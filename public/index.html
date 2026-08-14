@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d0819" />
+<title>MoneyMove — online property trading game</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<!-- ───────────────────────────── landing ───────────────────────────── -->
+<section id="landing" class="landing">
+  <div class="landing-bg"><span></span><span></span><span></span></div>
+  <div class="landing-inner">
+    <h1 class="logo xl">MONEY<span>MOVE</span></h1>
+    <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
+
+    <div class="landing-card">
+      <label class="field">
+        <span>Your nickname</span>
+        <input id="nickInput" maxlength="16" placeholder="Nik" autocomplete="off" />
+      </label>
+      <button id="createBtn" class="btn primary big">
+        <span class="btn-ico">🎲</span> Create a private game
+      </button>
+      <div class="or"><span>or join with a code</span></div>
+      <form id="joinForm" class="join-row">
+        <input id="codeInput" maxlength="8" placeholder="room code" autocomplete="off" />
+        <button class="btn" type="submit">Join</button>
+      </form>
+      <div id="publicRooms" class="public-rooms"></div>
+    </div>
+
+    <div class="landing-feats">
+      <div><b>4</b><span>boards</span></div>
+      <div><b>8</b><span>players</span></div>
+      <div><b>∞</b><span>bankruptcies</span></div>
+    </div>
+    <p class="fineprint">An original implementation of the classic property-trading board game.<br />Not affiliated with any trademark holder.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── game shell ───────────────────────────── -->
+<div id="app" class="app hidden">
+
+  <!-- left column -->
+  <aside class="col left">
+    <div class="brand">
+      <h1 class="logo">MONEY<span>MOVE</span></h1>
+      <div class="brand-actions">
+        <button id="helpBtn" class="icon-btn" title="How to play">?</button>
+        <button id="addLocalBtn" class="icon-btn" title="Add another player on this device">👥</button>
+        <button id="soundBtn" class="icon-btn" title="Toggle sound">🔊</button>
+        <button id="leaveBtn" class="icon-btn" title="Leave game">⏏</button>
+      </div>
+    </div>
+
+    <div id="shareCard" class="panel share">
+      <div class="panel-title">Invite your friends</div>
+      <div class="share-row">
+        <input id="shareLink" readonly />
+        <button id="copyBtn" class="btn small primary">Copy</button>
+      </div>
+    </div>
+
+    <div class="panel log-panel">
+      <div class="panel-title">Game log</div>
+      <div id="logList" class="log-list"></div>
+    </div>
+
+    <div class="panel chat-panel">
+      <div class="panel-title">Chat</div>
+      <div id="chatList" class="chat-list"><div class="empty">Say hi 👋</div></div>
+      <form id="chatForm" class="chat-form">
+        <input id="chatInput" maxlength="200" placeholder="Say something…" autocomplete="off" />
+        <button class="icon-btn send" type="submit">➤</button>
+      </form>
+    </div>
+  </aside>
+
+  <!-- board -->
+  <main class="col center">
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+      <div id="tokenLayer" class="token-layer"></div>
+
+      <div id="boardCenter" class="board-center">
+        <div class="center-felt"></div>
+        <div class="center-logo">MONEY<span>MOVE</span></div>
+        <div class="center-panel">
+          <div id="diceRow" class="dice-row">
+            <div class="die" data-die="0"></div>
+            <div class="die" data-die="1"></div>
+          </div>
+          <div id="centerCard" class="center-card"></div>
+          <div id="centerAction" class="center-action"></div>
+          <div id="centerStatus" class="center-status"></div>
+        </div>
+      </div>
+
+      <div id="turnBanner" class="turn-banner-fly"></div>
+    </div>
+  </main>
+
+  <!-- right column -->
+  <aside class="col right">
+    <div id="playerList" class="player-list"></div>
+    <div id="rightPanel" class="right-panel"></div>
+  </aside>
+</div>
+
+<!-- ───────────────────────────── overlays ───────────────────────────── -->
+<div id="modalRoot" class="modal-root hidden"></div>
+<div id="cardPopup" class="card-popup hidden"></div>
+<div id="toastRoot" class="toast-root"></div>
+<div id="tooltip" class="tile-tip hidden"></div>
+<canvas id="confetti" class="confetti hidden"></canvas>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
