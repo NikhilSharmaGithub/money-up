@@ -125,6 +125,8 @@ one process that stays alive to hold WebSocket connections open and keep every
 room's state in memory. Deploy it there and the landing page loads while every
 button quietly does nothing, because `/socket.io/` has nobody listening.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/NikhilSharmaGithub/money-up)
+
 Use anything that runs a normal Node process:
 
 | Host | How |
