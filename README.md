@@ -138,6 +138,32 @@ The server reads `PORT` from the environment, so nothing else needs configuring.
 If you put it behind a reverse proxy, make sure the proxy forwards `Upgrade` and
 `Connection` headers, otherwise the socket silently falls back and then fails.
 
+### Front end on Vercel, game server elsewhere
+
+You can keep the site on Vercel as long as the game itself runs somewhere that
+allows a persistent process. Vercel serves `public/` as a static site; the
+browser then talks to the game server directly over WebSocket.
+
+1. Deploy the game server (Render, Railway, Fly — see the table above) and copy
+   its URL, e.g. `https://moneymove.onrender.com`.
+2. Put that URL in [`public/config.js`](public/config.js):
+   ```js
+   window.MONEYMOVE_SERVER = 'https://moneymove.onrender.com';
+   ```
+3. Deploy the repo to Vercel. `vercel.json` already sets `public/` as the output
+   directory and rewrites `/room/:code` to `index.html`; `.vercelignore` keeps
+   the server code out of the upload.
+
+Leave `config.js` empty for local development or a single-host deploy — an empty
+value means "same origin". The Socket.IO browser client is vendored into
+`public/vendor/`, so the static host does not need to serve it, and the game
+server sends `Access-Control-Allow-Origin` on `/api/*` for the cross-origin
+fetches. Refresh the vendored client after upgrading Socket.IO:
+
+```bash
+cp node_modules/socket.io-client/dist/socket.io.min.js public/vendor/
+```
+
 ## Testing
 
 ```bash

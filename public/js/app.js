@@ -10,6 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal,
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
+import { api, connect, isSplitDeploy, SERVER } from './net.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -84,7 +85,7 @@ function showLanding() {
 }
 
 function loadPublicRooms() {
-  fetch('/api/rooms').then((r) => r.json()).then((rooms) => {
+  fetch(api('/api/rooms')).then((r) => r.json()).then((rooms) => {
     const el = $('#publicRooms');
     if (!rooms.length) { el.innerHTML = ''; return; }
     el.innerHTML = '<div class="pr-title">Public rooms</div>' + rooms.map((r) => `
@@ -115,7 +116,7 @@ $('#createBtn').addEventListener('click', () => {
   btn.dataset.label ||= btn.innerHTML;
   btn.innerHTML = '<span class="btn-ico">⏳</span> Creating…';
 
-  const s = io({ timeout: 8000, reconnectionAttempts: 2 });
+  const s = connect({ timeout: 8000, reconnectionAttempts: 2 });
   let settled = false;
   const giveUp = (why) => {
     if (settled) return;
@@ -145,14 +146,17 @@ $('#createBtn').addEventListener('click', () => {
 function serverUnreachable(why) {
   toast(why, 'error');
   const el = $('#publicRooms');
-  if (el) {
-    el.innerHTML = `<div class="server-down">
-      <b>⚠️ No realtime server</b>
-      <span>${escapeHtml(why)} MoneyMove needs a long-running Node process for
-      WebSockets — it cannot run on a serverless host. See the README for a
-      one-click deploy that works.</span>
+  if (!el) return;
+  const detail = isSplitDeploy()
+    ? `Tried <code>${escapeHtml(SERVER)}</code>. Check that the game server is
+       awake and that its URL in <code>config.js</code> is correct.`
+    : `No server is answering on this origin. MoneyMove needs a long-running
+       Node process for WebSockets — it cannot run on a serverless host. Point
+       <code>config.js</code> at your game server, or see the README's deploy notes.`;
+  el.innerHTML = `<div class="server-down">
+      <b>⚠️ Can't reach the game server</b>
+      <span>${detail}</span>
     </div>`;
-  }
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
@@ -182,7 +186,7 @@ function boot() {
   winnerShown = false;
 
   if (socket) socket.close();
-  socket = io();
+  socket = connect();
 
   socket.on('connect', () => socket.emit('join', { roomId, token, name: nickname || 'Player' }));
   socket.on('you', (d) => { meId = d.playerId; });

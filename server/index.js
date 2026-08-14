@@ -14,6 +14,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
+// The front end may be hosted elsewhere (e.g. Vercel) while this process runs
+// the game, so the read-only API has to be reachable cross-origin.
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Vary', 'Origin');
+  next();
+});
+
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
 app.get('/api/rooms', (_req, res) => {

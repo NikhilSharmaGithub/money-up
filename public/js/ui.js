@@ -3,6 +3,7 @@
 
 import { escapeHtml, deedMarkup } from './board.js';
 import { sfx } from './sound.js';
+import { api } from './net.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
@@ -729,7 +730,7 @@ function miniBoard(preview) {
 }
 
 export function openMapModal(state, actions) {
-  fetch('/api/maps').then((r) => r.json()).then((maps) => {
+  fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {
     openModal(`
       <h2>Pick a board</h2>
       <p class="sub">Every map has its own cities, prices and layout.</p>
