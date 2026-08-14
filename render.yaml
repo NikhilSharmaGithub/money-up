@@ -1,0 +1,13 @@
+# One-click deploy on Render — a persistent web service, which is what this
+# game needs. Point Render at this repo and it picks this file up automatically.
+services:
+  - type: web
+    name: moneymove
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/maps
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

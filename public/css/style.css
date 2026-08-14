@@ -178,6 +178,14 @@ option { background: #1b1330; }
 }
 .public-room:hover { border-color: var(--accent); background: rgba(139, 92, 246, .12); }
 
+.server-down {
+  display: flex; flex-direction: column; gap: 6px; text-align: left;
+  background: rgba(76, 17, 48, .55); border: 1px solid #9f1239;
+  border-radius: var(--r-sm); padding: 12px 14px;
+}
+.server-down b { font-size: 13px; color: #ffd7e0; }
+.server-down span { font-size: 11.5px; color: #f3b6c4; line-height: 1.5; }
+
 .landing-feats { display: flex; justify-content: center; gap: 30px; margin-top: 24px; }
 .landing-feats div { display: flex; flex-direction: column; }
 .landing-feats b { font-size: 22px; font-weight: 800; color: var(--accent-2); }

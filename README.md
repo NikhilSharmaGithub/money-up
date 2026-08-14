@@ -110,6 +110,27 @@ render the state that comes back, so a tampered client can't cheat. Identity is 
 in `localStorage`, which means refreshing or losing your connection drops you straight
 back into your seat — and a bot covers your turns until you're back.
 
+## Deploying
+
+**This will not run on Vercel, Netlify, or any serverless host.** Those platforms
+answer each request with a short-lived function, and MoneyMove needs the opposite:
+one process that stays alive to hold WebSocket connections open and keep every
+room's state in memory. Deploy it there and the landing page loads while every
+button quietly does nothing, because `/socket.io/` has nobody listening.
+
+Use anything that runs a normal Node process:
+
+| Host | How |
+|---|---|
+| **Render** | New → Web Service → point at this repo. `render.yaml` configures it. |
+| **Railway** | New Project → Deploy from repo. `Procfile` is picked up automatically. |
+| **Fly.io** | `fly launch` — it uses the `Dockerfile`. |
+| **Any VPS** | `npm ci && npm start`, behind nginx with WebSocket upgrade headers proxied. |
+
+The server reads `PORT` from the environment, so nothing else needs configuring.
+If you put it behind a reverse proxy, make sure the proxy forwards `Upgrade` and
+`Connection` headers, otherwise the socket silently falls back and then fails.
+
 ## Testing
 
 ```bash

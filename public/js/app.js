@@ -109,9 +109,55 @@ $('#createBtn').addEventListener('click', () => {
   unlock(); sfx.click();
   nickname = $('#nickInput').value.trim().slice(0, 16) || 'Player';
   storeName(nickname);
-  const s = io();
-  s.emit('createRoom', {}, ({ roomId: id }) => { s.close(); go(id); });
+
+  const btn = $('#createBtn');
+  btn.disabled = true;
+  btn.dataset.label ||= btn.innerHTML;
+  btn.innerHTML = '<span class="btn-ico">⏳</span> Creating…';
+
+  const s = io({ timeout: 8000, reconnectionAttempts: 2 });
+  let settled = false;
+  const giveUp = (why) => {
+    if (settled) return;
+    settled = true;
+    s.close();
+    btn.disabled = false;
+    btn.innerHTML = btn.dataset.label;
+    serverUnreachable(why);
+  };
+
+  const bail = setTimeout(() => giveUp('The game server did not respond.'), 9000);
+  s.on('connect_error', () => giveUp('Could not reach the game server.'));
+  s.emit('createRoom', {}, ({ roomId: id }) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(bail);
+    s.close();
+    go(id);
+  });
 });
+
+/**
+ * The realtime server is the whole game — if it is missing, say so loudly
+ * instead of leaving a dead button. Usually this means the app was deployed
+ * somewhere that cannot hold a WebSocket open (see the README's deploy notes).
+ */
+function serverUnreachable(why) {
+  toast(why, 'error');
+  const el = $('#publicRooms');
+  if (el) {
+    el.innerHTML = `<div class="server-down">
+      <b>⚠️ No realtime server</b>
+      <span>${escapeHtml(why)} MoneyMove needs a long-running Node process for
+      WebSockets — it cannot run on a serverless host. See the README for a
+      one-click deploy that works.</span>
+    </div>`;
+  }
+}
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
 
 $('#joinForm').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -144,6 +190,10 @@ function boot() {
   socket.on('toast', (t) => toast(t.message, t.type));
   socket.on('joinFailed', (d) => toast(d.message, 'error'));
   socket.on('disconnect', () => toast('Connection lost — reconnecting…', 'error'));
+  socket.on('connect_error', () => {
+    if (state) return; // already in a game, socket.io will keep retrying
+    toast('Could not reach the game server — is it running?', 'error');
+  });
 }
 
 // ───────────────────────────────────────────────────────────────── render ──
