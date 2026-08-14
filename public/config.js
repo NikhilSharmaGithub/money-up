@@ -9,4 +9,4 @@
  *
  *   window.MONEYMOVE_SERVER = 'https://moneymove.onrender.com';
  */
-window.MONEYMOVE_SERVER = '';
+window.MONEYMOVE_SERVER = 'https://moneymove-csk9.onrender.com';
