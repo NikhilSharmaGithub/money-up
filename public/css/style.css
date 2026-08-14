@@ -189,6 +189,13 @@ option { background: #1b1330; }
   background: rgba(0, 0, 0, .35); padding: 1px 5px; border-radius: 4px;
   font-size: 11px; word-break: break-all;
 }
+.server-form { display: flex; gap: 6px; margin-top: 4px; }
+.server-form input { padding: 8px 10px; font-size: 12px; background: rgba(0, 0, 0, .35); }
+.link-btn {
+  background: none; border: none; color: #f3b6c4; font-size: 11px;
+  text-decoration: underline; cursor: pointer; padding: 0; text-align: left;
+}
+.link-btn:hover { color: #ffd7e0; }
 
 .landing-feats { display: flex; justify-content: center; gap: 30px; margin-top: 24px; }
 .landing-feats div { display: flex; flex-direction: column; }

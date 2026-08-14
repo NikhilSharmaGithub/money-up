@@ -10,7 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal,
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
-import { api, connect, isSplitDeploy, SERVER } from './net.js';
+import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -148,15 +148,27 @@ function serverUnreachable(why) {
   const el = $('#publicRooms');
   if (!el) return;
   const detail = isSplitDeploy()
-    ? `Tried <code>${escapeHtml(SERVER)}</code>. Check that the game server is
-       awake and that its URL in <code>config.js</code> is correct.`
-    : `No server is answering on this origin. MoneyMove needs a long-running
-       Node process for WebSockets — it cannot run on a serverless host. Point
-       <code>config.js</code> at your game server, or see the README's deploy notes.`;
+    ? `Nothing answered at <code>${escapeHtml(SERVER)}</code>. If it is on a free
+       tier it may be waking up — give it a minute and try again.`
+    : `This page is served by a static host with no game server behind it.
+       MoneyMove needs a long-running Node process for WebSockets.`;
+
   el.innerHTML = `<div class="server-down">
       <b>⚠️ Can't reach the game server</b>
       <span>${detail}</span>
+      <form class="server-form" id="serverForm">
+        <input id="serverInput" placeholder="https://your-server.onrender.com"
+               value="${escapeHtml(SERVER)}" autocomplete="off" spellcheck="false" />
+        <button class="btn small primary" type="submit">Connect</button>
+      </form>
+      ${isSplitDeploy() ? '<button class="link-btn" id="serverReset">Reset to this site\'s own server</button>' : ''}
     </div>`;
+
+  $('#serverForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!useServer($('#serverInput').value)) toast('Enter your server URL first', 'error');
+  });
+  $('#serverReset')?.addEventListener('click', forgetServer);
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
