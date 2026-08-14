@@ -84,6 +84,13 @@ The whole thing reflows to one column on tablets and phones, and respects
 | Bharat | 40 | A tour of India, Jaipur through to New Delhi |
 | Blitz | 28 | Short board, two streets per set — games end fast |
 | Lucky Wheel | 40 | Half the tiles are chance — pure chaos |
+| **Random** | 40 | Generated fresh at the start of every game |
+
+**Random** keeps the classic board *shape* — where the airports, chance tiles and
+taxes sit — and shuffles the content: eight countries drawn from a pool of
+fourteen, their cities picked at random, fresh airport and utility names. The
+price ladder and group sizes stay put, so every generated board is balanced and
+playable. A new one is rolled the moment the game starts.
 
 The map picker draws a live miniature of each board from its own tile colours, so
 you can see the shape and the spread of colour sets before you commit to one.

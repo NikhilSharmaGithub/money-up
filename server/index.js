@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
-import { MAP_LIST } from './maps.js';
+import { mapList } from './maps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -15,7 +15,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(express.static(PUBLIC_DIR));
-app.get('/api/maps', (_req, res) => res.json(MAP_LIST));
+app.get('/api/maps', (_req, res) => res.json(mapList()));
 app.get('/api/rooms', (_req, res) => {
   res.json(
     [...rooms.values()]

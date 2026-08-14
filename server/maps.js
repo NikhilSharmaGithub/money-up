@@ -225,6 +225,9 @@ function buildMap(raw) {
 
   return {
     id: raw.id,
+    // Identifies this exact board. Generated boards share the id "random" but
+    // each gets its own uid, so the client knows to rebuild the tile grid.
+    uid: raw.uid || raw.id,
     name: raw.name,
     icon: raw.icon,
     description: raw.description,
@@ -239,6 +242,92 @@ function buildMap(raw) {
 
 const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
 
+// ---- random board generator --------------------------------------------------
+// Keeps the proven classic *shape* (where the airports, chance tiles and taxes
+// sit) and randomises the content: which countries appear, which of their cities
+// get used, and which airports and utilities show up.
+const CITY_POOL = {
+  BR: ['Salvador', 'Rio', 'São Paulo', 'Brasília', 'Recife'],
+  IL: ['Tel Aviv', 'Haifa', 'Jerusalem', 'Eilat'],
+  IT: ['Venice', 'Milan', 'Rome', 'Bologna', 'Naples', 'Turin'],
+  DE: ['Frankfurt', 'Munich', 'Berlin', 'Hamburg', 'Cologne', 'Wolfsburg'],
+  CN: ['Shanghai', 'Beijing', 'Shenzhen', 'Chengdu', 'Guangzhou'],
+  FR: ['Paris', 'Toulouse', 'Lyon', 'Marseille', 'Nice'],
+  UK: ['London', 'Manchester', 'Liverpool', 'Birmingham', 'Glasgow', 'Cambridge'],
+  US: ['New York', 'San Francisco', 'Chicago', 'Boston', 'Seattle', 'Los Angeles'],
+  IN: ['Mumbai', 'New Delhi', 'Bengaluru', 'Chennai', 'Kolkata', 'Jaipur'],
+  JP: ['Tokyo', 'Yokohama', 'Osaka', 'Kyoto'],
+  CA: ['Toronto', 'Montreal', 'Vancouver', 'Ottawa', 'Quebec City'],
+  TR: ['Istanbul', 'Antalya', 'Ankara', 'Izmir'],
+  RO: ['Bucharest', 'Brasov', 'Cluj'],
+  IE: ['Dublin', 'Belfast', 'Cork'],
+};
+
+const AIRPORT_POOL = [
+  'JFK Airport', 'TLV Airport', 'MUC Airport', 'CDG Airport', 'LHR Airport',
+  'YYZ Airport', 'DEL Airport', 'BOM Airport', 'NRT Airport', 'GRU Airport',
+];
+
+const UTILITY_POOL = [
+  ['Power Company', '⚡'], ['Water Company', '🚰'],
+  ['Gas Company', '🛢️'], ['Solar Farm', '☀️'], ['Wind Farm', '🌬️'],
+];
+
+// Group sizes and the price ladder walked around the board, classic proportions.
+const GROUP_SIZES = [2, 3, 3, 3, 3, 3, 3, 2];
+const PRICE_LADDER = [
+  60, 60, 100, 110, 120, 130, 140, 160, 180, 190, 200,
+  210, 220, 240, 260, 270, 280, 290, 300, 320, 350, 400,
+];
+
+function shuffle(list) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+const pick = (list, n) => shuffle(list).slice(0, n);
+
+export function generateRandomMap() {
+  const countries = pick(Object.keys(CITY_POOL), GROUP_SIZES.length);
+  const streets = [];
+  let priceIndex = 0;
+  countries.forEach((country, g) => {
+    pick(CITY_POOL[country], GROUP_SIZES[g]).forEach((city) => {
+      streets.push(p(city, country, PRICE_LADDER[priceIndex++]));
+    });
+  });
+
+  const airports = pick(AIRPORT_POOL, 4);
+  const utilities = pick(UTILITY_POOL, 2);
+  let s = 0, a = 0, u = 0;
+  const S = () => streets[s++];
+  const A = () => air(airports[a++]);
+  const U = () => { const [name, icon] = utilities[u++]; return util(name, icon); };
+
+  const tiles = [
+    start(),
+    S(), treasure(), S(), earningsTax(), A(), S(), S(), surprise(), S(),
+    prison(),
+    S(), U(), S(), S(), A(), S(), treasure(), S(), S(),
+    vacation(),
+    S(), surprise(), S(), S(), A(), S(), U(), S(), S(),
+    gotoprison(),
+    S(), S(), treasure(), S(), A(), surprise(), S(), premiumTax(), S(),
+  ];
+
+  return buildMap({
+    id: 'random',
+    uid: `random-${Math.random().toString(36).slice(2, 10)}`,
+    name: 'Random',
+    icon: '🎲',
+    description: 'A freshly shuffled board every single game.',
+    tiles,
+  });
+}
+
 // Colour used to draw a tile in the little board thumbnails on the map picker.
 const TYPE_COLORS = {
   airport: '#5b8def', utility: '#22d3ee', treasure: '#f59e0b', surprise: '#ec4899',
@@ -249,7 +338,7 @@ const swatch = (t) => (t.type === 'property' ? GROUPS[t.group]?.color || '#8b5cf
 
 export const MAPS = Object.fromEntries(RAW_MAPS.map((m) => [m.id, buildMap(m)]));
 
-export const MAP_LIST = Object.values(MAPS).map((m) => ({
+const summarise = (m) => ({
   id: m.id,
   name: m.name,
   icon: m.icon,
@@ -269,6 +358,10 @@ export const MAP_LIST = Object.values(MAPS).map((m) => ({
       left: m.layout.left.length,
     },
   },
-}));
+});
 
-export const getMap = (id) => MAPS[id] || MAPS.classic;
+/** Built fresh on every call, so the picker's Random thumbnail is never stale. */
+export const mapList = () => [...Object.values(MAPS).map(summarise), summarise(generateRandomMap())];
+export const MAP_LIST = mapList();
+
+export const getMap = (id) => (id === 'random' ? generateRandomMap() : MAPS[id] || MAPS.classic);

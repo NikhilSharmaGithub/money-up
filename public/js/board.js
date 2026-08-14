@@ -15,9 +15,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ═══════════════════════════════════════════════════════════ build the grid ══
 export function renderBoard(state, root) {
   const { map, groups } = state;
-  if (builtMapId === map.id && tileEls.length === map.tiles.length) return false;
+  // uid, not id — two "random" boards are different boards.
+  const key = map.uid || map.id;
+  if (builtMapId === key && tileEls.length === map.tiles.length) return false;
 
-  builtMapId = map.id;
+  builtMapId = key;
   root.innerHTML = '';
   tileEls = new Array(map.tiles.length);
 

@@ -191,6 +191,9 @@ export class GameRoom {
     }
     if (this.players.length < 2) return { error: 'Need at least 2 players' };
 
+    // "Random" means a brand new board each game, not a fixed shuffle.
+    if (this.settings.mapId === 'random') this.map = getMap('random');
+
     if (this.settings.randomizeOrder) {
       for (let i = this.players.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -1213,6 +1216,7 @@ export class GameRoom {
       mapId: this.map.id,
       map: {
         id: this.map.id,
+        uid: this.map.uid,
         name: this.map.name,
         icon: this.map.icon,
         tiles: this.map.tiles,

@@ -3,7 +3,7 @@
 // Run with `npm test`.
 
 import { GameRoom } from '../server/game.js';
-import { MAPS } from '../server/maps.js';
+import { MAPS, generateRandomMap } from '../server/maps.js';
 
 let failures = 0;
 const seen = new Set();
@@ -54,7 +54,7 @@ function playGame(mapId, settings = {}, maxSteps = 4000) {
   const pendingTrades = [];
   room.scheduleBotTrade = (tradeId) => pendingTrades.push(tradeId);
   room.settings = { ...room.settings, ...settings, mapId };
-  room.map = MAPS[mapId];
+  room.map = mapId === 'random' ? generateRandomMap() : MAPS[mapId];
 
   let turns = 0;
   const say = room.say.bind(room);
@@ -82,9 +82,8 @@ function playGame(mapId, settings = {}, maxSteps = 4000) {
   return { room, turns, steps };
 }
 
-// ---------------------------------------------------------------------------
-console.log('\n▶ map integrity');
-for (const [id, map] of Object.entries(MAPS)) {
+/** Every board — handwritten or generated — must satisfy all of this. */
+function checkMapIntegrity(id, map) {
   const props = map.tiles.filter((t) => t.type === 'property');
   const bad = props.filter((t) => !Array.isArray(t.rent) || t.rent.length !== 6 || !t.houseCost);
   if (bad.length) fail(`${id}: ${bad.length} properties missing rent data`);
@@ -99,7 +98,42 @@ for (const [id, map] of Object.entries(MAPS)) {
   for (const [g, idxs] of Object.entries(map.groups)) {
     if (idxs.length < 2) fail(`${id}: group ${g} has a single property`);
   }
+  const names = props.map((t) => t.name);
+  if (new Set(names).size !== names.length) fail(`${id}: duplicate street names`);
+  return props;
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n▶ map integrity');
+for (const [id, map] of Object.entries(MAPS)) {
+  const props = checkMapIntegrity(id, map);
   ok(`${id}: ${map.size} tiles, ${props.length} streets, ${map.airportCount} airports, ${map.utilityCount} utilities`);
+}
+
+{
+  // The generator must produce a legal board every time, not just usually.
+  const ROUNDS = 200;
+  const seenBoards = new Set();
+  for (let i = 0; i < ROUNDS; i++) {
+    const map = generateRandomMap();
+    checkMapIntegrity(`random#${i}`, map);
+    if (map.tiles.filter((t) => t.type === 'property').length !== 22) fail(`random#${i}: expected 22 streets`);
+    if (map.airportCount !== 4) fail(`random#${i}: expected 4 airports`);
+    if (map.utilityCount !== 2) fail(`random#${i}: expected 2 utilities`);
+    seenBoards.add(map.tiles.map((t) => t.name).join('|'));
+  }
+  if (seenBoards.size < ROUNDS * 0.9) fail(`random maps repeat too often (${seenBoards.size}/${ROUNDS} unique)`);
+  ok(`random: ${ROUNDS} generated boards all legal, ${seenBoards.size} unique`);
+
+  // Each generated board needs its own uid, otherwise the client reuses the
+  // previous tile grid and shows streets the server is no longer playing on.
+  const uids = new Set(Array.from({ length: 50 }, () => generateRandomMap().uid));
+  if (uids.size !== 50) fail(`generated boards must each have a unique uid (got ${uids.size}/50)`);
+  if ([...uids].some((u) => u === 'random')) fail('a generated board reused the shared id as its uid');
+  for (const [id, map] of Object.entries(MAPS)) {
+    if (map.uid !== id) fail(`${id}: a fixed board's uid should equal its id`);
+  }
+  ok('every generated board carries a distinct uid');
 }
 
 console.log('\n▶ rule variants (every map, twice each)');
@@ -112,7 +146,7 @@ const VARIANTS = [
   { label: 'poor start ($500), 6 players', settings: { startingCash: 500, players: 6, maxPlayers: 8 } },
 ];
 
-const MAP_IDS = Object.keys(MAPS);
+const MAP_IDS = [...Object.keys(MAPS), 'random'];
 const RUNS = MAP_IDS.length * 2; // every map twice per rule variant
 for (const v of VARIANTS) {
   let ended = 0, totalTurns = 0;
