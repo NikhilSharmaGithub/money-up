@@ -533,11 +533,23 @@ export function renderCenter(state, meId, actions) {
 
   // lobby ────────────────────────────────────────────────────────────────
   if (state.status === 'lobby') {
+    const seated = state.players.length;
+    const seats = state.settings.maxPlayers;
     actionEl.innerHTML = state.hostId === meId
       ? `<button class="btn primary big" id="cStart">▶ Start Game</button>`
-      : '';
-    statusEl.innerHTML = `<div class="room-code">Room <b>${escapeHtml(state.id)}</b></div>
-      <div class="dim">${state.players.length} of ${state.settings.maxPlayers} players joined</div>`;
+      : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
+    statusEl.innerHTML = `
+      <div class="lobby-head">
+        <div class="room-code">Room <b>${escapeHtml(state.id)}</b></div>
+        <div class="lobby-map">${state.map.icon} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
+      </div>
+      <div class="seat-dots">${Array.from({ length: seats }, (_, i) => {
+        const p = state.players[i];
+        return p
+          ? `<span class="seat-dot filled" style="background:${p.color}" title="${escapeHtml(p.name)}"></span>`
+          : '<span class="seat-dot"></span>';
+      }).join('')}</div>
+      <div class="dim small">${seated} of ${seats} seats taken</div>`;
     on('#cStart', actions.start);
     return;
   }

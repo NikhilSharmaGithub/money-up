@@ -349,8 +349,15 @@ select { cursor: pointer; }
   align-items: center; justify-content: center;
   gap: 4%; padding: 5% 3%; min-width: 0; min-height: 0; text-align: center;
 }
-.t-left .tile-body, .t-right .tile-body { writing-mode: vertical-rl; }
-.t-left .tile-body { transform: rotate(180deg); }
+.t-left, .t-right { container-type: size; }
+.t-left .tile-body, .t-right .tile-body {
+  position: absolute; top: 50%; left: 50%;
+  width: 100cqh; height: 100cqw;
+}
+.t-right .tile-body { transform: translate(-50%, -50%) rotate(90deg); }
+.t-left .tile-body  { transform: translate(-50%, -50%) rotate(-90deg); }
+.t-right .medal, .t-right .tile-art { transform: rotate(-90deg); }
+.t-left .medal,  .t-left .tile-art  { transform: rotate(90deg); }
 
 .tile-name {
   font-size: clamp(6.5px, .84vw, 13px); font-weight: 750; line-height: 1.08;
@@ -375,7 +382,6 @@ select { cursor: pointer; }
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .18), 0 2px 5px rgba(60, 30, 35, .22);
 }
 .medal > span { font-size: clamp(12px, 1.7vw, 26px); line-height: 1; transform: scale(1.32); }
-.t-left .medal { transform: rotate(180deg); }
 
 .tile-art {
   writing-mode: horizontal-tb; flex: none; display: block;
@@ -385,7 +391,6 @@ select { cursor: pointer; }
 .tile-art.big  { width: clamp(19px, 2.6vw, 40px); height: clamp(19px, 2.6vw, 40px); }
 .tile-art.huge { width: clamp(28px, 3.8vw, 64px); height: clamp(28px, 3.8vw, 64px); }
 .tile-art svg { width: 100%; height: 100%; display: block; }
-.t-left .tile-art { transform: rotate(180deg); }
 
 .accent-treasure { color: #8a5510; }
 .accent-surprise { color: #9c1f66; }
@@ -463,7 +468,7 @@ select { cursor: pointer; }
 }
 .center-logo {
   position: absolute; top: 2%; font-size: clamp(13px, 1.8vw, 24px); font-weight: 900;
-  letter-spacing: 1.5px; color: var(--ink); opacity: .07; pointer-events: none;
+  letter-spacing: 1.5px; color: var(--ink); opacity: .045; pointer-events: none;
 }
 .center-logo span { color: var(--red); }
 
@@ -871,8 +876,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(217, 32, 55, .3)
 /* Names measured as overflowing their tile: the side columns lay text out along
    the short axis, so two-word streets need a smaller size to fit their lines,
    and corner labels needed the clamp loosened rather than tightened. */
-.t-left .tile-name, .t-right .tile-name { font-size: clamp(5.8px, .72vw, 11px); }
+
 .corner .tile-name { -webkit-line-clamp: 2; line-height: 1.22; }
 /* The corner art was crowding out the label underneath it. */
 .tile-art.huge { width: clamp(24px, 3.1vw, 52px); height: clamp(24px, 3.1vw, 52px); }
 .corner .tile-body { gap: 2%; padding: 4% 3%; }
+
+/* lobby centre */
+.lobby-head { margin-bottom: 10px; }
+.lobby-map { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; font-weight: 600; }
+.seat-dots { display: flex; gap: 6px; justify-content: center; margin: 4px 0 8px; }
+.seat-dot {
+  width: 11px; height: 11px; border-radius: 50%;
+  background: transparent; border: 2px dashed var(--rule-2);
+}
+.seat-dot.filled { border: none; box-shadow: 0 1px 3px rgba(60, 30, 35, .3); }
