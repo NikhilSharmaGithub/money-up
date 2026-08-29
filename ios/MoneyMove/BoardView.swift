@@ -283,10 +283,18 @@ struct TokenLayer: View {
                     : (0, 0)
                 let isTurn = state.turn?.playerId == p.id
 
+                // Pieces stand at the tile's inner edge — pushed toward the middle
+                // of the board — so they never cover the flag or the price.
+                let mid = CGPoint(x: geom.size.width / 2, y: geom.size.height / 2)
+                let v = CGVector(dx: mid.x - frame.midX, dy: mid.y - frame.midY)
+                let len = max(1, (v.dx * v.dx + v.dy * v.dy).squareRoot())
+                let push = min(frame.width, frame.height) * 0.42
+                let inward = CGVector(dx: v.dx / len * push, dy: v.dy / len * push)
+
                 TokenDisc(player: p, highlighted: isTurn)
                     .position(
-                        x: frame.midX + slot.0 * frame.width,
-                        y: frame.midY + slot.1 * frame.height
+                        x: frame.midX + inward.dx + slot.0 * frame.width * 0.45,
+                        y: frame.midY + inward.dy + slot.1 * frame.height * 0.45
                     )
                     .animation(.spring(duration: 0.55, bounce: 0.25), value: p.pos)
                     .zIndex(isTurn ? 10 : 5)

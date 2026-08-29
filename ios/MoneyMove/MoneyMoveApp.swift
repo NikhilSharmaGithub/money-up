@@ -108,7 +108,8 @@ struct RootView: View {
             .background(P.card, in: Capsule())
             .overlay(Capsule().stroke(Color(css: p.color), lineWidth: 2))
             .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
-            .padding(.top, 8)
+            // Below the top bar and player strip, floating over the board.
+            .padding(.top, 116)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }

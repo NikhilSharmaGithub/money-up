@@ -1,5 +1,6 @@
-// The panel under the board while a game runs: whatever the current phase
-// needs — roll, buy/auction, debt rescue, end turn — plus live trade offers.
+// The action dock under the live feed: whatever the current phase needs —
+// roll, buy/auction, debt rescue, end turn — plus the topmost trade offer.
+// It hugs the bottom of the screen, where thumbs actually are.
 
 import SwiftUI
 
@@ -11,23 +12,26 @@ struct ActionPanel: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        ScrollView {
-            VStack(spacing: 10) {
-                incomingTrades
+        VStack(spacing: 8) {
+            firstIncomingTrade
 
-                if store.isMyTurn, let turn = store.state?.turn {
-                    myTurnControls(turn: turn, P: P)
-                } else if store.state?.isPlaying == true {
-                    waitingRow(P)
-                } else if store.state?.isEnded == true, store.isHost {
-                    Button("🔁  Play again") { store.rematch() }
-                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
-                }
+            if store.isMyTurn, let turn = store.state?.turn {
+                myTurnControls(turn: turn, P: P)
+            } else if store.state?.isPlaying == true {
+                waitingRow(P)
+            } else if store.state?.isEnded == true, store.isHost {
+                Button("🔁  Play again") { store.rematch() }
+                    .buttonStyle(MMButtonStyle(kind: .primary, big: true))
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
         }
-        .scrollBounceBehavior(.basedOnSize)
+        .padding(12)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(store.isMyTurn ? P.red.opacity(0.55) : P.rule, lineWidth: store.isMyTurn ? 1.5 : 1)
+        )
+        .shadow(color: .black.opacity(scheme == .light ? 0.14 : 0.4), radius: 12, y: 5)
+        .padding(.horizontal, 12)
         .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
             Button("Go bankrupt", role: .destructive) { store.declareBankrupt() }
         } message: {
@@ -87,11 +91,18 @@ struct ActionPanel: View {
             }
 
         case "end":
-            VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Button {
+                    openProperties()
+                } label: {
+                    Image(systemName: "building.columns.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 30, height: 26)
+                }
+                .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                .fixedSize()
                 Button("End turn →") { store.endTurn() }
                     .buttonStyle(MMButtonStyle(kind: .primary, big: true))
-                Button("Manage properties") { openProperties() }
-                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
             }
 
         default:
@@ -111,40 +122,56 @@ struct ActionPanel: View {
                     .foregroundStyle(P.ink)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(10)
             .background(P.redSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             Button("Pay \(money(amount))") { store.payDebt() }
                 .buttonStyle(MMButtonStyle(kind: .good, big: true))
                 .disabled((store.me?.money ?? 0) < amount)
-            Button("Sell / mortgage to raise cash") { openProperties() }
-                .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
-            Button("Declare bankruptcy") { confirmBankrupt = true }
-                .buttonStyle(MMButtonStyle(kind: .bad, big: true))
+            HStack(spacing: 8) {
+                Button("Raise cash") { openProperties() }
+                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                Button("Bankrupt") { confirmBankrupt = true }
+                    .buttonStyle(MMButtonStyle(kind: .bad, big: true))
+            }
         }
     }
 
     // MARK: - waiting / trades
 
     private func waitingRow(_ P: Palette) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().tint(P.red).scaleEffect(0.8)
-            Text("\(store.currentPlayer?.name ?? "…")'s move")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(P.ink3)
+        HStack(spacing: 10) {
+            if let current = store.currentPlayer {
+                AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26)
+                Text("\(current.name) is playing…")
+                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+            }
+            Spacer()
+            ProgressView().tint(P.red).scaleEffect(0.85)
         }
-        .padding(.top, 4)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
     }
 
-    @ViewBuilder private var incomingTrades: some View {
+    /// Only the topmost incoming offer lives in the dock; more stack behind a count.
+    @ViewBuilder private var firstIncomingTrade: some View {
         let P = Palette.current(scheme)
         let mine = (store.state?.trades ?? []).filter { $0.to == store.meId }
         let sent = (store.state?.trades ?? []).filter { $0.from == store.meId }
 
-        ForEach(mine) { trade in
+        if let trade = mine.first {
             let from = store.state?.player(trade.from)
             VStack(alignment: .leading, spacing: 6) {
-                PanelTitle("🤝 Offer from \(from?.name ?? "?")")
+                HStack {
+                    PanelTitle("🤝 Offer from \(from?.name ?? "?")")
+                    Spacer()
+                    if mine.count > 1 {
+                        Text("+\(mine.count - 1) more")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(P.ink3)
+                    }
+                }
                 tradeLine(label: "You get", side: trade.give, color: P.good)
                 tradeLine(label: "You give", side: trade.get, color: P.bad)
                 HStack(spacing: 8) {
@@ -154,22 +181,19 @@ struct ActionPanel: View {
                         .buttonStyle(MMButtonStyle(kind: .bad))
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.gold, lineWidth: 1.5))
+            .padding(10)
+            .background(P.goldSoft.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.gold.opacity(0.6), lineWidth: 1))
         }
 
-        ForEach(sent) { trade in
+        if let trade = sent.first {
             HStack {
                 Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?")…")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(P.ink3)
+                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(P.ink3)
                 Spacer()
                 Button("Cancel") { store.cancelTrade(trade.id) }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }
-            .padding(10)
-            .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 

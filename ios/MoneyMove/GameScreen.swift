@@ -48,7 +48,6 @@ struct GameScreen: View {
                 .padding(.horizontal, 6)
 
                 bottomPanel
-                    .frame(maxHeight: .infinity)
             } else {
                 Spacer()
                 ProgressView().tint(P.red)
@@ -155,10 +154,83 @@ struct GameScreen: View {
         if let state = store.state {
             if state.isLobby {
                 LobbyPanel(openSettings: { sheet = .settings })
+                    .frame(maxHeight: .infinity)
             } else {
+                // The live feed fills whatever the board leaves, and the action
+                // dock hugs the bottom where thumbs live.
+                ActivityFeed()
+                    .frame(maxHeight: .infinity)
+                    .padding(.horizontal, 12)
                 ActionPanel(openProperties: { sheet = .properties })
+                    .padding(.bottom, 4)
             }
         }
+    }
+}
+
+// MARK: - live activity feed
+
+/// The last few game-log lines, ticking live under the board — the game keeps
+/// talking even when it isn't your turn.
+struct ActivityFeed: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    private static let icons: [String: (String, Color)] = [
+        "dice": ("die.face.5.fill", Color(hex: 0x8B5CF6)),
+        "money": ("dollarsign.circle.fill", Color(hex: 0x4ADE80)),
+        "rent": ("house.fill", Color(hex: 0xFB7185)),
+        "buy": ("cart.fill", Color(hex: 0x60A5FA)),
+        "turn": ("play.fill", Color(hex: 0xFBBF24)),
+        "jail": ("exclamationmark.triangle.fill", Color(hex: 0xFB923C)),
+        "warn": ("exclamationmark.triangle.fill", Color(hex: 0xFB923C)),
+        "bankrupt": ("xmark.octagon.fill", Color(hex: 0xFB7185)),
+        "auction": ("hammer.fill", Color(hex: 0xFBBF24)),
+        "trade": ("arrow.left.arrow.right", Color(hex: 0xFBBF24)),
+        "system": ("sparkles", Color(hex: 0xF04156)),
+        "treasure": ("gift.fill", Color(hex: 0xFB923C)),
+        "surprise": ("questionmark.circle.fill", Color(hex: 0xF472B6)),
+        "build": ("hammer.circle.fill", Color(hex: 0x60A5FA)),
+        "mortgage": ("building.columns.fill", Color(hex: 0x94A3B8)),
+        "join": ("person.fill.badge.plus", Color(hex: 0x94A3B8)),
+        "leave": ("person.fill.badge.minus", Color(hex: 0x94A3B8)),
+    ]
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(store.state?.log.suffix(30) ?? []) { line in
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            let style = Self.icons[line.kind] ?? ("circle.fill", P.ink3)
+                            Image(systemName: style.0)
+                                .font(.system(size: 9))
+                                .foregroundStyle(style.1)
+                                .frame(width: 13)
+                            Text(line.text)
+                                .font(.system(size: 12.5, weight: line.kind == "turn" ? .bold : .medium, design: .rounded))
+                                .foregroundStyle(line.kind == "turn" ? P.ink : P.ink2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .id(line.id)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .onChange(of: store.state?.log.last?.at) {
+                if let last = store.state?.log.last {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+            .onAppear {
+                if let last = store.state?.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+        }
+        .background(P.card.opacity(scheme == .light ? 0.9 : 0.55),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 }
 
@@ -193,9 +265,19 @@ struct PlayerStrip: View {
                                         .foregroundStyle(P.ink3)
                                 }
                             }
-                            Text(p.isBankrupt ? "bankrupt" : money(p.money))
-                                .font(.system(size: 11.5, weight: .heavy, design: .rounded))
-                                .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
+                            HStack(spacing: 4) {
+                                Text(p.isBankrupt ? "bankrupt" : money(p.money))
+                                    .font(.system(size: 11.5, weight: .heavy, design: .rounded))
+                                    .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
+                                    .contentTransition(.numericText())
+                                    .animation(.snappy(duration: 0.4), value: p.money)
+                                let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
+                                if owned > 0, !p.isBankrupt {
+                                    Text("·  \(owned) 🏠")
+                                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                                        .foregroundStyle(P.ink3)
+                                }
+                            }
                         }
                     }
                     .padding(.vertical, 6)
@@ -229,11 +311,23 @@ struct CenterWell: View {
                 if let auction = state.auction {
                     AuctionBox(auction: auction)
                 } else if state.isLobby {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 8) {
                         Text(state.map.icon ?? "🌐").font(.system(size: 26))
                         Text(state.map.name)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink)
+                        // one dot per seat, filled with each player's colour
+                        HStack(spacing: 6) {
+                            ForEach(0..<state.settings.maxPlayers, id: \.self) { i in
+                                if let p = state.players[safe: i] {
+                                    Circle().fill(Color(css: p.color)).frame(width: 11, height: 11)
+                                        .overlay(Circle().stroke(.white.opacity(0.6), lineWidth: 1))
+                                } else {
+                                    Circle().stroke(P.rule2, style: StrokeStyle(lineWidth: 1.5, dash: [3]))
+                                        .frame(width: 11, height: 11)
+                                }
+                            }
+                        }
                         Text("\(state.players.count) of \(state.settings.maxPlayers) seats")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(P.ink3)
@@ -257,6 +351,17 @@ struct CenterWell: View {
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color(css: current.color))
                         }
+                    }
+                    if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
+                        HStack(spacing: 4) {
+                            Text("🏝️").font(.system(size: 11))
+                            Text(money(pot))
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                .foregroundStyle(P.gold)
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 10)
+                        .background(P.goldSoft, in: Capsule())
                     }
                 }
             }
