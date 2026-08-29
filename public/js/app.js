@@ -347,6 +347,38 @@ $('#chatForm').addEventListener('submit', (e) => {
   input.value = '';
 });
 
+// ---- light / dark -------------------------------------------------------
+const THEME_KEY = 'moneymove:theme';
+const readTheme = () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+
+function paintThemeButtons() {
+  const dark = readTheme() === 'dark';
+  document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => {
+    b.textContent = dark ? '☀️' : '🌙';
+    b.title = dark ? 'Switch to light' : 'Switch to dark';
+  });
+}
+
+function toggleTheme() {
+  const next = readTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
+  paintThemeButtons();
+  sfx.click();
+}
+
+document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => { b.onclick = toggleTheme; });
+paintThemeButtons();
+
+// Follow the system only while the player hasn't chosen for themselves.
+window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', (e) => {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch { /* ignore */ }
+  if (saved) return;
+  document.documentElement.dataset.theme = e.matches ? 'dark' : 'light';
+  paintThemeButtons();
+});
+
 const soundBtn = $('#soundBtn');
 soundBtn.textContent = isEnabled() ? '🔊' : '🔇';
 soundBtn.addEventListener('click', () => {
