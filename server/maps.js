@@ -290,8 +290,25 @@ function shuffle(list) {
 }
 const pick = (list, n) => shuffle(list).slice(0, n);
 
+// Countries with deep city pools — the only ones allowed to hold the two
+// priciest tiers, so a tiny map corner never outranks the majors.
+const MAJOR_COUNTRIES = ['US', 'IN', 'UK', 'DE', 'CN', 'FR', 'BR', 'CA', 'JP', 'IT'];
+
 export function generateRandomMap() {
-  const countries = pick(Object.keys(CITY_POOL), GROUP_SIZES.length);
+  // Five majors + three from everywhere, shuffled across the tiers…
+  const majors = shuffle(MAJOR_COUNTRIES).slice(0, 5);
+  const others = shuffle(Object.keys(CITY_POOL).filter((c) => !majors.includes(c))).slice(0, 3);
+  const countries = shuffle([...majors, ...others]);
+
+  // …but the top two tiers (the last two groups) must belong to majors.
+  for (const slot of [GROUP_SIZES.length - 1, GROUP_SIZES.length - 2]) {
+    if (!MAJOR_COUNTRIES.includes(countries[slot])) {
+      const swap = countries.findIndex(
+        (c, i) => i < GROUP_SIZES.length - 2 && MAJOR_COUNTRIES.includes(c),
+      );
+      [countries[slot], countries[swap]] = [countries[swap], countries[slot]];
+    }
+  }
   const streets = [];
   let priceIndex = 0;
   countries.forEach((country, g) => {

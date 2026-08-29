@@ -37,6 +37,7 @@ struct RootView: View {
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
+        .overlay { revealOverlay }
         .preferredColorScheme(nil) // follow the system; dark is the house default at night
     }
 
@@ -93,12 +94,36 @@ struct RootView: View {
         }
     }
 
+    @ViewBuilder private var revealOverlay: some View {
+        let P = Palette.current(scheme)
+        if let reveal = store.reveal {
+            VStack(spacing: 6) {
+                Text("THIS GAME")
+                    .font(.system(size: 11, weight: .black)).kerning(2.5)
+                    .foregroundStyle(P.gold)
+                Text(reveal)
+                    .font(.system(size: 18, weight: .heavy, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(P.ink)
+            }
+            .padding(.vertical, 18)
+            .padding(.horizontal, 26)
+            .background(P.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(P.gold, lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.45), radius: 28, y: 12)
+            .padding(.horizontal, 40)
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder private var turnBannerOverlay: some View {
         let P = Palette.current(scheme)
         if let p = store.turnBanner {
             HStack(spacing: 10) {
                 AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30)
-                Text(p.id == store.meId ? "Your turn!" : "\(p.name)'s turn")
+                Text(p.id == store.meId ? "Your turn!"
+                     : store.isLocal(p.id) ? "Pass to \(p.name)!"
+                     : "\(p.name)'s turn")
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
                     .foregroundStyle(P.ink)
             }
@@ -122,5 +147,6 @@ extension View {
             .animation(.spring(duration: 0.35), value: store.toast)
             .animation(.spring(duration: 0.4), value: store.cardPopup)
             .animation(.spring(duration: 0.4), value: store.turnBanner)
+            .animation(.spring(duration: 0.45, bounce: 0.3), value: store.reveal)
     }
 }

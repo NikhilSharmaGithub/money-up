@@ -27,6 +27,7 @@ enum ActiveSheet: Identifiable {
 struct GameScreen: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.horizontalSizeClass) private var hSize
     @State private var sheet: ActiveSheet?
 
     var body: some View {
@@ -35,22 +36,45 @@ struct GameScreen: View {
             topBar(P)
 
             if store.state != nil {
-                PlayerStrip(onTapPlayer: { p in
-                    if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                       store.me?.isBankrupt != true {
-                        sheet = .trade(p.id)
+                if hSize == .regular {
+                    // iPad / landscape: the board owns the left, everything else
+                    // stacks in a side column — no scrolling past the board.
+                    HStack(alignment: .top, spacing: 14) {
+                        BoardView(onTapTile: { sheet = .deed($0) }) {
+                            CenterWell()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        VStack(spacing: 10) {
+                            PlayerStrip(onTapPlayer: { p in
+                                if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
+                                   store.me?.isBankrupt != true {
+                                    sheet = .trade(p.id)
+                                }
+                            })
+                            bottomPanel
+                        }
+                        .frame(width: 380)
                     }
-                })
+                    .padding(.horizontal, 12)
+                } else {
+                    PlayerStrip(onTapPlayer: { p in
+                        if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
+                           store.me?.isBankrupt != true {
+                            sheet = .trade(p.id)
+                        }
+                    })
 
-                // While playing, the board floats midway between the strip and
-                // the dock instead of leaving one tall gap under itself.
-                if store.state?.isLobby == false { Spacer(minLength: 0) }
-                BoardView(onTapTile: { sheet = .deed($0) }) {
-                    CenterWell()
+                    // While playing, the board floats midway between the strip and
+                    // the dock instead of leaving one tall gap under itself.
+                    if store.state?.isLobby == false { Spacer(minLength: 0) }
+                    BoardView(onTapTile: { sheet = .deed($0) }) {
+                        CenterWell()
+                    }
+                    .padding(.horizontal, 6)
+
+                    bottomPanel
                 }
-                .padding(.horizontal, 6)
-
-                bottomPanel
             } else {
                 Spacer()
                 ProgressView().tint(P.red)

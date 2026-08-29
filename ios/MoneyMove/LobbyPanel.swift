@@ -28,6 +28,13 @@ struct LobbyPanel: View {
                     .padding(.top, 2)
                 }
 
+                if store.isHost { quickBoards(P) }
+
+                if store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
+                    Button("👥  Add player on this device") { store.addLocalPlayer() }
+                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                }
+
                 Button("⚙️  Game settings") { openSettings() }
                     .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
 
@@ -196,5 +203,44 @@ struct LobbyPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+}
+
+
+// MARK: - lobby extras
+
+extension LobbyPanel {
+    /// One-tap boards: the three favourites plus the shuffle, right in the lobby.
+    @ViewBuilder func quickBoards(_ P: Palette) -> some View {
+        let picks: [(String, String, String)] = [
+            ("classic", "🌐", "Classic"),
+            ("bharat", "🇮🇳", "Bharat"),
+            ("worldwide", "🌍", "Worldwide"),
+            ("random", "🎲", "Shuffle"),
+        ]
+        HStack(spacing: 8) {
+            ForEach(picks, id: \.0) { id, icon, name in
+                let selected = store.state?.settings.mapId == id || store.state?.mapId == id
+                Button {
+                    SoundKit.shared.click()
+                    store.updateSettings(["mapId": id])
+                } label: {
+                    VStack(spacing: 3) {
+                        Text(icon).font(.system(size: 20))
+                        Text(name)
+                            .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(selected ? P.red : P.ink2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(selected ? P.redSoft : P.sunken,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(selected ? P.red : Color.clear, lineWidth: 1.5)
+                    )
+                }
+            }
+        }
     }
 }

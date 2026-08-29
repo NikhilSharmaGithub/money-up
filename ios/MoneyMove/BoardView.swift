@@ -113,6 +113,7 @@ struct TileView: View {
     @Environment(\.colorScheme) private var scheme
     let tile: TileData
     let geom: BoardGeometry
+    @State private var dealt = true
 
     private var ownership: TileOwnership? { store.state?.owner(of: tile.index) }
     private var ownerPlayer: PlayerState? { store.state?.player(ownership?.owner) }
@@ -154,6 +155,21 @@ struct TileView: View {
                 .stroke(isActive ? P.gold : P.rule, lineWidth: isActive ? 2 : 0.7)
         }
         .shadow(color: isActive ? P.gold.opacity(0.5) : .clear, radius: 6)
+        .scaleEffect(dealt ? 1 : 0.01)
+        .rotationEffect(.degrees(dealt ? 0 : -18))
+        .opacity(dealt ? 1 : 0)
+        .onAppear { runDealIfFresh() }
+        .onChange(of: store.boardIntroAt) { runDealIfFresh() }
+    }
+
+    /// The deal-in: tiles snap out and spring back one after another, sweeping
+    /// around the board from START.
+    private func runDealIfFresh() {
+        guard let at = store.boardIntroAt, Date().timeIntervalSince(at) < 3 else { return }
+        dealt = false
+        withAnimation(.spring(duration: 0.5, bounce: 0.45).delay(Double(tile.index) * 0.022)) {
+            dealt = true
+        }
     }
 
     private func faceColor(_ P: Palette) -> Color {

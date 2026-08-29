@@ -45,6 +45,11 @@ final class GameStore: ObservableObject {
     @Published var cardPopup: LastCard?
     @Published var turnBanner: PlayerState?
     @Published var showGameOver = false
+    /// Set when a game begins — drives the board's deal-in animation.
+    @Published var boardIntroAt: Date?
+    /// "🇮🇳 India holds the priciest streets this game!"
+    @Published var reveal: String?
+    private var revealTask: Task<Void, Never>?
     @Published var joinError: String?
 
     struct ToastMessage: Identifiable, Equatable {
@@ -54,6 +59,17 @@ final class GameStore: ObservableObject {
     }
 
     private let socket = SocketIOClient()
+
+    /// Extra seats played from this same device (pass & play). Each guest keeps
+    /// its own socket because the server binds a seat to the connection that
+    /// joined it — intents must come from the right one.
+    struct LocalGuest: Identifiable {
+        let token: String
+        let number: Int
+        let socket: SocketIOClient
+        var id: String { token }
+    }
+    @Published var guests: [LocalGuest] = []
     private var lastCardAt: Double = 0
     private var lastTurnPlayer: String?
     private var lastLogAt: Double = 0
@@ -138,6 +154,23 @@ final class GameStore: ObservableObject {
             if turnId == meId { Haptics.turn(); SoundKit.shared.turn() }
         }
 
+        // A fresh game: deal the board in and announce this game's top country.
+        if new.isPlaying && old?.isPlaying != true {
+            boardIntroAt = Date()
+            SoundKit.shared.shuffleDeal()
+            if let top = new.map.tiles.filter({ $0.type == "property" }).max(by: { ($0.price ?? 0) < ($1.price ?? 0) }),
+               let g = top.group, let info = new.groups[g] {
+                revealTask?.cancel()
+                revealTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(900))   // let the deal land first
+                    guard !Task.isCancelled else { return }
+                    self?.reveal = "\(info.flag) \(info.name) holds the priciest streets this game!"
+                    try? await Task.sleep(for: .seconds(3.4))
+                    if !Task.isCancelled { self?.reveal = nil }
+                }
+            }
+        }
+
         // game over sheet, once
         if new.isEnded && old?.isEnded != true { showGameOver = true; SoundKit.shared.win() }
         if !new.isEnded { showGameOver = false }
@@ -205,6 +238,8 @@ final class GameStore: ObservableObject {
     }
 
     func leaveRoom() {
+        guests.forEach { $0.socket.close() }
+        guests = []
         socket.close()
         roomId = nil
         state = nil
@@ -215,7 +250,15 @@ final class GameStore: ObservableObject {
 
     // MARK: - intents (mirror public/js actions)
 
+    /// Room-level intents go out on the main connection; turn intents go out on
+    /// the acting player's own connection (the server trusts the socket's seat).
     private func emit(_ event: String, _ args: [Any] = []) { socket.emit(event, args) }
+    private func emitAsActive(_ event: String, _ args: [Any] = []) {
+        socket(for: activeId).emit(event, args)
+    }
+    private func emitAs(_ playerId: String, _ event: String, _ args: [Any] = []) {
+        socket(for: playerId).emit(event, args)
+    }
 
     func start() { emit("start") }
     func addBot() { emit("addBot") }
@@ -233,39 +276,84 @@ final class GameStore: ObservableObject {
     }
     func balanceTeams() { emit("balanceTeams") }
 
-    func roll() { emit("roll"); Haptics.tap() }
-    func buy() { emit("buy") }
-    func skipBuy() { emit("skipBuy") }
-    func endTurn() { emit("endTurn") }
-    func bid(_ amount: Int) { emit("bid", [amount]) }
-    func passBid() { emit("passBid") }
-    func jailPay() { emit("jailPay") }
-    func jailCard() { emit("jailCard") }
-    func build(_ tile: Int) { emit("build", [tile]) }
-    func sellHouse(_ tile: Int) { emit("sellHouse", [tile]) }
-    func mortgage(_ tile: Int) { emit("mortgage", [tile]) }
-    func unmortgage(_ tile: Int) { emit("unmortgage", [tile]) }
-    func payDebt() { emit("payDebt") }
-    func declareBankrupt() { emit("bankrupt") }
+    func roll() { emitAsActive("roll"); Haptics.tap() }
+    func buy() { emitAsActive("buy") }
+    func skipBuy() { emitAsActive("skipBuy") }
+    func endTurn() { emitAsActive("endTurn") }
+    func bid(_ amount: Int, as playerId: String? = nil) { emitAs(playerId ?? activeId, "bid", [amount]) }
+    func passBid(as playerId: String? = nil) { emitAs(playerId ?? activeId, "passBid") }
+    func jailPay() { emitAsActive("jailPay") }
+    func jailCard() { emitAsActive("jailCard") }
+    func build(_ tile: Int) { emitAsActive("build", [tile]) }
+    func sellHouse(_ tile: Int) { emitAsActive("sellHouse", [tile]) }
+    func mortgage(_ tile: Int) { emitAsActive("mortgage", [tile]) }
+    func unmortgage(_ tile: Int) { emitAsActive("unmortgage", [tile]) }
+    func payDebt() { emitAsActive("payDebt") }
+    func declareBankrupt() { emitAsActive("bankrupt") }
     func sendChat(_ text: String) { emit("chat", [text]) }
     func rematch() { emit("rematch") }
 
     func proposeTrade(to: String, give: TradeSide, get: TradeSide) {
-        emit("trade:propose", [[
+        emitAsActive("trade:propose", [[
             "to": to,
             "give": ["money": give.money, "tiles": give.tiles, "cards": give.cards],
             "get": ["money": get.money, "tiles": get.tiles, "cards": get.cards],
         ]])
     }
-    func respondTrade(_ id: Int, accept: Bool) { emit("trade:respond", [["id": id, "accept": accept]]) }
+    func respondTrade(_ id: Int, accept: Bool) {
+        // The responder must be the offer's target — route from their socket
+        // when that target is one of our local seats.
+        let target = state?.trades.first { $0.id == id }?.to ?? meId
+        emitAs(localIds.contains(target) ? target : meId, "trade:respond", [["id": id, "accept": accept]])
+    }
     func cancelTrade(_ id: Int) { emit("trade:cancel", [["id": id]]) }
 
     // MARK: - derived helpers (mirror the web client's rule mirrors)
 
-    var me: PlayerState? { state?.player(meId) }
+    /// Every seat controlled from this device: the main player plus local guests.
+    var localIds: Set<String> { Set([meId] + guests.map(\.token)) }
+
+    /// Whose seat the controls act for right now: the local player whose turn
+    /// it is, falling back to the main player. This is what makes pass & play
+    /// comfortable — the same buttons just serve whoever holds the phone.
+    var activeId: String {
+        if let turnId = state?.turn?.playerId, localIds.contains(turnId) { return turnId }
+        return meId
+    }
+
+    var me: PlayerState? { state?.player(activeId) }
     var isHost: Bool { state?.hostId == meId }
-    var isMyTurn: Bool { state?.isPlaying == true && state?.turn?.playerId == meId }
+    var isMyTurn: Bool { state?.isPlaying == true && localIds.contains(state?.turn?.playerId ?? "") }
     var currentPlayer: PlayerState? { state?.player(state?.turn?.playerId) }
+
+    func isLocal(_ id: String?) -> Bool { id.map { localIds.contains($0) } ?? false }
+
+    private func socket(for playerId: String) -> SocketIOClient {
+        guests.first { $0.token == playerId }?.socket ?? socket
+    }
+
+    /// Adds another human on this device. They join the room with their own
+    /// derived identity and show up as a normal player to everyone else.
+    func addLocalPlayer() {
+        guard let url = serverURL, let roomId else { return }
+        let number = guests.count + 2
+        let guestToken = "\(token)_p\(number)"
+        let s = SocketIOClient()
+        s.onStatus = { [weak self] status in
+            Task { @MainActor in
+                guard status == .connected, let self else { return }
+                s.emit("join", [[
+                    "roomId": roomId,
+                    "token": guestToken,
+                    "name": "Player \(number)",
+                    "flag": "",
+                ]])
+            }
+        }
+        s.connect(to: url)
+        guests.append(LocalGuest(token: guestToken, number: number, socket: s))
+        showToast("Player \(number) joined from this device")
+    }
 
     func tile(_ i: Int) -> TileData? {
         guard let tiles = state?.map.tiles, tiles.indices.contains(i) else { return nil }
@@ -280,7 +368,7 @@ final class GameStore: ObservableObject {
     func myTiles() -> [Int] {
         guard let state else { return [] }
         return state.ownership.compactMap { key, own in
-            own.owner == meId ? Int(key) : nil
+            own.owner == activeId ? Int(key) : nil
         }.sorted()
     }
 
@@ -291,9 +379,9 @@ final class GameStore: ObservableObject {
 
     func canBuild(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              own.owner == meId, t.type == "property", !own.isMortgaged,
+              own.owner == activeId, t.type == "property", !own.isMortgaged,
               let group = t.group, let idxs = state.map.groups?[group] else { return false }
-        guard ownsFullGroup(meId, group: group) else { return false }
+        guard ownsFullGroup(activeId, group: group) else { return false }
         guard !idxs.contains(where: { state.owner(of: $0)?.isMortgaged == true }) else { return false }
         guard own.houseCount < 5 else { return false }
         if state.settings.evenBuild ?? true {
@@ -305,7 +393,7 @@ final class GameStore: ObservableObject {
 
     func canSellHouse(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              own.owner == meId, own.houseCount > 0 else { return false }
+              own.owner == activeId, own.houseCount > 0 else { return false }
         if state.settings.evenBuild ?? true, let group = t.group, let idxs = state.map.groups?[group] {
             let maxHouses = idxs.map { state.owner(of: $0)?.houseCount ?? 0 }.max() ?? 0
             if own.houseCount < maxHouses { return false }
@@ -316,7 +404,7 @@ final class GameStore: ObservableObject {
     func canMortgage(_ i: Int) -> Bool {
         guard let state, state.settings.mortgage ?? true,
               let t = tile(i), let own = state.owner(of: i),
-              own.owner == meId, !own.isMortgaged else { return false }
+              own.owner == activeId, !own.isMortgaged else { return false }
         if t.type == "property", let group = t.group, let idxs = state.map.groups?[group] {
             if idxs.contains(where: { (state.owner(of: $0)?.houseCount ?? 0) > 0 }) { return false }
         }

@@ -1,4 +1,4 @@
-// The pre-game landing screen: brand, identity (nickname + flag), create or
+// The pre-game landing screen: brand, nickname, create or
 // join a room, an advanced server override, and the friends panel.
 
 import SwiftUI
@@ -82,11 +82,6 @@ struct LandingView: View {
                         .padding(12)
                         .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    PanelTitle("Flag")
-                    flagGrid(P)
                 }
 
                 Button("🎲  Create a private game") { store.createRoom() }

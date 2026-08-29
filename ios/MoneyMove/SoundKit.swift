@@ -158,6 +158,15 @@ final class SoundKit {
 
     func bankrupt() { tone(400, to: 90, dur: 0.65, wave: .triangle, vol: 0.16) }
 
+    /// The board dealing in at game start: a riffle plus a rising run.
+    func shuffleDeal() {
+        noise(dur: 0.30, vol: 0.11, bright: 0.55)
+        noise(dur: 0.22, vol: 0.09, bright: 0.7, after: 0.16)
+        for (i, f) in [392.0, 494, 587, 784].enumerated() {
+            tone(f, dur: 0.16, wave: .triangle, vol: 0.11, after: 0.34 + Double(i) * 0.07)
+        }
+    }
+
     func win() {
         for (i, f) in [523.0, 659, 784, 1047, 1319].enumerated() {
             tone(f, dur: 0.45, wave: .triangle, vol: 0.15, after: Double(i) * 0.09)
