@@ -35,7 +35,7 @@ struct SettingsSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
-            .background(P.page.ignoresSafeArea())
+            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Game settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

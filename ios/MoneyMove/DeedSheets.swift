@@ -90,7 +90,7 @@ struct DeedSheet: View {
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(P.page.ignoresSafeArea())
+            .background(P.sheet.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
         .presentationDetents([.medium, .large])
@@ -271,7 +271,7 @@ struct PropertiesSheet: View {
                     .padding(14)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(P.page.ignoresSafeArea())
+            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Your properties")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

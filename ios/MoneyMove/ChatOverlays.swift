@@ -38,7 +38,7 @@ struct ChatLogSheet: View {
                     logTab(P)
                 }
             }
-            .background(P.page)
+            .background(P.sheet)
             .navigationTitle(tab == 0 ? "Chat" : "Game log")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -363,7 +363,7 @@ struct GameOverSheet: View {
                 }
                 .padding(16)
             }
-            .background(P.page)
+            .background(P.sheet)
             .navigationTitle("Game over")
             .navigationBarTitleDisplayMode(.inline)
         }

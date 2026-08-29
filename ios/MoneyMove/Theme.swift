@@ -8,6 +8,7 @@ struct Palette {
     let page: Color        // screen background
     let page2: Color       // deep edge of the page gradient
     let card: Color        // panels / tiles
+    let sheet: Color       // background of presented sheets
     let sunken: Color      // recessed areas inside a card
     let boardBG: Color     // board frame fill
 
@@ -43,7 +44,7 @@ struct Palette {
 
     static let dark = Palette(
         page: Color(hex: 0x150A0E), page2: Color(hex: 0x0D0508),
-        card: Color(hex: 0x211319), sunken: Color(hex: 0x2B1A21), boardBG: Color(hex: 0x1A0E13),
+        card: Color(hex: 0x211319), sheet: Color(hex: 0x1B0F14), sunken: Color(hex: 0x2B1A21), boardBG: Color(hex: 0x1A0E13),
         ink: Color(hex: 0xF4EAED), ink2: Color(hex: 0xBDA8B0), ink3: Color(hex: 0x8D757E),
         rule: Color(hex: 0x382330), rule2: Color(hex: 0x4A2F3C),
         red: Color(hex: 0xF04156), redDeep: Color(hex: 0xC4243A), redSoft: Color(hex: 0x3A1620),
@@ -59,7 +60,7 @@ struct Palette {
 
     static let light = Palette(
         page: Color(hex: 0xB31527), page2: Color(hex: 0x8E0F1E),
-        card: .white, sunken: Color(hex: 0xF4EEEA), boardBG: Color(hex: 0xFFFAF7),
+        card: .white, sheet: Color(hex: 0xF6F1ED), sunken: Color(hex: 0xF4EEEA), boardBG: Color(hex: 0xFFFAF7),
         ink: Color(hex: 0x1E1A1C), ink2: Color(hex: 0x5F5359), ink3: Color(hex: 0x948890),
         rule: Color(hex: 0xE9E0DB), rule2: Color(hex: 0xD8CAC3),
         red: Color(hex: 0xD92037), redDeep: Color(hex: 0xA4142A), redSoft: Color(hex: 0xFDECEE),

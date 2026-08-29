@@ -28,7 +28,7 @@ struct TradeSheet: View {
                     missingTarget(P)
                 }
             }
-            .background(P.page.ignoresSafeArea())
+            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Trade")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
