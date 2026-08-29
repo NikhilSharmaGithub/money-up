@@ -42,6 +42,9 @@ struct GameScreen: View {
                     }
                 })
 
+                // While playing, the board floats midway between the strip and
+                // the dock instead of leaving one tall gap under itself.
+                if store.state?.isLobby == false { Spacer(minLength: 0) }
                 BoardView(onTapTile: { sheet = .deed($0) }) {
                     CenterWell()
                 }
@@ -157,11 +160,9 @@ struct GameScreen: View {
                 LobbyPanel(openSettings: { sheet = .settings })
                     .frame(maxHeight: .infinity)
             } else {
-                // The live feed fills whatever the board leaves, and the action
-                // dock hugs the bottom where thumbs live.
-                ActivityFeed()
-                    .frame(maxHeight: .infinity)
-                    .padding(.horizontal, 12)
+                // The live feed lives inside the board's centre well now, so the
+                // board itself takes the full width and the dock stays at thumbs.
+                Spacer(minLength: 0)
                 ActionPanel(openProperties: { sheet = .properties })
                     .padding(.bottom, 4)
             }
@@ -176,6 +177,8 @@ struct GameScreen: View {
 struct ActivityFeed: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// Embedded = inside the board's centre well: transparent, tighter type.
+    var embedded = false
 
     private static let icons: [String: (String, Color)] = [
         "dice": ("die.face.5.fill", Color(hex: 0x8B5CF6)),
@@ -201,23 +204,24 @@ struct ActivityFeed: View {
         let P = Palette.current(scheme)
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: embedded ? 4 : 5) {
                     ForEach(store.state?.log.suffix(30) ?? []) { line in
-                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
                             let style = Self.icons[line.kind] ?? ("circle.fill", P.ink3)
                             Image(systemName: style.0)
-                                .font(.system(size: 9))
+                                .font(.system(size: embedded ? 8 : 9))
                                 .foregroundStyle(style.1)
-                                .frame(width: 13)
+                                .frame(width: 12)
                             Text(line.text)
-                                .font(.system(size: 12.5, weight: line.kind == "turn" ? .bold : .medium, design: .rounded))
+                                .font(.system(size: embedded ? 11.5 : 12.5,
+                                              weight: line.kind == "turn" ? .bold : .medium, design: .rounded))
                                 .foregroundStyle(line.kind == "turn" ? P.ink : P.ink2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .id(line.id)
                     }
                 }
-                .padding(12)
+                .padding(embedded ? 8 : 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: store.state?.log.last?.at) {
@@ -229,9 +233,14 @@ struct ActivityFeed: View {
                 if let last = store.state?.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
-        .background(P.card.opacity(scheme == .light ? 0.9 : 0.55),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.rule, lineWidth: 1))
+        .background(
+            embedded ? Color.clear : P.card.opacity(scheme == .light ? 0.9 : 0.55),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(embedded ? Color.clear : P.rule, lineWidth: 1)
+        )
     }
 }
 
@@ -272,11 +281,11 @@ struct PlayerStrip: View {
                     let isTurn = store.state?.isPlaying == true && store.state?.turn?.playerId == p.id
                     let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
                     HStack(spacing: 7) {
-                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 28)
+                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
                                 Text(p.name)
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
                                     .foregroundStyle(P.ink)
                                     .lineLimit(1)
                                 if p.id == store.state?.hostId {
@@ -290,7 +299,7 @@ struct PlayerStrip: View {
                             }
                             HStack(spacing: 4) {
                                 Text(p.isBankrupt ? "bankrupt" : money(p.money))
-                                    .font(.system(size: 11.5, weight: .heavy, design: .rounded))
+                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
                                     .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
                                     .contentTransition(.numericText())
                                     .animation(.snappy(duration: 0.4), value: p.money)
@@ -317,7 +326,7 @@ struct PlayerStrip: View {
             }
             .padding(.horizontal, 12)
         }
-        .frame(height: 48)
+        .frame(height: 54)
     }
 }
 
@@ -366,15 +375,8 @@ struct CenterWell: View {
                     if let dice = state.turn?.dice, dice.count == 2 {
                         DiceView(values: dice)
                     }
-                    if let current = store.currentPlayer, store.state?.turn?.playerId != store.meId {
-                        VStack(spacing: 3) {
-                            AvatarView(name: current.name, colorCSS: current.color,
-                                       flag: current.flag ?? "", size: 30)
-                            Text("\(current.name)'s turn")
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color(css: current.color))
-                        }
-                    }
+                    ActivityFeed(embedded: true)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
                         HStack(spacing: 4) {
                             Text("🏝️").font(.system(size: 11))

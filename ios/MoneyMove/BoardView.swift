@@ -200,39 +200,39 @@ struct TileView: View {
         VStack(spacing: 1) {
             switch tile.type {
             case "property":
-                Text(group?.flag ?? "🏳️").font(.system(size: 13))
+                Text(group?.flag ?? "🏳️").font(.system(size: 16))
                 if houses > 0 {
                     Text(houses == 5 ? "🏨" : String(repeating: "▪︎", count: houses))
-                        .font(.system(size: 7, weight: .black))
+                        .font(.system(size: 8.5, weight: .black))
                         .foregroundStyle(P.good)
                 } else if let price = tile.price {
                     priceText(price, P)
                 }
             case "airport":
-                Text("✈️").font(.system(size: 12))
+                Text("✈️").font(.system(size: 14))
                 if let price = tile.price { priceText(price, P) }
             case "utility":
-                Text(tile.icon ?? "💡").font(.system(size: 12))
+                Text(tile.icon ?? "💡").font(.system(size: 14))
                 if let price = tile.price { priceText(price, P) }
-            case "treasure": Text("🧰").font(.system(size: 14))
-            case "surprise": Text("❓").font(.system(size: 14))
+            case "treasure": Text("🧰").font(.system(size: 17))
+            case "surprise": Text("❓").font(.system(size: 17))
             case "tax":
-                Text("💸").font(.system(size: 11))
+                Text("💸").font(.system(size: 13))
                 Text(tile.amount.map { "$\($0)" } ?? "\(tile.percent ?? 10)%")
                     .font(.system(size: 7, weight: .bold)).foregroundStyle(P.ink2)
             case "refund":
-                Text("💵").font(.system(size: 11))
+                Text("💵").font(.system(size: 13))
                 if let amount = tile.amount { priceText(amount, P) }
             case "start":
-                Text("▶▶").font(.system(size: 13, weight: .black)).foregroundStyle(P.good)
-                Text("START").font(.system(size: 8, weight: .heavy)).foregroundStyle(P.good)
+                Text("▶▶").font(.system(size: 16, weight: .black)).foregroundStyle(P.good)
+                Text("START").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(P.good)
             case "prison":
-                Text("🚔").font(.system(size: 16))
-                Text("PRISON").font(.system(size: 7, weight: .heavy)).foregroundStyle(P.ink3)
+                Text("🚔").font(.system(size: 20))
+                Text("PRISON").font(.system(size: 8.5, weight: .heavy)).foregroundStyle(P.ink3)
             case "vacation":
-                Text("🏝️").font(.system(size: 16))
+                Text("🏝️").font(.system(size: 20))
             case "gotoprison":
-                Text("🚨").font(.system(size: 16))
+                Text("🚨").font(.system(size: 20))
             default:
                 EmptyView()
             }
@@ -243,7 +243,7 @@ struct TileView: View {
 
     private func priceText(_ value: Int, _ P: Palette) -> some View {
         Text("\(value)$")
-            .font(.system(size: 7.5, weight: .bold, design: .rounded))
+            .font(.system(size: 9, weight: .bold, design: .rounded))
             .foregroundStyle(P.ink2)
     }
 
@@ -251,7 +251,7 @@ struct TileView: View {
         VStack {
             HStack {
                 Circle().fill(Color(css: owner.color))
-                    .frame(width: 8, height: 8)
+                    .frame(width: 10, height: 10)
                     .overlay(Circle().stroke(.white, lineWidth: 1))
                 Spacer(minLength: 0)
             }
@@ -392,10 +392,10 @@ struct TokenDisc: View {
     var body: some View {
         Circle()
             .fill(Color(css: player.color))
-            .frame(width: 17, height: 17)
+            .frame(width: 20, height: 20)
             .overlay(
                 Text(String(player.name.prefix(1)).uppercased())
-                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .font(.system(size: 9.5, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
             )
             .overlay(Circle().stroke(.white, lineWidth: highlighted ? 2 : 1.2))
