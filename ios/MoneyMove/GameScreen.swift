@@ -40,8 +40,11 @@ struct GameScreen: View {
                     // iPad / landscape: the board owns the left, everything else
                     // stacks in a side column — no scrolling past the board.
                     HStack(alignment: .top, spacing: 14) {
-                        BoardView(onTapTile: { sheet = .deed($0) }) {
-                            CenterWell()
+                        VStack(spacing: 0) {
+                            BoardView(onTapTile: { sheet = .deed($0) }) {
+                                CenterWell()
+                            }
+                            Spacer(minLength: 0)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -57,21 +60,31 @@ struct GameScreen: View {
                         .frame(width: 380)
                     }
                     .padding(.horizontal, 12)
+                } else if store.state?.isLobby == true {
+                    PlayerStrip(onTapPlayer: { _ in })
+                    BoardView(onTapTile: { sheet = .deed($0) }) {
+                        CenterWell()
+                    }
+                    .padding(.horizontal, 6)
+                    bottomPanel
                 } else {
+                    // Two zones: the board high, and one control cluster at the
+                    // bottom — player strip directly above the action dock, no
+                    // orphaned bands floating in between.
+                    BoardView(onTapTile: { sheet = .deed($0) }) {
+                        CenterWell()
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 2)
+
+                    Spacer(minLength: 10)
+
                     PlayerStrip(onTapPlayer: { p in
                         if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                            store.me?.isBankrupt != true {
                             sheet = .trade(p.id)
                         }
                     })
-
-                    // While playing, the board floats midway between the strip and
-                    // the dock instead of leaving one tall gap under itself.
-                    if store.state?.isLobby == false { Spacer(minLength: 0) }
-                    BoardView(onTapTile: { sheet = .deed($0) }) {
-                        CenterWell()
-                    }
-                    .padding(.horizontal, 6)
 
                     bottomPanel
                 }
@@ -134,9 +147,11 @@ struct GameScreen: View {
                     .fill(store.connection == .connected ? P.good : P.gold)
                     .frame(width: 7, height: 7)
                 Text(store.roomId ?? "")
-                    .font(.system(size: 15, weight: .heavy, design: .monospaced))
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
                     .foregroundStyle(P.ink)
-                    .kerning(2)
+                    .kerning(1)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.vertical, 7)
             .padding(.horizontal, 13)
@@ -146,7 +161,6 @@ struct GameScreen: View {
 
             SoundToggle()
             iconButton("bubble.left.and.bubble.right.fill", P) { sheet = .chatLog(0) }
-            iconButton("list.bullet.rectangle.fill", P) { sheet = .chatLog(1) }
             if store.state?.isPlaying == true {
                 iconButton("building.columns.fill", P) { sheet = .properties }
             }
@@ -299,6 +313,7 @@ struct PlayerStrip: View {
 
     var body: some View {
         let P = Palette.current(scheme)
+        let count = store.state?.players.count ?? 0
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(store.state?.players ?? []) { p in
@@ -349,6 +364,7 @@ struct PlayerStrip: View {
                 }
             }
             .padding(.horizontal, 12)
+            .frame(minWidth: count <= 3 ? UIScreen.main.bounds.width : 0)
         }
         .frame(height: 54)
     }

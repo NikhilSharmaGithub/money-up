@@ -384,7 +384,9 @@ private struct PlacedToken: View {
         let mid = CGPoint(x: geom.size.width / 2, y: geom.size.height / 2)
         let v = CGVector(dx: mid.x - frame.midX, dy: mid.y - frame.midY)
         let len = max(1, (v.dx * v.dx + v.dy * v.dy).squareRoot())
-        let push = min(frame.width, frame.height) * 0.42
+        // Corners hold big art plus a label, so pieces stand further in there.
+        let isCorner = geom.layout.corners.contains(pos)
+        let push = min(frame.width, frame.height) * (isCorner ? 0.58 : 0.42)
         return CGPoint(
             x: frame.midX + v.dx / len * push + slot.0 * frame.width * 0.45,
             y: frame.midY + v.dy / len * push + slot.1 * frame.height * 0.45
