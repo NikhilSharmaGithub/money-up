@@ -1,0 +1,12 @@
+{
+  "artboards": [
+    { "file": "Landing.dc.html", "x": 0, "y": 0, "w": 390, "h": 844, "title": "Landing" },
+    { "file": "Main.dc.html", "x": 480, "y": 0, "w": 390, "h": 844, "title": "Game" },
+    { "file": "Chat.dc.html", "x": 960, "y": 0, "w": 390, "h": 844, "title": "Chat" },
+    { "file": "Trade.dc.html", "x": 1440, "y": 0, "w": 390, "h": 844, "title": "Trade" }
+  ],
+  "annotations": [
+    { "id": "direction-note", "x": 0, "y": -170, "w": 330, "text": "MoneyMove iOS — red & white direction.\nTokens lifted from the app's Theme.swift (crimson #B31527 page, white cards, Outfit type). Edit anything and Save — I can then match the SwiftUI code to your changes." }
+  ],
+  "launch": { "view": "canvas" }
+}
