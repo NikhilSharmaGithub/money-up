@@ -11,12 +11,17 @@ struct TradeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
-    @State private var giveTiles: Set<Int> = []
+    @State private var giveTiles: Set<Int>
     @State private var getTiles: Set<Int> = []
     @State private var giveCash = 0
     @State private var getCash = 0
     @State private var giveCards = 0
     @State private var getCards = 0
+
+    init(targetId: String, preselectedGive: Set<Int> = []) {
+        self.targetId = targetId
+        _giveTiles = State(initialValue: preselectedGive)
+    }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -329,5 +334,97 @@ struct TradeSheet: View {
         store.proposeTrade(to: targetId, give: give, get: get)
         store.showToast("Offer sent")
         dismiss()
+    }
+}
+
+// MARK: - trade partner picker
+
+/// "Who do you want to trade with?" — one tap on a player opens the composer.
+/// This is the discoverable front door for trading on the phone.
+struct TradePickerSheet: View {
+    var give: Set<Int> = []
+    let pick: (String) -> Void
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let partners = (store.state?.players ?? []).filter { !$0.isBankrupt && $0.id != store.activeId }
+
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 8) {
+                    if let i = give.first, give.count == 1, let tile = store.tile(i) {
+                        Text("Offering \(tile.name)")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .padding(.top, 2)
+                    }
+                    ForEach(partners) { p in
+                        partnerRow(p, P)
+                    }
+                    if partners.isEmpty {
+                        Text("Nobody left to trade with.")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .padding(.top, 40)
+                    }
+                }
+                .padding(14)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .background(P.sheet.ignoresSafeArea())
+            .navigationTitle("Trade with…")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func partnerRow(_ p: PlayerState, _ P: Palette) -> some View {
+        let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
+        let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
+
+        return Button {
+            pick(p.id)
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 11) {
+                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 38)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(p.name)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        if p.isBot == true {
+                            Text("BOT").font(.system(size: 8, weight: .black)).foregroundStyle(P.ink3)
+                        }
+                        if let team {
+                            Text(team.icon).font(.system(size: 10))
+                        }
+                    }
+                    Text("\(money(p.money))  ·  \(owned) propert\(owned == 1 ? "y" : "ies")")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+                Spacer()
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(P.gold)
+            }
+            .padding(.vertical, 11)
+            .padding(.horizontal, 13)
+            .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 }

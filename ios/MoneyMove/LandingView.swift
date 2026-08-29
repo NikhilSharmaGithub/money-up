@@ -14,6 +14,14 @@ struct LandingView: View {
     @State private var selectedFlag = ""
     @State private var profile: ProfileInfo?
     @State private var friends: [FriendEntry] = []
+    @State private var publicRooms: [PublicRoom] = []
+
+    struct PublicRoom: Codable, Identifiable {
+        var id: String
+        var players: Int
+        var maxPlayers: Int
+        var map: String
+    }
 
     private struct AddFriendReply: Decodable {
         var ok: Bool?
@@ -28,6 +36,7 @@ struct LandingView: View {
             VStack(spacing: 18) {
                 header(P)
                 playCard(P, busy: busy)
+                publicRoomsCard(P)
                 serverCard(P)
                 friendsCard(P)
 
@@ -160,6 +169,55 @@ struct LandingView: View {
         let code = joinCode.trimmingCharacters(in: .whitespaces).lowercased()
         guard !code.isEmpty else { return }
         store.join(roomId: code)
+    }
+
+    // MARK: - public rooms
+
+    /// Open lobbies anyone can hop into — same list the web landing shows.
+    @ViewBuilder
+    private func publicRoomsCard(_ P: Palette) -> some View {
+        Group {
+            if !publicRooms.isEmpty {
+                MMCard(padding: 16) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        PanelTitle("Public rooms")
+                        VStack(spacing: 8) {
+                            ForEach(publicRooms) { room in
+                                Button {
+                                    store.join(roomId: room.id)
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Text("🌐").font(.system(size: 18))
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(room.map)
+                                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                                .foregroundStyle(P.ink)
+                                            Text("\(room.players) of \(room.maxPlayers) players · \(room.id)")
+                                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(P.ink3)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .foregroundStyle(P.ink3)
+                                    }
+                                    .padding(10)
+                                    .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                let rooms: [PublicRoom]? = try? await store.fetchJSON("/api/rooms")
+                publicRooms = rooms ?? []
+                try? await Task.sleep(for: .seconds(8))
+            }
+        }
     }
 
     // MARK: - server override

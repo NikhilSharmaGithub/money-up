@@ -132,6 +132,17 @@ export function patchBoard(state) {
     el.classList.toggle('mortgaged', !!own?.mortgaged);
     el.style.setProperty('--own-color', owner?.color || 'transparent');
 
+    // richup rule: a bought tile's colour band belongs to its owner, and a
+    // full country wears a thicker band plus a ring — one glance says whose.
+    const groupTint = tile.group ? state.groups[tile.group]?.color
+      : tile.type === 'airport' ? '#6aa2ff'
+      : tile.type === 'utility' ? '#3fd8ef' : '';
+    const fullSet = !!(owner && tile.group
+      && (state.map.groups?.[tile.group] || []).length
+      && state.map.groups[tile.group].every((k) => ownership[k]?.owner === owner.id));
+    el.style.setProperty('--g', owner ? owner.color : (groupTint || 'transparent'));
+    el.classList.toggle('full-set', fullSet);
+
     const badge = el.querySelector('.tile-owner');
     const sig = owner ? owner.id + (own.mortgaged ? 'm' : '') : '';
     if (badge.dataset.sig !== sig) {

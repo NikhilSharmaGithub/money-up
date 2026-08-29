@@ -290,7 +290,12 @@ final class GameStore: ObservableObject {
     func unmortgage(_ tile: Int) { emitAsActive("unmortgage", [tile]) }
     func payDebt() { emitAsActive("payDebt") }
     func declareBankrupt() { emitAsActive("bankrupt") }
-    func sendChat(_ text: String) { emit("chat", [text]) }
+    func sendChat(_ text: String, channel: String = "all") { emit("chat", [text, channel]) }
+
+    /// Team chat exists when teams are on and this player is actually on one.
+    var hasTeamChat: Bool {
+        (state?.settings.teams ?? 0) > 0 && state?.player(meId)?.team != nil
+    }
     func rematch() { emit("rematch") }
 
     func proposeTrade(to: String, give: TradeSide, get: TradeSide) {
@@ -306,7 +311,11 @@ final class GameStore: ObservableObject {
         let target = state?.trades.first { $0.id == id }?.to ?? meId
         emitAs(localIds.contains(target) ? target : meId, "trade:respond", [["id": id, "accept": accept]])
     }
-    func cancelTrade(_ id: Int) { emit("trade:cancel", [["id": id]]) }
+    func cancelTrade(_ id: Int) {
+        // Only the proposer or target may cancel — route from the right seat.
+        let from = state?.trades.first { $0.id == id }?.from ?? meId
+        emitAs(localIds.contains(from) ? from : meId, "trade:cancel", [["id": id]])
+    }
 
     // MARK: - derived helpers (mirror the web client's rule mirrors)
 

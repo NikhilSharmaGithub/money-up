@@ -111,8 +111,27 @@ function getRoom(id) {
   return room;
 }
 
+/** Team chat stays inside the team: strip other teams' messages per viewer. */
+function stateFor(base, room, viewerId) {
+  if (!base.chat.some((m) => m.channel === 'team')) return base;
+  const team = viewerId != null ? room.player(viewerId)?.team : null;
+  return { ...base, chat: base.chat.filter((m) => m.channel !== 'team' || (team != null && m.team === team)) };
+}
+
 function broadcast(room) {
-  io.to(room.id).emit('state', room.serialize());
+  const base = room.serialize();
+  const delivered = new Set();
+  for (const [playerId, socketIds] of seatsOf.get(room.id) || []) {
+    const state = stateFor(base, room, playerId);
+    for (const sid of socketIds) {
+      io.to(sid).emit('state', state);
+      delivered.add(sid);
+    }
+  }
+  // Spectators (sockets without a seat) see everything but team chat.
+  for (const sid of socketsOf.get(room.id) || []) {
+    if (!delivered.has(sid)) io.to(sid).emit('state', stateFor(base, room, null));
+  }
   // Keep each seated player's presence in step with what the room is doing,
   // so a friends list can say "in a lobby" vs "in a game".
   for (const playerId of seatsOf.get(room.id)?.keys() || []) {
@@ -172,7 +191,7 @@ io.on('connection', (socket) => {
       }
     }
     socket.emit('you', { playerId, roomId });
-    socket.emit('state', room.serialize());
+    socket.emit('state', stateFor(room.serialize(), room, playerId));
   });
 
   const guard = (fn) => (...args) => {
@@ -231,7 +250,7 @@ io.on('connection', (socket) => {
 
   socket.on('payDebt', guard(() => ok(room.payDebt(playerId))));
   socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));
-  socket.on('chat', guard((text) => room.sendChat(playerId, text)));
+  socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
   socket.on('rematch', guard(() => {
     if (playerId !== room.hostId) return fail('Only the host can restart');

@@ -251,7 +251,8 @@ function render() {
   safe('center', () => renderCenter(state, meId, actions));
   safe('dice', () => renderDice(state));
   safe('log', () => renderLog(state, $('#logList')));
-  safe('chat', () => renderChat(state, $('#chatList')));
+  safe('chatChannels', () => syncChatChannels(state));
+  safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
 
   $('#shareCard').classList.toggle('hidden', state.status !== 'lobby');
   document.body.classList.toggle('my-turn', state.turn?.playerId === meId && state.status === 'playing');
@@ -335,7 +336,7 @@ const EMOTES = ['👍', '😂', '😱', '🔥', '💸', '🎲', '😭', '🤝', 
 const emoteRow = $('#emoteRow');
 emoteRow.innerHTML = EMOTES.map((e) => `<button class="emote" type="button">${e}</button>`).join('');
 emoteRow.querySelectorAll('.emote').forEach((b) => {
-  b.onclick = () => { sfx.click(); actions.chat(b.textContent); };
+  b.onclick = () => { sfx.click(); actions.chat(b.textContent, chatChannel); };
 });
 
 $('#chatForm').addEventListener('submit', (e) => {
@@ -343,9 +344,34 @@ $('#chatForm').addEventListener('submit', (e) => {
   const input = $('#chatInput');
   const text = input.value.trim();
   if (!text) return;
-  actions.chat(text);
+  actions.chat(text, chatChannel);
   input.value = '';
 });
+
+// ---- chat channels (everyone / team) ------------------------------------
+let chatChannel = 'all';
+const channelBar = $('#chatChannels');
+channelBar.querySelectorAll('button').forEach((b) => {
+  b.onclick = () => {
+    sfx.click();
+    chatChannel = b.dataset.ch;
+    channelBar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    if (state) renderChat(state, $('#chatList'), chatChannel);
+    $('#chatInput').placeholder = chatChannel === 'team' ? 'Message your team…' : 'Say something…';
+  };
+});
+
+/** The team channel only shows up when this player is actually on a team. */
+function syncChatChannels(s) {
+  const me = s.players.find((p) => p.id === meId);
+  const hasTeam = (s.settings?.teams || 0) > 0 && me?.team != null;
+  channelBar.classList.toggle('hidden', !hasTeam);
+  if (!hasTeam && chatChannel !== 'all') {
+    chatChannel = 'all';
+    channelBar.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.ch === 'all'));
+    $('#chatInput').placeholder = 'Say something…';
+  }
+}
 
 // ---- focus mode ---------------------------------------------------------
 const FOCUS_KEY = 'moneymove:focus';

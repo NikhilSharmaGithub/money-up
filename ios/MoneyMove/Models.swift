@@ -25,6 +25,7 @@ struct GameState: Codable, Equatable {
     var winner: WinnerInfo?
     var lastCard: LastCard?
     var lastMove: LastMove?
+    var history: [WorthPoint]?              // net-worth series, sent once the game ends
     var version: Int
 
     func player(_ id: String?) -> PlayerState? {
@@ -194,6 +195,16 @@ struct ChatMessage: Codable, Equatable, Identifiable {
     var flag: String?
     var text: String
     var at: Double
+    var channel: String?                    // "all" | "team"
+    var team: Int?
+
+    var isTeam: Bool { channel == "team" }
+}
+
+/// One point of the end-of-game chart: turn number -> player id -> net worth.
+struct WorthPoint: Codable, Equatable {
+    var t: Int
+    var w: [String: Int]
 }
 
 struct WinnerInfo: Codable, Equatable {

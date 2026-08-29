@@ -8,6 +8,7 @@ struct ActionPanel: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     let openProperties: () -> Void
+    var openTrade: (() -> Void)? = nil
     @State private var confirmBankrupt = false
 
     var body: some View {
@@ -101,6 +102,17 @@ struct ActionPanel: View {
                 }
                 .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                 .fixedSize()
+                if let openTrade {
+                    Button {
+                        openTrade()
+                    } label: {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(width: 30, height: 26)
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                    .fixedSize()
+                }
                 Button("End turn →") { store.endTurn() }
                     .buttonStyle(MMButtonStyle(kind: .primary, big: true))
             }
@@ -154,17 +166,19 @@ struct ActionPanel: View {
         .padding(.vertical, 2)
     }
 
-    /// Only the topmost incoming offer lives in the dock; more stack behind a count.
+    /// Only the topmost incoming offer lives in the dock; more stack behind a
+    /// count. Pass & play: offers to ANY seat on this device show up here.
     @ViewBuilder private var firstIncomingTrade: some View {
         let P = Palette.current(scheme)
-        let mine = (store.state?.trades ?? []).filter { $0.to == store.meId }
-        let sent = (store.state?.trades ?? []).filter { $0.from == store.meId }
+        let mine = (store.state?.trades ?? []).filter { store.isLocal($0.to) }
+        let sent = (store.state?.trades ?? []).filter { store.isLocal($0.from) }
 
         if let trade = mine.first {
             let from = store.state?.player(trade.from)
+            let forGuest = trade.to != store.meId ? store.state?.player(trade.to) : nil
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    PanelTitle("🤝 Offer from \(from?.name ?? "?")")
+                    PanelTitle("🤝 Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")")
                     Spacer()
                     if mine.count > 1 {
                         Text("+\(mine.count - 1) more")

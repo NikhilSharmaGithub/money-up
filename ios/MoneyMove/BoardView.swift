@@ -2,9 +2,9 @@
 // length — Blitz is 6 a side, Worldwide 11), tokens animating between tiles,
 // and a centre well the game screen drops its dice/actions into.
 //
-// Phone tiles are deliberately compact — flag, price, colour band — with the
-// full deed one tap away. Cramming street names into 34pt tiles is how boards
-// become unreadable.
+// Tiles read like richup's: flag, tiny street name, price — and once a tile is
+// bought its colour band turns into the owner's colour, so a glance at the
+// ring tells you who holds what. A full country gets a thicker band.
 
 import SwiftUI
 
@@ -122,10 +122,18 @@ struct TileView: View {
         return store.currentPlayer?.pos == tile.index
     }
 
+    /// The whole country (or airport/utility family) in one player's hands.
+    private var isFullSet: Bool {
+        guard let state = store.state, let ownerId = ownership?.owner,
+              let g = tile.group, let idxs = state.map.groups?[g], !idxs.isEmpty else { return false }
+        return idxs.allSatisfy { state.owner(of: $0)?.owner == ownerId }
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
         let group = store.groupInfo(for: tile)
-        let bandColor = bandColorFor(tile: tile, group: group)
+        // richup rule: a bought tile wears its owner's colour, not the group's.
+        let bandColor = ownerPlayer.map { Color(css: $0.color) } ?? bandColorFor(tile: tile, group: group)
 
         ZStack {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -133,16 +141,15 @@ struct TileView: View {
 
             // colour band on the edge facing the middle
             if let bandColor {
-                band(color: bandColor)
+                band(color: bandColor, thickness: isFullSet ? 9 : 5)
             }
 
             content(P: P, group: group)
 
-            // owner tint + dot
+            // owner wash over the face
             if let owner = ownerPlayer {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(css: owner.color).opacity(0.20))
-                ownerDot(owner)
+                    .fill(Color(css: owner.color).opacity(isFullSet ? 0.30 : 0.18))
             }
 
             if ownership?.isMortgaged == true {
@@ -195,20 +202,21 @@ struct TileView: View {
         }
     }
 
-    @ViewBuilder private func band(color: Color) -> some View {
+    @ViewBuilder private func band(color: Color, thickness: CGFloat = 5) -> some View {
         let edge = geom.side(of: tile.index)
         // The band hugs the edge that faces the centre of the board.
         VStack(spacing: 0) {
-            if edge == .bottom { color.frame(height: 5); Spacer(minLength: 0) }
-            else if edge == .top { Spacer(minLength: 0); color.frame(height: 5) }
+            if edge == .bottom { color.frame(height: thickness); Spacer(minLength: 0) }
+            else if edge == .top { Spacer(minLength: 0); color.frame(height: thickness) }
             else {
                 HStack(spacing: 0) {
-                    if edge == .trailing { color.frame(width: 5); Spacer(minLength: 0) }
-                    else { Spacer(minLength: 0); color.frame(width: 5) }
+                    if edge == .trailing { color.frame(width: thickness); Spacer(minLength: 0) }
+                    else { Spacer(minLength: 0); color.frame(width: thickness) }
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .animation(.spring(duration: 0.4), value: thickness)
     }
 
     @ViewBuilder private func content(P: Palette, group: GroupInfo?) -> some View {
@@ -216,7 +224,8 @@ struct TileView: View {
         VStack(spacing: 1) {
             switch tile.type {
             case "property":
-                Text(group?.flag ?? "🏳️").font(.system(size: 16))
+                Text(group?.flag ?? "🏳️").font(.system(size: 12))
+                nameText(P)
                 if houses > 0 {
                     Text(houses == 5 ? "🏨" : String(repeating: "▪︎", count: houses))
                         .font(.system(size: 8.5, weight: .black))
@@ -225,10 +234,12 @@ struct TileView: View {
                     priceText(price, P)
                 }
             case "airport":
-                Text("✈️").font(.system(size: 14))
+                Text("✈️").font(.system(size: 11))
+                nameText(P)
                 if let price = tile.price { priceText(price, P) }
             case "utility":
-                Text(tile.icon ?? "💡").font(.system(size: 14))
+                Text(tile.icon ?? "💡").font(.system(size: 11))
+                nameText(P)
                 if let price = tile.price { priceText(price, P) }
             case "treasure": Text("🧰").font(.system(size: 17))
             case "surprise": Text("❓").font(.system(size: 17))
@@ -259,21 +270,19 @@ struct TileView: View {
 
     private func priceText(_ value: Int, _ P: Palette) -> some View {
         Text("\(value)$")
-            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .font(.system(size: 8.5, weight: .bold, design: .rounded))
             .foregroundStyle(P.ink2)
     }
 
-    private func ownerDot(_ owner: PlayerState) -> some View {
-        VStack {
-            HStack {
-                Circle().fill(Color(css: owner.color))
-                    .frame(width: 10, height: 10)
-                    .overlay(Circle().stroke(.white, lineWidth: 1))
-                Spacer(minLength: 0)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(2)
+    /// Tiny street name — two lines max, shrinking before it ever clips.
+    private func nameText(_ P: Palette) -> some View {
+        Text(tile.name)
+            .font(.system(size: 6.8, weight: .bold, design: .rounded))
+            .foregroundStyle(P.ink)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity)
     }
 }
 

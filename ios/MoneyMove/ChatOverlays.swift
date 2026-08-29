@@ -3,6 +3,7 @@
 // ever send intents back — the server stays authoritative.
 
 import SwiftUI
+import Charts
 
 // MARK: - chat / log sheet
 
@@ -13,10 +14,21 @@ struct ChatLogSheet: View {
     @Environment(\.colorScheme) private var scheme
     @State private var tab: Int
     @State private var draft = ""
+    @State private var channel = "all"      // "all" | "team"
 
     init(initialTab: Int = 0) {
         self.initialTab = initialTab
         _tab = State(initialValue: initialTab)
+    }
+
+    private var visibleChat: [ChatMessage] {
+        let all = store.state?.chat ?? []
+        guard store.hasTeamChat else { return all }
+        return channel == "team" ? all.filter(\.isTeam) : all.filter { !$0.isTeam }
+    }
+
+    private var myTeam: TeamInfo? {
+        store.state?.player(store.meId)?.team.flatMap { store.state?.teamInfo?[safe: $0] }
     }
 
     var body: some View {
@@ -50,21 +62,32 @@ struct ChatLogSheet: View {
 
     private func chatTab(_ P: Palette) -> some View {
         VStack(spacing: 0) {
+            if store.hasTeamChat {
+                channelSwitch(P)
+            }
+
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(store.state?.chat ?? []) { msg in
+                        ForEach(visibleChat) { msg in
                             chatRow(msg, P).id(msg.id)
+                        }
+                        if channel == "team", visibleChat.isEmpty {
+                            Text("Only your team can read this channel. Plan away.")
+                                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 26)
                         }
                     }
                     .padding(12)
                 }
                 .onAppear {
-                    if let last = store.state?.chat.last?.id {
+                    if let last = visibleChat.last?.id {
                         proxy.scrollTo(last, anchor: .bottom)
                     }
                 }
-                .onChange(of: store.state?.chat.last?.id) { _, new in
+                .onChange(of: visibleChat.last?.id) { _, new in
                     guard let new else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(new, anchor: .bottom)
@@ -77,8 +100,37 @@ struct ChatLogSheet: View {
         }
     }
 
+    /// Everyone ↔ Team, coloured by the player's own team.
+    private func channelSwitch(_ P: Palette) -> some View {
+        let teamColor = myTeam.map { Color(css: $0.color) } ?? P.gold
+        return HStack(spacing: 6) {
+            channelChip("🌍 Everyone", value: "all", tint: P.ink2, P: P)
+            channelChip("\(myTeam?.icon ?? "🛡️") Team only", value: "team", tint: teamColor, P: P)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+    }
+
+    private func channelChip(_ label: String, value: String, tint: Color, P: Palette) -> some View {
+        let on = channel == value
+        return Button {
+            withAnimation(.snappy(duration: 0.2)) { channel = value }
+            Haptics.tap()
+        } label: {
+            Text(label)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(on ? tint : P.ink3)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 11)
+                .background(on ? tint.opacity(0.16) : P.sunken, in: Capsule())
+                .overlay(Capsule().stroke(on ? tint.opacity(0.55) : .clear, lineWidth: 1))
+        }
+    }
+
     private func chatRow(_ msg: ChatMessage, _ P: Palette) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let teamColor = msg.team.flatMap { store.state?.teamInfo?[safe: $0] }.map { Color(css: $0.color) }
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 if let flag = msg.flag, !flag.isEmpty {
                     Text(flag).font(.system(size: 12))
@@ -87,6 +139,15 @@ struct ChatLogSheet: View {
                     .font(.system(size: 12.5, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(css: msg.color))
                     .lineLimit(1)
+                if msg.isTeam {
+                    Text("TEAM")
+                        .font(.system(size: 7.5, weight: .black))
+                        .kerning(0.5)
+                        .foregroundStyle(teamColor ?? P.gold)
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 5)
+                        .background((teamColor ?? P.gold).opacity(0.15), in: Capsule())
+                }
             }
             Text(msg.text)
                 .font(.system(size: 14.5, weight: .medium, design: .rounded))
@@ -108,7 +169,7 @@ struct ChatLogSheet: View {
             HStack(spacing: 6) {
                 ForEach(MMStatic.emotes, id: \.self) { emote in
                     Button {
-                        store.sendChat(emote)
+                        store.sendChat(emote, channel: channel)
                         Haptics.tap()
                     } label: {
                         Text(emote)
@@ -150,7 +211,7 @@ struct ChatLogSheet: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.sendChat(text)
+        store.sendChat(text, channel: channel)
         draft = ""
     }
 
@@ -346,6 +407,8 @@ struct GameOverSheet: View {
 
                     winnerHeadline(P)
 
+                    worthChartCard(P)
+
                     standingsCard(P)
 
                     if store.isHost {
@@ -389,6 +452,112 @@ struct GameOverSheet: View {
                 .font(.system(size: 22, weight: .heavy, design: .rounded))
                 .foregroundStyle(P.ink)
         }
+    }
+
+    // MARK: net worth over time
+
+    /// richup-style step chart of everyone's net worth, plus a marker on the
+    /// turn where the winner grabbed the lead for good — where the game turned.
+    @ViewBuilder
+    private func worthChartCard(_ P: Palette) -> some View {
+        let history = store.state?.history ?? []
+        let players = store.state?.players ?? []
+
+        if history.count >= 3, !players.isEmpty {
+            MMCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    PanelTitle("Net worth over time")
+
+                    Chart {
+                        ForEach(players) { p in
+                            ForEach(history, id: \.t) { pt in
+                                LineMark(
+                                    x: .value("Turn", pt.t),
+                                    y: .value("Net worth", pt.w[p.id] ?? 0),
+                                    series: .value("Player", p.id)
+                                )
+                                .foregroundStyle(Color(css: p.color).opacity(p.id == winnerId ? 1 : 0.75))
+                                .interpolationMethod(.stepEnd)
+                                .lineStyle(StrokeStyle(lineWidth: p.id == winnerId ? 2.5 : 1.8, lineCap: .round))
+                            }
+                        }
+
+                        if let flip = turningPoint {
+                            RuleMark(x: .value("Turn", flip))
+                                .foregroundStyle(P.gold.opacity(0.7))
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                .annotation(position: .top, alignment: .leading) {
+                                    Text("👑 game turned here")
+                                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                                        .foregroundStyle(P.gold)
+                                }
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 5)) { _ in
+                            AxisGridLine().foregroundStyle(P.rule)
+                            AxisValueLabel()
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(P.ink3)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                            AxisGridLine().foregroundStyle(P.rule)
+                            AxisValueLabel {
+                                if let v = value.as(Int.self) {
+                                    Text("$\(v >= 1000 ? "\(v / 1000)k" : "\(v)")")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundStyle(P.ink3)
+                                }
+                            }
+                        }
+                    }
+                    .chartXAxisLabel(alignment: .trailing) {
+                        Text("turn")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(P.ink3)
+                    }
+                    .frame(height: 190)
+
+                    // legend
+                    HStack(spacing: 12) {
+                        ForEach(players) { p in
+                            HStack(spacing: 4) {
+                                Circle().fill(Color(css: p.color)).frame(width: 7, height: 7)
+                                Text(p.name)
+                                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                                    .foregroundStyle(P.ink2)
+                                    .lineLimit(1)
+                                if p.id == winnerId {
+                                    Text("👑").font(.system(size: 9))
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    private var winnerId: String? { store.state?.winner?.id }
+
+    /// First turn of the winner's final, unbroken stretch on top.
+    private var turningPoint: Int? {
+        guard let winnerId, let history = store.state?.history, history.count >= 3 else { return nil }
+        var flip: Int? = nil
+        for pt in history {
+            let winnerWorth = pt.w[winnerId] ?? 0
+            let best = pt.w.values.max() ?? 0
+            if winnerWorth >= best {
+                if flip == nil { flip = pt.t }
+            } else {
+                flip = nil
+            }
+        }
+        // Leading from turn one isn't a turning point — no marker then.
+        return flip == history.first?.t ? nil : flip
     }
 
     private func standingsCard(_ P: Palette) -> some View {

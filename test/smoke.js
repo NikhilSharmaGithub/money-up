@@ -307,7 +307,7 @@ console.log('\n▶ targeted rules');
 }
 
 {
-  // Passing START pays a salary; landing on it pays twice.
+  // Passing START pays $200; landing dead on it pays $300 instead.
   const room = new GameRoom('s', () => {});
   room.map = MAPS.classic;
   room.addPlayer({ id: 'a', name: 'A' });
@@ -324,6 +324,13 @@ console.log('\n▶ targeted rules');
   room.movePlayer(a, landing + 2); // wraps past START
   if (a.pos !== landing) fail(`expected to land on tile ${landing}, got ${a.pos}`);
   if (a.money !== before + 200) fail(`passing START should pay exactly $200 (got ${a.money - before})`);
+
+  // Exact landing: $300, and no double-dip with the passing salary.
+  a.pos = room.map.size - 3;
+  const cash = a.money;
+  room.movePlayer(a, 3); // lands dead on START
+  if (a.pos !== 0) fail(`expected to land on START, got ${a.pos}`);
+  if (a.money !== cash + 300) fail(`landing on START should pay exactly $300 (got ${a.money - cash})`);
   ok('START salary');
 }
 

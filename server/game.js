@@ -35,6 +35,8 @@ export const DEFAULT_SETTINGS = {
 const AUCTION_SECONDS = 20;
 const JAIL_FINE = 50;
 const SALARY = 200;
+/** Landing dead on START pays this instead of the passing salary. */
+const START_BONUS = 300;
 const MAX_JAIL_TURNS = 3;
 /** How long a disconnected player keeps their seat before a bot steps in. */
 const RECONNECT_GRACE_MS = 30000;
@@ -60,6 +62,8 @@ export class GameRoom {
     this.winner = null;
     this.winningTeam = null;
     this.decks = { treasure: shuffled(TREASURE), surprise: shuffled(SURPRISE) };
+    this.history = []; // per-turn net-worth snapshots, revealed at game end
+    this.turnCount = 0;
     this.lastCard = null;
     this.lastMove = null;
     this.timers = {};
@@ -299,6 +303,8 @@ export class GameRoom {
     this.status = 'playing';
     this.ownership = {};
     this.vacationPot = 0;
+    this.history = [];
+    this.turnCount = 0;
     this.turn = {
       playerId: this.players[0].id,
       phase: 'roll',
@@ -308,6 +314,7 @@ export class GameRoom {
       debt: null,
       rolledThisTurn: false,
     };
+    this.recordWorth();
     this.say('Game started! Good luck.', 'system');
     this.say(`${this.players[0].name}'s turn`, 'turn');
     this.push();
@@ -361,6 +368,19 @@ export class GameRoom {
 
   cornerIndex(type) {
     return this.map.tiles.findIndex((t) => t.type === type);
+  }
+
+  /**
+   * Snapshots everyone's net worth for the end-of-game chart. Long bot games
+   * can run thousands of turns, so the series halves itself when it gets big —
+   * the shape survives, the payload stays small.
+   */
+  recordWorth() {
+    if (this.status !== 'playing') return;
+    const w = {};
+    for (const p of this.players) w[p.id] = p.bankrupt ? 0 : this.netWorth(p);
+    this.history.push({ t: this.turnCount, w });
+    if (this.history.length > 480) this.history = this.history.filter((_, i) => i % 2 === 0 || i === this.history.length - 1);
   }
 
   // ------------------------------------------------------------------- money --
@@ -485,7 +505,9 @@ export class GameRoom {
     const from = p.pos;
     let to = (p.pos + steps) % size;
     if (to < 0) to += size;
-    const passedStart = steps > 0 && to < from;
+    // Landing dead on START is its own (bigger) payday — see landOn.
+    const landsOnStart = this.tile(to)?.type === 'start';
+    const passedStart = steps > 0 && to < from && !landsOnStart;
     p.pos = to;
     this.lastMove = animate ? { playerId: p.id, from, to, steps, at: Date.now() } : null;
     if (passedStart && collectSalary) {
@@ -497,7 +519,8 @@ export class GameRoom {
 
   teleport(p, to, { collectSalary = true } = {}) {
     const from = p.pos;
-    const passedStart = to < from;
+    const landsOnStart = this.tile(to)?.type === 'start';
+    const passedStart = to < from && !landsOnStart;
     p.pos = to;
     this.lastMove = { playerId: p.id, from, to, steps: 0, at: Date.now() };
     if (passedStart && collectSalary) {
@@ -512,8 +535,8 @@ export class GameRoom {
     const t = this.tile(index);
     switch (t.type) {
       case 'start':
-        p.money += SALARY;
-        this.say(`${p.name} landed on START and collected another $${SALARY}`, 'money');
+        p.money += START_BONUS;
+        this.say(`${p.name} landed right on START — $${START_BONUS}!`, 'money');
         break;
 
       case 'prison':
@@ -1003,6 +1026,8 @@ export class GameRoom {
     if (this.teamsOn) {
       const teams = [...new Set(alive.map((p) => p.team))];
       if (teams.length > 1) return false;
+      this.turnCount++;
+      this.recordWorth();
       this.status = "ended";
       this.winningTeam = teams[0] ?? null;
       this.winner = alive[0] || null;
@@ -1011,6 +1036,8 @@ export class GameRoom {
       this.say(`🏆 Team ${label} wins the game! (${roster})`, "system");
     } else {
       if (alive.length > 1) return false;
+      this.turnCount++;
+      this.recordWorth();
       this.status = "ended";
       this.winner = alive[0] || null;
       this.say(`🏆 ${this.winner ? this.winner.name : "Nobody"} wins the game!`, "system");
@@ -1146,6 +1173,8 @@ export class GameRoom {
         rolledThisTurn: false,
       };
       cand.doublesInARow = 0;
+      this.turnCount++;
+      this.recordWorth();
       this.say(`${cand.name}'s turn`, 'turn');
       this.push();
       this.maybeBot();
@@ -1155,10 +1184,16 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------- chat --
-  sendChat(id, text) {
+  sendChat(id, text, channel) {
     const p = this.player(id);
     if (!p || !text) return;
-    const msg = { id: Math.random().toString(36).slice(2), name: p.name, color: p.color, flag: p.flag || '', text: String(text).slice(0, 200), at: Date.now() };
+    // The team channel only exists when teams do; anything else lands in 'all'.
+    const ch = channel === 'team' && this.teamsOn && p.team != null ? 'team' : 'all';
+    const msg = {
+      id: Math.random().toString(36).slice(2), name: p.name, color: p.color, flag: p.flag || '',
+      text: String(text).slice(0, 200), at: Date.now(),
+      channel: ch, team: ch === 'team' ? p.team : null,
+    };
     this.chat.push(msg);
     if (this.chat.length > 100) this.chat.shift();
     this.push();
@@ -1346,6 +1381,9 @@ export class GameRoom {
       chat: this.chat.slice(-50),
       vacationPot: this.vacationPot,
       winner: this.winner ? { id: this.winner.id, name: this.winner.name, color: this.winner.color } : null,
+      // The chart is an end-of-game reveal; streaming it every push would bloat
+      // the state for nothing.
+      history: this.status === 'ended' ? this.history : [],
       lastCard: this.lastCard,
       lastMove: this.lastMove,
       version: this.version,

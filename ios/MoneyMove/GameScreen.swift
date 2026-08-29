@@ -7,7 +7,8 @@ import SwiftUI
 enum ActiveSheet: Identifiable {
     case deed(Int)
     case properties
-    case trade(String)      // target player id
+    case trade(String, give: Set<Int>)       // target player id (+ preselected tiles)
+    case tradePicker(give: Set<Int>)         // choose who to trade with first
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
     case gameOver
@@ -16,7 +17,8 @@ enum ActiveSheet: Identifiable {
         switch self {
         case .deed(let i): "deed-\(i)"
         case .properties: "properties"
-        case .trade(let t): "trade-\(t)"
+        case .trade(let t, _): "trade-\(t)"
+        case .tradePicker: "tradepicker"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
         case .gameOver: "gameover"
@@ -60,7 +62,7 @@ struct GameScreen: View {
                     PlayerStrip(onTapPlayer: { p in
                         if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                            store.me?.isBankrupt != true {
-                            sheet = .trade(p.id)
+                            sheet = .trade(p.id, give: [])
                         }
                     })
 
@@ -70,7 +72,8 @@ struct GameScreen: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, 12)
 
-                    ActionPanel(openProperties: { sheet = .properties })
+                    ActionPanel(openProperties: { sheet = .properties },
+                                openTrade: { sheet = .tradePicker(give: []) })
                         .frame(maxWidth: 620)
                         .padding(.bottom, 8)
                 } else if store.state?.isLobby == true {
@@ -95,7 +98,7 @@ struct GameScreen: View {
                     PlayerStrip(onTapPlayer: { p in
                         if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                            store.me?.isBankrupt != true {
-                            sheet = .trade(p.id)
+                            sheet = .trade(p.id, give: [])
                         }
                     })
 
@@ -118,8 +121,9 @@ struct GameScreen: View {
             Group {
                 switch which {
                 case .deed(let i): DeedSheet(tileIndex: i)
-                case .properties: PropertiesSheet()
-                case .trade(let target): TradeSheet(targetId: target)
+                case .properties: PropertiesSheet(openTrade: { give in sheet = .tradePicker(give: give) })
+                case .trade(let target, let give): TradeSheet(targetId: target, preselectedGive: give)
+                case .tradePicker(let give): TradePickerSheet(give: give, pick: { sheet = .trade($0, give: give) })
                 case .chatLog(let tab): ChatLogSheet(initialTab: tab)
                 case .settings: SettingsSheet()
                 case .gameOver: GameOverSheet()
@@ -175,6 +179,7 @@ struct GameScreen: View {
             SoundToggle()
             iconButton("bubble.left.and.bubble.right.fill", P) { sheet = .chatLog(0) }
             if store.state?.isPlaying == true {
+                iconButton("arrow.left.arrow.right", P) { sheet = .tradePicker(give: []) }
                 iconButton("building.columns.fill", P) { sheet = .properties }
             }
             ShareLink(item: shareURL) {
@@ -214,7 +219,8 @@ struct GameScreen: View {
                 // The live feed lives inside the board's centre well now, so the
                 // board itself takes the full width and the dock stays at thumbs.
                 Spacer(minLength: 0)
-                ActionPanel(openProperties: { sheet = .properties })
+                ActionPanel(openProperties: { sheet = .properties },
+                            openTrade: { sheet = .tradePicker(give: []) })
                     .padding(.bottom, 4)
             }
         }
@@ -426,9 +432,22 @@ struct CenterWell: View {
                 } else {
                     // The log runs quietly across the whole well; the dice sit
                     // on top, dead-centre of the board, the way a table reads.
+                    // The feed is deliberately ghosted — background murmur, not
+                    // a wall of text competing with the board.
                     GeometryReader { geo in
                         ZStack {
                             ActivityFeed(embedded: true)
+                                .opacity(0.5)
+                                .mask(
+                                    LinearGradient(
+                                        stops: [
+                                            .init(color: .clear, location: 0),
+                                            .init(color: .black.opacity(0.55), location: 0.3),
+                                            .init(color: .black, location: 1),
+                                        ],
+                                        startPoint: .top, endPoint: .bottom
+                                    )
+                                )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                             VStack(spacing: 10) {

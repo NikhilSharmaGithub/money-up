@@ -259,9 +259,13 @@ struct DeedSheet: View {
 // MARK: - properties sheet
 
 struct PropertiesSheet: View {
+    /// Hands a preselected tile set to the trade flow (picker → composer).
+    var openTrade: ((Set<Int>) -> Void)? = nil
+
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmBankrupt = false
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -275,6 +279,16 @@ struct PropertiesSheet: View {
             .navigationTitle("Your properties")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if openTrade != nil, !store.myTiles().isEmpty {
+                        Button {
+                            openTrade?([])
+                        } label: {
+                            Label("Trade", systemImage: "arrow.left.arrow.right")
+                                .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .font(.system(size: 15, weight: .bold, design: .rounded))
@@ -317,7 +331,7 @@ struct PropertiesSheet: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(grouped, id: \.key) { entry in
-                    section(title: sectionTitle(for: entry.key), tiles: entry.tiles, P: P)
+                    section(title: sectionTitle(for: entry.key), tiles: entry.tiles, P: P, groupKey: entry.key)
                 }
                 if !airports.isEmpty {
                     section(title: "✈️ Airports", tiles: airports, P: P)
@@ -325,6 +339,7 @@ struct PropertiesSheet: View {
                 if !utilities.isEmpty {
                     section(title: "💡 Utilities", tiles: utilities, P: P)
                 }
+                bankruptRow(P)
             }
         }
     }
@@ -336,18 +351,80 @@ struct PropertiesSheet: View {
         return groupKey
     }
 
-    private func section(title: String, tiles: [TileData], P: Palette) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PanelTitle(title)
+    /// The web's always-there escape hatch, mirrored: give up on your own turn.
+    @ViewBuilder
+    private func bankruptRow(_ P: Palette) -> some View {
+        if store.isMyTurn {
+            Button("🏳️  Declare bankruptcy") { confirmBankrupt = true }
+                .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                .padding(.top, 6)
+                .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
+                    Button("Go bankrupt", role: .destructive) {
+                        store.declareBankrupt()
+                        dismiss()
+                    }
+                } message: {
+                    Text("Everything you own returns to the bank and you are out of the game.")
+                }
+        }
+    }
+
+    /// "how many of this country do I hold" — drives the set-progress badge.
+    private func setProgress(for groupKey: String) -> (owned: Int, total: Int)? {
+        guard let idxs = store.state?.map.groups?[groupKey], !idxs.isEmpty else { return nil }
+        let owned = idxs.filter { store.state?.owner(of: $0)?.owner == store.activeId }.count
+        return (owned, idxs.count)
+    }
+
+    private func section(title: String, tiles: [TileData], P: Palette, groupKey: String? = nil) -> some View {
+        let progress = groupKey.flatMap { setProgress(for: $0) }
+        let fullSet = progress.map { $0.owned == $0.total } ?? false
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                PanelTitle(title)
+                Spacer()
+                if let progress {
+                    Text(fullSet ? "FULL SET" : "\(progress.owned) of \(progress.total)")
+                        .font(.system(size: 8.5, weight: .black))
+                        .kerning(0.6)
+                        .foregroundStyle(fullSet ? Color(hex: 0x201607) : P.ink3)
+                        .padding(.vertical, 3)
+                        .padding(.horizontal, 7)
+                        .background(fullSet ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
+                }
+            }
             VStack(spacing: 8) {
                 ForEach(tiles) { tile in
-                    tileRow(tile, P)
+                    tileRow(tile, fullSet: fullSet, P: P)
                 }
             }
         }
     }
 
-    private func tileRow(_ tile: TileData, _ P: Palette) -> some View {
+    /// What this tile earns per landing right now — mirrors server rentFor().
+    private func rentNow(_ tile: TileData, own: TileOwnership?) -> Int? {
+        guard let own, !own.isMortgaged else { return nil }
+        switch tile.type {
+        case "property":
+            guard let rent = tile.rent, let base = rent[safe: own.houseCount] else { return nil }
+            let full = tile.group.map { store.ownsFullGroup(store.activeId, group: $0) } ?? false
+            let doubled = full && own.houseCount == 0 && store.state?.settings.x2rent == true
+            return doubled ? base * 2 : base
+        case "airport":
+            guard let state = store.state else { return nil }
+            let count = state.ownership.reduce(0) { acc, e in
+                guard e.value.owner == own.owner, let i = Int(e.key),
+                      state.map.tiles[safe: i]?.type == "airport" else { return acc }
+                return acc + 1
+            }
+            return 25 * Int(pow(2.0, Double(max(0, count - 1))))
+        default:
+            return nil
+        }
+    }
+
+    private func tileRow(_ tile: TileData, fullSet: Bool, P: Palette) -> some View {
         let own = store.state?.owner(of: tile.index)
         let houses = own?.houseCount ?? 0
         let mortgaged = own?.isMortgaged ?? false
@@ -379,15 +456,35 @@ struct PropertiesSheet: View {
                         .padding(.vertical, 3)
                         .padding(.horizontal, 6)
                         .background(P.redSoft, in: Capsule())
+                } else if let rent = rentNow(tile, own: own) {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("rent")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(P.ink3)
+                        Text(money(rent))
+                            .font(.system(size: 13, weight: .heavy, design: .rounded))
+                            .foregroundStyle(P.good)
+                    }
                 }
             }
 
             let buttons = rowButtons(for: tile, own: own)
-            if !buttons.isEmpty {
+            let canOfferInTrade = openTrade != nil && houses == 0
+            if !buttons.isEmpty || canOfferInTrade {
                 HStack(spacing: 6) {
                     ForEach(Array(buttons.enumerated()), id: \.offset) { _, b in
                         Button(b.label, action: b.action)
                             .buttonStyle(MMButtonStyle(kind: b.kind))
+                    }
+                    Spacer(minLength: 0)
+                    if canOfferInTrade {
+                        Button {
+                            openTrade?([tile.index])
+                        } label: {
+                            Image(systemName: "arrow.left.arrow.right")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .ghost))
                     }
                 }
             }
@@ -396,7 +493,10 @@ struct PropertiesSheet: View {
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(fullSet ? P.gold.opacity(0.55) : P.rule, lineWidth: 1)
+        )
     }
 
     private struct RowButton {

@@ -110,14 +110,28 @@ export function renderLog(state, el) {
   if (wasAtBottom) el.scrollTop = el.scrollHeight;
 }
 
-export function renderChat(state, el) {
-  const sig = `${state.chat.length}:${state.chat[state.chat.length - 1]?.id || ''}`;
+export function renderChat(state, el, channel = 'all') {
+  // Team messages live in their own channel; the server already keeps other
+  // teams' messages out of this client's copy of the chat.
+  const teamed = (state.settings?.teams || 0) > 0;
+  const msgs = teamed
+    ? state.chat.filter((m) => (channel === 'team' ? m.channel === 'team' : m.channel !== 'team'))
+    : state.chat;
+  const sig = `${channel}:${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
-  if (!state.chat.length) { el.innerHTML = '<div class="empty">Say hi 👋</div>'; return; }
-  el.innerHTML = state.chat.map((m) => `<div class="chat-msg">
-      ${m.flag ? `<span class="chat-flag">${escapeHtml(m.flag)}</span>` : ''}<b style="color:${m.color}">${escapeHtml(m.name)}</b> ${escapeHtml(m.text)}
-    </div>`).join('');
+  if (!msgs.length) {
+    el.innerHTML = channel === 'team'
+      ? '<div class="empty">Only your team reads this. Plan away 🛡️</div>'
+      : '<div class="empty">Say hi 👋</div>';
+    return;
+  }
+  el.innerHTML = msgs.map((m) => {
+    const teamColor = m.channel === 'team' ? state.teamInfo?.[m.team]?.color : null;
+    return `<div class="chat-msg">
+      ${m.flag ? `<span class="chat-flag">${escapeHtml(m.flag)}</span>` : ''}<b style="color:${m.color}">${escapeHtml(m.name)}</b>${teamColor ? ` <span class="chat-team-badge" style="color:${teamColor}">TEAM</span>` : ''} ${escapeHtml(m.text)}
+    </div>`;
+  }).join('');
   el.scrollTop = el.scrollHeight;
 }
 
@@ -926,6 +940,65 @@ export function openTradeModal(state, meId, targetId, actions) {
   }, 'wide');
 }
 
+/** richup-style stepped net-worth chart, drawn straight into SVG. */
+function worthChartSVG(state) {
+  const history = state.history || [];
+  if (history.length < 3 || !state.players.length) return '';
+
+  const W = 460, H = 210, padL = 44, padR = 12, padT = 16, padB = 26;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const maxT = Math.max(1, history[history.length - 1].t);
+  const maxW = Math.max(100, ...history.flatMap((pt) => Object.values(pt.w)));
+  const x = (t) => padL + (t / maxT) * innerW;
+  const y = (w) => padT + innerH - (w / maxW) * innerH;
+
+  // grid + labels
+  let grid = '';
+  for (let k = 0; k <= 4; k++) {
+    const v = Math.round((maxW / 4) * k);
+    const yy = y(v);
+    grid += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" class="gc-grid"/>
+      <text x="${padL - 6}" y="${yy + 3}" class="gc-label" text-anchor="end">$${v >= 1000 ? Math.round(v / 100) / 10 + 'k' : v}</text>`;
+  }
+  grid += `<text x="${W - padR}" y="${H - 8}" class="gc-label" text-anchor="end">turn ${maxT}</text>`;
+
+  // one stepped line per player
+  const lines = state.players.map((p) => {
+    let d = '';
+    history.forEach((pt, k) => {
+      const px = x(pt.t), py = y(pt.w[p.id] ?? 0);
+      d += k === 0 ? `M${px.toFixed(1)} ${py.toFixed(1)}` : `H${px.toFixed(1)}V${py.toFixed(1)}`;
+    });
+    const isWinner = p.id === state.winner?.id;
+    return `<path d="${d}" fill="none" stroke="${p.color}" stroke-width="${isWinner ? 2.6 : 1.8}"
+      stroke-linejoin="round" opacity="${isWinner ? 1 : 0.75}"/>`;
+  }).join('');
+
+  // where the winner grabbed the lead for good
+  let flipMark = '';
+  if (state.winner) {
+    let flip = null;
+    for (const pt of history) {
+      const mine = pt.w[state.winner.id] ?? 0;
+      const best = Math.max(...Object.values(pt.w));
+      if (mine >= best) { if (flip === null) flip = pt.t; } else flip = null;
+    }
+    if (flip !== null && flip !== history[0].t) {
+      flipMark = `<line x1="${x(flip)}" y1="${padT}" x2="${x(flip)}" y2="${padT + innerH}" class="gc-flip"/>
+        <text x="${Math.min(x(flip) + 4, W - 90)}" y="${padT + 9}" class="gc-flip-label">👑 game turned</text>`;
+    }
+  }
+
+  const legend = state.players.map((p) => `<span class="gc-key">
+      <i style="background:${p.color}"></i>${escapeHtml(p.name)}${p.id === state.winner?.id ? ' 👑' : ''}</span>`).join('');
+
+  return `<div class="go-chart">
+      <p class="sub">Net worth over time</p>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${grid}${lines}${flipMark}</svg>
+      <div class="gc-legend">${legend}</div>
+    </div>`;
+}
+
 export function showGameOver(state, meId, actions) {
   const rank = [...state.players].sort((a, b) =>
     Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
@@ -933,6 +1006,7 @@ export function showGameOver(state, meId, actions) {
   openModal(`
     <div class="go-crown">🏆</div>
     <h2 class="go-title" style="color:${state.winner?.color || '#fff'}">${escapeHtml(state.winner?.name || 'Nobody')} wins!</h2>
+    ${worthChartSVG(state)}
     <p class="sub">Final standings</p>
     ${rank.map((p, k) => `<div class="rank-row ${p.id === meId ? 'me' : ''}">
       <span class="rank-pos">${medals[k] || k + 1}</span>
