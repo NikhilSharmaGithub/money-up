@@ -263,43 +263,124 @@ struct TileView: View {
 
 // MARK: - tokens
 
+/// Walks each token tile-by-tile when its player moved by dice — with a tick
+/// per step and a soft thump on arrival — and glides it when teleported.
+@MainActor
+final class TokenWalker: ObservableObject {
+    @Published var shown: [String: Int] = [:]
+    private var tasks: [String: Task<Void, Never>] = [:]
+    private var targets: [String: Int] = [:]
+    private var lastMoveAt: Double = 0
+
+    func reconcile(_ state: GameState) {
+        let alive = state.players.filter { !$0.isBankrupt }
+        for gone in shown.keys where !alive.contains(where: { $0.id == gone }) {
+            shown.removeValue(forKey: gone)
+            tasks[gone]?.cancel()
+        }
+
+        let move = state.lastMove
+        let fresh = move != nil && move!.at != lastMoveAt
+        if fresh { lastMoveAt = move!.at }
+
+        for p in alive {
+            let current = shown[p.id]
+            guard current != p.pos else { targets.removeValue(forKey: p.id); continue }
+            // A walk already heading to this exact tile keeps going — state
+            // pushes mid-walk (rent, cards) must not snap the token forward.
+            if targets[p.id] == p.pos, tasks[p.id] != nil { continue }
+            tasks[p.id]?.cancel()
+
+            // First sight of a player, or a teleport: glide straight there.
+            guard let from = current, fresh, let move, move.playerId == p.id, move.steps != 0 else {
+                shown[p.id] = p.pos
+                if current != nil { SoundKit.shared.land() }
+                continue
+            }
+
+            let size = state.map.size
+            let dir = move.steps > 0 ? 1 : -1
+            let distance = dir > 0 ? (p.pos - from + size) % size : (from - p.pos + size) % size
+            let pace: Duration = .milliseconds(distance > 12 ? 70 : distance > 7 ? 95 : 130)
+            let target = p.pos
+            targets[p.id] = target
+
+            tasks[p.id] = Task { [weak self] in
+                var at = from
+                for _ in 0..<distance {
+                    guard !Task.isCancelled else { return }
+                    at = (at + dir + size) % size
+                    self?.shown[p.id] = at
+                    if at == target { SoundKit.shared.land() } else { SoundKit.shared.step() }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55)
+                    try? await Task.sleep(for: pace)
+                }
+                self?.tasks.removeValue(forKey: p.id)
+                self?.targets.removeValue(forKey: p.id)
+            }
+        }
+    }
+}
+
 struct TokenLayer: View {
     @EnvironmentObject var store: GameStore
+    @StateObject private var walker = TokenWalker()
     let geom: BoardGeometry
+
+    var body: some View {
+        if let state = store.state, state.isPlaying || state.isEnded {
+            let alive = state.players.filter { !$0.isBankrupt }
+            ZStack(alignment: .topLeading) {
+                ForEach(alive) { p in
+                    PlacedToken(player: p, alive: alive, walker: walker, geom: geom,
+                                isTurn: state.turn?.playerId == p.id)
+                }
+            }
+            .onChange(of: state.lastMove?.at) { walker.reconcile(state) }
+            .onChange(of: state.version) { walker.reconcile(state) }
+            .onAppear { walker.reconcile(state) }
+        }
+    }
+}
+
+/// One token, standing at its tile's inner edge (pushed toward the middle of
+/// the board so it never covers the flag or the price).
+private struct PlacedToken: View {
+    let player: PlayerState
+    let alive: [PlayerState]
+    @ObservedObject var walker: TokenWalker
+    let geom: BoardGeometry
+    let isTurn: Bool
 
     private static let slots: [(CGFloat, CGFloat)] = [
         (-0.20, -0.18), (0.20, -0.18), (-0.20, 0.18), (0.20, 0.18),
         (0, -0.30), (0, 0.30), (-0.34, 0), (0.34, 0),
     ]
 
-    var body: some View {
-        if let state = store.state, state.isPlaying || state.isEnded {
-            let alive = state.players.filter { !$0.isBankrupt }
-            ForEach(alive) { p in
-                let frame = geom.frame(of: p.pos)
-                let cohort = alive.filter { $0.pos == p.pos }
-                let slot = cohort.count > 1
-                    ? Self.slots[(cohort.firstIndex(where: { $0.id == p.id }) ?? 0) % Self.slots.count]
-                    : (0, 0)
-                let isTurn = state.turn?.playerId == p.id
-
-                // Pieces stand at the tile's inner edge — pushed toward the middle
-                // of the board — so they never cover the flag or the price.
-                let mid = CGPoint(x: geom.size.width / 2, y: geom.size.height / 2)
-                let v = CGVector(dx: mid.x - frame.midX, dy: mid.y - frame.midY)
-                let len = max(1, (v.dx * v.dx + v.dy * v.dy).squareRoot())
-                let push = min(frame.width, frame.height) * 0.42
-                let inward = CGVector(dx: v.dx / len * push, dy: v.dy / len * push)
-
-                TokenDisc(player: p, highlighted: isTurn)
-                    .position(
-                        x: frame.midX + inward.dx + slot.0 * frame.width * 0.45,
-                        y: frame.midY + inward.dy + slot.1 * frame.height * 0.45
-                    )
-                    .animation(.spring(duration: 0.55, bounce: 0.25), value: p.pos)
-                    .zIndex(isTurn ? 10 : 5)
-            }
+    private var position: CGPoint {
+        let pos = walker.shown[player.id] ?? player.pos
+        let frame = geom.frame(of: pos)
+        let cohort = alive.filter { (walker.shown[$0.id] ?? $0.pos) == pos }
+        var slot: (CGFloat, CGFloat) = (0, 0)
+        if cohort.count > 1, let k = cohort.firstIndex(where: { $0.id == player.id }) {
+            slot = Self.slots[k % Self.slots.count]
         }
+        let mid = CGPoint(x: geom.size.width / 2, y: geom.size.height / 2)
+        let v = CGVector(dx: mid.x - frame.midX, dy: mid.y - frame.midY)
+        let len = max(1, (v.dx * v.dx + v.dy * v.dy).squareRoot())
+        let push = min(frame.width, frame.height) * 0.42
+        return CGPoint(
+            x: frame.midX + v.dx / len * push + slot.0 * frame.width * 0.45,
+            y: frame.midY + v.dy / len * push + slot.1 * frame.height * 0.45
+        )
+    }
+
+    var body: some View {
+        let pos = walker.shown[player.id] ?? player.pos
+        TokenDisc(player: player, highlighted: isTurn)
+            .position(position)
+            .animation(.spring(duration: 0.26, bounce: 0.42), value: pos)
+            .zIndex(isTurn ? 10 : 5)
     }
 }
 
@@ -362,7 +443,7 @@ struct DieFace: View {
                         GridRow {
                             ForEach(0..<3) { col in
                                 Circle()
-                                    .fill(Color(hex: 0xD92037))
+                                    .fill(Color(hex: 0x1B5E3F))
                                     .frame(width: 7, height: 7)
                                     .opacity(Self.pips[value]?.contains(row * 3 + col) == true ? 1 : 0)
                             }

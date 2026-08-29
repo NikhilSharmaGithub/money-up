@@ -117,6 +117,7 @@ struct GameScreen: View {
 
             Spacer()
 
+            SoundToggle()
             iconButton("bubble.left.and.bubble.right.fill", P) { sheet = .chatLog(0) }
             iconButton("list.bullet.rectangle.fill", P) { sheet = .chatLog(1) }
             if store.state?.isPlaying == true {
@@ -231,6 +232,28 @@ struct ActivityFeed: View {
         .background(P.card.opacity(scheme == .light ? 0.9 : 0.55),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+}
+
+// MARK: - sound toggle
+
+struct SoundToggle: View {
+    @Environment(\.colorScheme) private var scheme
+    @State private var on = SoundKit.shared.enabled
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        Button {
+            on.toggle()
+            SoundKit.shared.enabled = on
+            if on { SoundKit.shared.warmUp(); SoundKit.shared.click() }
+        } label: {
+            Image(systemName: on ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(on ? P.ink2 : P.ink3)
+                .frame(width: 34, height: 34)
+                .background(P.card, in: Circle())
+        }
     }
 }
 

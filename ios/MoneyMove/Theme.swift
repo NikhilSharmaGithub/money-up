@@ -42,36 +42,38 @@ struct Palette {
     let tileJail: Color
     let tileCorner: Color
 
+    /// Midnight felt: a deep green card-table, warm ivory ink, brass accents.
     static let dark = Palette(
-        page: Color(hex: 0x150A0E), page2: Color(hex: 0x0D0508),
-        card: Color(hex: 0x211319), sheet: Color(hex: 0x1B0F14), sunken: Color(hex: 0x2B1A21), boardBG: Color(hex: 0x1A0E13),
-        ink: Color(hex: 0xF4EAED), ink2: Color(hex: 0xBDA8B0), ink3: Color(hex: 0x8D757E),
-        rule: Color(hex: 0x382330), rule2: Color(hex: 0x4A2F3C),
-        red: Color(hex: 0xF04156), redDeep: Color(hex: 0xC4243A), redSoft: Color(hex: 0x3A1620),
-        good: Color(hex: 0x4ADE80), goodSoft: Color(hex: 0x16301F),
-        bad: Color(hex: 0xFB7185),
-        gold: Color(hex: 0xFBBF24), goldSoft: Color(hex: 0x35240D),
-        tileTreasure: Color(hex: 0x33250F), tileSurprise: Color(hex: 0x351327),
-        tileTax: Color(hex: 0x3A1620), tileRefund: Color(hex: 0x16301F),
-        tileStart: Color(hex: 0x12331F), tileGoto: Color(hex: 0x3D1720),
-        tileVacation: Color(hex: 0x12312F), tileJail: Color(hex: 0x1F2338),
-        tileCorner: Color(hex: 0x33202A)
+        page: Color(hex: 0x0C1310), page2: Color(hex: 0x070B09),
+        card: Color(hex: 0x16211C), sheet: Color(hex: 0x101915), sunken: Color(hex: 0x1D2B25), boardBG: Color(hex: 0x121D18),
+        ink: Color(hex: 0xEFEDE2), ink2: Color(hex: 0xADB6AC), ink3: Color(hex: 0x78827A),
+        rule: Color(hex: 0x24332C), rule2: Color(hex: 0x31453C),
+        red: Color(hex: 0xE3A93C), redDeep: Color(hex: 0xC08A25), redSoft: Color(hex: 0x2E2718),
+        good: Color(hex: 0x4FD98B), goodSoft: Color(hex: 0x14291E),
+        bad: Color(hex: 0xE25A6D),
+        gold: Color(hex: 0xD9A13A), goldSoft: Color(hex: 0x2C2413),
+        tileTreasure: Color(hex: 0x2C2413), tileSurprise: Color(hex: 0x2A1D2C),
+        tileTax: Color(hex: 0x2E1B1F), tileRefund: Color(hex: 0x14291E),
+        tileStart: Color(hex: 0x153125), tileGoto: Color(hex: 0x331B21),
+        tileVacation: Color(hex: 0x122C2A), tileJail: Color(hex: 0x1C2433),
+        tileCorner: Color(hex: 0x223129)
     )
 
+    /// Daylight table: warm ivory linen, white cards, forest-and-brass accents.
     static let light = Palette(
-        page: Color(hex: 0xB31527), page2: Color(hex: 0x8E0F1E),
-        card: .white, sheet: Color(hex: 0xF6F1ED), sunken: Color(hex: 0xF4EEEA), boardBG: Color(hex: 0xFFFAF7),
-        ink: Color(hex: 0x1E1A1C), ink2: Color(hex: 0x5F5359), ink3: Color(hex: 0x948890),
-        rule: Color(hex: 0xE9E0DB), rule2: Color(hex: 0xD8CAC3),
-        red: Color(hex: 0xD92037), redDeep: Color(hex: 0xA4142A), redSoft: Color(hex: 0xFDECEE),
-        good: Color(hex: 0x157F4A), goodSoft: Color(hex: 0xE6F5EC),
-        bad: Color(hex: 0xC3283C),
-        gold: Color(hex: 0xB7791F), goldSoft: Color(hex: 0xFDF3E0),
-        tileTreasure: Color(hex: 0xFDF3E0), tileSurprise: Color(hex: 0xFDEAF3),
-        tileTax: Color(hex: 0xFDECEE), tileRefund: Color(hex: 0xE6F5EC),
-        tileStart: Color(hex: 0xE9F7EF), tileGoto: Color(hex: 0xFDEAEC),
-        tileVacation: Color(hex: 0xE6F6F6), tileJail: Color(hex: 0xEEF0F7),
-        tileCorner: Color(hex: 0xFFFDFB)
+        page: Color(hex: 0xEFE9DC), page2: Color(hex: 0xE2DAC9),
+        card: .white, sheet: Color(hex: 0xF7F3EA), sunken: Color(hex: 0xEFE9DE), boardBG: Color(hex: 0xFDFBF4),
+        ink: Color(hex: 0x201F1A), ink2: Color(hex: 0x5C5B50), ink3: Color(hex: 0x92917F),
+        rule: Color(hex: 0xE4DECE), rule2: Color(hex: 0xD2CAB6),
+        red: Color(hex: 0xB58223), redDeep: Color(hex: 0x93690F), redSoft: Color(hex: 0xF7EDD8),
+        good: Color(hex: 0x177C4D), goodSoft: Color(hex: 0xE4F3EA),
+        bad: Color(hex: 0xBF3A4E),
+        gold: Color(hex: 0xA97B1D), goldSoft: Color(hex: 0xF7EDD8),
+        tileTreasure: Color(hex: 0xF7EDD8), tileSurprise: Color(hex: 0xF3E4F1),
+        tileTax: Color(hex: 0xF6E3E5), tileRefund: Color(hex: 0xE4F3EA),
+        tileStart: Color(hex: 0xE2F2E8), tileGoto: Color(hex: 0xF6E3E7),
+        tileVacation: Color(hex: 0xE0F0EE), tileJail: Color(hex: 0xE8EBF4),
+        tileCorner: Color(hex: 0xFFFEF9)
     )
 
     static func current(_ scheme: ColorScheme) -> Palette {
@@ -145,7 +147,11 @@ struct MMButtonStyle: ButtonStyle {
         case .gold: P.gold
         case .ghost: P.sunken
         }
-        let fg: Color = kind == .ghost ? P.ink : .white
+        let fg: Color = switch kind {
+        case .ghost: P.ink
+        case .primary, .gold: Color(hex: 0x201607)
+        case .good, .bad: .white
+        }
         configuration.label
             .font(.system(size: big ? 17 : 14, weight: .bold, design: .rounded))
             .foregroundStyle(fg)

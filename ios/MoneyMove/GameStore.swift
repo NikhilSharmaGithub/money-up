@@ -121,7 +121,7 @@ final class GameStore: ObservableObject {
         // card popup — fires once per draw
         if let card = new.lastCard, card.at != lastCardAt {
             lastCardAt = card.at
-            if old != nil { cardPopup = card }
+            if old != nil { cardPopup = card; SoundKit.shared.card() }
         }
 
         // turn banner — when the turn passes to someone new
@@ -135,20 +135,27 @@ final class GameStore: ObservableObject {
                     if !Task.isCancelled { turnBanner = nil }
                 }
             }
-            if turnId == meId { Haptics.turn() }
+            if turnId == meId { Haptics.turn(); SoundKit.shared.turn() }
         }
 
         // game over sheet, once
-        if new.isEnded && old?.isEnded != true { showGameOver = true }
+        if new.isEnded && old?.isEnded != true { showGameOver = true; SoundKit.shared.win() }
         if !new.isEnded { showGameOver = false }
 
-        // haptics on fresh money events
+        // sounds + haptics on fresh log lines (mirrors the web client's mapping)
         if let last = new.log.last, last.at > lastLogAt {
             lastLogAt = last.at
             if old != nil {
                 switch last.kind {
-                case "money", "buy": Haptics.tap()
-                case "rent", "bankrupt": Haptics.warn()
+                case "dice": SoundKit.shared.dice()
+                case "money": SoundKit.shared.cash(); Haptics.tap()
+                case "buy": SoundKit.shared.buy(); Haptics.tap()
+                case "rent": SoundKit.shared.rent(); Haptics.warn()
+                case "bankrupt": SoundKit.shared.bankrupt(); Haptics.warn()
+                case "jail": SoundKit.shared.jail()
+                case "build": SoundKit.shared.build()
+                case "trade": SoundKit.shared.trade()
+                case "auction": SoundKit.shared.auction()
                 default: break
                 }
             }
@@ -167,6 +174,7 @@ final class GameStore: ObservableObject {
     // MARK: - room lifecycle
 
     func createRoom() {
+        SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         joinError = nil
         socket.connect(to: url)
@@ -183,6 +191,7 @@ final class GameStore: ObservableObject {
     }
 
     func join(roomId id: String) {
+        SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         joinError = nil
         roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
