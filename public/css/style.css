@@ -206,8 +206,8 @@ option { background: #1b1330; }
 /* ─────────────────────────────────────────────────────────── app shell ── */
 .app {
   height: 100vh; display: grid;
-  grid-template-columns: 292px minmax(0, 1fr) 330px;
-  gap: 13px; padding: 13px;
+  grid-template-columns: 258px minmax(0, 1fr) 296px;
+  gap: 11px; padding: 11px;
 }
 .col { min-height: 0; display: flex; flex-direction: column; gap: 11px; }
 .col.left, .col.right { overflow: hidden; }
@@ -267,7 +267,7 @@ option { background: #1b1330; }
 /* ─────────────────────────────────────────────────────────────── board ── */
 .board-wrap {
   position: relative;
-  width: min(100%, calc(100vh - 26px));
+  width: min(100%, calc(100vh - 22px));
   aspect-ratio: 1 / 1;
 }
 .board {
@@ -301,7 +301,7 @@ option { background: #1b1330; }
 .t-right  { flex-direction: row-reverse; }
 
 /* the colour wash, strongest at the inner edge */
-.tile-wash { position: absolute; inset: 0; pointer-events: none; opacity: .62; }
+.tile-wash { position: absolute; inset: 0; pointer-events: none; opacity: .72; }
 .t-top .tile-wash    { background: linear-gradient(0deg,   var(--g, transparent), transparent 64%); }
 .t-bottom .tile-wash { background: linear-gradient(180deg, var(--g, transparent), transparent 64%); }
 .t-left .tile-wash   { background: linear-gradient(270deg, var(--g, transparent), transparent 64%); }
@@ -325,20 +325,20 @@ option { background: #1b1330; }
   position: relative; z-index: 2;
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 6%; padding: 7% 4%; min-width: 0; min-height: 0; text-align: center;
+  gap: 5%; padding: 8% 5%; min-width: 0; min-height: 0; text-align: center;
 }
 .t-left .tile-body, .t-right .tile-body { writing-mode: vertical-rl; }
 .t-left .tile-body { transform: rotate(180deg); }
 
 .tile-name {
-  font-size: clamp(7px, .84vw, 12.5px); font-weight: 700; line-height: 1.12;
+  font-size: clamp(7.5px, 1.02vw, 15.5px); font-weight: 700; line-height: 1.1;
   color: #fff; letter-spacing: -.2px; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   text-shadow: 0 1px 3px rgba(0, 0, 0, .65);
 }
 .tile-price {
-  font-size: clamp(6px, .68vw, 10.5px); font-weight: 700; letter-spacing: -.2px;
-  color: rgba(255, 255, 255, .82);
+  font-size: clamp(6px, .74vw, 11.5px); font-weight: 700; letter-spacing: -.2px;
+  color: rgba(255, 255, 255, .85);
   background: rgba(0, 0, 0, .34);
   padding: 1px 5px; border-radius: 5px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07);
@@ -352,24 +352,29 @@ option { background: #1b1330; }
 /* round flag / category medallion */
 .medal {
   flex: none; writing-mode: horizontal-tb;
-  width: clamp(13px, 1.75vw, 26px); height: clamp(13px, 1.75vw, 26px);
+  width: clamp(16px, 2.35vw, 36px); height: clamp(16px, 2.35vw, 36px);
   border-radius: 50%; overflow: hidden;
   display: grid; place-items: center;
   background: #0e0a1c;
   box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .82), 0 2px 5px rgba(0, 0, 0, .55);
 }
 .medal > span {
-  font-size: clamp(11px, 1.5vw, 22px); line-height: 1;
+  font-size: clamp(14px, 2vw, 30px); line-height: 1;
   transform: scale(1.32); /* flags are wide — overfill, then clip to the circle */
 }
 .medal.plain { background: rgba(10, 6, 20, .75); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .35), 0 2px 5px rgba(0, 0, 0, .5); }
 .medal.plain > span { transform: scale(.92); }
 .t-left .medal { transform: rotate(180deg); }
 
-.tile-mark { writing-mode: horizontal-tb; font-size: clamp(11px, 1.4vw, 21px); line-height: 1; }
-.tile-mark.big { font-size: clamp(13px, 1.75vw, 27px); }
-.tile-mark.huge { font-size: clamp(16px, 2.3vw, 38px); filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .55)); }
-.t-left .tile-mark { transform: rotate(180deg); }
+.tile-art {
+  writing-mode: horizontal-tb; flex: none; display: block;
+  width: clamp(16px, 2.25vw, 34px); height: clamp(16px, 2.25vw, 34px);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, .45));
+}
+.tile-art.big  { width: clamp(19px, 2.6vw, 40px); height: clamp(19px, 2.6vw, 40px); }
+.tile-art.huge { width: clamp(28px, 3.8vw, 64px); height: clamp(28px, 3.8vw, 64px); }
+.tile-art svg { width: 100%; height: 100%; display: block; }
+.t-left .tile-art { transform: rotate(180deg); }
 
 .accent-treasure { color: #f7c67a; }
 .accent-surprise { color: #f7a8cd; }
@@ -413,9 +418,12 @@ option { background: #1b1330; }
 .t-right .tile-houses  { left: 1px; top: 0; bottom: 0; flex-direction: column; }
 .tile.has-buildings .medal { display: none; }
 .tile-houses .house, .tile-houses .hotel {
-  animation: popIn .35s var(--pop);
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .5));
+  display: block; animation: popIn .35s var(--pop);
+  width: clamp(7px, .82vw, 13px); height: clamp(7px, .82vw, 13px);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
 }
+.tile-houses .hotel { width: clamp(9px, 1.05vw, 17px); height: clamp(9px, 1.05vw, 17px); }
+.tile-houses svg { width: 100%; height: 100%; display: block; }
 @keyframes popIn { from { transform: scale(0); } }
 
 /* tokens ride on their own layer so they can animate between tiles */
@@ -969,3 +977,8 @@ body.my-turn .board { box-shadow: var(--shadow), inset 0 0 90px rgba(139, 92, 24
 @media (max-width: 560px) {
   .flag-picker { grid-template-columns: repeat(8, 1fr); }
 }
+
+/* the deed header shows either a flag glyph or a drawing — size both alike */
+.deed-flag { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; }
+.deed-flag svg { width: 100%; height: 100%; }
+.deed.compact .deed-flag { width: 15px; height: 15px; }

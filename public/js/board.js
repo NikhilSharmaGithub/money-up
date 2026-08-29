@@ -2,6 +2,8 @@
 // buildings on every update, and animates player tokens on a floating layer so
 // they can hop tile-by-tile instead of teleporting.
 
+import { ART, utilityArt } from './icons.js';
+
 let builtMapId = null;
 let tileEls = [];
 
@@ -57,53 +59,53 @@ export function renderBoard(state, root) {
   return true;
 }
 
-// Each tile carries the group colour as a wash from the inner edge, a round
-// flag medallion for identity, and the price on its own chip at the outer edge.
+// Each tile carries the group colour as a wash from the inner edge, a round flag
+// medallion for identity, and the price on its own chip at the outer edge.
 function tileMarkup(tile, groups) {
   const g = tile.group ? groups[tile.group] : null;
   const price = tile.price ? `<span class="tile-price">${tile.price}$</span>` : '';
-  const medal = (mark, cls = '') =>
-    `<span class="medal ${cls}"><span>${mark}</span></span>`;
+  const flag = (mark) => `<span class="medal"><span>${mark}</span></span>`;
+  const art = (drawing, cls = '') => `<span class="tile-art ${cls}">${drawing}</span>`;
 
   let body;
   switch (tile.type) {
     case 'property':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal(g?.flag || '🏳️')}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${flag(g?.flag || '🏳️')}`;
       break;
     case 'airport':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal('✈️', 'plain')}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.airport)}`;
       break;
     case 'utility':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal(tile.icon || '💡', 'plain')}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${art(utilityArt(tile.icon))}`;
       break;
     case 'tax':
-      body = `<span class="tile-name">${escapeHtml(tile.name)}</span><span class="tile-mark">💸</span>
+      body = `<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.tax)}
               <span class="tile-price solo">${tile.amount ? `$${tile.amount}` : `${tile.percent}%`}</span>`;
       break;
     case 'refund':
-      body = `<span class="tile-name">${escapeHtml(tile.name)}</span><span class="tile-mark">💵</span>
+      body = `<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.refund)}
               <span class="tile-price solo">$${tile.amount}</span>`;
       break;
     case 'treasure':
-      body = `<span class="tile-name accent-treasure">Treasure</span><span class="tile-mark big">🧰</span>`;
+      body = `<span class="tile-name accent-treasure">Treasure</span>${art(ART.treasure, 'big')}`;
       break;
     case 'surprise':
-      body = `<span class="tile-name accent-surprise">Surprise</span><span class="tile-mark big">❓</span>`;
+      body = `<span class="tile-name accent-surprise">Surprise</span>${art(ART.surprise, 'big')}`;
       break;
     case 'start':
-      body = `<span class="tile-name start-word">START</span><span class="tile-mark huge">🚀</span>
+      body = `<span class="tile-name start-word">START</span>${art(ART.start, 'huge')}
               <span class="tile-sub">collect $200</span>`;
       break;
     case 'prison':
-      body = `<span class="tile-sub">Passing by</span><span class="tile-mark huge">🚔</span>
+      body = `<span class="tile-sub">Passing by</span>${art(ART.prison, 'huge')}
               <span class="tile-name">In Prison</span>`;
       break;
     case 'vacation':
-      body = `<span class="tile-mark huge">🏝️</span><span class="tile-name">Vacation</span>
+      body = `${art(ART.vacation, 'huge')}<span class="tile-name">Vacation</span>
               <span class="tile-sub">skip a turn</span>`;
       break;
     case 'gotoprison':
-      body = `<span class="tile-mark huge">🚨</span><span class="tile-name">Go to prison</span>`;
+      body = `${art(ART.gotoprison, 'huge')}<span class="tile-name">Go to prison</span>`;
       break;
     default:
       body = `<span class="tile-name">${escapeHtml(tile.name || '')}</span>`;
@@ -145,8 +147,8 @@ export function patchBoard(state) {
     if (houses.dataset.v !== String(h)) {
       houses.dataset.v = String(h);
       houses.innerHTML = h === 5
-        ? '<span class="hotel">🏨</span>'
-        : Array.from({ length: h }, () => '<span class="house">🏠</span>').join('');
+        ? `<span class="hotel">${ART.hotel}</span>`
+        : Array.from({ length: h }, () => `<span class="house">${ART.house}</span>`).join('');
     }
   });
 }
@@ -309,7 +311,10 @@ export function deedMarkup(state, i, { compact = false } = {}) {
 
   return `<div class="deed${compact ? ' compact' : ''}">
     <div class="deed-head" style="background:${headColor}">
-      <span class="deed-flag">${g?.flag || (tile.type === 'airport' ? '✈️' : tile.type === 'utility' ? tile.icon || '💡' : '💸')}</span>
+      <span class="deed-flag">${g?.flag
+        || (tile.type === 'airport' ? ART.airport
+          : tile.type === 'utility' ? utilityArt(tile.icon)
+          : ART.tax)}</span>
       <span class="deed-title">${escapeHtml(tile.name)}</span>
     </div>
     ${tile.price ? `<div class="deed-price">$${tile.price}</div>` : ''}
