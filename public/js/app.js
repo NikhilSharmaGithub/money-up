@@ -347,6 +347,31 @@ $('#chatForm').addEventListener('submit', (e) => {
   input.value = '';
 });
 
+// ---- focus mode ---------------------------------------------------------
+const FOCUS_KEY = 'moneymove:focus';
+const focusBtn = $('#focusBtn');
+
+function paintFocus() {
+  const on = document.body.classList.contains('focus-board');
+  focusBtn.classList.toggle('on', on);
+  focusBtn.title = on ? 'Show the side panel' : 'Hide the side panel and enlarge the board';
+  // the board grew or shrank, so the tokens need to find their tiles again
+  requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
+}
+
+try {
+  if (localStorage.getItem(FOCUS_KEY) === 'on') document.body.classList.add('focus-board');
+} catch { /* private mode */ }
+
+focusBtn.onclick = () => {
+  const on = document.body.classList.toggle('focus-board');
+  try { localStorage.setItem(FOCUS_KEY, on ? 'on' : 'off'); } catch { /* ignore */ }
+  sfx.click();
+  paintFocus();
+  setTimeout(() => safe('reposition', () => repositionTokens(state)), 320);
+};
+paintFocus();
+
 // ---- light / dark -------------------------------------------------------
 const THEME_KEY = 'moneymove:theme';
 const readTheme = () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
@@ -375,7 +400,7 @@ window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change',
   let saved = null;
   try { saved = localStorage.getItem(THEME_KEY); } catch { /* ignore */ }
   if (saved) return;
-  document.documentElement.dataset.theme = e.matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = e.matches ? 'dark' : 'light'; // e is the dark query
   paintThemeButtons();
 });
 

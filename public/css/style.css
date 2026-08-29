@@ -105,6 +105,7 @@
 html, body {
   height: 100%;
   background: var(--page);
+  transition: background-color .28s var(--ease), color .28s var(--ease);
   color: var(--ink);
   font-family: 'Outfit', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-feature-settings: 'tnum' 1;
@@ -116,9 +117,10 @@ body::before {
   content: '';
   position: fixed; inset: 0; z-index: -1;
   background:
-    radial-gradient(900px 620px at 12% -8%, rgba(255, 255, 255, .14), transparent 62%),
-    radial-gradient(760px 540px at 96% 4%, rgba(0, 0, 0, .18), transparent 60%),
-    linear-gradient(160deg, var(--page), var(--page-2));
+    radial-gradient(1100px 780px at 50% 42%, rgba(255, 255, 255, .13), transparent 68%),
+    radial-gradient(900px 700px at 8% -10%, rgba(255, 255, 255, .10), transparent 60%),
+    radial-gradient(1000px 800px at 100% 108%, rgba(0, 0, 0, .30), transparent 62%),
+    linear-gradient(155deg, var(--page), var(--page-2));
 }
 
 .hidden { display: none !important; }
@@ -291,8 +293,9 @@ select { cursor: pointer; }
 /* ─────────────────────────────────────────────────────────── app shell ── */
 .app {
   height: 100vh; display: grid;
-  grid-template-columns: 258px minmax(0, 1fr) 296px;
-  gap: 11px; padding: 11px;
+  grid-template-columns: clamp(186px, 15.5vw, 244px) minmax(0, 1fr) clamp(242px, 18vw, 290px);
+  gap: 10px; padding: 10px;
+  transition: grid-template-columns .28s var(--ease);
 }
 .col { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .col.left, .col.right { overflow: hidden; }
@@ -316,7 +319,9 @@ select { cursor: pointer; }
 .share-row { display: flex; gap: 7px; }
 .share-row input { font-size: 12px; padding: 8px 11px; }
 
-.log-panel { flex: 1 1 46%; display: flex; flex-direction: column; min-height: 120px; }
+/* An empty log used to be a tall blank box; it now grows with its content
+   and only starts scrolling once it has earned the height. */
+.log-panel { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 46%; }
 .log-list { overflow-y: auto; font-size: 12.5px; display: flex; flex-direction: column; gap: 2px; padding-right: 3px; }
 .log-line {
   display: flex; gap: 7px; align-items: baseline; line-height: 1.4;
@@ -338,8 +343,8 @@ select { cursor: pointer; }
 .log-line.surprise { color: #a3246c; }
 .log-line.build    { color: #3a5bb5; }
 
-.chat-panel { flex: 1 1 30%; display: flex; flex-direction: column; min-height: 120px; }
-.chat-list { flex: 1; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 5px; }
+.chat-panel { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
+.chat-list { flex: 0 1 auto; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 5px; min-height: 34px; }
 .chat-msg { line-height: 1.4; animation: logIn .3s var(--ease); color: var(--ink-2); }
 .chat-msg b { font-weight: 750; margin-right: 4px; }
 .chat-flag { margin-right: 3px; }
@@ -972,3 +977,33 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(217, 32, 55, .3)
 .landing .landing-feats b { color: #fff; }
 .landing .or { color: rgba(255, 255, 255, .6); }
 .brand .logo { color: var(--ink); }
+
+/* Theme changes ease instead of snapping. */
+.panel, .player-card, .landing-card, .tile, .board, .center-panel, .modal, .btn, input, select {
+  transition-property: background-color, border-color, color, box-shadow, transform, filter;
+  transition-duration: .24s;
+  transition-timing-function: var(--ease);
+}
+.tile.ownable:hover { transform: translateY(-1px); }
+
+/* Empty seats read as an invitation, not a broken box. */
+.player-card.empty-seat {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--rule-2) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 22%, transparent);
+}
+.player-card.empty-seat:hover { border-color: var(--red); }
+
+/* The left column packs to the top rather than stretching to fill. */
+.col.left { justify-content: flex-start; }
+
+/* Focus mode: fold the log and chat away and the board takes the width back. */
+body.focus-board .app { grid-template-columns: 0 minmax(0, 1fr) clamp(242px, 18vw, 290px); }
+body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden; }
+.col.left { transition: opacity .2s var(--ease); }
+#focusBtn.on { color: var(--red); background: var(--red-soft); }
+
+@media (max-width: 1024px) {
+  body.focus-board .app { grid-template-columns: 1fr; }
+  body.focus-board .col.left { display: none; }
+}
