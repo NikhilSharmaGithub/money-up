@@ -36,9 +36,8 @@ struct GameScreen: View {
             topBar(P)
 
             if store.state != nil {
-                if hSize == .regular {
-                    // iPad / landscape: the board owns the left, everything else
-                    // stacks in a side column — no scrolling past the board.
+                if hSize == .regular, store.state?.isLobby == true {
+                    // iPad lobby: the board previews left, setup lives right.
                     HStack(alignment: .top, spacing: 14) {
                         VStack(spacing: 0) {
                             BoardView(onTapTile: { sheet = .deed($0) }) {
@@ -49,17 +48,31 @@ struct GameScreen: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                         VStack(spacing: 10) {
-                            PlayerStrip(onTapPlayer: { p in
-                                if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                                   store.me?.isBankrupt != true {
-                                    sheet = .trade(p.id)
-                                }
-                            })
                             bottomPanel
                         }
                         .frame(width: 380)
                     }
                     .padding(.horizontal, 12)
+                } else if hSize == .regular {
+                    // iPad in play is a tabletop: the board sits huge in the
+                    // middle — pass & play around it — with the players above
+                    // and one dock below, both centred.
+                    PlayerStrip(onTapPlayer: { p in
+                        if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
+                           store.me?.isBankrupt != true {
+                            sheet = .trade(p.id)
+                        }
+                    })
+
+                    BoardView(onTapTile: { sheet = .deed($0) }) {
+                        CenterWell()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 12)
+
+                    ActionPanel(openProperties: { sheet = .properties })
+                        .frame(maxWidth: 620)
+                        .padding(.bottom, 8)
                 } else if store.state?.isLobby == true {
                     PlayerStrip(onTapPlayer: { _ in })
                     BoardView(onTapTile: { sheet = .deed($0) }) {
@@ -313,7 +326,6 @@ struct PlayerStrip: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        let count = store.state?.players.count ?? 0
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(store.state?.players ?? []) { p in
@@ -364,7 +376,7 @@ struct PlayerStrip: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(minWidth: count <= 3 ? UIScreen.main.bounds.width : 0)
+            .frame(minWidth: UIScreen.main.bounds.width)
         }
         .frame(height: 54)
     }
