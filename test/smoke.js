@@ -4,6 +4,7 @@
 
 import { GameRoom } from '../server/game.js';
 import { MAPS, generateRandomMap } from '../server/maps.js';
+import { TEAMS } from '../server/game.js';
 
 let failures = 0;
 const seen = new Set();
@@ -144,6 +145,8 @@ const VARIANTS = [
   { label: 'free build order', settings: { evenBuild: false } },
   { label: 'no rent while jailed', settings: { noRentInPrison: true } },
   { label: 'poor start ($500), 6 players', settings: { startingCash: 500, players: 6, maxPlayers: 8 } },
+  { label: '2 teams of 2', settings: { teams: 2, players: 4 } },
+  { label: '2 teams of 3', settings: { teams: 2, players: 6, maxPlayers: 8 } },
 ];
 
 const MAP_IDS = [...Object.keys(MAPS), 'random'];
@@ -158,6 +161,71 @@ for (const v of VARIANTS) {
   ok(`${v.label}: ${ended}/${RUNS} games reached a winner, ${Math.round(totalTurns / RUNS)} turns avg`);
 }
 
+
+console.log('\n▶ teams');
+{
+  const room = new GameRoom('t', () => {});
+  room.map = MAPS.classic;
+  room.settings.teams = 2;
+  ['a', 'b', 'c', 'd'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+
+  room.balanceTeams();
+  const spread = [0, 1].map((n) => room.players.filter((p) => p.team === n).length);
+  if (spread[0] !== 2 || spread[1] !== 2) fail(`balanceTeams should split 2/2, got ${spread.join('/')}`);
+  ok('balanceTeams splits the room evenly');
+
+  room.settings.randomizeOrder = false;
+  room.start('a');
+
+  // start() wipes ownership, so hand out the deed after the game begins.
+  const [x] = room.map.groups.IT;
+  room.ownership[x] = { owner: 'a', houses: 0, mortgaged: false };
+
+  const mate = room.players.find((p) => p.id !== 'a' && p.team === room.player('a').team);
+  const foe = room.players.find((p) => p.team !== room.player('a').team);
+  if (!room.sameTeam(room.player('a'), mate)) fail('teammates should register as same team');
+  if (room.sameTeam(room.player('a'), foe)) fail('opponents should not register as same team');
+
+  const rentDue = room.rentFor(x);
+  if (!(rentDue > 0)) fail('test setup: the street should charge rent');
+
+  const mateBefore = mate.money;
+  room.turn = { playerId: mate.id, phase: 'roll', dice: [1, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.landOn(mate, x);
+  if (mate.money !== mateBefore) fail(`teammate paid ${mateBefore - mate.money} rent — should pay nothing`);
+  ok('teammates pay no rent to each other');
+
+  const foeBefore = foe.money;
+  room.turn = { playerId: foe.id, phase: 'roll', dice: [1, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.landOn(foe, x);
+  if (foe.money !== foeBefore - rentDue) fail(`opponent should pay ${rentDue}, paid ${foeBefore - foe.money}`);
+  ok('opponents still pay full rent');
+
+  // Knocking out one member must not end a team game.
+  room.bankrupt(foe, room.player('a'));
+  if (room.status === 'ended') fail('game ended while the losing team still had a player');
+  ok('a team survives while any member is solvent');
+
+  const lastFoe = room.active.find((p) => p.team !== room.player('a').team);
+  room.bankrupt(lastFoe, room.player('a'));
+  if (room.status !== 'ended') fail('game should end once a whole team is bankrupt');
+  if (room.winningTeam !== room.player('a').team) fail('the surviving team should be recorded as the winner');
+  ok(`team game ends on the last opponent (Team ${TEAMS[room.winningTeam].name} won)`);
+}
+
+{
+  // A lobby stacked onto one side cannot produce a winner, so refuse to start.
+  const room = new GameRoom('t2', () => {});
+  room.map = MAPS.classic;
+  room.settings.teams = 2;
+  ['a', 'b'].forEach((id) => room.addPlayer({ id, name: id }));
+  room.hostId = 'a';
+  room.players.forEach((p) => { p.team = 0; });
+  const res = room.start('a');
+  if (!res.error) fail('starting with everyone on one team should be refused');
+  ok('refuses to start with every player on one team');
+}
 console.log('\n▶ targeted rules');
 {
   // Rent doubles on a full set only when the rule is on.

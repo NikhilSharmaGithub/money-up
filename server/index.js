@@ -5,6 +5,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
 import { mapList } from './maps.js';
+import { profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence } from './social.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -16,12 +17,19 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 // The front end may be hosted elsewhere (e.g. Vercel) while this process runs
 // the game, so the read-only API has to be reachable cross-origin.
-app.use('/api', (_req, res, next) => {
+app.use('/api', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
   res.setHeader('Vary', 'Origin');
+  // A JSON POST from another origin is preflighted; answer it here or the
+  // browser never sends the real request.
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
+app.use(express.json({ limit: '8kb' }));
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
 app.get('/api/rooms', (_req, res) => {
@@ -36,6 +44,32 @@ app.get('/api/rooms', (_req, res) => {
       })),
   );
 });
+// ---- friends -------------------------------------------------------------
+// The identity token is the caller's own secret, so it only ever grants access
+// to their own profile; friends are exchanged as short codes instead.
+app.post('/api/profile', (req, res) => {
+  const { token, name, flag } = req.body || {};
+  const profile = profileFor(String(token || '').slice(0, 64), { name, flag });
+  if (!profile) return res.status(400).json({ error: 'Missing identity' });
+  res.json({ code: profile.code, name: profile.name, flag: profile.flag });
+});
+
+app.get('/api/friends', (req, res) => {
+  res.json(friendsOf(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/friends', (req, res) => {
+  const { token, code } = req.body || {};
+  const result = addFriend(String(token || '').slice(0, 64), code);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/friends/remove', (req, res) => {
+  const { token, code } = req.body || {};
+  res.json(removeFriend(String(token || '').slice(0, 64), code));
+});
+
 app.get(/^\/room\/.*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 /** @type {Map<string, GameRoom>} */
@@ -79,6 +113,11 @@ function getRoom(id) {
 
 function broadcast(room) {
   io.to(room.id).emit('state', room.serialize());
+  // Keep each seated player's presence in step with what the room is doing,
+  // so a friends list can say "in a lobby" vs "in a game".
+  for (const playerId of seatsOf.get(room.id)?.keys() || []) {
+    setPresence(playerId, room.id, room.status);
+  }
 }
 
 // Reap idle rooms every 10 minutes.
@@ -112,7 +151,7 @@ io.on('connection', (socket) => {
     else socket.emit('roomCreated', { roomId: id });
   });
 
-  socket.on('join', ({ roomId, token, name } = {}) => {
+  socket.on('join', ({ roomId, token, name, flag } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     roomId = String(roomId).toLowerCase().slice(0, 12);
     room = getRoom(roomId);
@@ -120,12 +159,14 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     socketsOf.get(roomId).add(socket.id);
     claimSeat(roomId, playerId, socket.id);
+    setPresence(playerId, roomId, room.status);
+    profileFor(playerId, { name, flag });
     room.lastSeen = Date.now();
 
     if (room.player(playerId)) {
       room.reconnect(playerId);
     } else {
-      const res = room.addPlayer({ id: playerId, name });
+      const res = room.addPlayer({ id: playerId, name, flag });
       if (res.error) {
         socket.emit('joinFailed', { message: res.error, spectate: true });
       }
@@ -150,6 +191,19 @@ io.on('connection', (socket) => {
     if (playerId !== room.hostId) return fail('Only the host can remove players');
     if (targetId === room.hostId) return;
     room.removePlayer(targetId);
+  }));
+  socket.on('team', guard((team, targetId) => {
+    const target = targetId && targetId !== playerId ? targetId : playerId;
+    if (target !== playerId) {
+      // You can move yourself, and the host can shuffle the bots — nobody else.
+      if (playerId !== room.hostId) return fail('Only the host can move other players');
+      if (!room.player(target)?.isBot) return fail('You can only move bots');
+    }
+    ok(room.setTeam(target, team));
+  }));
+  socket.on('balanceTeams', guard(() => {
+    if (playerId !== room.hostId) return fail('Only the host can shuffle the teams');
+    room.balanceTeams();
   }));
   socket.on('start', guard(() => ok(room.start(playerId))));
 
@@ -183,6 +237,7 @@ io.on('connection', (socket) => {
     if (playerId !== room.hostId) return fail('Only the host can restart');
     room.status = 'lobby';
     room.winner = null;
+    room.winningTeam = null;
     room.ownership = {};
     room.turn = null;
     room.auction = null;
@@ -203,6 +258,7 @@ io.on('connection', (socket) => {
     socketsOf.get(room.id)?.delete(socket.id);
     // Other tabs of the same player keep the seat alive.
     if (releaseSeat(room.id, playerId, socket.id) > 0) return;
+    clearPresence(playerId);
     room.removePlayer(playerId);
     if ((socketsOf.get(room.id)?.size || 0) === 0 && room.players.length === 0) {
       room.dispose();

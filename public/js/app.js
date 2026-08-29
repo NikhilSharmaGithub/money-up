@@ -11,6 +11,7 @@ import {
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
+import { initSocial } from './social.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -37,6 +38,10 @@ const isLocalGuest = !!sessionStorage.getItem(TOKEN_KEY);
 const storeName = (name) => (isLocalGuest ? sessionStorage : localStorage).setItem(NAME_KEY, name);
 let nickname = (isLocalGuest ? sessionStorage.getItem(NAME_KEY) : localStorage.getItem(NAME_KEY)) || '';
 
+const FLAG_KEY = 'moneymove:flag';
+const storeFlag = (f) => (isLocalGuest ? sessionStorage : localStorage).setItem(FLAG_KEY, f);
+let myFlag = (isLocalGuest ? sessionStorage.getItem(FLAG_KEY) : localStorage.getItem(FLAG_KEY)) || '';
+
 // ────────────────────────────────────────────────────────────────── state ──
 let socket = null;
 let state = null;
@@ -52,9 +57,15 @@ const emit = (evt) => (...args) => socket?.emit(evt, ...args);
 const actions = {
   start: emit('start'),
   addBot: emit('addBot'),
+  setTeam: (playerId, team) => socket?.emit('team', team, playerId),
+  balanceTeams: emit('balanceTeams'),
   kick: emit('kick'),
   settings: emit('settings'),
-  appearance: (d) => { if (d.name) storeName(d.name); socket?.emit('appearance', d); },
+  appearance: (d) => {
+    if (d.name) storeName(d.name);
+    if (d.flag !== undefined) { myFlag = d.flag; storeFlag(d.flag); }
+    socket?.emit('appearance', d);
+  },
   roll: emit('roll'),
   buy: emit('buy'),
   skipBuy: emit('skipBuy'),
@@ -82,6 +93,11 @@ function showLanding() {
   $('#app').classList.add('hidden');
   $('#nickInput').value = nickname;
   loadPublicRooms();
+  initSocial({
+    token, name: nickname, flag: myFlag,
+    onToast: toast,
+    onJoin: (id) => go(id),
+  });
 }
 
 function loadPublicRooms() {
@@ -200,7 +216,7 @@ function boot() {
   if (socket) socket.close();
   socket = connect();
 
-  socket.on('connect', () => socket.emit('join', { roomId, token, name: nickname || 'Player' }));
+  socket.on('connect', () => socket.emit('join', { roomId, token, name: nickname || 'Player', flag: myFlag }));
   socket.on('you', (d) => { meId = d.playerId; });
   socket.on('state', (s) => { state = s; render(); });
   socket.on('toast', (t) => toast(t.message, t.type));
@@ -313,6 +329,13 @@ $('#leaveBtn').addEventListener('click', () => {
   state = null;
   resetBoard();
   showLanding();
+});
+
+const EMOTES = ['👍', '😂', '😱', '🔥', '💸', '🎲', '😭', '🤝', '🏠', '🤡'];
+const emoteRow = $('#emoteRow');
+emoteRow.innerHTML = EMOTES.map((e) => `<button class="emote" type="button">${e}</button>`).join('');
+emoteRow.querySelectorAll('.emote').forEach((b) => {
+  b.onclick = () => { sfx.click(); actions.chat(b.textContent); };
 });
 
 $('#chatForm').addEventListener('submit', (e) => {

@@ -6,6 +6,14 @@ import { sfx } from './sound.js';
 import { api } from './net.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
+
+export const FLAGS = [
+  '🇮🇳', '🇬🇧', '🇺🇸', '🇧🇷', '🇩🇪', '🇫🇷', '🇮🇹', '🇪🇸', '🇵🇹', '🇳🇱',
+  '🇮🇪', '🇨🇭', '🇸🇪', '🇳🇴', '🇩🇰', '🇵🇱', '🇺🇦', '🇹🇷', '🇷🇴', '🇬🇷',
+  '🇮🇱', '🇦🇪', '🇸🇦', '🇪🇬', '🇿🇦', '🇳🇬', '🇰🇪', '🇨🇳', '🇯🇵', '🇰🇷',
+  '🇹🇭', '🇻🇳', '🇵🇭', '🇮🇩', '🇵🇰', '🇧🇩', '🇱🇰', '🇳🇵', '🇦🇺', '🇳🇿',
+  '🇨🇦', '🇲🇽', '🇦🇷', '🇨🇱', '🇨🇴', '🇷🇺', '🇸🇬', '🇲🇾', '🏴‍☠️', '🌍',
+];
 const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 
 // ─────────────────────────────────────────────────────────────── toasts ──
@@ -108,7 +116,7 @@ export function renderChat(state, el) {
   el.dataset.sig = sig;
   if (!state.chat.length) { el.innerHTML = '<div class="empty">Say hi 👋</div>'; return; }
   el.innerHTML = state.chat.map((m) => `<div class="chat-msg">
-      <b style="color:${m.color}">${escapeHtml(m.name)}</b> ${escapeHtml(m.text)}
+      ${m.flag ? `<span class="chat-flag">${escapeHtml(m.flag)}</span>` : ''}<b style="color:${m.color}">${escapeHtml(m.name)}</b> ${escapeHtml(m.text)}
     </div>`).join('');
   el.scrollTop = el.scrollHeight;
 }
@@ -130,6 +138,7 @@ export function renderPlayers(state, meId, el, actions) {
         <div class="avatar" style="background:${p.color}">
           ${escapeHtml((p.name[0] || '?').toUpperCase())}
           <span class="avatar-ring"></span>
+          <span class="avatar-flag"></span>
         </div>
         <div class="pinfo">
           <div class="pname">${escapeHtml(p.name)}<span class="tags"></span></div>
@@ -159,7 +168,19 @@ export function renderPlayers(state, meId, el, actions) {
     card.classList.toggle('turn', isTurn);
 
     // tags
+    const flagEl = card.querySelector('.avatar-flag');
+    if (flagEl.dataset.v !== (p.flag || '')) {
+      flagEl.dataset.v = p.flag || '';
+      flagEl.textContent = p.flag || '';
+      flagEl.classList.toggle('hidden', !p.flag);
+    }
+
+    const team = p.team != null ? state.teamInfo?.[p.team] : null;
+    card.style.setProperty('--team-color', team ? team.color : 'transparent');
+    card.classList.toggle('teamed', !!team);
+
     const tags = [];
+    if (team) tags.push(`<i class="tag team" style="background:${team.color}22;color:${team.color}">${escapeHtml(team.name)}</i>`);
     if (p.isBot) tags.push('<i class="tag bot">BOT</i>');
     if (state.hostId === p.id) tags.push('<i class="tag host">HOST</i>');
     if (p.id === meId) tags.push('<i class="tag you">YOU</i>');
@@ -219,11 +240,20 @@ export function renderPlayers(state, meId, el, actions) {
     const me = state.players.find((x) => x.id === meId);
     const canTrade = state.status === 'playing' && p.id !== meId && !p.bankrupt && !me?.bankrupt;
     const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId;
-    const want = `${canTrade ? 't' : ''}${canKick ? 'k' : ''}`;
+    const canPickTeam = state.status === 'lobby' && state.settings.teams > 0
+      && (p.id === meId || (state.hostId === meId && p.isBot));
+    const want = `${canTrade ? 't' : ''}${canKick ? 'k' : ''}${canPickTeam ? 'm' : ''}`;
     if (acts.dataset.v !== want) {
       acts.dataset.v = want;
-      acts.innerHTML = `${canTrade ? '<button class="btn tiny" data-trade>Trade</button>' : ''}
+      acts.innerHTML = `${canPickTeam ? '<button class="btn tiny" data-team title="Switch team">⇄</button>' : ''}
+                        ${canTrade ? '<button class="btn tiny" data-trade>Trade</button>' : ''}
                         ${canKick ? '<button class="icon-btn" data-kick title="Remove">✕</button>' : ''}`;
+      const mb = acts.querySelector('[data-team]');
+      if (mb) mb.onclick = () => {
+        sfx.click();
+        const next = ((p.team ?? -1) + 1) % state.settings.teams;
+        actions.setTeam(p.id, next);
+      };
       const tb = acts.querySelector('[data-trade]');
       if (tb) tb.onclick = () => { sfx.click(); openTradeModal(state, meId, p.id, actions); };
       const kb = acts.querySelector('[data-kick]');
@@ -289,6 +319,9 @@ function renderSettings(state, meId, el, actions) {
             ${taken ? 'disabled' : ''} style="--c:${c}"></button>`;
         }).join('')}
       </div>
+      <div class="flag-picker">
+        ${FLAGS.map((f) => `<button class="flag-opt ${me?.flag === f ? 'sel' : ''}" data-flag="${f}">${f}</button>`).join('')}
+      </div>
     </div>
 
     <div class="panel">
@@ -312,6 +345,15 @@ function renderSettings(state, meId, el, actions) {
         <label class="switch"><input type="checkbox" data-set="allowBots" ${state.settings.allowBots ? 'checked' : ''} ${dis} />
           <span class="track"></span><span class="thumb"></span></label>
       </div>
+      <div class="setting">
+        <span class="s-icon">🤝</span>
+        <div class="s-body"><div class="s-name">Teams</div>
+          <div class="s-desc">Teammates never charge each other rent and win together</div></div>
+        <select data-set="teams" ${dis}>
+          ${[0, 2, 3, 4].map((n) => `<option value="${n}" ${state.settings.teams === n ? 'selected' : ''}>${n === 0 ? 'Off' : `${n} teams`}</option>`).join('')}
+        </select>
+      </div>
+      ${state.settings.teams > 0 && isHost ? '<button class="btn small wide" id="balanceBtn">⇄ Balance teams</button>' : ''}
       <div class="setting">
         <span class="s-icon">🗺️</span>
         <div class="s-body"><div class="s-name">Board map</div><div class="s-desc">${escapeHtml(state.map.name)} · ${state.map.size} tiles</div></div>
@@ -351,10 +393,19 @@ function renderSettings(state, meId, el, actions) {
   el.querySelectorAll('[data-color]').forEach((b) => {
     b.onclick = () => { sfx.click(); actions.appearance({ color: b.dataset.color }); };
   });
+  el.querySelectorAll('[data-flag]').forEach((b) => {
+    b.onclick = () => {
+      sfx.click();
+      // Clicking the flag you already wear takes it off again.
+      actions.appearance({ flag: me?.flag === b.dataset.flag ? '' : b.dataset.flag });
+    };
+  });
   const nameField = $('#nameField', el);
   if (nameField) nameField.onchange = () => actions.appearance({ name: nameField.value.trim() || 'Player' });
   const mapBtn = $('#mapBtn', el);
   if (mapBtn) mapBtn.onclick = () => { sfx.click(); openMapModal(state, actions); };
+  const balanceBtn = $('#balanceBtn', el);
+  if (balanceBtn) balanceBtn.onclick = () => { sfx.click(); actions.balanceTeams(); };
   const startBtn = $('#startBtn', el);
   if (startBtn) startBtn.onclick = () => actions.start();
   const botBtn = $('#botBtn', el);

@@ -33,6 +33,10 @@ export function renderBoard(state, root) {
     const tile = map.tiles[index];
     const el = document.createElement('div');
     el.className = `tile t-${side}${side === 'corner' ? ' corner' : ''}${isOwnable(tile) ? ' ownable' : ''} type-${tile.type}`;
+    const tint = tile.group ? groups[tile.group]?.color
+      : tile.type === 'airport' ? '#6aa2ff'
+      : tile.type === 'utility' ? '#3fd8ef' : '';
+    if (tint) el.style.setProperty('--g', tint);
     el.style.gridRow = row;
     el.style.gridColumn = col;
     el.dataset.i = index;
@@ -53,64 +57,60 @@ export function renderBoard(state, root) {
   return true;
 }
 
-// Each ownable tile gets a thick colour band on the edge facing the centre of
-// the board, carrying the flag or category icon. Everything else is body text.
+// Each tile carries the group colour as a wash from the inner edge, a round
+// flag medallion for identity, and the price on its own chip at the outer edge.
 function tileMarkup(tile, groups) {
   const g = tile.group ? groups[tile.group] : null;
-  const price = tile.price ? `<span class="tile-price">$${tile.price}</span>` : '';
-  const band = (color, mark) =>
-    `<div class="tile-band" style="--band:${color}"><span class="band-mark">${mark}</span></div>`;
+  const price = tile.price ? `<span class="tile-price">${tile.price}$</span>` : '';
+  const medal = (mark, cls = '') =>
+    `<span class="medal ${cls}"><span>${mark}</span></span>`;
 
-  let bandHtml = '';
   let body;
-
   switch (tile.type) {
     case 'property':
-      bandHtml = band(g?.color || '#8b5cf6', g?.flag || '');
-      body = `<span class="tile-name">${escapeHtml(tile.name)}</span>${price}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal(g?.flag || '🏳️')}`;
       break;
     case 'airport':
-      bandHtml = band('#5b8def', '✈️');
-      body = `<span class="tile-name">${escapeHtml(tile.name)}</span>${price}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal('✈️', 'plain')}`;
       break;
     case 'utility':
-      bandHtml = band('#22d3ee', tile.icon || '💡');
-      body = `<span class="tile-name">${escapeHtml(tile.name)}</span>${price}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${medal(tile.icon || '💡', 'plain')}`;
       break;
     case 'tax':
-      body = `<span class="tile-mark">💸</span><span class="tile-name">${escapeHtml(tile.name)}</span>
-              <span class="tile-price">${tile.amount ? `$${tile.amount}` : `${tile.percent}%`}</span>`;
+      body = `<span class="tile-name">${escapeHtml(tile.name)}</span><span class="tile-mark">💸</span>
+              <span class="tile-price solo">${tile.amount ? `$${tile.amount}` : `${tile.percent}%`}</span>`;
       break;
     case 'refund':
-      body = `<span class="tile-mark">💵</span><span class="tile-name">${escapeHtml(tile.name)}</span>
-              <span class="tile-price">$${tile.amount}</span>`;
+      body = `<span class="tile-name">${escapeHtml(tile.name)}</span><span class="tile-mark">💵</span>
+              <span class="tile-price solo">$${tile.amount}</span>`;
       break;
     case 'treasure':
-      body = `<span class="tile-mark">🧰</span><span class="tile-name">Treasure</span>`;
+      body = `<span class="tile-name accent-treasure">Treasure</span><span class="tile-mark big">🧰</span>`;
       break;
     case 'surprise':
-      body = `<span class="tile-mark">❓</span><span class="tile-name">Surprise</span>`;
+      body = `<span class="tile-name accent-surprise">Surprise</span><span class="tile-mark big">❓</span>`;
       break;
     case 'start':
-      body = `<span class="tile-mark big">▶▶</span><span class="tile-name">START</span>
+      body = `<span class="tile-name start-word">START</span><span class="tile-mark huge">🚀</span>
               <span class="tile-sub">collect $200</span>`;
       break;
     case 'prison':
-      body = `<span class="tile-mark big">🚔</span><span class="tile-name">In Prison</span>
-              <span class="tile-sub">just visiting</span>`;
+      body = `<span class="tile-sub">Passing by</span><span class="tile-mark huge">🚔</span>
+              <span class="tile-name">In Prison</span>`;
       break;
     case 'vacation':
-      body = `<span class="tile-mark big">🏝️</span><span class="tile-name">Vacation</span>
+      body = `<span class="tile-mark huge">🏝️</span><span class="tile-name">Vacation</span>
               <span class="tile-sub">skip a turn</span>`;
       break;
     case 'gotoprison':
-      body = `<span class="tile-mark big">🚨</span><span class="tile-name">Go to prison</span>`;
+      body = `<span class="tile-mark huge">🚨</span><span class="tile-name">Go to prison</span>`;
       break;
     default:
       body = `<span class="tile-name">${escapeHtml(tile.name || '')}</span>`;
   }
 
-  return `<div class="tile-body">${body}</div>${bandHtml}
+  return `<div class="tile-wash"></div>
+    <div class="tile-body">${body}</div>
     <div class="tile-houses"></div>
     <div class="tile-owner"></div>`;
 }

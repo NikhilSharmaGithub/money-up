@@ -9,6 +9,13 @@ export const COLORS = [
   '#a78bfa', '#fb7185', '#22d3ee', '#f97316',
 ];
 
+export const TEAMS = [
+  { name: 'Crimson', color: '#f87171', icon: '🔴' },
+  { name: 'Azure',   color: '#60a5fa', icon: '🔵' },
+  { name: 'Jade',    color: '#4ade80', icon: '🟢' },
+  { name: 'Amber',   color: '#fbbf24', icon: '🟡' },
+];
+
 export const DEFAULT_SETTINGS = {
   maxPlayers: 4,
   isPrivate: true,
@@ -22,6 +29,7 @@ export const DEFAULT_SETTINGS = {
   evenBuild: true,
   startingCash: 2500,
   randomizeOrder: true,
+  teams: 0, // 0 = free-for-all, otherwise how many teams share the board
 };
 
 const AUCTION_SECONDS = 20;
@@ -50,6 +58,7 @@ export class GameRoom {
     this.trades = [];
     this.vacationPot = 0;
     this.winner = null;
+    this.winningTeam = null;
     this.decks = { treasure: shuffled(TREASURE), surprise: shuffled(SURPRISE) };
     this.lastCard = null;
     this.lastMove = null;
@@ -83,13 +92,15 @@ export class GameRoom {
     return COLORS.find((c) => !used.has(c)) || COLORS[this.players.length % COLORS.length];
   }
 
-  addPlayer({ id, name, isBot = false }) {
+  addPlayer({ id, name, isBot = false, flag = '' }) {
     if (this.players.length >= this.settings.maxPlayers) return { error: 'Room is full' };
     if (this.status !== 'lobby') return { error: 'Game already started' };
     const player = {
       id,
       name: (name || 'Player').slice(0, 16),
       color: this.freeColor(),
+      flag: flag || '',
+      team: null,
       isBot,
       connected: true,
       botControlled: false,
@@ -146,15 +157,60 @@ export class GameRoom {
     return true;
   }
 
+  // ------------------------------------------------------------------ teams --
+  get teamsOn() {
+    return this.settings.teams > 0;
+  }
+
+  /** Teammates share a win and never charge each other rent. */
+  sameTeam(a, b) {
+    return this.teamsOn && !!a && !!b && a.id !== b.id
+      && a.team != null && a.team === b.team;
+  }
+
+  teammatesOf(id) {
+    const p = this.player(id);
+    if (!this.teamsOn || !p || p.team == null) return [];
+    return this.players.filter((x) => x.id !== id && x.team === p.team);
+  }
+
+  setTeam(id, team) {
+    if (this.status !== 'lobby' || !this.teamsOn) return { error: 'Not available' };
+    const p = this.player(id);
+    if (!p) return { error: 'No such player' };
+    const n = Number(team);
+    if (!Number.isInteger(n) || n < 0 || n >= this.settings.teams) return { error: 'No such team' };
+    p.team = n;
+    this.push();
+    return { ok: true };
+  }
+
+  /** Spreads everyone across the teams as evenly as the seat count allows. */
+  balanceTeams() {
+    if (!this.teamsOn) {
+      this.players.forEach((p) => { p.team = null; });
+      return;
+    }
+    this.players.forEach((p, i) => { p.team = i % this.settings.teams; });
+    this.push();
+  }
+
+  /** True when at least two teams are represented, so a game can be won. */
+  teamsPlayable() {
+    if (!this.teamsOn) return true;
+    return new Set(this.players.map((p) => p.team)).size >= 2;
+  }
+
   /** True when the server should play this seat automatically. */
   autoPlayed(p) {
     return !!p && (p.isBot || p.botControlled);
   }
 
-  updateAppearance(id, { name, color }) {
+  updateAppearance(id, { name, color, flag }) {
     const p = this.player(id);
     if (!p || this.status !== 'lobby') return;
     if (name) p.name = name.slice(0, 16);
+    if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
     if (color && COLORS.includes(color) && !this.players.some((x) => x.id !== id && x.color === color)) {
       p.color = color;
     }
@@ -170,10 +226,26 @@ export class GameRoom {
     }
     this.settings.maxPlayers = Math.max(2, Math.min(8, Number(this.settings.maxPlayers) || 4));
     if (patch.mapId) this.map = getMap(this.settings.mapId);
+    if (patch.teams !== undefined) {
+      this.settings.teams = Math.max(0, Math.min(4, Number(this.settings.teams) || 0));
+      this.syncTeamsWithSettings();
+    }
     if (patch.startingCash) {
       this.players.forEach((p) => { p.money = this.settings.startingCash; });
     }
     this.push();
+  }
+
+  /** Clears team picks when the mode is switched off mid-lobby. */
+  syncTeamsWithSettings() {
+    if (!this.teamsOn) {
+      this.players.forEach((p) => { p.team = null; });
+      return;
+    }
+    const max = this.settings.teams - 1;
+    this.players.forEach((p) => {
+      if (p.team == null || p.team > max) p.team = null;
+    });
   }
 
   addBot() {
@@ -190,6 +262,21 @@ export class GameRoom {
       while (this.players.length < Math.min(this.settings.maxPlayers, 4)) this.addBot();
     }
     if (this.players.length < 2) return { error: 'Need at least 2 players' };
+
+    if (this.teamsOn) {
+      // Anyone who never picked a side gets dropped into the smallest team.
+      const counts = Array.from({ length: this.settings.teams }, () => 0);
+      this.players.forEach((p) => { if (p.team != null) counts[p.team]++; });
+      this.players.forEach((p) => {
+        if (p.team != null) return;
+        const smallest = counts.indexOf(Math.min(...counts));
+        p.team = smallest;
+        counts[smallest]++;
+      });
+      if (!this.teamsPlayable()) return { error: 'Split the players across at least two teams' };
+    } else {
+      this.players.forEach((p) => { p.team = null; });
+    }
 
     // "Random" means a brand new board each game, not a fixed shuffle.
     if (this.settings.mapId === 'random') this.map = getMap('random');
@@ -480,6 +567,10 @@ export class GameRoom {
           this.say(`${t.name} is mortgaged — no rent due`, 'info');
         } else {
           const owner = this.player(o.owner);
+          if (this.sameTeam(p, owner)) {
+            this.say(`${t.name} belongs to ${owner.name}'s team — no rent`, 'info');
+            break;
+          }
           if (this.settings.noRentInPrison && owner.jail) {
             this.say(`${owner.name} is in prison — no rent collected`, 'info');
             break;
@@ -903,6 +994,31 @@ export class GameRoom {
     return { ok: true };
   }
 
+  /**
+   * Ends the game when only one side is left standing. In team games that
+   * means one team, not one player — a team survives while any member does.
+   */
+  checkGameEnd() {
+    const alive = this.active;
+    if (this.teamsOn) {
+      const teams = [...new Set(alive.map((p) => p.team))];
+      if (teams.length > 1) return false;
+      this.status = "ended";
+      this.winningTeam = teams[0] ?? null;
+      this.winner = alive[0] || null;
+      const label = this.winningTeam != null ? TEAMS[this.winningTeam].name : "Nobody";
+      const roster = alive.map((p) => p.name).join(" & ");
+      this.say(`🏆 Team ${label} wins the game! (${roster})`, "system");
+    } else {
+      if (alive.length > 1) return false;
+      this.status = "ended";
+      this.winner = alive[0] || null;
+      this.say(`🏆 ${this.winner ? this.winner.name : "Nobody"} wins the game!`, "system");
+    }
+    this.push();
+    return true;
+  }
+
   bankrupt(p, creditor) {
     p.bankrupt = true;
     const tiles = this.tilesOf(p.id);
@@ -922,13 +1038,7 @@ export class GameRoom {
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
 
-    if (this.active.length <= 1) {
-      this.status = 'ended';
-      this.winner = this.active[0] || null;
-      this.say(`🏆 ${this.winner ? this.winner.name : 'Nobody'} wins the game!`, 'system');
-      this.push();
-      return;
-    }
+    if (this.checkGameEnd()) return;
     if (this.turn?.playerId === p.id) this.nextTurn();
     else this.push();
   }
@@ -1016,14 +1126,7 @@ export class GameRoom {
 
   nextTurn() {
     if (this.status !== 'playing') return;
-    const order = this.players.filter((p) => !p.bankrupt);
-    if (order.length <= 1) {
-      this.status = 'ended';
-      this.winner = order[0] || null;
-      this.say(`🏆 ${this.winner ? this.winner.name : 'Nobody'} wins the game!`, 'system');
-      this.push();
-      return;
-    }
+    if (this.checkGameEnd()) return;
     let idx = this.players.findIndex((p) => p.id === this.turn.playerId);
     for (let step = 1; step <= this.players.length * 2; step++) {
       const cand = this.players[(idx + step) % this.players.length];
@@ -1055,7 +1158,7 @@ export class GameRoom {
   sendChat(id, text) {
     const p = this.player(id);
     if (!p || !text) return;
-    const msg = { id: Math.random().toString(36).slice(2), name: p.name, color: p.color, text: String(text).slice(0, 200), at: Date.now() };
+    const msg = { id: Math.random().toString(36).slice(2), name: p.name, color: p.color, flag: p.flag || '', text: String(text).slice(0, 200), at: Date.now() };
     this.chat.push(msg);
     if (this.chat.length > 100) this.chat.shift();
     this.push();
@@ -1225,9 +1328,12 @@ export class GameRoom {
         groups: this.map.groups, // group key -> tile indices, needed to spot full sets
       },
       groups: GROUPS,
+      teamInfo: TEAMS,
+      winningTeam: this.winningTeam ?? null,
       players: this.players.map((p) => ({
         id: p.id, name: p.name, color: p.color, money: p.money, pos: p.pos,
         jail: p.jail, jailTurns: p.jailTurns, getOutCards: p.getOutCards,
+        flag: p.flag, team: p.team,
         bankrupt: p.bankrupt, isBot: p.isBot, connected: p.connected,
         botControlled: !!p.botControlled,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),

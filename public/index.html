@@ -36,6 +36,18 @@
       <div id="publicRooms" class="public-rooms"></div>
     </div>
 
+    <div class="landing-card friends-card" id="friendsCard">
+      <div class="fc-head">
+        <span class="panel-title" style="margin:0">Friends</span>
+        <button class="code-chip" id="myCode" title="Your friend code — tap to copy">······</button>
+      </div>
+      <form class="join-row" id="addFriendForm">
+        <input id="friendCode" maxlength="6" placeholder="friend code" autocomplete="off" />
+        <button class="btn small" type="submit">Add</button>
+      </form>
+      <div id="friendList" class="friend-list"></div>
+    </div>
+
     <div class="landing-feats">
       <div><b>6</b><span>boards</span></div>
       <div><b>8</b><span>players</span></div>
@@ -76,6 +88,7 @@
     <div class="panel chat-panel">
       <div class="panel-title">Chat</div>
       <div id="chatList" class="chat-list"><div class="empty">Say hi 👋</div></div>
+      <div class="emote-row" id="emoteRow"></div>
       <form id="chatForm" class="chat-form">
         <input id="chatInput" maxlength="200" placeholder="Say something…" autocomplete="off" />
         <button class="icon-btn send" type="submit">➤</button>

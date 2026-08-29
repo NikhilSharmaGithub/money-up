@@ -22,7 +22,12 @@ if (fromQuery !== null) {
 let stored = '';
 try { stored = clean(localStorage.getItem(KEY)); } catch { /* private mode */ }
 
-export const SERVER = stored || clean(window.MONEYMOVE_SERVER);
+const isLocalHost = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'].includes(location.hostname);
+
+// A checked-in config.js points at the deployed server, which would send a
+// local `npm start` off to production. Anything served from localhost talks to
+// itself unless someone deliberately overrode the server for that origin.
+export const SERVER = stored || (isLocalHost ? '' : clean(window.MONEYMOVE_SERVER));
 
 /**
  * Saves a server override and reloads onto it. A pasted host with no scheme
