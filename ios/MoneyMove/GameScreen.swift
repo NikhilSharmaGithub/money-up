@@ -424,21 +424,40 @@ struct CenterWell: View {
                             .foregroundStyle(P.ink)
                     }
                 } else {
-                    if let dice = state.turn?.dice, dice.count == 2 {
-                        DiceView(values: dice)
-                    }
-                    ActivityFeed(embedded: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
-                        HStack(spacing: 4) {
-                            Text("🏝️").font(.system(size: 11))
-                            Text(money(pot))
-                                .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                .foregroundStyle(P.gold)
+                    // The log runs quietly across the whole well; the dice sit
+                    // on top, dead-centre of the board, the way a table reads.
+                    GeometryReader { geo in
+                        ZStack {
+                            ActivityFeed(embedded: true)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                            VStack(spacing: 10) {
+                                if let dice = state.turn?.dice, dice.count == 2 {
+                                    let dieSize = min(max(geo.size.width * 0.17, 44), 76)
+                                    DiceView(values: dice, size: dieSize)
+                                        .padding(.vertical, dieSize * 0.30)
+                                        .padding(.horizontal, dieSize * 0.42)
+                                        .background(
+                                            P.boardBG.opacity(0.92),
+                                            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                        )
+                                        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+                                }
+                                if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
+                                    HStack(spacing: 4) {
+                                        Text("🏝️").font(.system(size: 11))
+                                        Text(money(pot))
+                                            .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                            .foregroundStyle(P.gold)
+                                    }
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 10)
+                                    .background(P.goldSoft, in: Capsule())
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .allowsHitTesting(false)
                         }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 10)
-                        .background(P.goldSoft, in: Capsule())
                     }
                 }
             }

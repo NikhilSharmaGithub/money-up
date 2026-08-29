@@ -428,12 +428,13 @@ struct TokenDisc: View {
 
 struct DiceView: View {
     let values: [Int]
+    var size: CGFloat = 42
     @State private var spin = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: size * 0.28) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, v in
-                DieFace(value: v)
+                DieFace(value: v, size: size)
             }
         }
         .rotationEffect(.degrees(spin ? 0 : -18))
@@ -446,30 +447,31 @@ struct DiceView: View {
 
 struct DieFace: View {
     let value: Int
+    var size: CGFloat = 42
 
     private static let pips: [Int: [Int]] = [
         1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8],
     ]
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
             .fill(LinearGradient(colors: [.white, Color(hex: 0xEFE7E2)], startPoint: .top, endPoint: .bottom))
-            .frame(width: 42, height: 42)
+            .frame(width: size, height: size)
             .overlay(
-                Grid(horizontalSpacing: 4, verticalSpacing: 4) {
+                Grid(horizontalSpacing: size * 0.095, verticalSpacing: size * 0.095) {
                     ForEach(0..<3) { row in
                         GridRow {
                             ForEach(0..<3) { col in
                                 Circle()
                                     .fill(Color(hex: 0x1B5E3F))
-                                    .frame(width: 7, height: 7)
+                                    .frame(width: size * 0.167, height: size * 0.167)
                                     .opacity(Self.pips[value]?.contains(row * 3 + col) == true ? 1 : 0)
                             }
                         }
                     }
                 }
-                .padding(7)
+                .padding(size * 0.167)
             )
-            .shadow(color: .black.opacity(0.35), radius: 5, y: 3)
+            .shadow(color: .black.opacity(0.35), radius: size * 0.12, y: size * 0.07)
     }
 }
