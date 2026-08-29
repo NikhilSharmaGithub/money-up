@@ -1,0 +1,433 @@
+// Chat + game-log sheet, the in-board auction box, and the game-over sheet.
+// All three read the live GameState from the injected GameStore and only
+// ever send intents back — the server stays authoritative.
+
+import SwiftUI
+
+// MARK: - chat / log sheet
+
+struct ChatLogSheet: View {
+    var initialTab: Int = 0                 // 0 = chat, 1 = log
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+    @State private var tab: Int
+    @State private var draft = ""
+
+    init(initialTab: Int = 0) {
+        self.initialTab = initialTab
+        _tab = State(initialValue: initialTab)
+    }
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Section", selection: $tab) {
+                    Text("Chat").tag(0)
+                    Text("Log").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+
+                if tab == 0 {
+                    chatTab(P)
+                } else {
+                    logTab(P)
+                }
+            }
+            .background(P.page)
+            .navigationTitle(tab == 0 ? "Chat" : "Game log")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    // MARK: chat
+
+    private func chatTab(_ P: Palette) -> some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(store.state?.chat ?? []) { msg in
+                            chatRow(msg, P).id(msg.id)
+                        }
+                    }
+                    .padding(12)
+                }
+                .onAppear {
+                    if let last = store.state?.chat.last?.id {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+                .onChange(of: store.state?.chat.last?.id) { _, new in
+                    guard let new else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(new, anchor: .bottom)
+                    }
+                }
+            }
+
+            emoteRow(P)
+            inputBar(P)
+        }
+    }
+
+    private func chatRow(_ msg: ChatMessage, _ P: Palette) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                if let flag = msg.flag, !flag.isEmpty {
+                    Text(flag).font(.system(size: 12))
+                }
+                Text(msg.name)
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(css: msg.color))
+                    .lineLimit(1)
+            }
+            Text(msg.text)
+                .font(.system(size: 14.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(P.rule, lineWidth: 1)
+        )
+    }
+
+    private func emoteRow(_ P: Palette) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(MMStatic.emotes, id: \.self) { emote in
+                    Button {
+                        store.sendChat(emote)
+                        Haptics.tap()
+                    } label: {
+                        Text(emote)
+                            .font(.system(size: 19))
+                            .frame(width: 36, height: 36)
+                            .background(P.sunken, in: Circle())
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func inputBar(_ P: Palette) -> some View {
+        HStack(spacing: 8) {
+            TextField("Say something…", text: $draft)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink)
+                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
+                .background(P.sunken, in: Capsule())
+                .submitLabel(.send)
+                .onSubmit(send)
+
+            Button(action: send) {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(P.red, in: Circle())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 10)
+    }
+
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        store.sendChat(text)
+        draft = ""
+    }
+
+    // MARK: log
+
+    private func logTab(_ P: Palette) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 9) {
+                    ForEach(store.state?.log ?? []) { line in
+                        logRow(line, P).id(line.id)
+                    }
+                }
+                .padding(12)
+            }
+            .onAppear {
+                if let last = store.state?.log.last?.id {
+                    proxy.scrollTo(last, anchor: .bottom)
+                }
+            }
+            .onChange(of: store.state?.log.last?.id) { _, new in
+                guard let new else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(new, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    private func logRow(_ line: LogLine, _ P: Palette) -> some View {
+        let style = logStyle(line.kind, P)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: style.symbol)
+                .font(.system(size: style.size, weight: .semibold))
+                .foregroundStyle(style.tint)
+                .frame(width: 18)
+            Text(line.text)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func logStyle(_ kind: String, _ P: Palette) -> (symbol: String, tint: Color, size: CGFloat) {
+        switch kind {
+        case "dice":              ("die.face.5", .purple, 13)
+        case "money":             ("dollarsign.circle", P.good, 13)
+        case "rent":              ("house", P.bad, 13)
+        case "buy":               ("cart", .blue, 13)
+        case "turn":              ("play.fill", P.gold, 13)
+        case "jail", "warn":      ("exclamationmark.triangle", .orange, 13)
+        case "bankrupt":          ("xmark.octagon", P.bad, 13)
+        case "auction", "trade":  ("hammer", P.gold, 13)
+        case "system":            ("sparkles", P.red, 13)
+        case "treasure":          ("gift", .orange, 13)
+        case "surprise":          ("questionmark.circle", .pink, 13)
+        case "build":             ("hammer.circle", .blue, 13)
+        case "mortgage":          ("building.columns", P.ink3, 13)
+        case "join", "leave":     ("person", P.ink3, 13)
+        default:                  ("circle.fill", P.ink3, 6)
+        }
+    }
+}
+
+// MARK: - auction box (lives inside the board's centre well, ≈240pt square)
+
+struct AuctionBox: View {
+    let auction: AuctionState
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    private static let windowSeconds: Double = 20
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        VStack(spacing: 5) {
+            Text("🔨 AUCTION")
+                .font(.system(size: 10, weight: .black, design: .rounded))
+                .kerning(1.5)
+                .foregroundStyle(P.gold)
+
+            Text(store.tile(auction.tile)?.name ?? "Property")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(P.ink)
+                .lineLimit(1)
+
+            Text(money(auction.bid))
+                .font(.system(size: 26, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.gold)
+
+            if let leader = store.state?.player(auction.leader) {
+                Text("leading: \(leader.name)")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(css: leader.color))
+                    .lineLimit(1)
+            } else {
+                Text("no bids yet")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+
+            countdownBar(P)
+
+            bidControls(P)
+        }
+        .padding(.horizontal, 6)
+    }
+
+    private func countdownBar(_ P: Palette) -> some View {
+        TimelineView(.animation) { context in
+            let now = context.date.timeIntervalSince1970
+            let remaining = max(0, (auction.endsAt ?? 0) / 1000 - now)
+            let fraction = min(1, remaining / Self.windowSeconds)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(P.sunken)
+                    Capsule().fill(P.gold)
+                        .frame(width: max(0, geo.size.width * fraction))
+                }
+            }
+        }
+        .frame(height: 5)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func bidControls(_ P: Palette) -> some View {
+        if auction.inRace.contains(store.meId), store.me?.isBankrupt != true {
+            let next = auction.bid == 0 ? 10 : auction.bid + 10
+            let myMoney = store.me?.money ?? 0
+            let amounts = [next, next + 40, next + 90].filter { $0 <= myMoney }
+
+            VStack(spacing: 5) {
+                if !amounts.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(amounts, id: \.self) { amount in
+                            Button(money(amount)) {
+                                store.bid(amount)
+                                Haptics.tap()
+                            }
+                            .buttonStyle(CompactAuctionButtonStyle(bg: P.gold))
+                        }
+                    }
+                }
+                Button("Pass") { store.passBid() }
+                    .buttonStyle(CompactAuctionButtonStyle(bg: P.bad))
+            }
+        } else {
+            Text("you're out")
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(P.ink3)
+        }
+    }
+}
+
+/// Tighter sibling of MMButtonStyle so three bid buttons + pass fit the well.
+private struct CompactAuctionButtonStyle: ButtonStyle {
+    let bg: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 11)
+            .background(bg, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.white.opacity(0.18), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+// MARK: - game over sheet
+
+struct GameOverSheet: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 14) {
+                    Text("🏆")
+                        .font(.system(size: 44))
+                        .padding(.top, 8)
+
+                    winnerHeadline(P)
+
+                    standingsCard(P)
+
+                    if store.isHost {
+                        Button("🔁  Play again") {
+                            store.rematch()
+                            dismiss()
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                    }
+
+                    Button("Leave room") {
+                        store.leaveRoom()   // RootView switches screens on roomId = nil
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                }
+                .padding(16)
+            }
+            .background(P.page)
+            .navigationTitle("Game over")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private func winnerHeadline(_ P: Palette) -> some View {
+        if let teamIdx = store.state?.winningTeam,
+           let team = store.state?.teamInfo?[safe: teamIdx] {
+            Text("Team \(team.name) wins!")
+                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color(css: team.color))
+                .multilineTextAlignment(.center)
+        } else if let winner = store.state?.winner {
+            Text("\(winner.name) wins!")
+                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color(css: winner.color))
+                .multilineTextAlignment(.center)
+        } else {
+            Text("Game over")
+                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.ink)
+        }
+    }
+
+    private func standingsCard(_ P: Palette) -> some View {
+        let players = store.state?.players ?? []
+        let solvent = players.filter { !$0.isBankrupt }
+            .sorted { ($0.netWorth ?? 0) > ($1.netWorth ?? 0) }
+        let standings = solvent + players.filter { $0.isBankrupt }
+
+        return MMCard {
+            VStack(alignment: .leading, spacing: 10) {
+                PanelTitle("Final standings")
+                ForEach(Array(standings.enumerated()), id: \.element.id) { rank, p in
+                    HStack(spacing: 10) {
+                        Text(medal(rank))
+                            .font(.system(size: rank < 3 ? 18 : 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .frame(width: 26)
+                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30)
+                        Text(p.name)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        Spacer()
+                        Text(p.isBankrupt ? "bankrupt" : money(p.netWorth ?? 0))
+                            .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                            .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
+                    }
+                    .opacity(p.isBankrupt ? 0.6 : 1)
+                }
+            }
+        }
+    }
+
+    private func medal(_ rank: Int) -> String {
+        switch rank {
+        case 0: "🥇"
+        case 1: "🥈"
+        case 2: "🥉"
+        default: "\(rank + 1)"
+        }
+    }
+}
