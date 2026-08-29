@@ -34,10 +34,10 @@ export const ART = {
     <path d="M2 24.5c2.6-2 5.2-2 7.8 0s5.2 2 7.8 0 5.2-2 7.8 0 4 1.4 5.6 0" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round"/>`),
 
   gotoprison: svg(`
-    <circle cx="10" cy="19" r="6.4" stroke="#f4f7ff" stroke-width="3"/>
-    <circle cx="22" cy="19" r="6.4" stroke="#f4f7ff" stroke-width="3"/>
-    <path d="M10 12.6V8.4M22 12.6V8.4" stroke="#f4f7ff" stroke-width="3" stroke-linecap="round"/>
-    <path d="M12.4 7.4h7.2" stroke="#fb7185" stroke-width="3.2" stroke-linecap="round"/>`),
+    <circle cx="10" cy="19" r="6.4" stroke="#54607a" stroke-width="3"/>
+    <circle cx="22" cy="19" r="6.4" stroke="#54607a" stroke-width="3"/>
+    <path d="M10 12.6V8.4M22 12.6V8.4" stroke="#54607a" stroke-width="3" stroke-linecap="round"/>
+    <path d="M12.4 7.4h7.2" stroke="#d92037" stroke-width="3.4" stroke-linecap="round"/>`),
 
   // ---- card and cash tiles ---------------------------------------------
   treasure: svg(`
@@ -67,9 +67,9 @@ export const ART = {
   // ---- ownables ---------------------------------------------------------
   airport: svg(`
     <path d="M16 2.6c1.5 0 2.4 1.6 2.4 3.6v5.4l10.2 5.6v3l-10.2-3v5.4l3 2.2v2.4L16 26l-5.4 1.2v-2.4l3-2.2v-5.4l-10.2 3v-3l10.2-5.6V6.2c0-2 .9-3.6 2.4-3.6z"
-      fill="#cfe0ff"/>`),
+      fill="#3f6fae"/>`),
 
-  bolt: svg(`<path d="M18.4 2.5 7 18h6.6l-1.4 11.5L25 13.4h-7l.4-10.9z" fill="#fcd34d"/>`),
+  bolt: svg(`<path d="M18.4 2.5 7 18h6.6l-1.4 11.5L25 13.4h-7l.4-10.9z" fill="#eab308"/>`),
   droplet: svg(`
     <path d="M16 3c5.4 6.6 8.4 10.9 8.4 14.7A8.4 8.4 0 0 1 16 26a8.4 8.4 0 0 1-8.4-8.3C7.6 13.9 10.6 9.6 16 3z" fill="#5cc9f5"/>
     <path d="M12.4 18.6c0 2.2 1.5 3.9 3.4 4.3" stroke="#e0f6ff" stroke-width="1.8" stroke-linecap="round"/>`),
@@ -82,10 +82,10 @@ export const ART = {
       <path d="M16 3.4v3.6M16 25v3.6M3.4 16h3.6M25 16h3.6M7.2 7.2l2.5 2.5M22.3 22.3l2.5 2.5M24.8 7.2l-2.5 2.5M9.7 22.3l-2.5 2.5"/>
     </g>`),
   turbine: svg(`
-    <path d="M15 15 6.5 8.4l1.8-2.6L16 13.6z" fill="#a8d8ff"/>
-    <path d="M17 15.6 27 12l.7 3.1-10 3.3z" fill="#a8d8ff"/>
-    <path d="M15.6 17.4 13 28.4h-3.2l3.5-11.4z" fill="#a8d8ff"/>
-    <circle cx="16" cy="16" r="2.4" fill="#e2f1ff"/>`),
+    <path d="M15 15 6.5 8.4l1.8-2.6L16 13.6z" fill="#4a86bd"/>
+    <path d="M17 15.6 27 12l.7 3.1-10 3.3z" fill="#4a86bd"/>
+    <path d="M15.6 17.4 13 28.4h-3.2l3.5-11.4z" fill="#4a86bd"/>
+    <circle cx="16" cy="16" r="2.4" fill="#2c5a85"/>`),
 };
 
 /** Utility tiles carry an emoji in the map data — map it onto the drawn set. */
