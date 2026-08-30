@@ -886,9 +886,9 @@ export function openTradeModal(state, meId, targetId, actions) {
         }).join('') : '<div class="empty small">No properties</div>'}
       </div>
       <label class="field tight"><span>Cash · max ${money(player.money)}</span>
-        <input type="number" min="0" max="${player.money}" value="0" data-cash="${prefix}" /></label>
+        <input type="number" min="0" max="${player.money}" value="" placeholder="0" data-cash="${prefix}" /></label>
       ${player.getOutCards ? `<label class="field tight"><span>Prison cards · max ${player.getOutCards}</span>
-        <input type="number" min="0" max="${player.getOutCards}" value="0" data-cards="${prefix}" /></label>` : ''}
+        <input type="number" min="0" max="${player.getOutCards}" value="" placeholder="0" data-cards="${prefix}" /></label>` : ''}
     </div>`;
 
   openModal(`

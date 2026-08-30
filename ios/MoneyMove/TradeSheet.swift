@@ -279,9 +279,11 @@ struct TradeSheet: View {
     }
 
     /// TextField binding that only accepts digits and clamps into 0...limit.
+    /// Zero renders as an empty field (the placeholder shows the 0) so typing
+    /// "150" can never glue itself onto a leftover digit and become "1500".
     private func clampedText(_ value: Binding<Int>, limit: Int) -> Binding<String> {
         Binding(
-            get: { String(value.wrappedValue) },
+            get: { value.wrappedValue == 0 ? "" : String(value.wrappedValue) },
             set: { s in
                 let n = Int(s.filter(\.isNumber)) ?? 0
                 value.wrappedValue = min(max(0, n), max(0, limit))

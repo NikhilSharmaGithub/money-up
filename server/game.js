@@ -263,7 +263,8 @@ export class GameRoom {
   start(id) {
     if (id !== this.hostId || this.status !== 'lobby') return { error: 'Not allowed' };
     if (this.settings.allowBots) {
-      while (this.players.length < Math.min(this.settings.maxPlayers, 4)) this.addBot();
+      // Fill every empty seat the table was set for — six-player games included.
+      while (this.players.length < this.settings.maxPlayers) this.addBot();
     }
     if (this.players.length < 2) return { error: 'Need at least 2 players' };
 

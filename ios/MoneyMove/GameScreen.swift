@@ -57,25 +57,33 @@ struct GameScreen: View {
                     .padding(.horizontal, 12)
                 } else if hSize == .regular {
                     // iPad in play is a tabletop: the board sits huge in the
-                    // middle — pass & play around it — with the players above
-                    // and one dock below, both centred.
-                    PlayerStrip(onTapPlayer: { p in
-                        if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                           store.me?.isBankrupt != true {
-                            sheet = .trade(p.id, give: [])
+                    // middle with the whole dock INSIDE its centre well — the
+                    // dice and buttons live where everyone around the table can
+                    // see them — plus a roll control pinned to each corner of
+                    // the screen so whoever sits on that side can reach one.
+                    ZStack {
+                        VStack(spacing: 10) {
+                            PlayerStrip(onTapPlayer: { p in
+                                if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
+                                   store.me?.isBankrupt != true {
+                                    sheet = .trade(p.id, give: [])
+                                }
+                            })
+
+                            BoardView(onTapTile: { sheet = .deed($0) }) {
+                                CenterWell(actionsInWell: true,
+                                           openProperties: { sheet = .properties },
+                                           openTrade: { sheet = .tradePicker(give: []) },
+                                           openHistory: { sheet = .chatLog(1) })
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 12)
+
+                            Spacer(minLength: 6)
                         }
-                    })
 
-                    BoardView(onTapTile: { sheet = .deed($0) }) {
-                        CenterWell()
+                        CornerControls()
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 12)
-
-                    ActionPanel(openProperties: { sheet = .properties },
-                                openTrade: { sheet = .tradePicker(give: []) })
-                        .frame(maxWidth: 620)
-                        .padding(.bottom, 8)
                 } else if store.state?.isLobby == true {
                     PlayerStrip(onTapPlayer: { _ in })
                     BoardView(onTapTile: { sheet = .deed($0) }) {
@@ -88,7 +96,7 @@ struct GameScreen: View {
                     // bottom — player strip directly above the action dock, no
                     // orphaned bands floating in between.
                     BoardView(onTapTile: { sheet = .deed($0) }) {
-                        CenterWell()
+                        CenterWell(openHistory: { sheet = .chatLog(1) })
                     }
                     .padding(.horizontal, 6)
                     .padding(.top, 2)
@@ -391,6 +399,14 @@ struct PlayerStrip: View {
 // MARK: - centre well
 
 struct CenterWell: View {
+    /// iPad tabletop: the action dock renders inside the well, dead-centre.
+    var actionsInWell = false
+    var openProperties: (() -> Void)? = nil
+    var openTrade: (() -> Void)? = nil
+    /// Opens the full game log — the ghosted feed behind the dice is a teaser,
+    /// this is the whole story.
+    var openHistory: (() -> Void)? = nil
+
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
 
@@ -450,32 +466,47 @@ struct CenterWell: View {
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                            VStack(spacing: 10) {
-                                if let dice = state.turn?.dice, dice.count == 2 {
-                                    let dieSize = min(max(geo.size.width * 0.17, 44), 76)
-                                    DiceView(values: dice, size: dieSize)
-                                        .padding(.vertical, dieSize * 0.30)
-                                        .padding(.horizontal, dieSize * 0.42)
-                                        .background(
-                                            P.boardBG.opacity(0.92),
-                                            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                        )
-                                        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
-                                }
-                                if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
-                                    HStack(spacing: 4) {
-                                        Text("🏝️").font(.system(size: 11))
-                                        Text(money(pot))
-                                            .font(.system(size: 12, weight: .heavy, design: .rounded))
-                                            .foregroundStyle(P.gold)
+                            VStack(spacing: 12) {
+                                Group {
+                                    if let dice = state.turn?.dice, dice.count == 2 {
+                                        let dieSize = min(max(geo.size.width * 0.17, 44), 76)
+                                        DiceView(values: dice, size: dieSize)
+                                            .padding(.vertical, dieSize * 0.30)
+                                            .padding(.horizontal, dieSize * 0.42)
+                                            .background(
+                                                P.boardBG.opacity(0.92),
+                                                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                            )
+                                            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
                                     }
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 10)
-                                    .background(P.goldSoft, in: Capsule())
+                                    if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
+                                        HStack(spacing: 4) {
+                                            Text("🏝️").font(.system(size: 11))
+                                            Text(money(pot))
+                                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                                .foregroundStyle(P.gold)
+                                        }
+                                        .padding(.vertical, 4)
+                                        .padding(.horizontal, 10)
+                                        .background(P.goldSoft, in: Capsule())
+                                    }
+                                }
+                                .allowsHitTesting(false)
+
+                                // iPad tabletop: roll/buy/end-turn live right
+                                // here, in the middle of the table.
+                                if actionsInWell {
+                                    ActionPanel(openProperties: { openProperties?() },
+                                                openTrade: openTrade)
+                                        .frame(maxWidth: min(geo.size.width * 0.74, 470))
                                 }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .allowsHitTesting(false)
+                        }
+                        .overlay(alignment: .bottomTrailing) {
+                            if let openHistory {
+                                historyChip(openHistory, P)
+                            }
                         }
                     }
                 }
@@ -483,6 +514,82 @@ struct CenterWell: View {
         }
         .padding(8)
         .minimumScaleFactor(0.7)
+    }
+
+    private func historyChip(_ open: @escaping () -> Void, _ P: Palette) -> some View {
+        Button {
+            open()
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .bold))
+                Text("History")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(P.ink2)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 12)
+            .background(P.card.opacity(0.92), in: Capsule())
+            .overlay(Capsule().stroke(P.rule, lineWidth: 1))
+        }
+        .padding(10)
+    }
+}
+
+// MARK: - corner roll controls (iPad tabletop)
+
+/// Four oversized turn buttons pinned to the corners of the screen. On a
+/// tabletop, half the table can't reach a bottom dock — whoever's side it is
+/// just taps the nearest corner. The top pair renders upside down for the
+/// players sitting across.
+struct CornerControls: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let phase = store.state?.turn?.phase
+        if store.state?.isPlaying == true, store.isMyTurn,
+           phase == "roll" || phase == "end" {
+            VStack {
+                HStack {
+                    cornerButton(flipped: true)
+                    Spacer()
+                    cornerButton(flipped: true)
+                }
+                Spacer()
+                HStack {
+                    cornerButton(flipped: false)
+                    Spacer()
+                    cornerButton(flipped: false)
+                }
+            }
+            .padding(14)
+            .transition(.opacity)
+        }
+    }
+
+    private func cornerButton(flipped: Bool) -> some View {
+        let P = Palette.current(scheme)
+        let rolling = store.state?.turn?.phase == "roll"
+        return Button {
+            if rolling { store.roll() } else { store.endTurn() }
+            Haptics.tap()
+        } label: {
+            VStack(spacing: 2) {
+                Text(rolling ? "🎲" : "➜")
+                    .font(.system(size: 22, weight: .heavy))
+                Text(rolling ? "ROLL" : "END")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .kerning(1)
+                    .foregroundStyle(Color(hex: 0x201607))
+            }
+            .frame(width: 62, height: 62)
+            .background(P.red, in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
+        }
+        .rotationEffect(.degrees(flipped ? 180 : 0))
     }
 }
 
