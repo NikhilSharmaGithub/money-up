@@ -104,6 +104,12 @@ export const sfx = {
   },
   cash: () => { tone({ freq: jit(880), to: 1320, dur: 0.14, type: 'triangle', vol: 0.16 }); tone({ freq: jit(1320), dur: 0.16, at: 0.1, type: 'sine', vol: 0.1 }); },
   rent: () => { tone({ freq: jit(420), to: 200, dur: 0.28, type: 'triangle', vol: 0.14 }); },
+  // a whole country in one hand — a short triumphant flourish
+  setComplete: () => {
+    [523, 659, 784, 1047].forEach((f, i) =>
+      tone({ freq: jit(f, 0.006), dur: 0.3, type: 'triangle', vol: 0.14, at: i * 0.07 }));
+    tone({ freq: jit(1568), dur: 0.4, type: 'sine', vol: 0.08, at: 0.32 });
+  },
   // money arriving in YOUR pocket: a bright rising coin ding
   gain: () => { tone({ freq: jit(988), to: 1319, dur: 0.12, type: 'triangle', vol: 0.18 }); tone({ freq: jit(1568), dur: 0.18, at: 0.1, type: 'sine', vol: 0.12 }); },
   // money leaving YOUR pocket: a hiss and a sagging "ishh…"

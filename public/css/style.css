@@ -608,6 +608,15 @@ select { cursor: pointer; }
   content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .2; z-index: 1;
   background: var(--own-color);
 }
+/* Set-completed celebration: the whole section floods with the owner's
+   colour and breathes back, three deep pulses. */
+.tile.owned.set-flash::after { animation: setPulse 3.2s ease-in-out; }
+@keyframes setPulse {
+  0%, 100% { opacity: .2; }
+  12%, 44%, 76% { opacity: .85; }
+  28%, 60% { opacity: .3; }
+}
+
 /* A whole country in one hand: thicker owner band + a quiet ring. */
 .t-top.full-set .tile-wash,
 .t-bottom.full-set .tile-wash { height: 30%; }

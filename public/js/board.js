@@ -3,6 +3,7 @@
 // they can hop tile-by-tile instead of teleporting.
 
 import { ART, utilityArt } from './icons.js';
+import { sfx } from './sound.js';
 
 let builtMapId = null;
 let tileEls = [];
@@ -24,6 +25,7 @@ export function renderBoard(state, root) {
   builtMapId = key;
   root.innerHTML = '';
   tileEls = new Array(map.tiles.length);
+  resetSetTracking(); // a fresh grid must not flash sets it just learned about
 
   const L = map.layout;
   const cols = Math.max(L.top.length, L.bottom.length) + 2;
@@ -118,9 +120,42 @@ function tileMarkup(tile, groups) {
 }
 
 // ══════════════════════════════════════════════════ ownership / buildings ══
+
+// group key -> ownerId for every completed set, so a NEW completion (buy or
+// trade) can flood-flash the whole section in the owner's colour.
+const completedSets = new Map();
+let setsSeeded = false;
+export function resetSetTracking() { completedSets.clear(); setsSeeded = false; }
+
 export function patchBoard(state) {
   const { ownership, players } = state;
   const owners = new Map(players.map((p) => [p.id, p]));
+
+  // which colour groups are fully owned right now, and by whom
+  const nowComplete = new Map();
+  for (const [g, idxs] of Object.entries(state.map.groups || {})) {
+    if (!idxs.length) continue;
+    const owner = ownership[idxs[0]]?.owner;
+    if (owner && idxs.every((k) => ownership[k]?.owner === owner)) nowComplete.set(g, owner);
+  }
+  if (setsSeeded && state.status === 'playing') {
+    for (const [g, owner] of nowComplete) {
+      if (completedSets.get(g) === owner) continue;
+      // a set just came together — pulse the whole section, deep then back
+      (state.map.groups[g] || []).forEach((k) => {
+        const el = tileEls[k];
+        if (!el) return;
+        el.classList.remove('set-flash');
+        void el.offsetWidth; // restart the animation if it re-fires
+        el.classList.add('set-flash');
+        setTimeout(() => el.classList.remove('set-flash'), 3500);
+      });
+      sfx.setComplete();
+    }
+  }
+  completedSets.clear();
+  for (const [g, owner] of nowComplete) completedSets.set(g, owner);
+  setsSeeded = true;
 
   state.map.tiles.forEach((tile, i) => {
     const el = tileEls[i];
@@ -173,7 +208,7 @@ export function highlightTiles(state) {
 }
 
 export function tileElement(i) { return tileEls[i]; }
-export function resetBoard() { builtMapId = null; tileEls = []; tokens.clear(); }
+export function resetBoard() { builtMapId = null; tileEls = []; tokens.clear(); resetSetTracking(); }
 
 // ═══════════════════════════════════════════════════════════ token layer ══
 const tokens = new Map();   // playerId -> { el, pos }

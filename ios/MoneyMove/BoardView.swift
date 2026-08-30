@@ -114,6 +114,9 @@ struct TileView: View {
     let tile: TileData
     let geom: BoardGeometry
     @State private var dealt = true
+    /// Drives the "whole set completed" celebration: the tile floods with the
+    /// owner's colour and pulses back three times.
+    @State private var setFlash = false
 
     private var ownership: TileOwnership? { store.state?.owner(of: tile.index) }
     private var ownerPlayer: PlayerState? { store.state?.player(ownership?.owner) }
@@ -158,6 +161,13 @@ struct TileView: View {
             if let owner = ownerPlayer {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color(css: owner.color).opacity(isFullSet ? 0.30 : 0.18))
+
+                // set-completed celebration: flood with the owner's colour,
+                // then breathe back to the resting wash
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(css: owner.color))
+                    .opacity(setFlash ? 0.88 : 0)
+                    .allowsHitTesting(false)
             }
 
             if ownership?.isMortgaged == true {
@@ -176,6 +186,22 @@ struct TileView: View {
         .opacity(dealt ? 1 : 0)
         .onAppear { runDealIfFresh() }
         .onChange(of: store.boardIntroAt) { runDealIfFresh() }
+        .onChange(of: isFullSet) { was, now in
+            guard now, !was else { return }
+            celebrateSet()
+        }
+    }
+
+    /// Three deep pulses of the owner's colour, ~3.3s in all.
+    private func celebrateSet() {
+        Task { @MainActor in
+            for _ in 0..<3 {
+                withAnimation(.easeIn(duration: 0.4)) { setFlash = true }
+                try? await Task.sleep(for: .milliseconds(450))
+                withAnimation(.easeOut(duration: 0.55)) { setFlash = false }
+                try? await Task.sleep(for: .milliseconds(650))
+            }
+        }
     }
 
     /// The deal-in: every tile starts as a card on the deck in the middle of

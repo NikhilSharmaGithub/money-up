@@ -316,11 +316,19 @@ function render() {
     if (p) { showTurnBanner(p, p.id === meId); if (p.id === meId) sfx.turn(); }
   }
 
-  // drawn card
+  // drawn card — revealed only once the token has walked onto the tile; the
+  // server resolves instantly, but the reveal must not beat the piece there.
   if (state.lastCard && state.lastCard.at !== lastCardAt) {
     lastCardAt = state.lastCard.at;
-    $('#cardPopup').classList.remove('hidden');
-    showCard(state.lastCard);
+    const card = state.lastCard;
+    const mv = state.lastMove;
+    const steps = mv && mv.steps && Math.abs(mv.at - card.at) < 2500 ? Math.abs(mv.steps) : 0;
+    const delay = steps ? steps * 120 + 350 : 0;
+    setTimeout(() => {
+      if (state?.lastCard?.at !== card.at) return; // superseded meanwhile
+      $('#cardPopup').classList.remove('hidden');
+      showCard(card);
+    }, delay);
   }
 
   // game over

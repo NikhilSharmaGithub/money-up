@@ -173,10 +173,40 @@ final class GameStore: ObservableObject {
             else if remoteChange { SoundKit.shared.cash() }
         }
 
-        // card popup — fires once per draw
+        // A completed country set is a moment — the tiles flash (TileView),
+        // the fanfare plays exactly once from here.
+        if let old, new.isPlaying, old.isPlaying, let groups = new.map.groups {
+            for (_, idxs) in groups where idxs.count > 1 {
+                guard let firstOwner = new.owner(of: idxs[0])?.owner,
+                      idxs.allSatisfy({ new.owner(of: $0)?.owner == firstOwner }) else { continue }
+                let wasComplete = idxs.allSatisfy { old.owner(of: $0)?.owner == firstOwner }
+                if !wasComplete {
+                    SoundKit.shared.setComplete()
+                    Haptics.turn()
+                    break
+                }
+            }
+        }
+
+        // card popup — fires once per draw, but only AFTER the token has
+        // actually walked onto the Treasure/Surprise tile. The server resolves
+        // instantly; the reveal must not beat the piece to the square.
         if let card = new.lastCard, card.at != lastCardAt {
             lastCardAt = card.at
-            if old != nil { cardPopup = card; SoundKit.shared.card() }
+            if old != nil {
+                let delay = walkDelay(in: new, eventAt: card.at)
+                if delay > 0 {
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
+                        guard let self, self.state?.lastCard?.at == card.at else { return }
+                        withAnimation { self.cardPopup = card }
+                        SoundKit.shared.card()
+                    }
+                } else {
+                    cardPopup = card
+                    SoundKit.shared.card()
+                }
+            }
         }
 
         // turn banner — when the turn passes to someone new
@@ -232,6 +262,16 @@ final class GameStore: ObservableObject {
                 }
             }
         }
+    }
+
+    /// How long the token on screen still needs to finish its walk for the
+    /// move that caused this event — mirrors TokenWalker's pacing.
+    private func walkDelay(in state: GameState, eventAt: Double) -> Double {
+        guard let move = state.lastMove, move.steps != 0,
+              abs(move.at - eventAt) < 2500 else { return 0 }
+        let distance = abs(move.steps)
+        let pace: Double = distance > 12 ? 0.07 : distance > 7 ? 0.095 : 0.13
+        return Double(distance) * pace + 0.35
     }
 
     func showToast(_ text: String, isError: Bool = false) {

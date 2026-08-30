@@ -157,6 +157,14 @@ final class SoundKit {
 
     func rent() { tone(420, to: 200, dur: 0.26, wave: .triangle, vol: 0.15) }
 
+    /// A whole country in one hand — a short triumphant flourish.
+    func setComplete() {
+        for (i, f) in [523.0, 659, 784, 1047].enumerated() {
+            tone(jitter(f, 0.006), dur: 0.3, wave: .triangle, vol: 0.14, after: Double(i) * 0.07)
+        }
+        tone(jitter(1568), dur: 0.4, wave: .sine, vol: 0.08, after: 0.32)
+    }
+
     /// Money arriving in YOUR pocket: a bright rising coin ding.
     func gain() {
         tone(988, to: 1319, dur: 0.12, wave: .triangle, vol: 0.17)
