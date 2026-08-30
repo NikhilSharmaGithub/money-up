@@ -83,6 +83,10 @@ export const sfx = {
   buy: () => chord([523, 659, 784]),
   cash: () => { tone({ freq: 880, to: 1320, dur: 0.14, type: 'triangle', vol: 0.18 }); tone({ freq: 1320, dur: 0.16, at: 0.1, type: 'sine', vol: 0.12 }); },
   rent: () => { tone({ freq: 420, to: 200, dur: 0.28, type: 'sawtooth', vol: 0.14 }); },
+  // money arriving in YOUR pocket: a bright rising coin ding
+  gain: () => { tone({ freq: 988, to: 1319, dur: 0.12, type: 'triangle', vol: 0.18 }); tone({ freq: 1568, dur: 0.18, at: 0.1, type: 'sine', vol: 0.12 }); },
+  // money leaving YOUR pocket: a hiss and a sagging "ishh…"
+  lose: () => { noise({ dur: 0.22, from: 3200, to: 700, vol: 0.1, q: 1 }); tone({ freq: 330, to: 165, dur: 0.34, at: 0.04, type: 'triangle', vol: 0.16 }); },
   build: () => { tone({ freq: 300, dur: 0.07, type: 'square', vol: 0.14 }); tone({ freq: 460, dur: 0.09, at: 0.08, type: 'square', vol: 0.12 }); },
 
   card: () => noise({ dur: 0.4, from: 600, to: 3200, vol: 0.1, q: 0.7 }),

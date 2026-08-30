@@ -58,6 +58,14 @@ final class GameStore: ObservableObject {
         let isError: Bool
     }
 
+    /// One player's cash just moved — drives the floating "+$200 / −$150"
+    /// badge next to their money and the gain/loss sounds.
+    struct MoneyDelta: Equatable {
+        let id = UUID()
+        let amount: Int
+    }
+    @Published var moneyDeltas: [String: MoneyDelta] = [:]
+
     private let socket = SocketIOClient()
 
     /// Extra seats played from this same device (pass & play). Each guest keeps
@@ -134,6 +142,33 @@ final class GameStore: ObservableObject {
         let old = state
         state = new
 
+        // Money moved: float a +/- badge on everyone whose cash changed, and
+        // give the seats on THIS device their own gain/loss sound — losing
+        // money makes that little "ishh", gaining rings like a till.
+        if let old, new.isPlaying, old.isPlaying {
+            var localGain = false, localLoss = false, remoteChange = false
+            for p in new.players {
+                guard let was = old.player(p.id)?.money, was != p.money else { continue }
+                let delta = MoneyDelta(amount: p.money - was)
+                moneyDeltas[p.id] = delta
+                let pid = p.id
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1.6))
+                    if self?.moneyDeltas[pid]?.id == delta.id {
+                        _ = withAnimation { self?.moneyDeltas.removeValue(forKey: pid) }
+                    }
+                }
+                if localIds.contains(pid) {
+                    if delta.amount < 0 { localLoss = true } else { localGain = true }
+                } else {
+                    remoteChange = true
+                }
+            }
+            if localLoss { SoundKit.shared.lose(); Haptics.warn() }
+            else if localGain { SoundKit.shared.gain(); Haptics.tap() }
+            else if remoteChange { SoundKit.shared.cash() }
+        }
+
         // card popup — fires once per draw
         if let card = new.lastCard, card.at != lastCardAt {
             lastCardAt = card.at
@@ -180,10 +215,10 @@ final class GameStore: ObservableObject {
             lastLogAt = last.at
             if old != nil {
                 switch last.kind {
+                // "money" and "rent" are covered by the per-player delta
+                // sounds above — mapping them here would double-fire.
                 case "dice": SoundKit.shared.dice()
-                case "money": SoundKit.shared.cash(); Haptics.tap()
                 case "buy": SoundKit.shared.buy(); Haptics.tap()
-                case "rent": SoundKit.shared.rent(); Haptics.warn()
                 case "bankrupt": SoundKit.shared.bankrupt(); Haptics.warn()
                 case "jail": SoundKit.shared.jail()
                 case "build": SoundKit.shared.build()
@@ -298,8 +333,11 @@ final class GameStore: ObservableObject {
     }
     func rematch() { emit("rematch") }
 
-    func proposeTrade(to: String, give: TradeSide, get: TradeSide) {
-        emitAsActive("trade:propose", [[
+    /// `from` picks which local seat proposes — a corner pod trades as its own
+    /// player, not as whoever happens to hold the turn.
+    func proposeTrade(from: String? = nil, to: String, give: TradeSide, get: TradeSide) {
+        let seat = from.flatMap { localIds.contains($0) ? $0 : nil } ?? activeId
+        emitAs(seat, "trade:propose", [[
             "to": to,
             "give": ["money": give.money, "tiles": give.tiles, "cards": give.cards],
             "get": ["money": get.money, "tiles": get.tiles, "cards": get.cards],

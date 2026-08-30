@@ -284,19 +284,33 @@ function render() {
 }
 
 /** Turns fresh log lines into sound effects. */
+let lastMyMoney = null;
 function playSoundsForNewEvents() {
+  // My own wallet gets its own voice: a coin ring when money lands, an
+  // "ishh…" when it leaves — the generic room sounds stay for everyone else.
+  const meNow = state.players.find((p) => p.id === meId);
+  let myDelta = 0;
+  if (state.status === 'playing' && meNow && !meNow.bankrupt) {
+    if (lastMyMoney != null) myDelta = meNow.money - lastMyMoney;
+    lastMyMoney = meNow.money;
+  } else {
+    lastMyMoney = null;
+  }
+  if (myDelta > 0) sfx.gain();
+  else if (myDelta < 0) sfx.lose();
+
   const fresh = state.log.filter((l) => l.at > lastLogAt);
   if (!fresh.length) return;
   lastLogAt = state.log[state.log.length - 1].at;
   const kinds = new Set(fresh.map((l) => l.kind));
   if (kinds.has('bankrupt')) return sfx.bankrupt();
-  if (kinds.has('rent')) return sfx.rent();
+  if (!myDelta && kinds.has('rent')) return sfx.rent();
   if (kinds.has('buy')) return sfx.buy();
   if (kinds.has('jail')) return sfx.jail();
   if (kinds.has('build')) return sfx.build();
   if (kinds.has('trade')) return sfx.trade();
   if (kinds.has('auction')) return sfx.auction();
-  if (kinds.has('money')) return sfx.cash();
+  if (!myDelta && kinds.has('money')) return sfx.cash();
 }
 
 // ───────────────────────────────────────────────────────────────── inputs ──

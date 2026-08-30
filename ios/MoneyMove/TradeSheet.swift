@@ -5,6 +5,8 @@
 import SwiftUI
 
 struct TradeSheet: View {
+    /// The seat making the offer — a corner pod trades as its own player.
+    let fromId: String
     let targetId: String
 
     @EnvironmentObject var store: GameStore
@@ -18,10 +20,13 @@ struct TradeSheet: View {
     @State private var giveCards = 0
     @State private var getCards = 0
 
-    init(targetId: String, preselectedGive: Set<Int> = []) {
+    init(fromId: String, targetId: String, preselectedGive: Set<Int> = []) {
+        self.fromId = fromId
         self.targetId = targetId
         _giveTiles = State(initialValue: preselectedGive)
     }
+
+    private var fromPlayer: PlayerState? { store.state?.player(fromId) }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -62,8 +67,8 @@ struct TradeSheet: View {
                     title: "You give",
                     tileIndexes: myTileIndexes,
                     selection: $giveTiles,
-                    cash: $giveCash, cashLimit: store.me?.money ?? 0,
-                    cards: $giveCards, cardLimit: store.me?.getOutCards ?? 0,
+                    cash: $giveCash, cashLimit: fromPlayer?.money ?? 0,
+                    cards: $giveCards, cardLimit: fromPlayer?.getOutCards ?? 0,
                     P: P
                 )
 
@@ -85,14 +90,15 @@ struct TradeSheet: View {
         HStack(spacing: 18) {
             VStack(spacing: 4) {
                 AvatarView(
-                    name: store.me?.name ?? "You",
-                    colorCSS: store.me?.color ?? "#888888",
-                    flag: store.me?.flag ?? "",
+                    name: fromPlayer?.name ?? "You",
+                    colorCSS: fromPlayer?.color ?? "#888888",
+                    flag: fromPlayer?.flag ?? "",
                     size: 44
                 )
-                Text("You")
+                Text(store.isLocal(fromId) && fromId == store.meId ? "You" : (fromPlayer?.name ?? "You"))
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(P.ink2)
+                    .lineLimit(1)
             }
             Image(systemName: "arrow.left.arrow.right")
                 .font(.system(size: 17, weight: .bold))
@@ -263,7 +269,12 @@ struct TradeSheet: View {
 
     // MARK: - data helpers
 
-    private var myTileIndexes: [Int] { store.myTiles() }
+    private var myTileIndexes: [Int] {
+        guard let state = store.state else { return [] }
+        return state.ownership.compactMap { key, own in
+            own.owner == fromId ? Int(key) : nil
+        }.sorted()
+    }
 
     private var targetTileIndexes: [Int] {
         guard let state = store.state else { return [] }
@@ -310,12 +321,12 @@ struct TradeSheet: View {
         // Re-validate against the freshest state: ownership or houses may
         // have changed while the sheet was open.
         let give = TradeSide(
-            money: min(max(0, giveCash), max(0, store.me?.money ?? 0)),
+            money: min(max(0, giveCash), max(0, fromPlayer?.money ?? 0)),
             tiles: giveTiles.filter {
                 let own = state.owner(of: $0)
-                return own?.owner == store.meId && own?.houseCount ?? 0 == 0
+                return own?.owner == fromId && own?.houseCount ?? 0 == 0
             }.sorted(),
-            cards: min(max(0, giveCards), max(0, store.me?.getOutCards ?? 0))
+            cards: min(max(0, giveCards), max(0, fromPlayer?.getOutCards ?? 0))
         )
         let get = TradeSide(
             money: min(max(0, getCash), max(0, target.money)),
@@ -333,7 +344,7 @@ struct TradeSheet: View {
             return
         }
 
-        store.proposeTrade(to: targetId, give: give, get: get)
+        store.proposeTrade(from: fromId, to: targetId, give: give, get: get)
         store.showToast("Offer sent")
         dismiss()
     }
@@ -344,6 +355,8 @@ struct TradeSheet: View {
 /// "Who do you want to trade with?" — one tap on a player opens the composer.
 /// This is the discoverable front door for trading on the phone.
 struct TradePickerSheet: View {
+    /// The seat making the offer — everyone except them is a possible partner.
+    var fromId: String
     var give: Set<Int> = []
     let pick: (String) -> Void
 
@@ -353,7 +366,7 @@ struct TradePickerSheet: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        let partners = (store.state?.players ?? []).filter { !$0.isBankrupt && $0.id != store.activeId }
+        let partners = (store.state?.players ?? []).filter { !$0.isBankrupt && $0.id != fromId }
 
         NavigationStack {
             ScrollView {

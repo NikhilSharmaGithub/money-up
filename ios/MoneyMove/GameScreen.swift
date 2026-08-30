@@ -7,8 +7,8 @@ import SwiftUI
 enum ActiveSheet: Identifiable {
     case deed(Int)
     case properties
-    case trade(String, give: Set<Int>)       // target player id (+ preselected tiles)
-    case tradePicker(give: Set<Int>)         // choose who to trade with first
+    case trade(from: String, to: String, give: Set<Int>)  // proposing seat → target
+    case tradePicker(from: String, give: Set<Int>)        // choose who to trade with first
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
     case gameOver
@@ -17,8 +17,8 @@ enum ActiveSheet: Identifiable {
         switch self {
         case .deed(let i): "deed-\(i)"
         case .properties: "properties"
-        case .trade(let t, _): "trade-\(t)"
-        case .tradePicker: "tradepicker"
+        case .trade(let f, let t, _): "trade-\(f)-\(t)"
+        case .tradePicker(let f, _): "tradepicker-\(f)"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
         case .gameOver: "gameover"
@@ -63,17 +63,20 @@ struct GameScreen: View {
                     // the screen so whoever sits on that side can reach one.
                     ZStack {
                         VStack(spacing: 10) {
-                            PlayerStrip(onTapPlayer: { p in
+                            // The strip stays out of the corners — those belong
+                            // to the players' own pods.
+                            PlayerStrip(sideInset: 196, onTapPlayer: { p in
                                 if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                                    store.me?.isBankrupt != true {
-                                    sheet = .trade(p.id, give: [])
+                                    sheet = .trade(from: store.activeId, to: p.id, give: [])
                                 }
                             })
+                            .padding(.horizontal, 196)
 
                             BoardView(onTapTile: { sheet = .deed($0) }) {
                                 CenterWell(actionsInWell: true,
                                            openProperties: { sheet = .properties },
-                                           openTrade: { sheet = .tradePicker(give: []) },
+                                           openTrade: { sheet = .tradePicker(from: store.activeId, give: []) },
                                            openHistory: { sheet = .chatLog(1) })
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -82,7 +85,9 @@ struct GameScreen: View {
                             Spacer(minLength: 6)
                         }
 
-                        CornerControls()
+                        CornerPods(openTrade: { from in
+                            sheet = .tradePicker(from: from, give: [])
+                        })
                     }
                 } else if store.state?.isLobby == true {
                     PlayerStrip(onTapPlayer: { _ in })
@@ -106,7 +111,7 @@ struct GameScreen: View {
                     PlayerStrip(onTapPlayer: { p in
                         if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                            store.me?.isBankrupt != true {
-                            sheet = .trade(p.id, give: [])
+                            sheet = .trade(from: store.activeId, to: p.id, give: [])
                         }
                     })
 
@@ -129,9 +134,14 @@ struct GameScreen: View {
             Group {
                 switch which {
                 case .deed(let i): DeedSheet(tileIndex: i)
-                case .properties: PropertiesSheet(openTrade: { give in sheet = .tradePicker(give: give) })
-                case .trade(let target, let give): TradeSheet(targetId: target, preselectedGive: give)
-                case .tradePicker(let give): TradePickerSheet(give: give, pick: { sheet = .trade($0, give: give) })
+                case .properties: PropertiesSheet(openTrade: { give in
+                    sheet = .tradePicker(from: store.activeId, give: give)
+                })
+                case .trade(let from, let target, let give):
+                    TradeSheet(fromId: from, targetId: target, preselectedGive: give)
+                case .tradePicker(let from, let give):
+                    TradePickerSheet(fromId: from, give: give,
+                                     pick: { sheet = .trade(from: from, to: $0, give: give) })
                 case .chatLog(let tab): ChatLogSheet(initialTab: tab)
                 case .settings: SettingsSheet()
                 case .gameOver: GameOverSheet()
@@ -187,7 +197,7 @@ struct GameScreen: View {
             SoundToggle()
             iconButton("bubble.left.and.bubble.right.fill", P) { sheet = .chatLog(0) }
             if store.state?.isPlaying == true {
-                iconButton("arrow.left.arrow.right", P) { sheet = .tradePicker(give: []) }
+                iconButton("arrow.left.arrow.right", P) { sheet = .tradePicker(from: store.activeId, give: []) }
                 iconButton("building.columns.fill", P) { sheet = .properties }
             }
             ShareLink(item: shareURL) {
@@ -228,7 +238,7 @@ struct GameScreen: View {
                 // board itself takes the full width and the dock stays at thumbs.
                 Spacer(minLength: 0)
                 ActionPanel(openProperties: { sheet = .properties },
-                            openTrade: { sheet = .tradePicker(give: []) })
+                            openTrade: { sheet = .tradePicker(from: store.activeId, give: []) })
                     .padding(.bottom, 4)
             }
         }
@@ -336,6 +346,8 @@ struct SoundToggle: View {
 struct PlayerStrip: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// Horizontal space the parent has shaved off each side (iPad corner pods).
+    var sideInset: CGFloat = 0
     let onTapPlayer: (PlayerState) -> Void
 
     var body: some View {
@@ -368,6 +380,10 @@ struct PlayerStrip: View {
                                     .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
                                     .contentTransition(.numericText())
                                     .animation(.snappy(duration: 0.4), value: p.money)
+                                    .overlay(alignment: .topTrailing) {
+                                        MoneyDeltaBadge(playerId: p.id)
+                                            .offset(x: 30, y: -16)
+                                    }
                                 let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
                                 if owned > 0, !p.isBankrupt {
                                     Text("·  \(owned) 🏠")
@@ -390,7 +406,7 @@ struct PlayerStrip: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(minWidth: UIScreen.main.bounds.width)
+            .frame(minWidth: max(0, UIScreen.main.bounds.width - sideInset * 2))
         }
         .frame(height: 54)
     }
@@ -537,59 +553,165 @@ struct CenterWell: View {
     }
 }
 
-// MARK: - corner roll controls (iPad tabletop)
+// MARK: - floating money delta
 
-/// Four oversized turn buttons pinned to the corners of the screen. On a
-/// tabletop, half the table can't reach a bottom dock — whoever's side it is
-/// just taps the nearest corner. The top pair renders upside down for the
-/// players sitting across.
-struct CornerControls: View {
+/// "+$200" / "−$150" floating up beside a player's money for a beat.
+struct MoneyDeltaBadge: View {
+    let playerId: String
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let phase = store.state?.turn?.phase
-        if store.state?.isPlaying == true, store.isMyTurn,
-           phase == "roll" || phase == "end" {
-            VStack {
-                HStack {
-                    cornerButton(flipped: true)
-                    Spacer()
-                    cornerButton(flipped: true)
-                }
-                Spacer()
-                HStack {
-                    cornerButton(flipped: false)
-                    Spacer()
-                    cornerButton(flipped: false)
-                }
+        let P = Palette.current(scheme)
+        ZStack {
+            if let d = store.moneyDeltas[playerId] {
+                Text("\(d.amount > 0 ? "+" : "−")$\(abs(d.amount))")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(d.amount > 0 ? P.good : P.bad)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 7)
+                    .background(P.card.opacity(0.94), in: Capsule())
+                    .overlay(Capsule().stroke((d.amount > 0 ? P.good : P.bad).opacity(0.4), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                    .id(d.id)
+                    .transition(.asymmetric(
+                        insertion: .offset(y: 8).combined(with: .opacity).combined(with: .scale(scale: 0.7)),
+                        removal: .offset(y: -12).combined(with: .opacity)
+                    ))
             }
-            .padding(14)
-            .transition(.opacity)
         }
+        .animation(.spring(duration: 0.4, bounce: 0.4), value: store.moneyDeltas[playerId])
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - corner player pods (iPad tabletop)
+
+/// Every player seated at THIS device gets their own little dashboard pinned
+/// to a corner of the screen — name, live cash with the +/- flash, and their
+/// dice / end-turn / trade controls. The top pair renders upside down, facing
+/// the people sitting across the table.
+struct CornerPods: View {
+    let openTrade: (String) -> Void
+
+    @EnvironmentObject var store: GameStore
+
+    /// Local seats in join order, dealt to corners: first two at the bottom,
+    /// next two across the table.
+    private var seats: [PlayerState] {
+        (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
     }
 
-    private func cornerButton(flipped: Bool) -> some View {
+    var body: some View {
+        let s = seats
+        VStack {
+            HStack(alignment: .top) {
+                pod(s[safe: 2], flipped: true)
+                Spacer()
+                pod(s[safe: 3], flipped: true)
+            }
+            Spacer()
+            HStack(alignment: .bottom) {
+                pod(s[safe: 0], flipped: false)
+                Spacer()
+                pod(s[safe: 1], flipped: false)
+            }
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder private func pod(_ p: PlayerState?, flipped: Bool) -> some View {
+        if let p {
+            PlayerPod(player: p, flipped: flipped, openTrade: openTrade)
+        } else {
+            Color.clear.frame(width: 1, height: 1)
+        }
+    }
+}
+
+/// One corner dashboard: identity, cash, and this seat's controls.
+private struct PlayerPod: View {
+    let player: PlayerState
+    let flipped: Bool
+    let openTrade: (String) -> Void
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    private var isTurn: Bool {
+        store.state?.isPlaying == true && store.state?.turn?.playerId == player.id
+    }
+
+    var body: some View {
         let P = Palette.current(scheme)
-        let rolling = store.state?.turn?.phase == "roll"
+        let color = Color(css: player.color)
+
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                AvatarView(name: player.name, colorCSS: player.color, flag: player.flag ?? "", size: 28)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(player.name)
+                        .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink)
+                        .lineLimit(1)
+                    Text(money(player.money))
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.good)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.4), value: player.money)
+                }
+                Spacer(minLength: 0)
+            }
+            .overlay(alignment: .topTrailing) {
+                MoneyDeltaBadge(playerId: player.id)
+                    .offset(x: 6, y: -4)
+            }
+
+            HStack(spacing: 6) {
+                if isTurn, let phase = store.state?.turn?.phase {
+                    switch phase {
+                    case "roll":
+                        podButton("🎲 Roll", prominent: true) { store.roll() }
+                    case "end":
+                        podButton("End ➜", prominent: true) { store.endTurn() }
+                    default:
+                        Text(phase == "action" ? "your call…" : "…")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                podButton("⇄", prominent: false) { openTrade(player.id) }
+                    .frame(width: 44)
+            }
+        }
+        .padding(10)
+        .frame(width: 172)
+        .background(P.card.opacity(0.96), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isTurn ? color : P.rule, lineWidth: isTurn ? 2 : 1)
+        )
+        .shadow(color: isTurn ? color.opacity(0.35) : .black.opacity(0.2),
+                radius: isTurn ? 12 : 6, y: 4)
+        .rotationEffect(.degrees(flipped ? 180 : 0))
+        .animation(.spring(duration: 0.35), value: isTurn)
+    }
+
+    private func podButton(_ label: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+        let P = Palette.current(scheme)
         return Button {
-            if rolling { store.roll() } else { store.endTurn() }
+            action()
             Haptics.tap()
         } label: {
-            VStack(spacing: 2) {
-                Text(rolling ? "🎲" : "➜")
-                    .font(.system(size: 22, weight: .heavy))
-                Text(rolling ? "ROLL" : "END")
-                    .font(.system(size: 9, weight: .black, design: .rounded))
-                    .kerning(1)
-                    .foregroundStyle(Color(hex: 0x201607))
-            }
-            .frame(width: 62, height: 62)
-            .background(P.red, in: Circle())
-            .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
+            Text(label)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(prominent ? Color(hex: 0x201607) : P.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(prominent ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .rotationEffect(.degrees(flipped ? 180 : 0))
     }
 }
 

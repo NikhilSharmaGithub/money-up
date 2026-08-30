@@ -128,6 +128,18 @@ final class SoundKit {
 
     func rent() { tone(420, to: 200, dur: 0.26, wave: .triangle, vol: 0.15) }
 
+    /// Money arriving in YOUR pocket: a bright rising coin ding.
+    func gain() {
+        tone(988, to: 1319, dur: 0.12, wave: .triangle, vol: 0.17)
+        tone(1568, dur: 0.18, wave: .sine, vol: 0.12, after: 0.1)
+    }
+
+    /// Money leaving YOUR pocket: a little hiss and a sagging "ishh…".
+    func lose() {
+        noise(dur: 0.2, vol: 0.1, bright: 0.7)
+        tone(330, to: 165, dur: 0.34, wave: .triangle, vol: 0.16, after: 0.04)
+    }
+
     func card() { noise(dur: 0.32, vol: 0.1, bright: 0.35) }
 
     func turn() {
