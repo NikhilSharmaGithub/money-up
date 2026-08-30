@@ -137,7 +137,7 @@ struct RootView: View {
         let P = Palette.current(scheme)
         if let p = store.turnBanner {
             HStack(spacing: 10) {
-                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30)
+                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30, emoji: p.avatar ?? "")
                 Text(p.id == store.meId ? "Your turn!"
                      : store.isLocal(p.id) ? "Pass to \(p.name)!"
                      : "\(p.name)'s turn")

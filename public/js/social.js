@@ -3,6 +3,9 @@
 
 import { api } from './net.js';
 import { escapeHtml } from './board.js';
+import { openDmModal } from './ui.js';
+
+let myToken = '';
 
 const $ = (s) => document.querySelector(s);
 
@@ -21,6 +24,7 @@ const post = (path, body) => fetch(api(path), {
 
 /** Registers this browser's profile and returns its friend code. */
 export async function initSocial({ token, name, flag, onToast, onJoin }) {
+  myToken = token;
   try {
     const me = await post('/api/profile', { token, name, flag });
     myCode = me.code;
@@ -94,14 +98,18 @@ async function refreshFriends(token, onJoin) {
   el.innerHTML = friends.map((f) => {
     const s = STATUS[f.status] || STATUS.offline;
     return `<div class="friend">
-      <span class="friend-flag">${escapeHtml(f.flag || '🙂')}</span>
+      <span class="friend-flag">${escapeHtml(f.avatar || f.flag || '🙂')}</span>
       <span class="friend-name">${escapeHtml(f.name)}</span>
       <span class="friend-status ${s.cls}">${s.label}</span>
+      <button class="icon-btn" data-chat="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}" title="Chat">💬</button>
       ${f.roomId ? `<button class="btn tiny primary" data-join="${escapeHtml(f.roomId)}">Join</button>` : ''}
       <button class="icon-btn tiny-x" data-drop="${escapeHtml(f.code)}" title="Remove">✕</button>
     </div>`;
   }).join('');
 
+  el.querySelectorAll('[data-chat]').forEach((b) => {
+    b.onclick = () => openDmModal(myToken, b.dataset.chat, b.dataset.name);
+  });
   el.querySelectorAll('[data-join]').forEach((b) => {
     b.onclick = () => onJoin(b.dataset.join);
   });

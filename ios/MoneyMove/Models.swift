@@ -110,6 +110,9 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var color: String
     var flag: String?
     var team: Int?
+    /// Store cosmetics: emoji piece on the board / emoji face in the chip.
+    var tokenSkin: String?
+    var avatar: String?
     var money: Int
     var pos: Int
     var jail: Bool?
@@ -255,4 +258,28 @@ struct ProfileInfo: Codable {
     var code: String
     var name: String?
     var flag: String?
+}
+
+// MARK: - store
+
+struct StoreItem: Codable, Identifiable {
+    var id: String
+    var kind: String                        // "token" | "avatar"
+    var name: String
+    var emoji: String
+    var price: Int
+}
+
+struct Wallet: Codable {
+    var coins: Int
+    var owned: [String]
+    var equipped: [String: String]          // slot -> item id
+}
+
+struct DMessage: Codable, Identifiable {
+    var from: String
+    var text: String
+    var at: Double
+
+    var id: String { "\(at):\(from)" }
 }

@@ -93,7 +93,8 @@ struct TradeSheet: View {
                     name: fromPlayer?.name ?? "You",
                     colorCSS: fromPlayer?.color ?? "#888888",
                     flag: fromPlayer?.flag ?? "",
-                    size: 44
+                    size: 44,
+                    emoji: fromPlayer?.avatar ?? ""
                 )
                 Text(store.isLocal(fromId) && fromId == store.meId ? "You" : (fromPlayer?.name ?? "You"))
                     .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -108,7 +109,8 @@ struct TradeSheet: View {
                     name: target.name,
                     colorCSS: target.color,
                     flag: target.flag ?? "",
-                    size: 44
+                    size: 44,
+                    emoji: target.avatar ?? ""
                 )
                 Text(target.name)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -412,7 +414,7 @@ struct TradePickerSheet: View {
             Haptics.tap()
         } label: {
             HStack(spacing: 11) {
-                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 38)
+                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 38, emoji: p.avatar ?? "")
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
                         Text(p.name)

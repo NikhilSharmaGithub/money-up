@@ -6,7 +6,11 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
 import { mapList } from './maps.js';
-import { profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence, allProfiles, attachLogin } from './social.js';
+import {
+  profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
+  allProfiles, attachLogin, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
+} from './social.js';
+import { STORE_ITEMS, itemById, emojiFor } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -71,6 +75,55 @@ app.post('/api/friends/remove', (req, res) => {
   res.json(removeFriend(String(token || '').slice(0, 64), code));
 });
 
+// ---- friend chat (DMs, polled) -------------------------------------------
+app.post('/api/dm', (req, res) => {
+  const { token, code, text } = req.body || {};
+  const result = sendDM(String(token || '').slice(0, 64), code, text);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.get('/api/dm', (req, res) => {
+  const result = dmsWith(String(req.query.token || '').slice(0, 64), req.query.code);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// ---- store & wallet ------------------------------------------------------
+app.get('/api/store', (_req, res) => res.json({ items: STORE_ITEMS }));
+
+app.get('/api/wallet', (req, res) => {
+  const w = walletOf(String(req.query.token || '').slice(0, 64));
+  if (!w) return res.status(400).json({ error: 'Missing identity' });
+  res.json(w);
+});
+
+app.post('/api/store/buy', (req, res) => {
+  const { token, itemId } = req.body || {};
+  const item = itemById(String(itemId || ''));
+  if (!item) return res.status(400).json({ error: 'Unknown item' });
+  const result = buyItem(String(token || '').slice(0, 64), item);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/store/equip', (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 64);
+  const { slot, itemId } = req.body || {};
+  const result = equipItem(token, slot, itemId ? String(itemId) : null);
+  if (result.error) return res.status(400).json(result);
+  // Already sitting at a table? Restyle the piece live.
+  const profile = profileFor(token);
+  const room = profile?.roomId ? rooms.get(profile.roomId) : null;
+  if (room?.player(token)) {
+    room.setCosmetics(token, {
+      tokenSkin: emojiFor(result.equipped.token),
+      avatar: emojiFor(result.equipped.avatar),
+    });
+  }
+  res.json(result);
+});
+
 // ---- auth (config-gated: works once the operator supplies credentials) ----
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 
@@ -132,6 +185,14 @@ function recordTransitions(room) {
   }
   if (room.status === 'ended' && prev === 'playing') {
     stats.gamesEnded++;
+    // Winning pays: one coin for a quick game, two once it went the distance.
+    // Team games pay every human on the winning side.
+    const turns = room.turnCount || 0;
+    const payout = turns >= 40 ? 2 : 1;
+    const winners = room.winningTeam != null
+      ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
+      : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
+    for (const w of winners) awardCoins(w.id, payout);
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
@@ -335,6 +396,14 @@ io.on('connection', (socket) => {
       if (res.error) {
         socket.emit('joinFailed', { message: res.error, spectate: true });
       }
+    }
+    // Dress the piece in whatever the player bought and equipped.
+    const wallet = walletOf(playerId);
+    if (wallet && room.player(playerId)) {
+      room.setCosmetics(playerId, {
+        tokenSkin: emojiFor(wallet.equipped.token),
+        avatar: emojiFor(wallet.equipped.avatar),
+      });
     }
     socket.emit('you', { playerId, roomId });
     socket.emit('state', stateFor(room.serialize(), room, playerId));

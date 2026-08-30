@@ -82,7 +82,7 @@ struct LobbyPanel: View {
         let canKick = store.isHost && p.id != store.meId
 
         return HStack(spacing: 10) {
-            AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 34)
+            AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 34, emoji: p.avatar ?? "")
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {

@@ -70,7 +70,7 @@ final class GameStore: ObservableObject {
     }
     @Published var moneyDeltas: [String: MoneyDelta] = [:]
 
-    /// A finished game, kept on this device for the History tab.
+    /// A finished (or abandoned) game, kept on this device for History.
     struct MatchRecord: Codable, Identifiable {
         var id = UUID()
         var date: Date
@@ -81,6 +81,8 @@ final class GameStore: ObservableObject {
         var won: Bool
         var myWorth: Int
         var turns: Int
+        /// "won" | "lost" | "left" — optional so older saved records decode.
+        var outcome: String?
     }
     @Published var matchHistory: [MatchRecord] = {
         guard let data = UserDefaults.standard.data(forKey: "mm.history"),
@@ -88,7 +90,7 @@ final class GameStore: ObservableObject {
         return list
     }()
 
-    private func recordMatch(_ state: GameState) {
+    private func recordMatch(_ state: GameState, outcome: String? = nil) {
         let winnerName: String
         if let teamIdx = state.winningTeam, let team = state.teamInfo?[safe: teamIdx] {
             winnerName = "Team \(team.name)"
@@ -105,12 +107,35 @@ final class GameStore: ObservableObject {
             winner: winnerName,
             won: wonByLocalSeat,
             myWorth: me?.isBankrupt == true ? 0 : (me?.netWorth ?? 0),
-            turns: state.history?.last?.t ?? 0
+            turns: state.turn != nil ? max(state.history?.last?.t ?? 0, 0) : 0,
+            outcome: outcome ?? (wonByLocalSeat ? "won" : "lost")
         )
         matchHistory.insert(record, at: 0)
         matchHistory = Array(matchHistory.prefix(50))
         if let data = try? JSONEncoder().encode(matchHistory) {
             UserDefaults.standard.set(data, forKey: "mm.history")
+        }
+    }
+
+    // MARK: - wallet & store
+
+    @Published var wallet: Wallet?
+
+    func refreshWallet(celebrate: Bool = false) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let base = serverURL,
+                  var comps = URLComponents(url: base.appending(path: "/api/wallet"), resolvingAgainstBaseURL: false)
+            else { return }
+            comps.queryItems = [URLQueryItem(name: "token", value: token)]
+            guard let url = comps.url,
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let fresh = try? JSONDecoder().decode(Wallet.self, from: data) else { return }
+            if celebrate, let old = wallet?.coins, fresh.coins > old {
+                let earned = fresh.coins - old
+                showToast("🪙 +\(earned) coin\(earned > 1 ? "s" : "") earned — spend them in the Store!")
+            }
+            wallet = fresh
         }
     }
 
@@ -295,11 +320,16 @@ final class GameStore: ObservableObject {
             }
         }
 
-        // game over sheet, once — and the result goes into the History tab
+        // game over sheet, once — the result lands in History and the win
+        // may have paid out coins, so check the wallet with a celebration
         if new.isEnded && old?.isEnded != true {
             showGameOver = true
             SoundKit.shared.win()
             recordMatch(new)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.refreshWallet(celebrate: true)
+            }
         }
         if !new.isEnded { showGameOver = false }
 
@@ -406,6 +436,10 @@ final class GameStore: ObservableObject {
     }
 
     func leaveRoom() {
+        // Walking out mid-game still deserves a History line.
+        if let state, state.isPlaying {
+            recordMatch(state, outcome: "left")
+        }
         guests.forEach { $0.socket.close() }
         guests = []
         socket.close()

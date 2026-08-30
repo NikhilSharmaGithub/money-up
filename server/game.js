@@ -1261,6 +1261,18 @@ export class GameRoom {
     this.push();
   }
 
+  /** Store cosmetics: the emoji piece on the board and the chip avatar. */
+  setCosmetics(id, { tokenSkin, avatar } = {}) {
+    const p = this.player(id);
+    if (!p) return;
+    const skin = String(tokenSkin || '').slice(0, 8);
+    const face = String(avatar || '').slice(0, 8);
+    if (p.tokenSkin === skin && p.avatar === face) return;
+    p.tokenSkin = skin;
+    p.avatar = face;
+    this.push();
+  }
+
   // ------------------------------------------------------------------- chat --
   sendChat(id, text, channel) {
     const p = this.player(id);
@@ -1447,6 +1459,7 @@ export class GameRoom {
         id: p.id, name: p.name, color: p.color, money: p.money, pos: p.pos,
         jail: p.jail, jailTurns: p.jailTurns, getOutCards: p.getOutCards,
         flag: p.flag, team: p.team,
+        tokenSkin: p.tokenSkin || '', avatar: p.avatar || '',
         bankrupt: p.bankrupt, isBot: p.isBot, connected: p.connected,
         botControlled: !!p.botControlled,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),

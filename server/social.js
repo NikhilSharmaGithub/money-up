@@ -29,6 +29,9 @@ function load() {
       profiles.set(p.token, p);
       byCode.set(p.code, p.token);
     }
+    for (const [key, thread] of Object.entries(raw.dms || {})) {
+      dms.set(key, thread);
+    }
     console.log(`  social: restored ${profiles.size} profile(s)`);
   } catch {
     // first run, or the store was wiped by a redeploy — start fresh
@@ -41,7 +44,10 @@ function save() {
   saveTimer = setTimeout(() => {
     try {
       fs.mkdirSync(path.dirname(STORE), { recursive: true });
-      fs.writeFileSync(STORE, JSON.stringify({ profiles: [...profiles.values()] }));
+      fs.writeFileSync(STORE, JSON.stringify({
+        profiles: [...profiles.values()],
+        dms: Object.fromEntries(dms),
+      }));
     } catch (err) {
       console.warn('social: could not persist profiles —', err.message);
     }
@@ -81,12 +87,92 @@ export function profileFor(token, { name, flag } = {}) {
   }
   if (name) p.name = String(name).slice(0, 16);
   if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
+  // The wallet rides on the profile: coins earned by winning, cosmetics
+  // bought in the store, and what's currently equipped.
+  p.coins ??= 0;
+  p.owned ??= [];
+  p.equipped ??= {};
   p.seen = Date.now();
   save();
   return p;
 }
 
-const publicView = (p) => ({ code: p.code, name: p.name || 'Player', flag: p.flag || '' });
+const publicView = (p) => ({
+  code: p.code, name: p.name || 'Player', flag: p.flag || '',
+  avatar: p.equipped?.avatar || '',
+});
+
+// ------------------------------------------------------------ store wallet --
+export function walletOf(token) {
+  const p = profileFor(token);
+  if (!p) return null;
+  return { coins: p.coins, owned: p.owned, equipped: p.equipped };
+}
+
+/** Winning pays out — a coin or two, longer games pay the bigger purse. */
+export function awardCoins(token, amount) {
+  const p = profileFor(token);
+  if (!p || amount <= 0) return null;
+  p.coins += amount;
+  save();
+  return p.coins;
+}
+
+export function buyItem(token, item) {
+  const p = profileFor(token);
+  if (!p) return { error: 'Unknown player' };
+  if (p.owned.includes(item.id)) return { error: 'Already owned' };
+  if (p.coins < item.price) return { error: 'Not enough coins' };
+  p.coins -= item.price;
+  p.owned.push(item.id);
+  save();
+  return { ok: true, coins: p.coins, owned: p.owned };
+}
+
+export function equipItem(token, slot, itemId) {
+  const p = profileFor(token);
+  if (!p) return { error: 'Unknown player' };
+  if (!['token', 'avatar'].includes(slot)) return { error: 'Unknown slot' };
+  if (itemId && !p.owned.includes(itemId)) return { error: 'Not owned' };
+  if (itemId) p.equipped[slot] = itemId;
+  else delete p.equipped[slot];
+  save();
+  return { ok: true, equipped: p.equipped };
+}
+
+// ------------------------------------------------------------ friend chat --
+// Lightweight DMs between friends, polled over REST. One thread per pair,
+// keyed by their sorted codes, capped so the file can't balloon.
+const dms = new Map(); // 'CODE1|CODE2' -> [{from, text, at}]
+
+const dmKey = (a, b) => [a, b].sort().join('|');
+
+export function sendDM(token, rawCode, text) {
+  const me = profileFor(token);
+  const code = String(rawCode || '').trim().toUpperCase();
+  const themToken = byCode.get(code);
+  const them = themToken ? profiles.get(themToken) : null;
+  if (!me || !them) return { error: 'Unknown player' };
+  if (!me.friends.includes(code)) return { error: 'You can only message friends' };
+  const clean = String(text || '').slice(0, 300).trim();
+  if (!clean) return { error: 'Empty message' };
+  const key = dmKey(me.code, code);
+  const thread = dms.get(key) || [];
+  thread.push({ from: me.code, text: clean, at: Date.now() });
+  dms.set(key, thread.slice(-200));
+  save();
+  return { ok: true };
+}
+
+export function dmsWith(token, rawCode) {
+  const me = profileFor(token);
+  const code = String(rawCode || '').trim().toUpperCase();
+  if (!me) return { error: 'Unknown player' };
+  if (!me.friends.includes(code)) return { error: 'You can only message friends' };
+  return { messages: dms.get(dmKey(me.code, code)) || [], me: me.code };
+}
+
+export function dmThreads() { return dms; }
 
 // ----------------------------------------------------------------- friends --
 export function addFriend(token, rawCode) {

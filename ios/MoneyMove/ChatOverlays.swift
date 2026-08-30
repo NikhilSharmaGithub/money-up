@@ -575,7 +575,7 @@ struct GameOverSheet: View {
                             .font(.system(size: rank < 3 ? 18 : 13, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink3)
                             .frame(width: 26)
-                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30)
+                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30, emoji: p.avatar ?? "")
                         Text(p.name)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink)

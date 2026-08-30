@@ -7,7 +7,7 @@ import {
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
-  confetti, openDeedModal, openHelpModal,
+  confetti, openDeedModal, openHelpModal, openStoreModal,
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
@@ -108,6 +108,7 @@ function showLanding() {
     cont.onclick = () => { sfx.click(); go(lastRoom); };
   }
 
+  refreshCoins();
   loadPublicRooms();
   initGoogleSignIn();
   initSocial({
@@ -116,6 +117,27 @@ function showLanding() {
     onJoin: (id) => go(id),
   });
 }
+
+// ---- store & coins -------------------------------------------------------
+let knownCoins = null;
+
+async function refreshCoins({ celebrate = false } = {}) {
+  try {
+    const w = await fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json());
+    if (typeof w.coins !== 'number') return;
+    const chip = $('#coinChip');
+    if (chip) chip.textContent = `🪙 ${w.coins}`;
+    if (celebrate && knownCoins != null && w.coins > knownCoins) {
+      toast(`🪙 +${w.coins - knownCoins} coin${w.coins - knownCoins > 1 ? 's' : ''} earned — spend them in the Store!`);
+    }
+    knownCoins = w.coins;
+  } catch { /* server nap — the chip just stays put */ }
+}
+
+$('#storeBtn').addEventListener('click', () => {
+  sfx.click();
+  openStoreModal(token);
+});
 
 // ---- sign in with Google (only when the server has a client id) ----------
 let googleInitDone = false;
@@ -370,6 +392,8 @@ function render() {
     sfx.win();
     confetti();
     setTimeout(() => showGameOver(state, meId, actions), 700);
+    // did the win pay out? the wallet knows
+    setTimeout(() => refreshCoins({ celebrate: true }), 1200);
   }
   if (state.status !== 'ended') winnerShown = false;
 }

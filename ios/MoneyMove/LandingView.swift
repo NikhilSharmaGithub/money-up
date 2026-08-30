@@ -16,6 +16,9 @@ struct LandingView: View {
     @State private var profile: ProfileInfo?
     @State private var friends: [FriendEntry] = []
     @State private var publicRooms: [PublicRoom] = []
+    @State private var storeItems: [StoreItem] = []
+    @State private var dmFriend: FriendEntry?
+    @AppStorage("mm.phone") private var phone = ""
 
     struct PublicRoom: Codable, Identifiable {
         var id: String
@@ -38,6 +41,9 @@ struct LandingView: View {
             tabPage { playTab(P) }
                 .tabItem { Label("Play", systemImage: "dice.fill") }
 
+            tabPage { storeTab(P) }
+                .tabItem { Label("Store", systemImage: "bag.fill") }
+
             tabPage { friendsTab(P) }
                 .tabItem { Label("Friends", systemImage: "person.2.fill") }
 
@@ -48,7 +54,13 @@ struct LandingView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
         .tint(P.red)
-        .onAppear { selectedFlag = store.flag }
+        .sheet(item: $dmFriend) { friend in
+            DMSheet(friend: friend).environmentObject(store)
+        }
+        .onAppear {
+            selectedFlag = store.flag
+            store.refreshWallet()
+        }
     }
 
     /// Shared page chrome: scrolling column of cards over the felt.
@@ -76,8 +88,110 @@ struct LandingView: View {
         publicRoomsCard(P)
     }
 
+    @ViewBuilder private func storeTab(_ P: Palette) -> some View {
+        HStack(alignment: .top) {
+            pageTitle("Store", "Win games, earn coins, dress your piece.", P)
+            Spacer()
+            Text("🪙 \(store.wallet?.coins ?? 0)")
+                .font(.system(size: 17, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.gold)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 13)
+                .background(P.goldSoft, in: Capsule())
+                .overlay(Capsule().stroke(P.gold.opacity(0.6), lineWidth: 1))
+                .padding(.top, 10)
+        }
+        .task { await loadStore() }
+
+        Text("1 coin for winning a quick game, 2 when it goes long. Everything here is pure style — never pay-to-win.")
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(P.ink3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        storeSection("🎲 Token skins", "Your piece on the board.", kind: "token", P: P)
+        storeSection("🙂 Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+    }
+
+    @ViewBuilder private func storeSection(_ title: String, _ sub: String, kind: String, P: Palette) -> some View {
+        let items = storeItems.filter { $0.kind == kind }
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                PanelTitle(title)
+                Text(sub)
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                ForEach(items) { item in
+                    storeCard(item, P)
+                }
+            }
+        }
+    }
+
+    private func storeCard(_ item: StoreItem, _ P: Palette) -> some View {
+        let owned = store.wallet?.owned.contains(item.id) ?? false
+        let equipped = store.wallet?.equipped[item.kind] == item.id
+
+        return Button {
+            Task { await buyOrEquip(item, owned: owned, equipped: equipped) }
+        } label: {
+            VStack(spacing: 5) {
+                Text(item.emoji).font(.system(size: 34))
+                Text(item.name)
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .lineLimit(1)
+                Text(equipped ? "✓ Equipped" : owned ? "Tap to equip" : "🪙 \(item.price)")
+                    .font(.system(size: 10.5, weight: .heavy, design: .rounded))
+                    .foregroundStyle(equipped ? P.good : owned ? P.ink3 : P.gold)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(equipped ? P.goldSoft : P.card,
+                        in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(equipped ? P.gold : P.rule, lineWidth: equipped ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private struct StoreReply: Decodable { var ok: Bool?; var error: String?; var coins: Int? }
+
+    private func loadStore() async {
+        store.refreshWallet()
+        guard storeItems.isEmpty else { return }
+        struct Catalog: Decodable { var items: [StoreItem] }
+        let catalog: Catalog? = try? await store.fetchJSON("/api/store")
+        storeItems = catalog?.items ?? []
+    }
+
+    private func buyOrEquip(_ item: StoreItem, owned: Bool, equipped: Bool) async {
+        SoundKit.shared.click()
+        if !owned {
+            let reply: StoreReply? = try? await store.fetchJSON(
+                "/api/store/buy", method: "POST",
+                body: ["token": store.token, "itemId": item.id])
+            if let error = reply?.error {
+                store.showToast(error, isError: true)
+                return
+            }
+            SoundKit.shared.buy()
+            store.showToast("\(item.emoji) \(item.name) is yours!")
+        }
+        // buying auto-equips; tapping an equipped item takes it off
+        var body: [String: Any] = ["token": store.token, "slot": item.kind]
+        if !equipped { body["itemId"] = item.id }
+        let _: StoreReply? = try? await store.fetchJSON("/api/store/equip", method: "POST", body: body)
+        store.refreshWallet()
+    }
+
     @ViewBuilder private func friendsTab(_ P: Palette) -> some View {
-        pageTitle("Friends", "Swap codes, see who's online, jump into their room.", P)
+        pageTitle("Friends", "Swap codes, chat, jump into their room.", P)
         friendsCard(P)
     }
 
@@ -106,6 +220,7 @@ struct LandingView: View {
 
     @ViewBuilder private func settingsTab(_ P: Palette) -> some View {
         pageTitle("Settings", "Make the table yours.", P)
+        profileCard(P)
         themeCard(P)
         soundCard(P)
         serverCard(P)
@@ -163,6 +278,59 @@ struct LandingView: View {
                 }
             }
         }
+    }
+
+    /// Who you are at every table: name, flag, equipped look, and a phone
+    /// number that stays on this device only.
+    private func profileCard(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    AvatarView(name: store.nickname.isEmpty ? "P" : store.nickname,
+                               colorCSS: "#4ade80", flag: store.flag, size: 46,
+                               emoji: equippedAvatarEmoji)
+                        .task { await loadStore() }
+                    VStack(alignment: .leading, spacing: 2) {
+                        PanelTitle("Profile")
+                        if let profile {
+                            Text("Friend code \(profile.code)")
+                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                        }
+                    }
+                    Spacer()
+                }
+
+                TextField("Your name", text: $store.nickname)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit { Task { await loadProfile() } }
+                    .padding(11)
+                    .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                TextField("Phone (stays on this device)", text: $phone)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .keyboardType(.phonePad)
+                    .padding(11)
+                    .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Country flag")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                    flagGrid(P)
+                }
+            }
+        }
+    }
+
+    /// The avatar emoji currently equipped from the store, if any.
+    private var equippedAvatarEmoji: String {
+        guard let id = store.wallet?.equipped["avatar"],
+              let item = storeItems.first(where: { $0.id == id }) else { return "" }
+        return item.emoji
     }
 
     private func soundCard(_ P: Palette) -> some View {
@@ -572,6 +740,17 @@ struct LandingView: View {
 
             Spacer()
 
+            Button {
+                dmFriend = entry
+                Haptics.tap()
+            } label: {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(P.ink2)
+                    .frame(width: 32, height: 32)
+                    .background(P.card, in: Circle())
+            }
+
             if let roomId = entry.roomId {
                 Button("Join") { store.join(roomId: roomId) }
                     .buttonStyle(MMButtonStyle(kind: .primary))
@@ -626,5 +805,143 @@ struct LandingView: View {
         } catch {
             store.showToast("Could not add that code", isError: true)
         }
+    }
+}
+
+// MARK: - friend chat
+
+/// A lightweight DM thread with one friend, polled over REST — the same chat
+/// the web landing offers, so the conversation is shared across devices.
+struct DMSheet: View {
+    let friend: FriendEntry
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var messages: [DMessage] = []
+    @State private var myCode = ""
+    @State private var draft = ""
+
+    private struct DMReply: Decodable {
+        var messages: [DMessage]?
+        var me: String?
+        var error: String?
+    }
+    private struct SendReply: Decodable { var ok: Bool?; var error: String? }
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            if messages.isEmpty {
+                                Text("Say hi 👋")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(P.ink3)
+                                    .padding(.top, 30)
+                            }
+                            ForEach(messages) { msg in
+                                bubble(msg, P)
+                                    .id(msg.id)
+                            }
+                        }
+                        .padding(12)
+                    }
+                    .onChange(of: messages.last?.id) { _, new in
+                        guard let new else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(new, anchor: .bottom)
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TextField("Message \(friend.name)…", text: $draft)
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink)
+                        .padding(.vertical, 9)
+                        .padding(.horizontal, 14)
+                        .background(P.sunken, in: Capsule())
+                        .submitLabel(.send)
+                        .onSubmit { Task { await send() } }
+
+                    Button {
+                        Task { await send() }
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Palette.current(scheme).accentInk)
+                            .frame(width: 36, height: 36)
+                            .background(P.red, in: Circle())
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .background(P.sheet.ignoresSafeArea())
+            .navigationTitle("\(friend.flag?.isEmpty == false ? "\(friend.flag!) " : "")\(friend.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .task {
+            // poll while the sheet is up; the task dies with the sheet
+            while !Task.isCancelled {
+                await load()
+                try? await Task.sleep(for: .seconds(2.5))
+            }
+        }
+    }
+
+    private func bubble(_ msg: DMessage, _ P: Palette) -> some View {
+        let mine = msg.from == myCode
+        return HStack {
+            if mine { Spacer(minLength: 50) }
+            Text(msg.text)
+                .font(.system(size: 14.5, weight: .medium, design: .rounded))
+                .foregroundStyle(mine ? P.accentInk : P.ink)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 13)
+                .background(mine ? AnyShapeStyle(P.red) : AnyShapeStyle(P.card),
+                            in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            if !mine { Spacer(minLength: 50) }
+        }
+    }
+
+    private func load() async {
+        guard let base = store.serverURL,
+              var comps = URLComponents(url: base.appending(path: "/api/dm"),
+                                        resolvingAgainstBaseURL: false) else { return }
+        comps.queryItems = [
+            URLQueryItem(name: "token", value: store.token),
+            URLQueryItem(name: "code", value: friend.code),
+        ]
+        guard let url = comps.url,
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let reply = try? JSONDecoder().decode(DMReply.self, from: data) else { return }
+        if let me = reply.me { myCode = me }
+        if let msgs = reply.messages { messages = msgs }
+    }
+
+    private func send() async {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        draft = ""
+        SoundKit.shared.click()
+        let reply: SendReply? = try? await store.fetchJSON(
+            "/api/dm", method: "POST",
+            body: ["token": store.token, "code": friend.code, "text": text])
+        if let error = reply?.error {
+            store.showToast(error, isError: true)
+        }
+        await load()
     }
 }

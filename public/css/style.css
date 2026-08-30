@@ -204,6 +204,52 @@
   background: var(--gold-soft);
 }
 
+/* ── store ── */
+.store-btn { margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.coin-chip {
+  font-size: 12.5px; font-weight: 850; color: var(--gold);
+  background: var(--gold-soft); border: 1px solid var(--gold);
+  border-radius: 99px; padding: 2px 9px;
+}
+.store-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.store-head .coin-chip { font-size: 15px; padding: 4px 13px; }
+.store-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.store-card {
+  font: inherit; cursor: pointer; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 14px 8px 11px; border-radius: var(--r);
+  background: var(--paper-2); border: 1.5px solid var(--rule-2);
+  transition: transform .15s var(--pop), border-color .15s;
+}
+.store-card:hover { transform: translateY(-2px); border-color: var(--gold); }
+.store-card.owned { border-color: var(--rule-2); }
+.store-card.equipped { border-color: var(--gold); background: var(--gold-soft); }
+.sc-emoji { font-size: 34px; line-height: 1.1; }
+.sc-name { font-size: 12.5px; font-weight: 800; color: var(--ink); }
+.sc-price { font-size: 11px; font-weight: 750; color: var(--gold); }
+.store-card.owned .sc-price { color: var(--ink-3); }
+
+/* ── friend DMs ── */
+.dm-list {
+  max-height: 300px; min-height: 140px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 2px;
+}
+.dm-msg {
+  align-self: flex-start; max-width: 78%;
+  background: var(--paper-2); color: var(--ink);
+  font-size: 13.5px; line-height: 1.35; font-weight: 550;
+  padding: 8px 12px; border-radius: 14px 14px 14px 4px;
+  animation: logIn .25s var(--ease);
+  overflow-wrap: anywhere;
+}
+.dm-msg.mine {
+  align-self: flex-end;
+  background: var(--red); color: #fff;
+  border-radius: 14px 14px 4px 14px;
+}
+.token-face.skin { font-size: clamp(11px, 1.3vw, 19px); }
+.avatar.has-skin { font-size: 17px; }
+
 /* the picker itself */
 .palette-bar {
   position: fixed; z-index: 90; display: flex; gap: 8px;

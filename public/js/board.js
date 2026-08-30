@@ -265,13 +265,19 @@ export function syncTokens(state, { onStep, onArrive } = {}) {
     if (!rec) {
       const el = document.createElement('div');
       el.className = 'token';
-      el.innerHTML = `<span class="token-face">${escapeHtml(p.name[0] || '?').toUpperCase()}</span>`;
       layerEl.appendChild(el);
-      rec = { el, pos: null };
+      rec = { el, pos: null, face: null };
       tokens.set(p.id, rec);
       rec.el.style.background = p.color;
       rec.el.style.setProperty('--tc', p.color);
       place(state, p.id, p.pos, 0);
+    }
+    // a store token skin replaces the initial — live, so equipping mid-game
+    // restyles the piece on everyone's board
+    const face = p.tokenSkin || (p.name[0] || '?').toUpperCase();
+    if (rec.face !== face) {
+      rec.face = face;
+      rec.el.innerHTML = `<span class="token-face${p.tokenSkin ? ' skin' : ''}">${escapeHtml(face)}</span>`;
     }
     rec.el.classList.toggle('is-turn', state.turn?.playerId === p.id && state.status === 'playing');
     rec.el.title = p.name;

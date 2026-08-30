@@ -457,9 +457,16 @@ struct TokenDisc: View {
             .fill(Color(css: player.color))
             .frame(width: 20, height: 20)
             .overlay(
-                Text(String(player.name.prefix(1)).uppercased())
-                    .font(.system(size: 9.5, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
+                // a store token skin replaces the initial on the piece
+                Group {
+                    if let skin = player.tokenSkin, !skin.isEmpty {
+                        Text(skin).font(.system(size: 12.5))
+                    } else {
+                        Text(String(player.name.prefix(1)).uppercased())
+                            .font(.system(size: 9.5, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                }
             )
             .overlay(Circle().stroke(.white, lineWidth: highlighted ? 2 : 1.2))
             .shadow(color: .black.opacity(0.45), radius: 3, y: 2)

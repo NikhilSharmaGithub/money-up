@@ -337,6 +337,8 @@ struct AvatarView: View {
     let colorCSS: String
     let flag: String
     var size: CGFloat = 36
+    /// Store avatar emoji — replaces the initial when equipped.
+    var emoji: String = ""
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -344,9 +346,15 @@ struct AvatarView: View {
                 .fill(Color(css: colorCSS))
                 .frame(width: size, height: size)
                 .overlay(
-                    Text(String(name.prefix(1)).uppercased())
-                        .font(.system(size: size * 0.42, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
+                    Group {
+                        if !emoji.isEmpty {
+                            Text(emoji).font(.system(size: size * 0.58))
+                        } else {
+                            Text(String(name.prefix(1)).uppercased())
+                                .font(.system(size: size * 0.42, weight: .black, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
+                    }
                 )
                 .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
             if !flag.isEmpty {

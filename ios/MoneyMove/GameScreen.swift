@@ -377,7 +377,7 @@ struct PlayerStrip: View {
                     let isTurn = store.state?.isPlaying == true && store.state?.turn?.playerId == p.id
                     let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
                     HStack(spacing: 7) {
-                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32)
+                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32, emoji: p.avatar ?? "")
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
                                 Text(p.name)
@@ -729,7 +729,7 @@ private struct PlayerPod: View {
 
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                AvatarView(name: player.name, colorCSS: player.color, flag: player.flag ?? "", size: 28)
+                AvatarView(name: player.name, colorCSS: player.color, flag: player.flag ?? "", size: 28, emoji: player.avatar ?? "")
                 VStack(alignment: .leading, spacing: 0) {
                     Text(player.name)
                         .font(.system(size: 12.5, weight: .bold, design: .rounded))

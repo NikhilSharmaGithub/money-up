@@ -154,7 +154,7 @@ struct ActionPanel: View {
     private func waitingRow(_ P: Palette) -> some View {
         HStack(spacing: 10) {
             if let current = store.currentPlayer {
-                AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26)
+                AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26, emoji: current.avatar ?? "")
                 Text("\(current.name) is playing…")
                     .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink2)

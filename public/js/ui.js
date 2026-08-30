@@ -147,7 +147,7 @@ export function renderPlayers(state, meId, el, actions) {
   livePlayersState = state;
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
-  const structure = state.players.map((p) => `${p.id}:${p.bankrupt ? 1 : 0}:${p.color}`).join('|')
+  const structure = state.players.map((p) => `${p.id}:${p.bankrupt ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
     + `:${state.status}:${state.hostId}:${emptySeats}`;
 
   if (el.dataset.structure !== structure) {
@@ -155,8 +155,8 @@ export function renderPlayers(state, meId, el, actions) {
     el.innerHTML = state.players.map((p) => `
       <div class="player-card ${p.bankrupt ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
         <div class="pc-glow"></div>
-        <div class="avatar" style="background:${p.color}">
-          ${escapeHtml((p.name[0] || '?').toUpperCase())}
+        <div class="avatar ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">
+          ${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}
           <span class="avatar-ring"></span>
           <span class="avatar-flag"></span>
         </div>
@@ -741,6 +741,123 @@ export function showTurnBanner(player, isMe) {
 }
 
 // ─────────────────────────────────────────────────────────────── modals ──
+// ─────────────────────────────────────────────────────────────── store ──
+
+/** The cosmetics shop: token skins for the board piece, avatars for the chip. */
+export function openStoreModal(token) {
+  Promise.all([
+    fetch(api('/api/store')).then((r) => r.json()),
+    fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json()),
+  ]).then(([storeData, wallet]) => {
+    const items = storeData.items || [];
+    const section = (kind, title, sub) => `
+      <h3 class="map-section">${title}</h3>
+      <p class="sub">${sub}</p>
+      <div class="store-grid">
+        ${items.filter((i) => i.kind === kind).map((i) => {
+          const owned = wallet.owned?.includes(i.id);
+          const equipped = wallet.equipped?.[i.kind] === i.id;
+          return `<button class="store-card ${equipped ? 'equipped' : owned ? 'owned' : ''}"
+                    data-item="${i.id}" data-kind="${i.kind}" data-owned="${owned ? 1 : 0}">
+            <span class="sc-emoji">${i.emoji}</span>
+            <span class="sc-name">${escapeHtml(i.name)}</span>
+            <span class="sc-price">${equipped ? '✓ Equipped' : owned ? 'Tap to equip' : `🪙 ${i.price}`}</span>
+          </button>`;
+        }).join('')}
+      </div>`;
+
+    openModal(`
+      <div class="store-head">
+        <h2>Store</h2>
+        <span class="coin-chip">🪙 ${wallet.coins ?? 0}</span>
+      </div>
+      <p class="sub">Win games to earn coins — 1 for a quick match, 2 when it goes long. Everything here is pure style.</p>
+      ${section('token', '🎲 Token skins', 'Your piece on the board.')}
+      ${section('avatar', '🙂 Avatars', 'Your face in the player chip.')}
+      <div class="modal-actions"><button class="btn ghost" id="stClose">Close</button></div>`, (root) => {
+      $('#stClose', root).onclick = closeModal;
+      root.querySelectorAll('[data-item]').forEach((card) => {
+        card.onclick = async () => {
+          sfx.click();
+          const id = card.dataset.item;
+          const kind = card.dataset.kind;
+          const owned = card.dataset.owned === '1';
+          const equipped = card.classList.contains('equipped');
+          try {
+            if (!owned) {
+              const res = await fetch(api('/api/store/buy'), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, itemId: id }),
+              }).then((r) => r.json());
+              if (res.error) return toast(res.error, 'error');
+              sfx.buy();
+            }
+            // buying auto-equips; tapping an equipped item takes it off
+            await fetch(api('/api/store/equip'), {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token, slot: kind, itemId: equipped ? null : id }),
+            });
+            closeModal();
+            openStoreModal(token);   // re-render with fresh wallet
+          } catch {
+            toast('Store is unreachable', 'error');
+          }
+        };
+      });
+    }, 'wide');
+  }).catch(() => toast('Store is unreachable', 'error'));
+}
+
+// ──────────────────────────────────────────────────────────── friend DMs ──
+
+export function openDmModal(token, code, name) {
+  openModal(`
+    <h2>💬 ${escapeHtml(name)}</h2>
+    <div id="dmList" class="dm-list"><div class="empty">Say hi 👋</div></div>
+    <form id="dmForm" class="chat-form">
+      <input id="dmInput" maxlength="300" placeholder="Message ${escapeHtml(name)}…" autocomplete="off" />
+      <button class="icon-btn send" type="submit">➤</button>
+    </form>`, (root) => {
+    const list = $('#dmList', root);
+    let lastSig = '';
+
+    const paint = (messages, me) => {
+      const sig = `${messages.length}:${messages[messages.length - 1]?.at || 0}`;
+      if (sig === lastSig) return;
+      lastSig = sig;
+      list.innerHTML = messages.length
+        ? messages.map((m) => `<div class="dm-msg ${m.from === me ? 'mine' : ''}">${escapeHtml(m.text)}</div>`).join('')
+        : '<div class="empty">Say hi 👋</div>';
+      list.scrollTop = list.scrollHeight;
+    };
+
+    const load = async () => {
+      if (!document.body.contains(root)) { clearInterval(timer); return; }
+      try {
+        const d = await fetch(api(`/api/dm?token=${encodeURIComponent(token)}&code=${encodeURIComponent(code)}`))
+          .then((r) => r.json());
+        if (d.messages) paint(d.messages, d.me);
+      } catch { /* server nap — next poll retries */ }
+    };
+    const timer = setInterval(load, 2500);
+    load();
+
+    $('#dmForm', root).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = $('#dmInput', root);
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      sfx.click();
+      await fetch(api('/api/dm'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, code, text }),
+      }).catch(() => toast('Message did not send', 'error'));
+      load();
+    });
+  });
+}
+
 export function closeModal() {
   const root = $('#modalRoot');
   root.classList.add('hidden');
