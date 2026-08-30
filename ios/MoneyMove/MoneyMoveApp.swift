@@ -19,6 +19,10 @@ struct RootView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     @AppStorage("mm.theme") private var themeID = "felt"
+    /// Cold-launch flourish; shown exactly once per process (the theme
+    /// switcher rebuilds this view's identity, which must not replay it).
+    static var didSplash = false
+    @State private var splashing = !RootView.didSplash
 
     var body: some View {
         // Feed the static before anything below reads a palette, then key the
@@ -35,6 +39,14 @@ struct RootView: View {
             } else {
                 GameScreen()
                     .transition(.opacity)
+            }
+
+            if splashing {
+                SplashView {
+                    RootView.didSplash = true
+                    splashing = false
+                }
+                .zIndex(10)
             }
         }
         .id(themeID)   // full repaint when the table style changes

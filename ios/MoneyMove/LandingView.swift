@@ -63,21 +63,40 @@ struct LandingView: View {
     // MARK: - brand header
 
     private func header(_ P: Palette) -> some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 0) {
-                Text("MONEY").foregroundStyle(P.ink)
-                Text("MOVE").foregroundStyle(P.red)
-            }
-            .font(.system(size: 44, weight: .heavy, design: .rounded))
-            .kerning(1)
+        VStack(spacing: 14) {
+            LogoMark(size: 84)
+                .padding(.top, 4)
+                .padding(.bottom, 6)
+
+            Wordmark(fontSize: 40)
 
             Text("Buy streets. Build hotels. Bankrupt your friends.")
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(P.ink2)
                 .multilineTextAlignment(.center)
+
+            // the numbers that sell the table
+            HStack(spacing: 26) {
+                stat("19", "BOARDS", P)
+                stat("8", "PLAYERS", P)
+                stat("∞", "BANKRUPTCIES", P)
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 6)
+    }
+
+    private func stat(_ value: String, _ label: String, _ P: Palette) -> some View {
+        VStack(spacing: 1) {
+            Text(value)
+                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.gold)
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .kerning(1)
+                .foregroundStyle(P.ink3)
+        }
     }
 
     // MARK: - create / join
