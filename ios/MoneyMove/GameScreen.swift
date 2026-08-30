@@ -645,6 +645,10 @@ struct MoneyDeltaBadge: View {
                 Text("\(d.amount > 0 ? "+" : "−")$\(abs(d.amount))")
                     .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(d.amount > 0 ? P.good : P.bad)
+                    // The badge floats in an overlay that proposes the tiny
+                    // size of the money label — never let the amount truncate
+                    // into "−$…".
+                    .fixedSize()
                     .padding(.vertical, 2)
                     .padding(.horizontal, 7)
                     .background(P.card.opacity(0.94), in: Capsule())
