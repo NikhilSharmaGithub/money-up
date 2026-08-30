@@ -145,7 +145,13 @@ export const sfx = {
     noise({ dur: 0.035, from: 1700, to: 850, q: 6, vol: 0.11, at: 0.16 });
     tone({ freq: jit(760), dur: 0.05, type: 'triangle', vol: 0.08, at: 0.162 });
   },
-  bid: () => tone({ freq: jit(760), to: 1140, dur: 0.1, type: 'triangle', vol: 0.13 }),
+  // a paddle shoots up: crisp tick, then a ding that climbs with the stakes
+  bid: (amount = 0) => {
+    const lift = Math.min(Math.max(amount, 0), 1200) * 0.35;
+    noise({ dur: 0.025, from: 3000, to: 1800, q: 8, vol: 0.09 });
+    tone({ freq: jit(620 + lift), to: 940 + lift, dur: 0.16, at: 0.012, type: 'triangle', vol: 0.16 });
+    tone({ freq: jit(1240 + lift, 0.008), dur: 0.14, at: 0.055, type: 'sine', vol: 0.07 });
+  },
 
   turn: () => {
     // a doorbell third with a hint of shimmer

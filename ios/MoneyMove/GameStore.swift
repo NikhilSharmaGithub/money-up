@@ -70,6 +70,50 @@ final class GameStore: ObservableObject {
     }
     @Published var moneyDeltas: [String: MoneyDelta] = [:]
 
+    /// A finished game, kept on this device for the History tab.
+    struct MatchRecord: Codable, Identifiable {
+        var id = UUID()
+        var date: Date
+        var mapName: String
+        var mapIcon: String
+        var players: [String]
+        var winner: String
+        var won: Bool
+        var myWorth: Int
+        var turns: Int
+    }
+    @Published var matchHistory: [MatchRecord] = {
+        guard let data = UserDefaults.standard.data(forKey: "mm.history"),
+              let list = try? JSONDecoder().decode([MatchRecord].self, from: data) else { return [] }
+        return list
+    }()
+
+    private func recordMatch(_ state: GameState) {
+        let winnerName: String
+        if let teamIdx = state.winningTeam, let team = state.teamInfo?[safe: teamIdx] {
+            winnerName = "Team \(team.name)"
+        } else {
+            winnerName = state.winner?.name ?? "Nobody"
+        }
+        let wonByLocalSeat = state.winner.map { localIds.contains($0.id) } ?? false
+        let me = state.player(meId)
+        let record = MatchRecord(
+            date: Date(),
+            mapName: state.map.name,
+            mapIcon: state.map.icon ?? "🌐",
+            players: state.players.map(\.name),
+            winner: winnerName,
+            won: wonByLocalSeat,
+            myWorth: me?.isBankrupt == true ? 0 : (me?.netWorth ?? 0),
+            turns: state.history?.last?.t ?? 0
+        )
+        matchHistory.insert(record, at: 0)
+        matchHistory = Array(matchHistory.prefix(50))
+        if let data = try? JSONEncoder().encode(matchHistory) {
+            UserDefaults.standard.set(data, forKey: "mm.history")
+        }
+    }
+
     private let socket = SocketIOClient()
 
     /// Extra seats played from this same device (pass & play). Each guest keeps
@@ -173,6 +217,17 @@ final class GameStore: ObservableObject {
             else if remoteChange { SoundKit.shared.cash() }
         }
 
+        // Auction has its own voice: the gavel when it opens, and a rising
+        // paddle-tick for every new bid — pitched by how high the bid is.
+        if let old {
+            if new.auction != nil, old.auction == nil {
+                SoundKit.shared.auction()
+            } else if let a = new.auction, let b = old.auction, a.bid > b.bid {
+                SoundKit.shared.bid(a.bid)
+                Haptics.tap()
+            }
+        }
+
         // A completed country set is a moment — the tiles flash (TileView),
         // the fanfare plays exactly once from here.
         if let old, new.isPlaying, old.isPlaying, let groups = new.map.groups {
@@ -240,8 +295,12 @@ final class GameStore: ObservableObject {
             }
         }
 
-        // game over sheet, once
-        if new.isEnded && old?.isEnded != true { showGameOver = true; SoundKit.shared.win() }
+        // game over sheet, once — and the result goes into the History tab
+        if new.isEnded && old?.isEnded != true {
+            showGameOver = true
+            SoundKit.shared.win()
+            recordMatch(new)
+        }
         if !new.isEnded { showGameOver = false }
 
         // sounds + haptics on fresh log lines (mirrors the web client's mapping)
@@ -257,7 +316,8 @@ final class GameStore: ObservableObject {
                 case "jail": SoundKit.shared.jail()
                 case "build": SoundKit.shared.build()
                 case "trade": SoundKit.shared.trade()
-                case "auction": SoundKit.shared.auction()
+                // "auction" lines are handled by the state diff above — the
+                // log kind covers both openings and bids and would double-fire.
                 default: break
                 }
             }

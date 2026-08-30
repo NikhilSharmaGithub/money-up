@@ -31,33 +31,161 @@ struct LandingView: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        let busy = store.connection == .connecting
 
+        // The home is a proper tabbed hub — on modern iOS the system renders
+        // this bar as floating liquid glass over the felt.
+        TabView {
+            tabPage { playTab(P) }
+                .tabItem { Label("Play", systemImage: "dice.fill") }
+
+            tabPage { friendsTab(P) }
+                .tabItem { Label("Friends", systemImage: "person.2.fill") }
+
+            tabPage { historyTab(P) }
+                .tabItem { Label("History", systemImage: "clock.fill") }
+
+            tabPage { settingsTab(P) }
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+        }
+        .tint(P.red)
+        .onAppear { selectedFlag = store.flag }
+    }
+
+    /// Shared page chrome: scrolling column of cards over the felt.
+    private func tabPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ScrollView {
             VStack(spacing: 18) {
-                header(P)
-                continueCard(P)
-                playCard(P, busy: busy)
-                themeCard(P)
-                publicRoomsCard(P)
-                serverCard(P)
-                friendsCard(P)
-
-                Text("An original implementation of the classic property-trading board game.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(P.ink3)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 2)
+                content()
             }
             .padding(.horizontal, 16)
-            .padding(.top, 28)
+            .padding(.top, 20)
             .padding(.bottom, 32)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
-        .onAppear { selectedFlag = store.flag }
+    }
+
+    // MARK: - tabs
+
+    @ViewBuilder private func playTab(_ P: Palette) -> some View {
+        let busy = store.connection == .connecting
+        header(P)
+        continueCard(P)
+        playCard(P, busy: busy)
+        publicRoomsCard(P)
+    }
+
+    @ViewBuilder private func friendsTab(_ P: Palette) -> some View {
+        pageTitle("Friends", "Swap codes, see who's online, jump into their room.", P)
+        friendsCard(P)
+    }
+
+    @ViewBuilder private func historyTab(_ P: Palette) -> some View {
+        pageTitle("History", "Every game this device has finished.", P)
+        if store.matchHistory.isEmpty {
+            MMCard(padding: 22) {
+                VStack(spacing: 8) {
+                    Text("🎲").font(.system(size: 36))
+                    Text("No games finished yet")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink)
+                    Text("Play a match — your wins (and your bankruptcies) land here.")
+                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            ForEach(store.matchHistory) { match in
+                matchRow(match, P)
+            }
+        }
+    }
+
+    @ViewBuilder private func settingsTab(_ P: Palette) -> some View {
+        pageTitle("Settings", "Make the table yours.", P)
+        themeCard(P)
+        soundCard(P)
+        serverCard(P)
+        MMCard {
+            Text("An original implementation of the classic property-trading board game. Not affiliated with any trademark holder.")
+                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+        }
+    }
+
+    private func pageTitle(_ title: String, _ sub: String, _ P: Palette) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 30, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.ink)
+            Text(sub)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
+    }
+
+    private func matchRow(_ match: GameStore.MatchRecord, _ P: Palette) -> some View {
+        MMCard(padding: 13) {
+            HStack(spacing: 12) {
+                Text(match.mapIcon).font(.system(size: 26))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(match.mapName)
+                            .font(.system(size: 14.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        Text(match.won ? "WON" : "LOST")
+                            .font(.system(size: 8, weight: .black))
+                            .kerning(0.8)
+                            .foregroundStyle(match.won ? P.accentInk : P.ink3)
+                            .padding(.vertical, 2.5)
+                            .padding(.horizontal, 6)
+                            .background(match.won ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
+                    }
+                    Text("🏆 \(match.winner) · \(match.players.count) players · \(match.turns) turns")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                    Text(match.date.formatted(.relative(presentation: .named)))
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+                Spacer()
+                if !match.won {
+                    Text(money(match.myWorth))
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(match.myWorth > 0 ? P.good : P.bad)
+                }
+            }
+        }
+    }
+
+    private func soundCard(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    PanelTitle("Sound")
+                    Text("Dice, coins and the little \"ishh\" when you pay rent.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { SoundKit.shared.enabled },
+                    set: { on in
+                        SoundKit.shared.enabled = on
+                        if on { SoundKit.shared.warmUp(); SoundKit.shared.click() }
+                    }
+                ))
+                .labelsHidden()
+                .tint(P.red)
+            }
+        }
     }
 
     // MARK: - brand header

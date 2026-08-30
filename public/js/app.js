@@ -296,6 +296,8 @@ function boot() {
       lastCardAt = s.lastCard?.at ?? 0;
       lastLogAt = s.log?.[s.log.length - 1]?.at ?? 0;
       lastMyMoney = null;
+      hadAuction = !!s.auction;
+      lastAuctionBid = s.auction?.bid || 0;
     }
     state = s;
     render();
@@ -374,6 +376,8 @@ function render() {
 
 /** Turns fresh log lines into sound effects. */
 let lastMyMoney = null;
+let hadAuction = false;
+let lastAuctionBid = 0;
 function playSoundsForNewEvents() {
   // My own wallet gets its own voice: a coin ring when money lands, an
   // "ishh…" when it leaves — the generic room sounds stay for everyone else.
@@ -388,6 +392,14 @@ function playSoundsForNewEvents() {
   if (myDelta > 0) sfx.gain();
   else if (myDelta < 0) sfx.lose();
 
+  // Auction: the gavel when it opens, a rising paddle-tick for every new bid
+  // (pitched by how high the bid is).
+  const a = state.auction;
+  if (a && !hadAuction) sfx.auction();
+  else if (a && hadAuction && a.bid > lastAuctionBid) sfx.bid(a.bid);
+  hadAuction = !!a;
+  lastAuctionBid = a?.bid || 0;
+
   const fresh = state.log.filter((l) => l.at > lastLogAt);
   if (!fresh.length) return;
   lastLogAt = state.log[state.log.length - 1].at;
@@ -398,7 +410,7 @@ function playSoundsForNewEvents() {
   if (kinds.has('jail')) return sfx.jail();
   if (kinds.has('build')) return sfx.build();
   if (kinds.has('trade')) return sfx.trade();
-  if (kinds.has('auction')) return sfx.auction();
+  // auction openings + bids are voiced by the state diff below, not the log
   if (!myDelta && kinds.has('money')) return sfx.cash();
 }
 

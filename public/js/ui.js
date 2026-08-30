@@ -612,7 +612,9 @@ export function renderCenter(state, meId, actions) {
       </div>`;
     statusEl.innerHTML = '';
     actionEl.querySelectorAll('[data-bid]').forEach((b) => {
-      b.onclick = () => { sfx.bid(); actions.bid(Number(b.dataset.bid)); };
+      // the state diff plays the bid sound for everyone (including us) — a
+      // click sound here would double it up
+      b.onclick = () => actions.bid(Number(b.dataset.bid));
     });
     on('#passBid', actions.passBid);
     animateAuctionBar(a);

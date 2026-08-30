@@ -208,6 +208,15 @@ final class SoundKit {
         tone(jitter(760), dur: 0.05, wave: .triangle, vol: 0.08, after: 0.162)
     }
 
+    /// A paddle shoots up: crisp tick, then a ding that climbs with the
+    /// stakes — bigger bids literally ring higher.
+    func bid(_ amount: Int = 0) {
+        let lift = min(Double(max(amount, 0)), 1200) * 0.35
+        noise(dur: 0.025, vol: 0.1, bright: 0.85)
+        tone(jitter(620 + lift), to: 940 + lift, dur: 0.16, wave: .triangle, vol: 0.16, after: 0.012)
+        tone(jitter(1240 + lift, 0.008), dur: 0.14, wave: .sine, vol: 0.07, after: 0.055)
+    }
+
     func trade() {
         for (i, f) in [440.0, 587, 740].enumerated() {
             let at = slop(Double(i) * 0.08)
