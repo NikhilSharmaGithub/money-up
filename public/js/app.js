@@ -23,24 +23,29 @@ const TOKEN_KEY = 'moneymove:token';
 const NAME_KEY = 'moneymove:name';
 const newId = () => `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 
+// Browsers with site data blocked make every storage call THROW — the app
+// must still boot (with a per-tab identity) instead of dying at module scope.
+const safeGet = (s, k) => { try { return s.getItem(k); } catch { return null; } };
+const safeSet = (s, k, v) => { try { s.setItem(k, v); } catch { /* storage blocked */ } };
+
 if (location.hash === '#newplayer') {
-  sessionStorage.setItem(TOKEN_KEY, newId());
-  sessionStorage.setItem(NAME_KEY, '');
+  safeSet(sessionStorage, TOKEN_KEY, newId());
+  safeSet(sessionStorage, NAME_KEY, '');
   history.replaceState({}, '', location.pathname);
 }
 
-let token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
+let token = safeGet(sessionStorage, TOKEN_KEY) || safeGet(localStorage, TOKEN_KEY);
 if (!token) {
   token = newId();
-  localStorage.setItem(TOKEN_KEY, token);
+  safeSet(localStorage, TOKEN_KEY, token);
 }
-const isLocalGuest = !!sessionStorage.getItem(TOKEN_KEY);
-const storeName = (name) => (isLocalGuest ? sessionStorage : localStorage).setItem(NAME_KEY, name);
-let nickname = (isLocalGuest ? sessionStorage.getItem(NAME_KEY) : localStorage.getItem(NAME_KEY)) || '';
+const isLocalGuest = !!safeGet(sessionStorage, TOKEN_KEY);
+const storeName = (name) => safeSet(isLocalGuest ? sessionStorage : localStorage, NAME_KEY, name);
+let nickname = (isLocalGuest ? safeGet(sessionStorage, NAME_KEY) : safeGet(localStorage, NAME_KEY)) || '';
 
 const FLAG_KEY = 'moneymove:flag';
-const storeFlag = (f) => (isLocalGuest ? sessionStorage : localStorage).setItem(FLAG_KEY, f);
-let myFlag = (isLocalGuest ? sessionStorage.getItem(FLAG_KEY) : localStorage.getItem(FLAG_KEY)) || '';
+const storeFlag = (f) => safeSet(isLocalGuest ? sessionStorage : localStorage, FLAG_KEY, f);
+let myFlag = (isLocalGuest ? safeGet(sessionStorage, FLAG_KEY) : safeGet(localStorage, FLAG_KEY)) || '';
 
 // ────────────────────────────────────────────────────────────────── state ──
 let socket = null;
@@ -200,6 +205,10 @@ $('#createBtn').addEventListener('click', () => {
     settled = true;
     clearTimeout(bail);
     s.close();
+    // Restore the button before leaving — coming back to the landing later
+    // must not find it stuck on "Creating…".
+    btn.disabled = false;
+    btn.innerHTML = btn.dataset.label;
     go(id);
   });
 });
@@ -253,7 +262,18 @@ $('#joinForm').addEventListener('submit', (e) => {
 // ─────────────────────────────────────────────────────────────────── boot ──
 function boot() {
   const match = location.pathname.match(/^\/room\/([a-z0-9]+)/i);
-  if (!match) return showLanding();
+  if (!match) {
+    // Reached via browser Back mid-game: release the seat properly (a held
+    // socket would stall the room) and leave a way back in.
+    if (state?.status === 'playing' && roomId) {
+      try { localStorage.setItem(LAST_ROOM_KEY, roomId); } catch { /* blocked */ }
+    }
+    if (socket) { socket.close(); socket = null; }
+    state = null;
+    roomId = null;
+    resetBoard();
+    return showLanding();
+  }
 
   roomId = match[1].toLowerCase();
   $('#landing').classList.add('hidden');
@@ -268,7 +288,18 @@ function boot() {
 
   socket.on('connect', () => socket.emit('join', { roomId, token, name: nickname || 'Player', flag: myFlag }));
   socket.on('you', (d) => { meId = d.playerId; });
-  socket.on('state', (s) => { state = s; render(); });
+  socket.on('state', (s) => {
+    // First state after a (re)join is history, not news: seed the one-shot
+    // trackers so the last card doesn't pop again and old log lines and the
+    // opening balance don't play sounds.
+    if (!state) {
+      lastCardAt = s.lastCard?.at ?? 0;
+      lastLogAt = s.log?.[s.log.length - 1]?.at ?? 0;
+      lastMyMoney = null;
+    }
+    state = s;
+    render();
+  });
   socket.on('toast', (t) => toast(t.message, t.type));
   socket.on('joinFailed', (d) => toast(d.message, 'error'));
   socket.on('disconnect', () => toast('Connection lost — reconnecting…', 'error'));

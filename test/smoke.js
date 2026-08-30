@@ -384,5 +384,148 @@ console.log('\n▶ targeted rules');
   ok('trade execution');
 }
 
+{
+  // Accepting a stale trade must not steal a tile from its new owner.
+  const room = new GameRoom('st', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.addPlayer({ id: 'c', name: 'C' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const street = room.map.tiles.find((t) => t.type === 'property').index;
+  room.ownership[street] = { owner: 'a', houses: 0, mortgaged: false };
+
+  const toB = room.proposeTrade('a', { to: 'b', give: { money: 0, tiles: [street], cards: 0 }, get: { money: 100, tiles: [], cards: 0 } });
+  const toC = room.proposeTrade('a', { to: 'c', give: { money: 0, tiles: [street], cards: 0 }, get: { money: 100, tiles: [], cards: 0 } });
+  room.respondTrade('b', toB.trade.id, true);
+  if (room.own(street).owner !== 'b') fail('first accept should hand the tile to b');
+  const cCashBefore = room.player('c').money;
+  const res = room.respondTrade('c', toC.trade.id, true);
+  if (!res.error) fail('stale duplicate trade should be rejected');
+  if (room.own(street).owner !== 'b') fail('stale trade must not rip the tile off its new owner');
+  if (room.player('c').money !== cCashBefore) fail('stale trade must not move cash');
+  ok('stale trade rejected on accept');
+}
+
+{
+  // "Pay each player" goes to the players — never into the vacation pot.
+  const room = new GameRoom('pe', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.addPlayer({ id: 'c', name: 'C' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.settings.vacationCash = true;
+  room.start('a');
+  const a = room.player('a');
+  a.money = 500;
+  room.applyCard(a, { kind: 'payEach', amount: 50 });
+  if (room.vacationPot !== 0) fail(`payEach must not feed the vacation pot (pot ${room.vacationPot})`);
+  if (a.money !== 400) fail(`payEach should cost $100, cash is ${a.money}`);
+  if (room.player('b').money !== 2550 || room.player('c').money !== 2550) fail('payEach should credit each opponent');
+
+  // …including when it has to go through the debt phase.
+  a.money = 20;
+  room.applyCard(a, { kind: 'payEach', amount: 50 });
+  if (room.turn.phase !== 'debt') fail('unaffordable payEach should open a debt');
+  a.money = 200;
+  room.payDebt('a');
+  if (room.vacationPot !== 0) fail('debt-settled payEach must not feed the pot');
+  if (room.player('b').money !== 2600 || room.player('c').money !== 2600) fail('debt-settled payEach should credit opponents');
+  ok('payEach pays the players, not the pot');
+}
+
+{
+  // Settling the forced prison fine actually releases the player.
+  const room = new GameRoom('jf', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  room.sendToJail(a);
+  a.jailTurns = 2;
+  a.money = 10;                       // cannot afford the $50 fine
+  room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
+  room.roll('a', [2, 3]);             // third failed attempt → fine → debt
+  if (room.turn.phase !== 'debt') fail('unpayable fine should open a debt');
+  if (!room.turn.debt?.jailRelease) fail('the fine debt should remember the rolled move');
+  a.money = 400;
+  room.payDebt('a');
+  if (a.jail) fail('paying the fine debt must release the player');
+  if (a.pos !== room.cornerIndex('prison') + 5) fail(`released player should have walked 5 tiles, at ${a.pos}`);
+  ok('prison fine via debt releases and moves');
+}
+
+{
+  // Auction money is escrowed: outbid players are refunded, winners cannot
+  // spend their bid elsewhere during the countdown.
+  const room = new GameRoom('ae', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const street = room.map.tiles.find((t) => t.type === 'property').index;
+  room.startAuction(street);
+  room.bid('a', 100);
+  if (room.player('a').money !== 2400) fail('leading bid should be escrowed');
+  room.bid('b', 200);
+  if (room.player('a').money !== 2500) fail('outbid player should be refunded');
+  if (room.player('b').money !== 2300) fail('new leader should be escrowed');
+  room.finishAuction();
+  if (room.own(street)?.owner !== 'b') fail('auction winner should own the tile');
+  if (room.player('b').money !== 2300) fail('winner must not be charged twice');
+  ok('auction escrow');
+}
+
+{
+  // A double that breaks you OUT of prison does not earn a free reroll —
+  // not even after buying the tile you landed on.
+  const room = new GameRoom('nr', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  room.sendToJail(a);
+  room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
+  room.roll('a', [3, 3]);             // escape double, lands on tile 16 (street)
+  if (a.jail) fail('escape double should release');
+  if (room.turn.pending?.type === 'buy') {
+    room.buy('a');
+    if (room.turn.phase === 'roll') fail('jail-escape double must not grant a reroll after buying');
+  } else if (room.turn.phase === 'roll') {
+    fail('jail-escape double must not grant a reroll');
+  }
+  ok('no reroll after jail-escape double');
+}
+
+{
+  // A backwards teleport to Vacation is not a lap — no START salary.
+  const room = new GameRoom('vt', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  a.pos = room.cornerIndex('vacation') + 2;   // just past Vacation
+  const cash = a.money;
+  room.applyCard(a, { kind: 'moveTo', tile: 'vacation' });
+  if (a.pos !== room.cornerIndex('vacation')) fail('should land on Vacation');
+  if (a.money !== cash) fail(`backwards vacation hop paid $${a.money - cash} salary`);
+  ok('no salary for backwards vacation teleport');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);

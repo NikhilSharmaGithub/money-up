@@ -12,11 +12,14 @@ const KEY = 'moneymove:server';
 const clean = (url) => String(url || '').trim().replace(/\/+$/, '');
 
 // A ?server= param wins and is remembered; ?server= (empty) clears the override.
+// Storage may be blocked entirely — the override just won't stick then.
 const fromQuery = new URLSearchParams(location.search).get('server');
 if (fromQuery !== null) {
   const value = clean(fromQuery);
-  if (value) localStorage.setItem(KEY, value);
-  else localStorage.removeItem(KEY);
+  try {
+    if (value) localStorage.setItem(KEY, value);
+    else localStorage.removeItem(KEY);
+  } catch { /* storage blocked */ }
 }
 
 let stored = '';

@@ -3,7 +3,9 @@
 
 let ctx = null;
 let master = null;
-let enabled = localStorage.getItem('moneymove:sound') !== 'off';
+// Storage can be blocked outright; the game must still make noise.
+let enabled = true;
+try { enabled = localStorage.getItem('moneymove:sound') !== 'off'; } catch { /* storage blocked */ }
 
 function audio() {
   if (!ctx) {
@@ -20,7 +22,7 @@ function audio() {
 
 export function setEnabled(on) {
   enabled = on;
-  localStorage.setItem('moneymove:sound', on ? 'on' : 'off');
+  try { localStorage.setItem('moneymove:sound', on ? 'on' : 'off'); } catch { /* storage blocked */ }
   if (on) audio();
 }
 export const isEnabled = () => enabled;

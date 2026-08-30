@@ -138,7 +138,13 @@ export function renderChat(state, el, channel = 'all') {
 // ───────────────────────────────────────────────────────────── player list ──
 const prevMoney = new Map();
 
+// The action buttons are wired once (dataset.v caching) but must act on the
+// CURRENT game, not the render that created them — a trade opened two turns
+// later would otherwise show a frozen snapshot.
+let livePlayersState = null;
+
 export function renderPlayers(state, meId, el, actions) {
+  livePlayersState = state;
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
   const structure = state.players.map((p) => `${p.id}:${p.bankrupt ? 1 : 0}:${p.color}`).join('|')
@@ -262,16 +268,23 @@ export function renderPlayers(state, meId, el, actions) {
       acts.innerHTML = `${canPickTeam ? '<button class="btn tiny" data-team title="Switch team">⇄</button>' : ''}
                         ${canTrade ? '<button class="btn tiny" data-trade>Trade</button>' : ''}
                         ${canKick ? '<button class="icon-btn" data-kick title="Remove">✕</button>' : ''}`;
+      const pid = p.id;
       const mb = acts.querySelector('[data-team]');
       if (mb) mb.onclick = () => {
         sfx.click();
-        const next = ((p.team ?? -1) + 1) % state.settings.teams;
-        actions.setTeam(p.id, next);
+        const st = livePlayersState;
+        const cur = st?.players.find((x) => x.id === pid);
+        if (!st || !cur) return;
+        const next = ((cur.team ?? -1) + 1) % st.settings.teams;
+        actions.setTeam(pid, next);
       };
       const tb = acts.querySelector('[data-trade]');
-      if (tb) tb.onclick = () => { sfx.click(); openTradeModal(state, meId, p.id, actions); };
+      if (tb) tb.onclick = () => {
+        sfx.click();
+        if (livePlayersState) openTradeModal(livePlayersState, meId, pid, actions);
+      };
       const kb = acts.querySelector('[data-kick]');
-      if (kb) kb.onclick = () => actions.kick(p.id);
+      if (kb) kb.onclick = () => actions.kick(pid);
     }
   });
 }

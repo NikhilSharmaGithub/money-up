@@ -455,6 +455,9 @@ export class GameRoom {
       if (isDouble) {
         p.jail = false;
         p.jailTurns = 0;
+        // A jail-escape double buys freedom, not a free roll — and buy/skip/
+        // auction must not re-derive a reroll from these dice later.
+        this.turn.noReroll = true;
         this.say(`${p.name} rolled a double (${d1}+${d2}) and walked out of prison`, 'dice');
         this.movePlayer(p, d1 + d2);
         this.turn.phase = this.turn.phase === 'debt' ? 'debt' : (this.turn.pending ? this.turn.phase : 'end');
@@ -471,6 +474,10 @@ export class GameRoom {
           p.jailTurns = 0;
           this.movePlayer(p, d1 + d2);
           this.turn.phase = this.turn.pending ? this.turn.phase : 'end';
+        } else {
+          // Can't pay yet: remember the rolled move so settling the fine in
+          // the debt phase actually opens the cell and walks the player out.
+          this.turn.debt.jailRelease = d1 + d2;
         }
       } else {
         this.turn.phase = 'end';
@@ -679,7 +686,9 @@ export class GameRoom {
         else if (act.tile === 'priciest') {
           idx = this.map.tiles.reduce((best, t) => (t.type === 'property' && t.price > (this.tile(best)?.price || 0) ? t.index : best), 0);
         } else idx = Number(act.tile);
-        this.teleport(p, idx, { collectSalary: act.collect !== false });
+        // Salary only when the card says so (START / priciest cards) — a
+        // backwards hop to Vacation is not a lap of the board.
+        this.teleport(p, idx, { collectSalary: act.collect === true });
         break;
       }
 
@@ -726,11 +735,20 @@ export class GameRoom {
       }
 
       case 'payEach': {
-        const total = act.amount * (this.active.length - 1);
-        if (this.charge(p, total, null, 'to the other players')) {
-          for (const other of this.active) {
-            if (other.id !== p.id) other.money += act.amount;
-          }
+        const others = this.active.filter((o) => o.id !== p.id);
+        const total = act.amount * others.length;
+        if (total <= 0) break;
+        if (p.money >= total) {
+          // Straight to the players — this money must never touch the
+          // vacation pot, so it can't go through charge()'s bank path.
+          p.money -= total;
+          for (const other of others) other.money += act.amount;
+          this.say(`${p.name} paid $${act.amount} to every player`, 'money');
+        } else {
+          this.turn.debt = { debtor: p.id, creditor: null, amount: total, reason: 'to the other players', each: act.amount };
+          this.turn.phase = 'debt';
+          this.say(`${p.name} owes $${total} to the other players and must raise funds`, 'warn');
+          if (this.autoPlayed(p)) this.scheduleBot(900);
         }
         break;
       }
@@ -775,7 +793,7 @@ export class GameRoom {
     this.ownership[pend.tile] = { owner: p.id, houses: 0, mortgaged: false };
     this.say(`${p.name} bought ${t.name} for $${t.price}`, 'buy');
     this.turn.pending = null;
-    this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail ? 'roll' : 'end';
+    this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
     this.push();
     this.maybeBot();
     return { ok: true };
@@ -792,7 +810,7 @@ export class GameRoom {
       this.startAuction(tileIndex);
     } else {
       this.say(`${p.name} passed on ${this.tile(tileIndex).name}`, 'info');
-      this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail ? 'roll' : 'end';
+      this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
       this.push();
       this.maybeBot();
     }
@@ -829,7 +847,13 @@ export class GameRoom {
     amount = Math.floor(Number(amount) || 0);
     const min = a.bid === 0 ? 10 : a.bid + 10;
     if (amount < min) return { error: `Minimum bid is $${min}` };
-    if (amount > p.money) return { error: 'Not enough money' };
+    // Escrow: the leading bid is paid up front (and refunded when outbid), so
+    // the winner can never spend the money elsewhere during the countdown and
+    // close the auction into a negative balance.
+    const available = p.money + (a.leader === id ? a.bid : 0);
+    if (amount > available) return { error: 'Not enough money' };
+    if (a.leader) this.player(a.leader).money += a.bid; // refund the old escrow
+    p.money -= amount;
     a.bid = amount;
     a.leader = id;
     a.endsAt = Date.now() + 12000;
@@ -860,9 +884,9 @@ export class GameRoom {
     if (!a) return { ok: true };
     clearTimeout(this.timers.auction);
     const t = this.tile(a.tile);
-    if (a.leader) {
+    if (a.leader && !this.player(a.leader)?.bankrupt) {
+      // The bid is already escrowed by bid(); just hand over the deed.
       const winner = this.player(a.leader);
-      winner.money -= a.bid;
       this.ownership[a.tile] = { owner: winner.id, houses: 0, mortgaged: false };
       this.say(`${winner.name} won ${t.name} at auction for $${a.bid}`, 'auction');
     } else {
@@ -871,7 +895,7 @@ export class GameRoom {
     this.auction = null;
     const p = this.current;
     this.turn.phase = this.turn.debt ? 'debt'
-      : (this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail ? 'roll' : 'end');
+      : (this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end');
     this.push();
     this.maybeBot();
     return { ok: true };
@@ -1006,11 +1030,34 @@ export class GameRoom {
     if (p.money < d.amount) return { error: 'Still not enough money' };
     p.money -= d.amount;
     const creditor = d.creditor ? this.player(d.creditor) : null;
-    if (creditor) creditor.money += d.amount;
-    else if (this.settings.vacationCash) this.vacationPot += d.amount;
+    if (creditor) {
+      creditor.money += d.amount;
+    } else if (d.each) {
+      // "pay every player" card settled late: the money goes to the players,
+      // never to the vacation pot.
+      for (const other of this.active) {
+        if (other.id !== p.id) other.money += d.each;
+      }
+    } else if (this.settings.vacationCash) {
+      this.vacationPot += d.amount;
+    }
     this.say(`${p.name} settled a debt of $${d.amount}`, 'money');
     this.turn.debt = null;
-    this.turn.phase = this.turn.pending ? 'action' : 'end';
+
+    if (d.jailRelease) {
+      // The prison fine is paid — open the cell and play out the stored roll.
+      p.jail = false;
+      p.jailTurns = 0;
+      this.turn.phase = 'end';
+      this.say(`${p.name} leaves prison`, 'jail');
+      this.movePlayer(p, d.jailRelease);
+      // landOn set the phase where it belongs (action/debt/auction); a plain
+      // tile leaves the 'end' baseline standing.
+      if (this.turn.debt) this.turn.phase = 'debt';
+      else if (this.turn.pending) this.turn.phase = 'action';
+    } else {
+      this.turn.phase = this.turn.pending ? 'action' : 'end';
+    }
     this.push();
     this.maybeBot();
     return { ok: true };
@@ -1075,6 +1122,11 @@ export class GameRoom {
     p.money = 0;
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
+    // Drop them from any running auction so it can't stall on their bid.
+    if (this.auction) {
+      this.auction.inRace = this.auction.inRace.filter((x) => x !== p.id);
+      if (this.auction.leader === p.id) this.auction.leader = null;
+    }
 
     if (this.checkGameEnd()) return;
     if (this.turn?.playerId === p.id) this.nextTurn();
@@ -1126,6 +1178,21 @@ export class GameRoom {
       this.say('Trade failed — someone no longer has the cash', 'warn');
       this.push();
       return { error: 'Insufficient funds' };
+    }
+    // Re-validate the whole offer against the CURRENT board: another trade,
+    // an auction or a bankruptcy may have moved these pieces since it was
+    // proposed. Accepting a stale offer must never rip a tile off its new
+    // owner, move buildings, or push prison cards negative.
+    const stale =
+      from.bankrupt || to.bankrupt
+      || trade.give.tiles.some((i) => this.own(i)?.owner !== from.id || (this.own(i)?.houses || 0) > 0)
+      || trade.get.tiles.some((i) => this.own(i)?.owner !== to.id || (this.own(i)?.houses || 0) > 0)
+      || from.getOutCards < trade.give.cards
+      || to.getOutCards < trade.get.cards;
+    if (stale) {
+      this.say('Trade failed — the offer no longer matches what each side owns', 'warn');
+      this.push();
+      return { error: 'Offer is out of date' };
     }
     from.money -= trade.give.money;
     to.money += trade.give.money;
