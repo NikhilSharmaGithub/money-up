@@ -3,6 +3,7 @@
 
 import SwiftUI
 import UIKit
+import AuthenticationServices
 
 struct LandingView: View {
     @EnvironmentObject var store: GameStore
@@ -35,7 +36,9 @@ struct LandingView: View {
         ScrollView {
             VStack(spacing: 18) {
                 header(P)
+                continueCard(P)
                 playCard(P, busy: busy)
+                themeCard(P)
                 publicRoomsCard(P)
                 serverCard(P)
                 friendsCard(P)
@@ -171,6 +174,51 @@ struct LandingView: View {
         store.join(roomId: code)
     }
 
+    // MARK: - continue last game
+
+    /// The way back into the table you stepped away from — the server has been
+    /// holding the seats (bots fill in while people are gone).
+    @ViewBuilder
+    private func continueCard(_ P: Palette) -> some View {
+        if !store.lastRoom.isEmpty {
+            Button {
+                store.continueGame()
+            } label: {
+                HStack(spacing: 12) {
+                    Text("▶️").font(.system(size: 22))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Continue game")
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(P.ink)
+                        Text("Room \(store.lastRoom)\(store.lastGuests > 0 ? " · \(store.lastGuests + 1) players on this device" : "")")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(P.gold)
+                }
+                .padding(14)
+                .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.gold.opacity(0.55), lineWidth: 1.5))
+                .shadow(color: .black.opacity(scheme == .light ? 0.1 : 0.35), radius: 8, y: 3)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - table style
+
+    private func themeCard(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                PanelTitle("Table style")
+                ThemePicker()
+            }
+        }
+    }
+
     // MARK: - public rooms
 
     /// Open lobbies anyone can hop into — same list the web landing shows.
@@ -252,6 +300,37 @@ struct LandingView: View {
         MMCard(padding: 16) {
             VStack(alignment: .leading, spacing: 12) {
                 PanelTitle("Friends")
+
+                // Signing in ties your name + friend code to your Apple ID, so
+                // a reinstall or a second device keeps the same identity.
+                SignInWithAppleButton(.signIn) { request in
+                    request.requestedScopes = [.fullName]
+                } onCompletion: { result in
+                    switch result {
+                    case .success(let auth):
+                        guard let cred = auth.credential as? ASAuthorizationAppleIDCredential else { return }
+                        let name = [cred.fullName?.givenName, cred.fullName?.familyName]
+                            .compactMap { $0 }.joined(separator: " ")
+                        Task {
+                            struct Reply: Decodable { var ok: Bool?; var name: String?; var code: String? }
+                            let reply: Reply? = try? await store.fetchJSON(
+                                "/api/auth/apple", method: "POST",
+                                body: ["token": store.token, "userId": cred.user, "name": name])
+                            if reply?.ok == true {
+                                if let n = reply?.name, !n.isEmpty { store.nickname = n }
+                                store.showToast("Signed in with Apple")
+                                await loadProfile()
+                            } else {
+                                store.showToast("Could not reach the server", isError: true)
+                            }
+                        }
+                    case .failure:
+                        store.showToast("Apple Sign-In was cancelled", isError: true)
+                    }
+                }
+                .signInWithAppleButtonStyle(scheme == .light ? .black : .white)
+                .frame(height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 if let profile {
                     HStack {

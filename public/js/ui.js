@@ -808,19 +808,24 @@ function miniBoard(preview) {
 
 export function openMapModal(state, actions) {
   fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {
-    openModal(`
-      <h2>Pick a board</h2>
-      <p class="sub">Every map has its own cities, prices and layout.</p>
-      <div class="map-grid">
-        ${maps.map((m) => `<button class="map-card ${m.id === state.mapId ? 'sel' : ''}" data-map="${m.id}">
+    const card = (m) => `<button class="map-card ${m.id === state.mapId ? 'sel' : ''}" data-map="${m.id}">
           ${miniBoard(m.preview)}
           <span class="mn">${m.icon} ${escapeHtml(m.name)}</span>
           <span class="md">${escapeHtml(m.description)}</span>
           <span class="mstats">
             <b>${m.size}</b> tiles · <b>${m.streets}</b> streets · <b>${m.countries}</b> sets
           </span>
-        </button>`).join('')}
-      </div>
+        </button>`;
+    const house = maps.filter((m) => !m.country);
+    const custom = maps.filter((m) => m.country);
+
+    openModal(`
+      <h2>Pick a board</h2>
+      <p class="sub">Every map has its own cities, prices and layout.</p>
+      <div class="map-grid">${house.map(card).join('')}</div>
+      <h3 class="map-section">🗺️ Custom — pick your country</h3>
+      <p class="sub">One nation per board, with its own regions and its own Treasure &amp; Surprise deck.</p>
+      <div class="map-grid">${custom.map(card).join('')}</div>
       <div class="modal-actions"><button class="btn ghost" id="mClose">Close</button></div>`, (root) => {
       root.querySelectorAll('[data-map]').forEach((c) => {
         c.onclick = () => { sfx.click(); actions.settings({ mapId: c.dataset.map }); closeModal(); };

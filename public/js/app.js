@@ -92,12 +92,62 @@ function showLanding() {
   $('#landing').classList.remove('hidden');
   $('#app').classList.add('hidden');
   $('#nickInput').value = nickname;
+
+  // A table you stepped away from mid-game gets a way back in.
+  let lastRoom = null;
+  try { lastRoom = localStorage.getItem('moneymove:lastRoom'); } catch { /* private mode */ }
+  const cont = $('#continueBtn');
+  cont.classList.toggle('hidden', !lastRoom);
+  if (lastRoom) {
+    cont.textContent = `▶️ Continue game — room ${lastRoom}`;
+    cont.onclick = () => { sfx.click(); go(lastRoom); };
+  }
+
   loadPublicRooms();
+  initGoogleSignIn();
   initSocial({
     token, name: nickname, flag: myFlag,
     onToast: toast,
     onJoin: (id) => go(id),
   });
+}
+
+// ---- sign in with Google (only when the server has a client id) ----------
+let googleInitDone = false;
+function initGoogleSignIn() {
+  if (googleInitDone) return;
+  fetch(api('/api/auth/config')).then((r) => r.json()).then((cfg) => {
+    if (!cfg.google || !cfg.googleClientId) return; // not configured — stay hidden
+    googleInitDone = true;
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.onload = () => {
+      $('#authRow').classList.remove('hidden');
+      window.google.accounts.id.initialize({
+        client_id: cfg.googleClientId,
+        callback: async (resp) => {
+          try {
+            const out = await fetch(api('/api/auth/google'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token, credential: resp.credential }),
+            }).then((r) => r.json());
+            if (out.ok) {
+              if (out.name) { $('#nickInput').value = out.name; storeName(out.name); }
+              $('#authStatus').textContent = `Signed in as ${out.name || 'you'} · code ${out.code || ''}`;
+              toast('Signed in with Google');
+            } else {
+              toast(out.error || 'Sign-in failed', 'error');
+            }
+          } catch {
+            toast('Sign-in failed', 'error');
+          }
+        },
+      });
+      window.google.accounts.id.renderButton($('#googleSignIn'), { theme: 'outline', size: 'large', shape: 'pill' });
+    };
+    document.head.appendChild(s);
+  }).catch(() => { /* server offline — landing still works */ });
 }
 
 function loadPublicRooms() {
@@ -338,12 +388,31 @@ $('#addLocalBtn').addEventListener('click', () => {
   else toast('New window opened — that player picks their own name and colour');
 });
 
+const LAST_ROOM_KEY = 'moneymove:lastRoom';
+
 $('#leaveBtn').addEventListener('click', () => {
+  // Mid-game, leaving deserves a second thought — a bot holds the seat and
+  // the landing screen offers a way back in.
+  if (state?.status === 'playing') {
+    const stay = !window.confirm('Game chal rahi hai! A bot will hold your seat — you can continue from the home screen. Leave?');
+    if (stay) return;
+    try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
+  } else {
+    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+  }
   history.pushState({}, '', '/');
   if (socket) { socket.close(); socket = null; }
   state = null;
   resetBoard();
   showLanding();
+});
+
+// Closing the tab mid-game gets the browser's own "are you sure".
+window.addEventListener('beforeunload', (e) => {
+  if (state?.status !== 'playing') return;
+  try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
+  e.preventDefault();
+  e.returnValue = '';
 });
 
 const EMOTES = ['👍', '😂', '😱', '🔥', '💸', '🎲', '😭', '🤝', '🏠', '🤡'];
@@ -434,6 +503,56 @@ function toggleTheme() {
 
 document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => { b.onclick = toggleTheme; });
 paintThemeButtons();
+
+// ---- table styles (7 palettes, each with its own light + dark) ----------
+const PALETTE_KEY = 'moneymove:palette';
+const PALETTES = [
+  { id: 'felt', name: 'Midnight Felt', dot: '#2e7d5b' },
+  { id: 'crimson', name: 'Crimson Classic', dot: '#d92037' },
+  { id: 'royale', name: 'Purple Royale', dot: '#8b5cf6' },
+  { id: 'blush', name: 'Blush Pink', dot: '#f472b6' },
+  { id: 'marine', name: 'Deep Marine', dot: '#38bdf8' },
+  { id: 'sands', name: 'Desert Sands', dot: '#f59e0b' },
+  { id: 'noir', name: 'Silver Noir', dot: '#c9a86a' },
+];
+
+const paletteBar = document.createElement('div');
+paletteBar.id = 'paletteBar';
+paletteBar.className = 'palette-bar hidden';
+paletteBar.innerHTML = PALETTES.map((p) =>
+  `<button class="pswatch" data-pal="${p.id}" title="${p.name}" style="--dot:${p.dot}"></button>`).join('');
+document.body.appendChild(paletteBar);
+
+function currentPalette() { return document.documentElement.dataset.palette || 'felt'; }
+function paintPaletteBar() {
+  paletteBar.querySelectorAll('.pswatch').forEach((b) =>
+    b.classList.toggle('on', b.dataset.pal === currentPalette()));
+}
+paletteBar.querySelectorAll('.pswatch').forEach((b) => {
+  b.onclick = () => {
+    const id = b.dataset.pal;
+    if (id === 'felt') delete document.documentElement.dataset.palette;
+    else document.documentElement.dataset.palette = id;
+    try { localStorage.setItem(PALETTE_KEY, id); } catch { /* private mode */ }
+    paintPaletteBar();
+    sfx.click();
+  };
+});
+document.querySelectorAll('#paletteBtn, #paletteBtnLanding').forEach((b) => {
+  b.onclick = (e) => {
+    sfx.click();
+    const r = e.currentTarget.getBoundingClientRect();
+    paletteBar.style.top = `${Math.min(innerHeight - 60, r.bottom + 8)}px`;
+    paletteBar.style.left = `${Math.max(8, Math.min(innerWidth - 268, r.left - 110))}px`;
+    paletteBar.classList.toggle('hidden');
+    paintPaletteBar();
+  };
+});
+document.addEventListener('click', (e) => {
+  if (!paletteBar.contains(e.target) && !e.target.closest?.('#paletteBtn, #paletteBtnLanding')) {
+    paletteBar.classList.add('hidden');
+  }
+});
 
 // Follow the system only while the player hasn't chosen for themselves.
 window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', (e) => {

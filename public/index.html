@@ -13,12 +13,16 @@
 <script>
   // Runs before paint so a dark-mode player never gets a white flash.
   (function () {
-    var saved = null;
-    try { saved = localStorage.getItem('moneymove:theme'); } catch (e) {}
+    var saved = null, pal = null;
+    try {
+      saved = localStorage.getItem('moneymove:theme');
+      pal = localStorage.getItem('moneymove:palette');
+    } catch (e) {}
     // Dark is the house style; the system setting only lightens it.
     var dark = saved ? saved === 'dark'
       : !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    if (pal && pal !== 'felt') document.documentElement.dataset.palette = pal;
   })();
 </script>
 </head>
@@ -29,10 +33,16 @@
   <div class="landing-bg"><span></span><span></span><span></span></div>
   <div class="landing-inner">
     <button id="themeBtnLanding" class="icon-btn theme-float" title="Switch between light and dark"></button>
+    <button id="paletteBtnLanding" class="icon-btn palette-float" title="Table style">🎨</button>
     <h1 class="logo xl">MONEY<span>MOVE</span></h1>
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
 
     <div class="landing-card">
+      <button id="continueBtn" class="btn wide continue-btn hidden">▶️ Continue game</button>
+      <div id="authRow" class="auth-row hidden">
+        <div id="googleSignIn"></div>
+        <span id="authStatus" class="dim small"></span>
+      </div>
       <label class="field">
         <span>Your nickname</span>
         <input id="nickInput" maxlength="16" placeholder="Nik" autocomplete="off" />
@@ -79,6 +89,7 @@
       <div class="brand-actions">
         <button id="focusBtn" class="icon-btn" title="Hide the side panel and enlarge the board">⛶</button>
         <button id="themeBtn" class="icon-btn" title="Switch between light and dark"></button>
+        <button id="paletteBtn" class="icon-btn" title="Table style">🎨</button>
         <button id="helpBtn" class="icon-btn" title="How to play">?</button>
         <button id="addLocalBtn" class="icon-btn" title="Add another player on this device">👥</button>
         <button id="soundBtn" class="icon-btn" title="Toggle sound">🔊</button>

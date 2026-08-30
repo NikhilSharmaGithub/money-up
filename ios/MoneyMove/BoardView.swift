@@ -129,6 +129,14 @@ struct TileView: View {
         return idxs.allSatisfy { state.owner(of: $0)?.owner == ownerId }
     }
 
+    /// Where this tile flies in from when the deck deals the board out —
+    /// every card starts at the middle of the table.
+    private var dealOffset: CGSize {
+        let frame = geom.frame(of: tile.index)
+        return CGSize(width: geom.size.width / 2 - frame.midX,
+                      height: geom.size.height / 2 - frame.midY)
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
         let group = store.groupInfo(for: tile)
@@ -162,19 +170,21 @@ struct TileView: View {
                 .stroke(isActive ? P.gold : P.rule, lineWidth: isActive ? 2 : 0.7)
         }
         .shadow(color: isActive ? P.gold.opacity(0.5) : .clear, radius: 6)
-        .scaleEffect(dealt ? 1 : 0.01)
-        .rotationEffect(.degrees(dealt ? 0 : -18))
+        .scaleEffect(dealt ? 1 : 0.22)
+        .rotationEffect(.degrees(dealt ? 0 : -24))
+        .offset(dealt ? .zero : dealOffset)
         .opacity(dealt ? 1 : 0)
         .onAppear { runDealIfFresh() }
         .onChange(of: store.boardIntroAt) { runDealIfFresh() }
     }
 
-    /// The deal-in: tiles snap out and spring back one after another, sweeping
-    /// around the board from START.
+    /// The deal-in: every tile starts as a card on the deck in the middle of
+    /// the table, then flies to its place one after another — the deck in the
+    /// centre riffle-shuffles first (see DeckIntro), so the deal waits for it.
     private func runDealIfFresh() {
         guard let at = store.boardIntroAt, Date().timeIntervalSince(at) < 3 else { return }
         dealt = false
-        withAnimation(.spring(duration: 0.5, bounce: 0.45).delay(Double(tile.index) * 0.022)) {
+        withAnimation(.spring(duration: 0.55, bounce: 0.32).delay(0.9 + Double(tile.index) * 0.028)) {
             dealt = true
         }
     }

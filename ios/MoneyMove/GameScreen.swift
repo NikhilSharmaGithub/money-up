@@ -31,6 +31,7 @@ struct GameScreen: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var sheet: ActiveSheet?
+    @State private var confirmLeave = false
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -168,13 +169,31 @@ struct GameScreen: View {
     private func topBar(_ P: Palette) -> some View {
         HStack(spacing: 12) {
             Button {
-                store.leaveRoom()
+                // Mid-game, leaving deserves a second thought — and a way back.
+                if store.state?.isPlaying == true {
+                    confirmLeave = true
+                } else {
+                    store.leaveRoom()
+                }
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(P.ink2)
                     .frame(width: 34, height: 34)
                     .background(P.card, in: Circle())
+            }
+            .confirmationDialog("Leave the game?", isPresented: $confirmLeave, titleVisibility: .visible) {
+                Button("Leave — I'll come back") {
+                    // Keep lastRoom so the landing screen offers Continue.
+                    let room = store.roomId ?? ""
+                    let guestCount = store.guests.count
+                    store.leaveRoom()
+                    store.lastRoom = room
+                    store.lastGuests = guestCount
+                }
+                Button("Leave for good", role: .destructive) { store.leaveRoom() }
+            } message: {
+                Text("A bot holds your seat while you're away. You can continue from the home screen.")
             }
 
             HStack(spacing: 6) {
@@ -524,6 +543,7 @@ struct CenterWell: View {
                                 historyChip(openHistory, P)
                             }
                         }
+                        .overlay { DeckIntro(at: store.boardIntroAt) }
                     }
                 }
             }
@@ -550,6 +570,63 @@ struct CenterWell: View {
             .overlay(Capsule().stroke(P.rule, lineWidth: 1))
         }
         .padding(10)
+    }
+}
+
+// MARK: - deck-shuffle intro
+
+/// The opening flourish: a deck of face-down cards sits in the middle of the
+/// table, riffle-shuffles in two halves, then sinks away as the board deals
+/// itself out of it (each tile flies from the centre — see TileView).
+struct DeckIntro: View {
+    let at: Date?
+
+    @Environment(\.colorScheme) private var scheme
+    @State private var split = false      // halves apart
+    @State private var merged = false     // riffled back together
+    @State private var gone = false       // deck sinks as tiles fly
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        if let at, Date().timeIntervalSince(at) < 3, !gone {
+            ZStack {
+                ForEach(0..<10, id: \.self) { i in
+                    let half: CGFloat = i.isMultiple(of: 2) ? -1 : 1
+                    cardBack(P)
+                        .offset(x: split ? half * 46 : 0,
+                                y: CGFloat(i) * -2.4 + (merged ? 0 : (split ? CGFloat(i % 3) * 5 : 0)))
+                        .rotationEffect(.degrees(split ? Double(half) * 9 : Double(i) * 1.4 - 6))
+                }
+            }
+            .scaleEffect(gone ? 0.4 : 1)
+            .opacity(gone ? 0 : 1)
+            .allowsHitTesting(false)
+            .task {
+                // Matches SoundKit.shuffleDeal: riffle ~0.55s, then the deal.
+                withAnimation(.spring(duration: 0.28, bounce: 0.4)) { split = true }
+                try? await Task.sleep(for: .milliseconds(330))
+                withAnimation(.spring(duration: 0.3, bounce: 0.5)) { split = false; merged = true }
+                try? await Task.sleep(for: .milliseconds(520))
+                withAnimation(.easeIn(duration: 0.45)) { gone = true }
+            }
+        }
+    }
+
+    private func cardBack(_ P: Palette) -> some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(LinearGradient(colors: [P.red, P.redDeep], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 74, height: 104)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(P.accentInk.opacity(0.4), lineWidth: 1.5)
+                    .padding(6)
+            )
+            .overlay(
+                Text("MM")
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+                    .foregroundStyle(P.accentInk.opacity(0.75))
+            )
+            .shadow(color: .black.opacity(0.3), radius: 6, y: 3)
     }
 }
 
@@ -706,7 +783,7 @@ private struct PlayerPod: View {
         } label: {
             Text(label)
                 .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(prominent ? Color(hex: 0x201607) : P.ink)
+                .foregroundStyle(prominent ? P.accentInk : P.ink)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(prominent ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken),

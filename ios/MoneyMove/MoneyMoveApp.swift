@@ -18,8 +18,12 @@ struct MoneyMoveApp: App {
 struct RootView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @AppStorage("mm.theme") private var themeID = "felt"
 
     var body: some View {
+        // Feed the static before anything below reads a palette, then key the
+        // whole tree on the theme so a change repaints every screen at once.
+        let _: Void = { Palette.themeID = themeID }()
         let P = Palette.current(scheme)
         ZStack {
             LinearGradient(colors: [P.page, P.page2], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -33,6 +37,7 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
+        .id(themeID)   // full repaint when the table style changes
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }

@@ -388,7 +388,7 @@ struct PropertiesSheet: View {
                     Text(fullSet ? "FULL SET" : "\(progress.owned) of \(progress.total)")
                         .font(.system(size: 8.5, weight: .black))
                         .kerning(0.6)
-                        .foregroundStyle(fullSet ? Color(hex: 0x201607) : P.ink3)
+                        .foregroundStyle(fullSet ? P.accentInk : P.ink3)
                         .padding(.vertical, 3)
                         .padding(.horizontal, 7)
                         .background(fullSet ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())

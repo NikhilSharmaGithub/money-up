@@ -10,6 +10,8 @@ struct LobbyPanel: View {
     let openSettings: () -> Void
 
     @State private var nameDraft = ""
+    /// Single-nation boards for the Custom menu, loaded from /api/maps.
+    @State var countryBoards: [MapSummary] = []
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -210,11 +212,12 @@ struct LobbyPanel: View {
 // MARK: - lobby extras
 
 extension LobbyPanel {
-    /// One-tap boards: the three favourites plus the shuffle, right in the lobby.
+    /// One-tap boards in the lobby: Classic, Worldwide, Shuffle — and last,
+    /// Custom: a menu of single-nation boards, each with its own regions and
+    /// its own localized Treasure & Surprise deck.
     @ViewBuilder func quickBoards(_ P: Palette) -> some View {
         let picks: [(String, String, String)] = [
             ("classic", "🌐", "Classic"),
-            ("bharat", "🇮🇳", "Bharat"),
             ("worldwide", "🌍", "Worldwide"),
             ("random", "🎲", "Shuffle"),
         ]
@@ -225,22 +228,64 @@ extension LobbyPanel {
                     SoundKit.shared.click()
                     store.updateSettings(["mapId": id])
                 } label: {
-                    VStack(spacing: 3) {
-                        Text(icon).font(.system(size: 20))
-                        Text(name)
-                            .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                            .foregroundStyle(selected ? P.red : P.ink2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(selected ? P.redSoft : P.sunken,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(selected ? P.red : Color.clear, lineWidth: 1.5)
-                    )
+                    quickChip(icon: icon, name: name, selected: selected, P: P)
                 }
             }
+            customBoardMenu(P)
         }
+        .task { await loadCountryBoards() }
+    }
+
+    /// The current selection is a country board when its id starts "country-".
+    @ViewBuilder private func customBoardMenu(_ P: Palette) -> some View {
+        let currentId = store.state?.mapId ?? store.state?.settings.mapId ?? ""
+        let selected = currentId.hasPrefix("country-")
+        let current = countryBoards.first { $0.id == currentId }
+
+        Menu {
+            ForEach(countryBoards) { map in
+                Button {
+                    SoundKit.shared.click()
+                    store.updateSettings(["mapId": map.id])
+                } label: {
+                    if map.id == currentId {
+                        Label("\(map.icon ?? "🗺️") \(map.name)", systemImage: "checkmark")
+                    } else {
+                        Text("\(map.icon ?? "🗺️") \(map.name)")
+                    }
+                }
+            }
+            if countryBoards.isEmpty {
+                Text("Loading countries…")
+            }
+        } label: {
+            quickChip(icon: current?.icon ?? "🗺️",
+                      name: selected ? (current?.name ?? "Custom") : "Custom",
+                      selected: selected, P: P)
+        }
+    }
+
+    private func quickChip(icon: String, name: String, selected: Bool, P: Palette) -> some View {
+        VStack(spacing: 3) {
+            Text(icon).font(.system(size: 20))
+            Text(name)
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                .foregroundStyle(selected ? P.red : P.ink2)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 9)
+        .background(selected ? P.redSoft : P.sunken,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(selected ? P.red : Color.clear, lineWidth: 1.5)
+        )
+    }
+
+    private func loadCountryBoards() async {
+        guard countryBoards.isEmpty else { return }
+        let maps: [MapSummary]? = try? await store.fetchJSON("/api/maps")
+        countryBoards = (maps ?? []).filter { $0.country == true }
     }
 }

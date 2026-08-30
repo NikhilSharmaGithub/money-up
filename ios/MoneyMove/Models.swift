@@ -237,6 +237,8 @@ struct MapSummary: Codable, Identifiable {
     var size: Int
     var streets: Int?
     var countries: Int?
+    /// True for the single-nation "custom" boards with their own card decks.
+    var country: Bool?
 }
 
 struct FriendEntry: Codable, Identifiable {

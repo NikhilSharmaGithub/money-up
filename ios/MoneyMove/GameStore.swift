@@ -24,6 +24,10 @@ final class GameStore: ObservableObject {
     @AppStorage("mm.name") var nickname: String = ""
     @AppStorage("mm.flag") var flag: String = ""
     @AppStorage("mm.server") var serverURLString: String = GameStore.defaultServer
+    /// Last room this device sat in — powers "Continue game" on the landing
+    /// screen. The server holds seats (bots fill in) so rejoining just works.
+    @AppStorage("mm.lastRoom") var lastRoom: String = ""
+    @AppStorage("mm.lastGuests") var lastGuests: Int = 0
 
     static var defaultServer: String {
         #if targetEnvironment(simulator)
@@ -263,12 +267,41 @@ final class GameStore: ObservableObject {
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         joinError = nil
         roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
+        lastRoom = roomId ?? ""
         state = nil
         lastTurnPlayer = nil
         if connection == .connected {
             onSocketStatus(.connected) // emit join now
         } else {
             socket.connect(to: url)
+        }
+    }
+
+    /// Rejoins the last room and quietly re-seats every pass & play guest this
+    /// device had — their tokens are deterministic, so the server hands each
+    /// seat straight back.
+    func continueGame() {
+        guard !lastRoom.isEmpty else { return }
+        let guestsToRestore = lastGuests
+        join(roomId: lastRoom)
+        guard let url = serverURL, let roomId else { return }
+        for number in 2...(max(2, guestsToRestore + 1)) where guestsToRestore > 0 {
+            let guestToken = "\(token)_p\(number)"
+            guard !guests.contains(where: { $0.token == guestToken }) else { continue }
+            let s = SocketIOClient()
+            s.onStatus = { status in
+                Task { @MainActor in
+                    guard status == .connected else { return }
+                    s.emit("join", [[
+                        "roomId": roomId,
+                        "token": guestToken,
+                        "name": "Player \(number)",
+                        "flag": "",
+                    ]])
+                }
+            }
+            s.connect(to: url)
+            guests.append(LocalGuest(token: guestToken, number: number, socket: s))
         }
     }
 
@@ -281,6 +314,8 @@ final class GameStore: ObservableObject {
         joinError = nil
         lastTurnPlayer = nil
         lastCardAt = 0
+        lastRoom = ""
+        lastGuests = 0
     }
 
     // MARK: - intents (mirror public/js actions)
@@ -399,6 +434,7 @@ final class GameStore: ObservableObject {
         }
         s.connect(to: url)
         guests.append(LocalGuest(token: guestToken, number: number, socket: s))
+        lastGuests = guests.count
         showToast("Player \(number) joined from this device")
     }
 

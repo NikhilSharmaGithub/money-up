@@ -1,7 +1,9 @@
 // Board map definitions.
 // Tile order is clockwise starting from START (top-left corner):
 //   START -> top row (L->R) -> PRISON corner -> right column (T->B)
-//   -> VACATION corner -> bottom row (R->L) -> GO TO PRISON corner -> left column (B->T)
+//   -> VACATION corner -> bottom row (R->T) -> GO TO PRISON corner -> left column (B->T)
+
+import { COUNTRY_BOARDS } from './countries.js';
 
 export const GROUPS = {
   BR: { name: 'Brazil', color: '#3ec46d', flag: '🇧🇷' },
@@ -18,6 +20,10 @@ export const GROUPS = {
   TR: { name: 'Türkiye', color: '#d63b4a', flag: '🇹🇷' },
   RO: { name: 'Romania', color: '#3f5fd6', flag: '🇷🇴' },
   IE: { name: 'Ireland', color: '#35a76a', flag: '🇮🇪' },
+
+  // regions used by the country boards live under namespaced keys, e.g.
+  // IN_MH — registered below from COUNTRY_BOARDS so two countries can both
+  // have a "NE" region without colliding.
 
   // regions used by the all-India board
   RJ: { name: 'Rajasthan', color: '#e8913c', flag: '🏰' },
@@ -345,6 +351,51 @@ export function generateRandomMap() {
   });
 }
 
+// ---- country boards ----------------------------------------------------------
+// Each COUNTRY_BOARDS entry becomes a full 40-tile board in the proven classic
+// shape, plus its own localized Treasure/Surprise deck. Group keys are
+// namespaced (IN_MH, US_CA…) so regions never collide across countries.
+for (const b of COUNTRY_BOARDS) {
+  for (const g of b.groups) {
+    GROUPS[`${b.id.toUpperCase()}_${g.key}`] = { name: g.name, color: g.color, flag: g.flag };
+  }
+}
+
+function buildCountryMap(b) {
+  const gkey = (k) => `${b.id.toUpperCase()}_${k}`;
+  const streets = b.cities.map((c, i) => p(c.name, gkey(c.group), PRICE_LADDER[i]));
+  let s = 0, a = 0, u = 0;
+  const S = () => streets[s++];
+  const A = () => air(b.airports[a++]);
+  const U = () => util(b.utilities[u].name, b.utilities[u++].icon);
+
+  const tiles = [
+    start(),
+    S(), treasure(), S(), earningsTax(), A(), S(), S(), surprise(), S(),
+    prison(),
+    S(), U(), S(), S(), A(), S(), treasure(), S(), S(),
+    vacation(),
+    S(), surprise(), S(), S(), A(), S(), U(), S(), S(),
+    gotoprison(),
+    S(), S(), treasure(), S(), A(), surprise(), S(), premiumTax(), S(),
+  ];
+
+  const map = buildMap({
+    id: `country-${b.id}`,
+    name: b.name,
+    icon: b.icon,
+    description: b.description,
+    tiles,
+  });
+  map.deck = { treasure: b.treasure, surprise: b.surprise };
+  map.country = true;
+  return map;
+}
+
+export const COUNTRY_MAPS = Object.fromEntries(
+  COUNTRY_BOARDS.map((b) => [`country-${b.id}`, buildCountryMap(b)]),
+);
+
 // Colour used to draw a tile in the little board thumbnails on the map picker.
 const TYPE_COLORS = {
   airport: '#5b8def', utility: '#22d3ee', treasure: '#f59e0b', surprise: '#ec4899',
@@ -353,13 +404,17 @@ const TYPE_COLORS = {
 };
 const swatch = (t) => (t.type === 'property' ? GROUPS[t.group]?.color || '#8b5cf6' : TYPE_COLORS[t.type] || '#6d6394');
 
-export const MAPS = Object.fromEntries(RAW_MAPS.map((m) => [m.id, buildMap(m)]));
+export const MAPS = {
+  ...Object.fromEntries(RAW_MAPS.map((m) => [m.id, buildMap(m)])),
+  ...COUNTRY_MAPS,
+};
 
 const summarise = (m) => ({
   id: m.id,
   name: m.name,
   icon: m.icon,
   description: m.description,
+  country: !!m.country,
   size: m.size,
   streets: m.tiles.filter((t) => t.type === 'property').length,
   airports: m.airportCount,

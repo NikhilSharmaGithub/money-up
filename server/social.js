@@ -132,6 +132,29 @@ export function friendsOf(token) {
 }
 
 // ---------------------------------------------------------------- presence --
+/** Everything the admin dashboard needs — read-only snapshot. */
+export function allProfiles() {
+  return [...profiles.values()].map((p) => ({
+    code: p.code, name: p.name || '', flag: p.flag || '',
+    friends: (p.friends || []).length,
+    roomId: p.roomId || null, status: p.status || 'offline',
+    login: p.login || null,
+  }));
+}
+
+/** Records an external login (google/apple) against the identity token. */
+export function attachLogin(token, provider, subject, name) {
+  const p = profileFor(token, { name });
+  if (!p) return null;
+  const stored = profiles.get(token);
+  stored.login = { provider, subject, at: Date.now() };
+  if (name) stored.name = name;
+  saveSoon();
+  return { code: stored.code, name: stored.name };
+}
+
+function saveSoon() { save(); }
+
 export function setPresence(token, roomId, status = 'lobby') {
   if (!token) return;
   if (roomId) presence.set(token, { roomId, status, at: Date.now() });

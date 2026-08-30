@@ -9,3 +9,4 @@ ios/DerivedData/
 *.xcuserstate
 xcuserdata/
 design/moneymove-ios.html
+data/stats.json

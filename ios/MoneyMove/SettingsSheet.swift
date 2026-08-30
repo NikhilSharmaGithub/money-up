@@ -29,6 +29,7 @@ struct SettingsSheet: View {
                     boardSection(P)
                     playersSection(P)
                     teamsSection(P)
+                    styleSection(P)
                     moneySection(P)
                     rulesSection(P)
                 }
@@ -92,13 +93,33 @@ struct SettingsSheet: View {
                     }
                     .padding(.vertical, 6)
                 } else {
+                    // House boards first…
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(maps) { map in
+                            ForEach(maps.filter { $0.country != true }) { map in
                                 mapCard(map, P)
                             }
                         }
                         .padding(.vertical, 2)
+                    }
+
+                    // …then the single-nation boards, each with its own
+                    // localized Treasure & Surprise deck.
+                    let custom = maps.filter { $0.country == true }
+                    if !custom.isEmpty {
+                        PanelTitle("Custom — pick your country")
+                            .padding(.top, 6)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(custom) { map in
+                                    mapCard(map, P)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        Text("Country boards deal their own local Treasure & Surprise cards.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
                     }
                 }
             }
@@ -178,6 +199,16 @@ struct SettingsSheet: View {
             }
         }
         .disabled(!canEdit)
+    }
+
+    /// Personal, not a room setting — every player can pick their own table.
+    private func styleSection(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                PanelTitle("Table style")
+                ThemePicker()
+            }
+        }
     }
 
     private func teamsSection(_ P: Palette) -> some View {

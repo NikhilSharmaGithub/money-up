@@ -1,11 +1,12 @@
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
 import { mapList } from './maps.js';
-import { profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence } from './social.js';
+import { profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence, allProfiles, attachLogin } from './social.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -70,6 +71,150 @@ app.post('/api/friends/remove', (req, res) => {
   res.json(removeFriend(String(token || '').slice(0, 64), code));
 });
 
+// ---- auth (config-gated: works once the operator supplies credentials) ----
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+
+app.get('/api/auth/config', (_req, res) => {
+  res.json({ google: !!GOOGLE_CLIENT_ID, googleClientId: GOOGLE_CLIENT_ID || null });
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(501).json({ error: 'Google login not configured on this server' });
+  const { token, credential } = req.body || {};
+  if (!token || !credential) return res.status(400).json({ error: 'Missing token or credential' });
+  try {
+    const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
+      .then((r) => r.json());
+    if (info.aud !== GOOGLE_CLIENT_ID) return res.status(401).json({ error: 'Token was not issued for this app' });
+    const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, info.name || info.email);
+    res.json({ ok: true, name: linked?.name || info.name || '', code: linked?.code });
+  } catch {
+    res.status(401).json({ error: 'Could not verify the Google token' });
+  }
+});
+
+// The native flow on iOS: Apple has already authenticated the user on-device;
+// we record the stable user id against this install's identity token.
+app.post('/api/auth/apple', (req, res) => {
+  const { token, userId, name } = req.body || {};
+  if (!token || !userId) return res.status(400).json({ error: 'Missing token or userId' });
+  const linked = attachLogin(String(token).slice(0, 64), 'apple', String(userId).slice(0, 128), name);
+  res.json({ ok: true, name: linked?.name || name || '', code: linked?.code });
+});
+
+// ---- master admin ---------------------------------------------------------
+// GET /admin?key=... — a live dashboard of rooms, games and profiles.
+// Set ADMIN_KEY in the environment; the default is for local tinkering only.
+const ADMIN_KEY = process.env.ADMIN_KEY || 'moneymove-admin';
+const STATS_FILE = path.join(__dirname, '..', 'data', 'stats.json');
+const stats = { gamesStarted: 0, gamesEnded: 0, recent: [] };
+try {
+  Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')));
+} catch { /* first run */ }
+
+function saveStats() {
+  try {
+    fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
+    fs.writeFileSync(STATS_FILE, JSON.stringify(stats));
+  } catch (err) {
+    console.warn('stats: could not persist —', err.message);
+  }
+}
+
+const lastStatus = new Map(); // roomId -> status, to spot transitions
+function recordTransitions(room) {
+  const prev = lastStatus.get(room.id);
+  if (prev === room.status) return;
+  lastStatus.set(room.id, room.status);
+  if (room.status === 'playing' && prev !== 'playing') {
+    stats.gamesStarted++;
+    saveStats();
+  }
+  if (room.status === 'ended' && prev === 'playing') {
+    stats.gamesEnded++;
+    stats.recent.unshift({
+      roomId: room.id,
+      map: room.map.name,
+      players: room.players.map((p) => p.name),
+      winner: room.winner?.name || null,
+      winningTeam: room.winningTeam ?? null,
+      turns: room.turnCount || 0,
+      at: Date.now(),
+    });
+    stats.recent = stats.recent.slice(0, 100);
+    saveStats();
+  }
+}
+
+const adminGuard = (req, res) => {
+  if ((req.query.key || '') === ADMIN_KEY) return true;
+  res.status(401).send('Missing or wrong ?key=');
+  return false;
+};
+
+app.get('/api/admin/data', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json({
+    totals: {
+      gamesStarted: stats.gamesStarted,
+      gamesEnded: stats.gamesEnded,
+      liveRooms: rooms.size,
+      liveSockets: [...socketsOf.values()].reduce((n, s) => n + s.size, 0),
+      profiles: allProfiles().length,
+    },
+    rooms: [...rooms.values()].map((r) => ({
+      id: r.id, status: r.status, map: r.map.name,
+      players: r.players.map((p) => `${p.name}${p.isBot ? ' 🤖' : ''}`),
+      sockets: socketsOf.get(r.id)?.size || 0,
+      turns: r.turnCount || 0,
+    })),
+    recentGames: stats.recent,
+    profiles: allProfiles(),
+  });
+});
+
+app.get('/admin', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.type('html').send(`<!doctype html><meta charset="utf-8">
+<title>MoneyMove Admin</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{font-family:system-ui,sans-serif;background:#0c1310;color:#efede2;margin:0;padding:24px}
+  h1{font-size:22px} h2{font-size:15px;margin:26px 0 8px;color:#adb6ac;text-transform:uppercase;letter-spacing:1px}
+  .tiles{display:flex;gap:12px;flex-wrap:wrap}
+  .tile{background:#16211c;border:1px solid #24332c;border-radius:14px;padding:14px 20px;min-width:120px}
+  .tile b{font-size:24px;display:block;color:#e3a93c}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #24332c}
+  th{color:#78827a;font-weight:600}
+  .ok{color:#4fd98b}.warn{color:#e3a93c}
+</style>
+<h1>🎲 MoneyMove — Master Admin</h1>
+<div class="tiles" id="tiles"></div>
+<h2>Live rooms</h2><table id="rooms"></table>
+<h2>Recent games</h2><table id="games"></table>
+<h2>Profiles</h2><table id="profiles"></table>
+<script>
+  const key = new URLSearchParams(location.search).get('key');
+  async function refresh() {
+    const d = await fetch('/api/admin/data?key=' + encodeURIComponent(key)).then(r => r.json());
+    const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    tiles.innerHTML = Object.entries(d.totals).map(([k, v]) =>
+      '<div class="tile"><b>' + esc(v) + '</b>' + esc(k) + '</div>').join('');
+    rooms.innerHTML = '<tr><th>room</th><th>status</th><th>map</th><th>players</th><th>sockets</th><th>turns</th></tr>' +
+      d.rooms.map(r => '<tr><td>' + esc(r.id) + '</td><td class="' + (r.status === 'playing' ? 'ok' : 'warn') + '">' + esc(r.status) +
+        '</td><td>' + esc(r.map) + '</td><td>' + esc(r.players.join(', ')) + '</td><td>' + esc(r.sockets) + '</td><td>' + esc(r.turns) + '</td></tr>').join('');
+    games.innerHTML = '<tr><th>when</th><th>room</th><th>map</th><th>winner</th><th>players</th><th>turns</th></tr>' +
+      d.recentGames.map(g => '<tr><td>' + new Date(g.at).toLocaleString() + '</td><td>' + esc(g.roomId) + '</td><td>' + esc(g.map) +
+        '</td><td class="ok">' + esc(g.winner || '—') + '</td><td>' + esc(g.players.join(', ')) + '</td><td>' + esc(g.turns) + '</td></tr>').join('');
+    profiles.innerHTML = '<tr><th>code</th><th>name</th><th>flag</th><th>friends</th><th>status</th><th>login</th></tr>' +
+      d.profiles.map(p => '<tr><td>' + esc(p.code) + '</td><td>' + esc(p.name) + '</td><td>' + esc(p.flag) + '</td><td>' + esc(p.friends) +
+        '</td><td>' + esc(p.status) + (p.roomId ? ' (' + esc(p.roomId) + ')' : '') + '</td><td>' + esc(p.login ? p.login.provider : '—') + '</td></tr>').join('');
+  }
+  refresh(); setInterval(refresh, 5000);
+</script>`);
+});
+
 app.get(/^\/room\/.*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 /** @type {Map<string, GameRoom>} */
@@ -119,6 +264,7 @@ function stateFor(base, room, viewerId) {
 }
 
 function broadcast(room) {
+  recordTransitions(room);
   const base = room.serialize();
   const delivered = new Set();
   for (const [playerId, socketIds] of seatsOf.get(room.id) || []) {

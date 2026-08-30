@@ -61,7 +61,7 @@ export class GameRoom {
     this.vacationPot = 0;
     this.winner = null;
     this.winningTeam = null;
-    this.decks = { treasure: shuffled(TREASURE), surprise: shuffled(SURPRISE) };
+    this.decks = this.freshDecks();
     this.history = []; // per-turn net-worth snapshots, revealed at game end
     this.turnCount = 0;
     this.lastCard = null;
@@ -285,6 +285,8 @@ export class GameRoom {
 
     // "Random" means a brand new board each game, not a fixed shuffle.
     if (this.settings.mapId === 'random') this.map = getMap('random');
+    // Country boards bring their own localized Treasure/Surprise decks.
+    this.decks = this.freshDecks();
 
     if (this.settings.randomizeOrder) {
       for (let i = this.players.length - 1; i > 0; i--) {
@@ -644,9 +646,17 @@ export class GameRoom {
   }
 
   // -------------------------------------------------------------------- cards --
+  /** The map's own localized deck when it has one, the classic deck otherwise. */
+  freshDecks() {
+    return {
+      treasure: shuffled(this.map.deck?.treasure || TREASURE),
+      surprise: shuffled(this.map.deck?.surprise || SURPRISE),
+    };
+  }
+
   drawCard(p, deckName) {
     const deck = this.decks[deckName];
-    if (!deck.length) this.decks[deckName] = shuffled(deckName === 'treasure' ? TREASURE : SURPRISE);
+    if (!deck.length) this.decks[deckName] = shuffled(this.map.deck?.[deckName] || (deckName === 'treasure' ? TREASURE : SURPRISE));
     const card = this.decks[deckName].shift();
     this.decks[deckName].push(card);
     this.lastCard = { deck: deckName, text: card.text, at: Date.now() };
