@@ -143,8 +143,40 @@ const prevMoney = new Map();
 // later would otherwise show a frozen snapshot.
 let livePlayersState = null;
 
+/**
+ * Live standings by net worth. Seating order breaks ties so two players on the
+ * same money don't swap numbers back and forth on every push.
+ */
+function rankByWorth(state) {
+  const rank = new Map();
+  state.players
+    .map((p, seat) => ({ id: p.id, seat, worth: p.netWorth || 0, out: !!p.bankrupt }))
+    .sort((a, b) => Number(a.out) - Number(b.out) || b.worth - a.worth || a.seat - b.seat)
+    .forEach((p, k) => rank.set(p.id, k + 1));
+  return rank;
+}
+
+/**
+ * Whoever plays after the current chair — bankrupt seats and players sitting
+ * out a vacation are stepped over, the same way the server steps over them.
+ */
+function nextUpId(state) {
+  const { players } = state;
+  if (state.status !== 'playing' || !state.turn?.playerId) return null;
+  const idx = players.findIndex((p) => p.id === state.turn.playerId);
+  if (idx < 0) return null;
+  for (let step = 1; step < players.length; step++) {
+    const cand = players[(idx + step) % players.length];
+    if (cand.bankrupt || cand.skipTurns > 0) continue;
+    return cand.id;
+  }
+  return null;
+}
+
 export function renderPlayers(state, meId, el, actions) {
   livePlayersState = state;
+  const rank = rankByWorth(state);
+  const nextUp = nextUpId(state);
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
   const structure = state.players.map((p) => `${p.id}:${p.bankrupt ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
@@ -155,6 +187,7 @@ export function renderPlayers(state, meId, el, actions) {
     el.innerHTML = state.players.map((p) => `
       <div class="player-card ${p.bankrupt ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
         <div class="pc-glow"></div>
+        <span class="prank hidden"></span>
         <div class="avatar ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">
           ${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}
           <span class="avatar-ring"></span>
@@ -174,7 +207,7 @@ export function renderPlayers(state, meId, el, actions) {
         <div class="avatar ghost-seat">+</div>
         <div class="pinfo"><div class="pname dim">Empty seat</div>
           <div class="pmeta dim">waiting for a player…</div></div>
-        ${state.hostId === meId ? '<button class="btn tiny" data-addbot>Add bot</button>' : ''}
+        ${state.hostId === meId && !state.quick ? '<button class="btn tiny" data-addbot>Add bot</button>' : ''}
       </div>`).join('');
 
     el.querySelectorAll('[data-addbot]').forEach((b) => {
@@ -187,6 +220,19 @@ export function renderPlayers(state, meId, el, actions) {
     if (!card) return;
     const isTurn = state.turn?.playerId === p.id && state.status === 'playing';
     card.classList.toggle('turn', isTurn);
+    card.classList.toggle('next-up', p.id === nextUp && !isTurn);
+
+    // live position — the leader wears the crown, everyone else their number
+    const rankEl = card.querySelector('.prank');
+    const pos = state.status === 'playing' ? rank.get(p.id) : null;
+    const rankHtml = !pos ? '' : pos === 1 ? '<b>👑</b><span>#1</span>' : `<span>#${pos}</span>`;
+    if (rankEl.dataset.v !== rankHtml) {
+      rankEl.dataset.v = rankHtml;
+      rankEl.innerHTML = rankHtml;
+      rankEl.classList.toggle('hidden', !rankHtml);
+      rankEl.classList.toggle('lead', pos === 1);
+      rankEl.title = pos ? `#${pos} by net worth` : '';
+    }
 
     // tags
     const flagEl = card.querySelector('.avatar-flag');
@@ -205,6 +251,8 @@ export function renderPlayers(state, meId, el, actions) {
     if (p.isBot) tags.push('<i class="tag bot">BOT</i>');
     if (state.hostId === p.id) tags.push('<i class="tag host">HOST</i>');
     if (p.id === meId) tags.push('<i class="tag you">YOU</i>');
+    // A quiet heads-up so people look up before the turn lands on them.
+    if (p.id === nextUp && !isTurn) tags.push(`<i class="tag next">${p.id === meId ? "YOU'RE NEXT" : 'NEXT'}</i>`);
     if (p.timedOut) tags.push(`<i class="tag off">${p.removedFor === 'quit' ? 'LEFT' : 'TIMED OUT'}</i>`);
     else if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
     else if (!p.connected && !p.isBot) tags.push('<i class="tag off">AWAY</i>');
@@ -262,7 +310,8 @@ export function renderPlayers(state, meId, el, actions) {
     const acts = card.querySelector('.player-actions');
     const me = state.players.find((x) => x.id === meId);
     const canTrade = state.status === 'playing' && p.id !== meId && !p.bankrupt && !me?.bankrupt;
-    const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId;
+    // Nobody hosts a Quick Play table, so nobody gets to throw strangers off it.
+    const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId && !state.quick;
     const canPickTeam = state.status === 'lobby' && state.settings.teams > 0
       && (p.id === meId || (state.hostId === meId && p.isBot));
     const want = `${canTrade ? 't' : ''}${canKick ? 'k' : ''}${canPickTeam ? 'm' : ''}`;
@@ -312,22 +361,97 @@ const RULES = [
   { key: 'randomizeOrder', icon: '🔀', name: 'Randomize order', desc: 'Shuffle the turn order when the game starts' },
 ];
 
+/**
+ * Only the debtor's own shortfall belongs in the signature: folding cash in
+ * the rest of the time would rebuild the panel on every rent payment.
+ */
+function debtSig(state, meId) {
+  const d = state.turn?.phase === 'debt' ? state.turn.debt : null;
+  if (!d || d.debtor !== meId) return '';
+  return `${d.amount}:${state.players.find((p) => p.id === meId)?.money}`;
+}
+
 export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   const sig = state.status === 'lobby'
-    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${state.trades.map((t) => t.id).join()}:${state.status}:${state.settings.mortgage}`;
+    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${state.quickStartAt || 0}`
+    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${state.trades.map((t) => t.id).join()}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
-  if (state.status === 'lobby') renderSettings(state, meId, el, actions);
-  else renderMyStuff(state, meId, el, actions);
+  if (state.status !== 'lobby') renderMyStuff(state, meId, el, actions);
+  else if (state.quick) renderQuickLobby(state, meId, el, actions);
+  else renderSettings(state, meId, el, actions);
+}
+
+const LOOK_COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
+
+/** Name, colour and flag — the one part of any lobby every player owns. */
+function lookPanel(state, meId) {
+  const me = state.players.find((p) => p.id === meId);
+  return `<div class="panel">
+      <div class="panel-title">Your look</div>
+      <input id="nameField" class="name-field" value="${escapeHtml(me?.name || '')}" maxlength="16" placeholder="Nickname" />
+      <div class="swatches">
+        ${LOOK_COLORS.map((c) => {
+          const taken = state.players.some((p) => p.color === c && p.id !== meId);
+          return `<button class="swatch ${me?.color === c ? 'sel' : ''}" data-color="${c}"
+            ${taken ? 'disabled' : ''} style="--c:${c}"></button>`;
+        }).join('')}
+      </div>
+      <div class="flag-picker">
+        ${FLAGS.map((f) => `<button class="flag-opt ${me?.flag === f ? 'sel' : ''}" data-flag="${f}">${f}</button>`).join('')}
+      </div>
+    </div>`;
+}
+
+function wireLookPanel(state, meId, el, actions) {
+  const me = state.players.find((p) => p.id === meId);
+  el.querySelectorAll('[data-color]').forEach((b) => {
+    b.onclick = () => { sfx.click(); actions.appearance({ color: b.dataset.color }); };
+  });
+  el.querySelectorAll('[data-flag]').forEach((b) => {
+    b.onclick = () => {
+      sfx.click();
+      // Clicking the flag you already wear takes it off again.
+      actions.appearance({ flag: me?.flag === b.dataset.flag ? '' : b.dataset.flag });
+    };
+  });
+  const nameField = $('#nameField', el);
+  if (nameField) nameField.onchange = () => actions.appearance({ name: nameField.value.trim() || 'Player' });
+}
+
+/**
+ * A Quick Play table runs itself — nobody sitting here owns its settings, so
+ * the panel is about who has turned up rather than what to switch on.
+ */
+function renderQuickLobby(state, meId, el, actions) {
+  const seats = state.settings.maxPlayers;
+  const open = Math.max(0, seats - state.players.length);
+  el.innerHTML = `
+    <div class="panel">
+      <div class="panel-title">⚡ Quick Play</div>
+      <div class="quick-blurb">A public table with whoever is online. It deals
+        itself in as soon as the seats fill${state.quickStartAt ? ', or when the countdown runs out' : ''}.</div>
+      <div class="quick-seats">
+        ${state.players.map((p) => `<div class="quick-seat">
+          <span class="avatar sm ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}</span>
+          <span class="qs-name">${escapeHtml(p.name)}</span>
+          ${p.id === meId ? '<i class="tag you">YOU</i>' : ''}
+        </div>`).join('')}
+        ${Array.from({ length: open }, () => `<div class="quick-seat open">
+          <span class="avatar sm ghost-seat">+</span>
+          <span class="qs-name dim">Open seat</span>
+        </div>`).join('')}
+      </div>
+      <div class="dim small">${state.players.length} of ${seats} seats taken</div>
+    </div>
+    ${lookPanel(state, meId)}`;
+  wireLookPanel(state, meId, el, actions);
 }
 
 function renderSettings(state, meId, el, actions) {
   const isHost = state.hostId === meId;
   const dis = isHost ? '' : 'disabled';
-  const me = state.players.find((p) => p.id === meId);
-  const COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
 
   const toggle = (d) => `<div class="setting">
       <span class="s-icon">${d.icon}</span>
@@ -339,20 +463,7 @@ function renderSettings(state, meId, el, actions) {
     </div>`;
 
   el.innerHTML = `
-    <div class="panel">
-      <div class="panel-title">Your look</div>
-      <input id="nameField" class="name-field" value="${escapeHtml(me?.name || '')}" maxlength="16" placeholder="Nickname" />
-      <div class="swatches">
-        ${COLORS.map((c) => {
-          const taken = state.players.some((p) => p.color === c && p.id !== meId);
-          return `<button class="swatch ${me?.color === c ? 'sel' : ''}" data-color="${c}"
-            ${taken ? 'disabled' : ''} style="--c:${c}"></button>`;
-        }).join('')}
-      </div>
-      <div class="flag-picker">
-        ${FLAGS.map((f) => `<button class="flag-opt ${me?.flag === f ? 'sel' : ''}" data-flag="${f}">${f}</button>`).join('')}
-      </div>
-    </div>
+    ${lookPanel(state, meId)}
 
     <div class="panel">
       <div class="panel-title">Game settings</div>
@@ -420,18 +531,7 @@ function renderSettings(state, meId, el, actions) {
       actions.settings({ [key]: value });
     };
   });
-  el.querySelectorAll('[data-color]').forEach((b) => {
-    b.onclick = () => { sfx.click(); actions.appearance({ color: b.dataset.color }); };
-  });
-  el.querySelectorAll('[data-flag]').forEach((b) => {
-    b.onclick = () => {
-      sfx.click();
-      // Clicking the flag you already wear takes it off again.
-      actions.appearance({ flag: me?.flag === b.dataset.flag ? '' : b.dataset.flag });
-    };
-  });
-  const nameField = $('#nameField', el);
-  if (nameField) nameField.onchange = () => actions.appearance({ name: nameField.value.trim() || 'Player' });
+  wireLookPanel(state, meId, el, actions);
   const mapBtn = $('#mapBtn', el);
   if (mapBtn) mapBtn.onclick = () => { sfx.click(); openMapModal(state, actions); };
   const balanceBtn = $('#balanceBtn', el);
@@ -440,6 +540,83 @@ function renderSettings(state, meId, el, actions) {
   if (startBtn) startBtn.onclick = () => actions.start();
   const botBtn = $('#botBtn', el);
   if (botBtn) botBtn.onclick = () => { sfx.click(); actions.addBot(); };
+}
+
+/**
+ * "1 away — Venice is with Ravi". A set you nearly hold is the most valuable
+ * thing on your board, so the missing street is named next to the group it
+ * belongs to, with the trade that would finish it one tap away.
+ */
+function oneAwayRow(state, meId, key) {
+  const group = state.map.groups[key];
+  if (!group || group.length < 2) return '';
+  const missing = group.filter((i) => state.ownership[i]?.owner !== meId);
+  if (missing.length !== 1) return '';
+
+  const i = missing[0];
+  const name = escapeHtml(state.map.tiles[i].name);
+  const holder = state.players.find((p) => p.id === state.ownership[i]?.owner);
+  if (!holder) {
+    return `<div class="one-away"><span>1 away — <b>${name}</b> is still with the bank</span></div>`;
+  }
+  const dealable = state.status === 'playing' && !holder.bankrupt && holder.id !== meId;
+  return `<div class="one-away">
+      <span>1 away — <b>${name}</b> is with ${escapeHtml(holder.name)}</span>
+      ${dealable ? `<button class="btn tiny gold" data-ask="${i}" data-ask-to="${escapeHtml(holder.id)}">Ask for it</button>` : ''}
+    </div>`;
+}
+
+/**
+ * Owing money turns the panel into a scavenger hunt through your own deeds.
+ * This puts the shortfall on top and the biggest levers under it, so paying up
+ * is a few taps rather than a search.
+ */
+function raiseCashPanel(state, meId) {
+  const d = state.turn?.phase === 'debt' ? state.turn.debt : null;
+  if (state.status !== 'playing' || !d || d.debtor !== meId) return '';
+
+  const cash = state.players.find((p) => p.id === meId)?.money || 0;
+  const short = Math.max(0, (d.amount || 0) - cash);
+
+  const moves = [];
+  Object.entries(state.ownership).forEach(([key, o]) => {
+    if (o.owner !== meId) return;
+    const i = Number(key);
+    const t = state.map.tiles[i];
+    if (canSellOn(state, meId, i)) {
+      moves.push({ attr: 'sell', i, value: Math.floor((t.houseCost || 0) / 2), icon: '🏠', what: `Sell a building on ${t.name}` });
+    }
+    if (canMortgage(state, meId, i)) {
+      moves.push({ attr: 'mort', i, value: Math.floor((t.price || 0) / 2), icon: '🏦', what: `Mortgage ${t.name}` });
+    }
+  });
+  moves.sort((a, b) => b.value - a.value);
+  const reach = moves.reduce((sum, m) => sum + m.value, 0);
+
+  const head = short === 0
+    ? `<div class="raise-line good-text">You can cover it — hit <b>Pay ${money(d.amount)}</b> on the board.</div>`
+    : `<div class="raise-line">Still to raise <b class="bad-text">${money(short)}</b>
+         <span class="dim small">of ${money(d.amount)}</span></div>`;
+
+  const list = moves.length
+    ? moves.slice(0, 8).map((m) => `<div class="raise-row">
+        <span class="raise-what">${m.icon} ${escapeHtml(m.what)}</span>
+        <button class="btn tiny gold" data-${m.attr}="${m.i}">+${money(m.value)}</button>
+      </div>`).join('')
+    : '<div class="empty small">Nothing left to sell or mortgage — a trade is the only way out.</div>';
+
+  // Say it straight when the deeds don't add up: a hopeful list would only
+  // waste the taps that are left.
+  const foot = short > 0 && reach < short
+    ? `<div class="raise-line dim small">Everything above adds up to ${money(reach)} — you will need a trade to close the gap.</div>`
+    : '';
+
+  return `<div class="panel raise-panel">
+      <div class="panel-title">💸 You owe ${money(d.amount)}</div>
+      ${head}
+      ${short > 0 ? list : ''}
+      ${short > 0 ? foot : ''}
+    </div>`;
 }
 
 function renderMyStuff(state, meId, el, actions) {
@@ -475,13 +652,14 @@ function renderMyStuff(state, meId, el, actions) {
         </span>
       </div>`;
     }).join('');
-    return `<div class="group-head ${complete ? 'complete' : ''}">${title}${complete ? '<i>FULL SET</i>' : ''}</div>${rows}`;
+    return `<div class="group-head ${complete ? 'complete' : ''}">${title}${complete ? '<i>FULL SET</i>' : ''}</div>${rows}${oneAwayRow(state, meId, key)}`;
   }).join('');
 
   const incoming = state.trades.filter((t) => t.to === meId);
   const outgoing = state.trades.filter((t) => t.from === meId);
 
   el.innerHTML = `
+    ${raiseCashPanel(state, meId)}
     ${incoming.map((t) => tradeCard(state, t, meId)).join('')}
     ${outgoing.map((t) => `<div class="panel">
       <div class="panel-title">Offer sent</div>
@@ -502,7 +680,9 @@ function renderMyStuff(state, meId, el, actions) {
       <div class="pot-amount">${money(state.vacationPot)}</div>
     </div>` : ''}
 
-    ${state.status === 'ended' && state.hostId === meId ? '<button class="btn primary wide" id="rematchBtn">🔁 Play again</button>' : ''}
+    ${state.status === 'ended' && state.hostId === meId
+      ? '<button class="btn primary wide wrap" id="rematchBtn">🔁 Play again with the same players</button>'
+      : ''}
   `;
 
   el.querySelectorAll('[data-open]').forEach((row) => {
@@ -526,6 +706,14 @@ function renderMyStuff(state, meId, el, actions) {
   });
   el.querySelectorAll('[data-decline]').forEach((b) => {
     b.onclick = () => { sfx.click(); actions.respondTrade(Number(b.dataset.decline), false); };
+  });
+  // "1 away" → the composer opens with that street already on their side.
+  el.querySelectorAll('[data-ask]').forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      sfx.click();
+      openTradeModal(state, meId, b.dataset.askTo, actions, { get: { tiles: [Number(b.dataset.ask)] } });
+    };
   });
   el.querySelectorAll('[data-negotiate]').forEach((b) => {
     b.onclick = () => {
@@ -591,6 +779,7 @@ export function renderCenter(state, meId, actions) {
   const turnPlayer = state.turn ? state.players.find((p) => p.id === state.turn.playerId) : null;
   const myTurn = state.turn?.playerId === meId;
   cardEl.innerHTML = '';
+  syncQuickCountdown(state.status === 'lobby' && state.quick ? state.quickStartAt : null);
 
   const on = (id, fn, sound) => {
     const b = $(id);
@@ -601,12 +790,18 @@ export function renderCenter(state, meId, actions) {
   if (state.status === 'lobby') {
     const seated = state.players.length;
     const seats = state.settings.maxPlayers;
-    actionEl.innerHTML = state.hostId === meId
-      ? `<button class="btn primary big" id="cStart">▶ Start Game</button>`
-      : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
+    // A Quick Play table deals itself in on its own clock, so it shows the
+    // wait instead of controls nobody at this table owns.
+    const searching = !!(state.quick && state.quickStartAt);
+    actionEl.innerHTML = searching
+      ? `<div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
+         <div class="quick-count">Starting in <b id="quickCount">…</b></div>`
+      : state.hostId === meId
+        ? '<button class="btn primary big" id="cStart">▶ Start Game</button>'
+        : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
     statusEl.innerHTML = `
       <div class="lobby-head">
-        <div class="room-code">Room <b>${escapeHtml(state.id)}</b></div>
+        <div class="room-code">${searching ? '⚡ Quick Play' : `Room <b>${escapeHtml(state.id)}</b>`}</div>
         <div class="lobby-map">${state.map.icon} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
       </div>
       <div class="seat-dots">${Array.from({ length: seats }, (_, i) => {
@@ -617,6 +812,7 @@ export function renderCenter(state, meId, actions) {
       }).join('')}</div>
       <div class="dim small">${seated} of ${seats} seats taken</div>`;
     on('#cStart', actions.start);
+    paintQuickCountdown();
     return;
   }
 
@@ -684,7 +880,7 @@ export function renderCenter(state, meId, actions) {
     html = `<button class="btn good big" id="cPayDebt" ${me.money < d.amount ? 'disabled' : ''}>Pay ${money(d.amount)}</button>
             <button class="btn bad wide" id="cBankrupt">Declare bankruptcy</button>`;
     status = `<div class="alert">You owe <b>${money(d.amount)}</b>${creditor ? ` to <b style="color:${creditor.color}">${escapeHtml(creditor.name)}</b>` : ' to the bank'}</div>
-      <div class="dim small">Sell buildings, mortgage streets or trade to raise the cash.</div>`;
+      <div class="dim small">Your properties panel lists the fastest ways to raise it.</div>`;
   } else if (t.phase === 'action' && t.pending?.type === 'buy') {
     const tile = state.map.tiles[t.pending.tile];
     cardEl.innerHTML = deedMarkup(state, t.pending.tile, { compact: true }) || '';
@@ -729,6 +925,27 @@ function phaseHint(state, p) {
   if (t.phase === 'action') return 'deciding on a property…';
   if (t.phase === 'roll') return p.jail ? 'locked up' : 'about to roll…';
   return 'wrapping up…';
+}
+
+// ──────────────────────────────────────────────── quick play countdown ──
+// The deal-in deadline rides along with the state, but the seconds are counted
+// here: a state push can be a minute old after a sleeping tab, and a number
+// frozen mid-countdown reads as a table that has given up on you.
+let quickEndsAt = null;
+let quickTimer = null;
+
+function paintQuickCountdown() {
+  const el = document.getElementById('quickCount');
+  if (!el) return; // the searching state isn't on screen
+  const secs = quickEndsAt ? Math.max(0, Math.ceil((quickEndsAt - Date.now()) / 1000)) : 0;
+  el.textContent = secs ? `${secs}s` : 'a moment';
+}
+
+function syncQuickCountdown(endsAt) {
+  quickEndsAt = endsAt || null;
+  paintQuickCountdown();
+  if (quickEndsAt && !quickTimer) quickTimer = setInterval(paintQuickCountdown, 250);
+  else if (!quickEndsAt && quickTimer) { clearInterval(quickTimer); quickTimer = null; }
 }
 
 // ─────────────────────────────────────────────────────────── turn clock ──
@@ -1294,6 +1511,10 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       <span id="tradeVerdict" class="dim"></span>
       <span>You get <b id="getTotal">$0</b></span>
     </div>
+    <div class="trade-tools">
+      <button class="btn small" type="button" id="tBalance">⚖️ Balance it</button>
+      <span class="dim small">Tops up the lighter side with cash, as far as that wallet goes.</span>
+    </div>
     <div class="modal-actions">
       <button class="btn ghost" id="tCancel">Cancel</button>
       <button class="btn primary" id="tSend">${prefill?.counterOf != null ? 'Send counter-offer' : 'Send offer'}</button>
@@ -1339,6 +1560,33 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
         : diff > 0 ? `+${money(diff)} your way` : `${money(-diff)} in their favour`;
       v.className = !give && !get ? 'dim' : Math.abs(diff) < 25 ? 'dim' : diff > 0 ? 'good-text' : 'bad-text';
     };
+    /**
+     * Put cash on whichever side is offering less, until the verdict reads
+     * even. The payer can only stake what they actually hold, so a gap their
+     * wallet can't close stays visible in the verdict instead of being papered
+     * over — a deal that reads "even" has to be one.
+     */
+    const balance = () => {
+      const goods = (side) => side.cards * 50
+        + side.tiles.reduce((sum, i) => sum + state.map.tiles[i].price, 0);
+      const gap = goods(collect('get')) - goods(collect('give'));
+      const light = gap > 0 ? 'give' : 'get';   // getting more means you top up
+      const heavy = gap > 0 ? 'get' : 'give';
+
+      const heavyEl = root.querySelector(`input[data-cash="${heavy}"]`);
+      if (heavyEl) heavyEl.value = 0;
+      const lightEl = root.querySelector(`input[data-cash="${light}"]`);
+      const owed = Math.abs(gap);
+      const paid = lightEl ? Math.min(owed, Math.max(0, Number(lightEl.max) || 0)) : 0;
+      if (lightEl) lightEl.value = paid;
+      refresh();
+
+      const payer = light === 'give' ? me : them;
+      if (owed - paid > 0) {
+        toast(`${payer.name} is ${money(owed - paid)} short — that is as even as this deal gets`);
+      }
+    };
+
     // While the composer is open on their offer, they can see you're reading it.
     const watching = prefill?.counterOf != null;
     if (watching) actions.tradeViewing?.(prefill.counterOf, true);
@@ -1368,6 +1616,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
     root.querySelectorAll('input').forEach((i) => { i.oninput = refresh; i.onchange = refresh; });
     refresh();
 
+    $('#tBalance', root).onclick = () => { sfx.click(); balance(); };
     $('#tCancel', root).onclick = () => { stopWatching(); closeModal(); };
     $('#tSend', root).onclick = () => {
       sfx.trade();
@@ -1454,9 +1703,11 @@ export function showGameOver(state, meId, actions) {
       <span class="rank-name">${escapeHtml(p.name)}</span>
       <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.netWorth)}</span>
     </div>`).join('')}
-    <div class="modal-actions">
+    <div class="modal-actions go-actions">
+      ${state.hostId === meId
+        ? '<button class="btn primary big wrap" id="gAgain">🔁 Play again with the same players</button>'
+        : '<div class="dim small go-wait">Sit tight — the host can deal the same table again.</div>'}
       <button class="btn ghost" id="gClose">Close</button>
-      ${state.hostId === meId ? '<button class="btn primary" id="gAgain">🔁 Play again</button>' : ''}
     </div>`, (root) => {
     $('#gClose', root).onclick = closeModal;
     const again = $('#gAgain', root);

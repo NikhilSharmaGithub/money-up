@@ -164,24 +164,38 @@ struct ChatLogSheet: View {
         )
     }
 
+    /// Quick reactions first — one tap sends the emoji as a normal message, so
+    /// you can answer the table without ever leaving the board for long. The
+    /// rest of the palette follows in the same scroll.
     private func emoteRow(_ P: Palette) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(MMStatic.emotes, id: \.self) { emote in
-                    Button {
-                        store.sendChat(emote, channel: channel)
-                        Haptics.tap()
-                    } label: {
-                        Text(emote)
-                            .font(.system(size: 19))
-                            .frame(width: 36, height: 36)
-                            .background(P.sunken, in: Circle())
-                    }
+                ForEach(MMStatic.reactions, id: \.self) { reaction in
+                    emoteButton(reaction, size: 20, tint: P.goldSoft)
+                }
+                Rectangle()
+                    .fill(P.rule)
+                    .frame(width: 1, height: 20)
+                    .padding(.horizontal, 2)
+                ForEach(Array(MMStatic.emotes.dropFirst(MMStatic.reactions.count)), id: \.self) { emote in
+                    emoteButton(emote, size: 18, tint: P.sunken)
                 }
             }
             .padding(.horizontal, 12)
         }
         .padding(.vertical, 4)
+    }
+
+    private func emoteButton(_ emote: String, size: CGFloat, tint: Color) -> some View {
+        Button {
+            store.sendChat(emote, channel: channel)
+            Haptics.tap()
+        } label: {
+            Text(emote)
+                .font(.system(size: size))
+                .frame(width: 36, height: 36)
+                .background(tint, in: Circle())
+        }
     }
 
     private func inputBar(_ P: Palette) -> some View {
@@ -407,17 +421,11 @@ struct GameOverSheet: View {
 
                     winnerHeadline(P)
 
+                    rematchAction(P)
+
                     worthChartCard(P)
 
                     standingsCard(P)
-
-                    if store.isHost {
-                        Button("🔁  Play again") {
-                            store.rematch()
-                            dismiss()
-                        }
-                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
-                    }
 
                     Button("Leave room") {
                         store.leaveRoom()   // RootView switches screens on roomId = nil
@@ -432,6 +440,25 @@ struct GameOverSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// The table is already assembled — running it back is one tap, and it
+    /// sits directly under the result where everyone is still looking.
+    @ViewBuilder
+    private func rematchAction(_ P: Palette) -> some View {
+        if store.isHost {
+            Button("🔁  Play again with the same players") {
+                store.rematch()
+                Haptics.tap()
+                dismiss()
+            }
+            .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+        } else {
+            Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+                .multilineTextAlignment(.center)
+        }
     }
 
     @ViewBuilder

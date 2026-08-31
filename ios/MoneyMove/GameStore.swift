@@ -58,6 +58,10 @@ final class GameStore: ObservableObject {
     @Published var reveal: String?
     private var revealTask: Task<Void, Never>?
     @Published var joinError: String?
+    /// A Quick Play match request is in flight. It only ever dims the Play now
+    /// button — create and join stay usable, so a slow server is never a wall.
+    @Published var quickSearching = false
+    private var quickTask: Task<Void, Never>?
 
     struct ToastMessage: Identifiable, Equatable {
         let id = UUID()
@@ -408,10 +412,45 @@ final class GameStore: ObservableObject {
         }
     }
 
+    /// Matchmaking: the server answers with a public table that is already
+    /// filling up (or opens a fresh one), and we join it like any other room.
+    func quickPlay() {
+        SoundKit.shared.warmUp()
+        guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
+        joinError = nil
+        quickSearching = true
+        socket.connect(to: url)
+        socket.emit("quickplay", [[String: String]()]) { [weak self] args in
+            Task { @MainActor in
+                guard let self else { return }
+                self.quickTask?.cancel()
+                self.quickSearching = false
+                if let dict = args.first as? [String: Any], let id = dict["roomId"] as? String {
+                    self.join(roomId: id)
+                } else {
+                    self.showToast("Matchmaking didn't answer — create or join a room instead", isError: true)
+                }
+            }
+        }
+        // A tap must never dead-end: if the ack never lands, say so out loud
+        // and hand the player back the normal ways in.
+        quickTask?.cancel()
+        quickTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled, self.quickSearching else { return }
+            self.quickSearching = false
+            // Drop the socket too: a retry loop left running would keep the
+            // landing screen looking busy long after we gave up.
+            self.socket.close()
+            self.showToast("Couldn't reach matchmaking — create or join a room instead", isError: true)
+        }
+    }
+
     func join(roomId id: String) {
         SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         joinError = nil
+        quickSearching = false
         roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
         lastRoom = roomId ?? ""
         state = nil
@@ -459,6 +498,8 @@ final class GameStore: ObservableObject {
         guests.forEach { $0.socket.close() }
         guests = []
         socket.close()
+        quickTask?.cancel()
+        quickSearching = false
         roomId = nil
         state = nil
         joinError = nil
@@ -573,6 +614,37 @@ final class GameStore: ObservableObject {
     var isHost: Bool { state?.hostId == meId }
     var isMyTurn: Bool { state?.isPlaying == true && localIds.contains(state?.turn?.playerId ?? "") }
     var currentPlayer: PlayerState? { state?.player(state?.turn?.playerId) }
+
+    /// Live standings by net worth, player id -> position. Recomputed from
+    /// whatever the last push said; ties fall back to seat order so two equal
+    /// fortunes don't swap badges on every tick.
+    var liveRanks: [String: Int] {
+        guard let state, state.isPlaying else { return [:] }
+        let ordered = state.players.enumerated()
+            .filter { !$0.element.isBankrupt }
+            .sorted { a, b in
+                let wa = a.element.netWorth ?? 0
+                let wb = b.element.netWorth ?? 0
+                return wa == wb ? a.offset < b.offset : wa > wb
+            }
+        var ranks: [String: Int] = [:]
+        for (i, entry) in ordered.enumerated() { ranks[entry.element.id] = i + 1 }
+        return ranks
+    }
+
+    /// Who plays after the current player — mirrors the server's rotation so
+    /// people can look up before the turn actually lands on them.
+    var nextUpId: String? {
+        guard let state, state.isPlaying, let currentId = state.turn?.playerId,
+              let idx = state.players.firstIndex(where: { $0.id == currentId }),
+              state.players.count > 1 else { return nil }
+        for step in 1...state.players.count {
+            let cand = state.players[(idx + step) % state.players.count]
+            guard cand.id != currentId, !cand.isBankrupt, (cand.skipTurns ?? 0) == 0 else { continue }
+            return cand.id
+        }
+        return nil
+    }
 
     func isLocal(_ id: String?) -> Bool { id.map { localIds.contains($0) } ?? false }
 

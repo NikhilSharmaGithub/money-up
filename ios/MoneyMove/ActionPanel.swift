@@ -22,7 +22,7 @@ struct ActionPanel: View {
             } else if store.state?.isPlaying == true {
                 waitingRow(P)
             } else if store.state?.isEnded == true, store.isHost {
-                Button("🔁  Play again") { store.rematch() }
+                Button("🔁  Play again with the same players") { store.rematch() }
                     .buttonStyle(MMButtonStyle(kind: .primary, big: true))
             }
         }

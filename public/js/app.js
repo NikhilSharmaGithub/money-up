@@ -221,40 +221,66 @@ $('#nameDiceBtn').addEventListener('click', async () => {
   storeName(name);
 });
 
-$('#createBtn').addEventListener('click', () => {
-  unlock(); sfx.click();
+const takeNickname = () => {
   nickname = $('#nickInput').value.trim().slice(0, 16) || 'Player';
   storeName(nickname);
+};
 
-  const btn = $('#createBtn');
+/**
+ * Both landing buttons do the same dance: a throwaway socket asks the server
+ * for a room id, then boot() opens the real one. Nothing here may dead-end —
+ * every way out puts the button back so the rest of the landing stays usable.
+ */
+function askForRoom(btn, busyLabel, event) {
   btn.disabled = true;
   btn.dataset.label ||= btn.innerHTML;
-  btn.innerHTML = '<span class="btn-ico">⏳</span> Creating…';
+  btn.innerHTML = busyLabel;
+
+  // Coming back to the landing later must not find it stuck on "Creating…".
+  const restore = () => { btn.disabled = false; btn.innerHTML = btn.dataset.label; };
 
   const s = connect({ timeout: 8000, reconnectionAttempts: 2 });
   let settled = false;
-  const giveUp = (why) => {
-    if (settled) return;
-    settled = true;
-    s.close();
-    btn.disabled = false;
-    btn.innerHTML = btn.dataset.label;
-    serverUnreachable(why);
-  };
-
-  const bail = setTimeout(() => giveUp('The game server did not respond.'), 9000);
-  s.on('connect_error', () => giveUp('Could not reach the game server.'));
-  s.emit('createRoom', {}, ({ roomId: id }) => {
+  let bail = null;
+  const giveUp = (why, reachable) => {
     if (settled) return;
     settled = true;
     clearTimeout(bail);
     s.close();
-    // Restore the button before leaving — coming back to the landing later
-    // must not find it stuck on "Creating…".
-    btn.disabled = false;
-    btn.innerHTML = btn.dataset.label;
-    go(id);
+    restore();
+    // A socket that opened and then went quiet is a server that is up but
+    // unhappy — pointing at the "set your server URL" form would be a lie.
+    if (reachable) toast(why, 'error');
+    else serverUnreachable(why);
+  };
+
+  bail = setTimeout(() => giveUp(s.connected
+    ? 'That table never came back. Try again, or create a private game.'
+    : 'The game server did not respond.', s.connected), 9000);
+  s.on('connect_error', () => giveUp('Could not reach the game server.', false));
+  s.emit(event, {}, ({ roomId: id } = {}) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(bail);
+    s.close();
+    restore();
+    if (!id) return toast('No table came back — try again in a moment.', 'error');
+    return go(id);
   });
+}
+
+// Quick Play: the server hands back a public table that is already filling up,
+// or opens a fresh one — either way it is one tap to a seat.
+$('#quickBtn').addEventListener('click', () => {
+  unlock(); sfx.click();
+  takeNickname();
+  askForRoom($('#quickBtn'), '<span class="btn-ico">⏳</span> Finding a table…', 'quickplay');
+});
+
+$('#createBtn').addEventListener('click', () => {
+  unlock(); sfx.click();
+  takeNickname();
+  askForRoom($('#createBtn'), '<span class="btn-ico">⏳</span> Creating…', 'createRoom');
 });
 
 /**
@@ -297,8 +323,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
 $('#joinForm').addEventListener('submit', (e) => {
   e.preventDefault();
   unlock(); sfx.click();
-  nickname = $('#nickInput').value.trim().slice(0, 16) || 'Player';
-  storeName(nickname);
+  takeNickname();
   const code = $('#codeInput').value.trim().toLowerCase();
   if (code) go(code);
 });
@@ -571,9 +596,12 @@ window.addEventListener('beforeunload', (e) => {
   e.returnValue = '';
 });
 
-const EMOTES = ['👍', '😂', '😱', '🔥', '💸', '🎲', '😭', '🤝', '🏠', '🤡'];
+// Quick reactions: a tap posts the emoji as an ordinary chat message, so it
+// lands in the same channel the player is reading.
+const REACTIONS = ['👍', '😂', '😱', '🤝', '🔥'];
 const emoteRow = $('#emoteRow');
-emoteRow.innerHTML = EMOTES.map((e) => `<button class="emote" type="button">${e}</button>`).join('');
+emoteRow.innerHTML = REACTIONS.map((e) =>
+  `<button class="emote" type="button" title="Send ${e}" aria-label="Send ${e}">${e}</button>`).join('');
 emoteRow.querySelectorAll('.emote').forEach((b) => {
   b.onclick = () => { sfx.click(); actions.chat(b.textContent, chatChannel); };
 });

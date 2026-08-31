@@ -419,20 +419,34 @@ io.on('connection', (socket) => {
     return !res?.error;
   };
 
-  socket.on('createRoom', (payload = {}, cb) => {
+  // One bad message must never take the process down with it. Socket.IO
+  // handlers run outside any request lifecycle, so an uncaught throw here is a
+  // crashed server for everyone, not a failed action for one player.
+  const safely = (label, fn) => (...args) => {
+    try {
+      return fn(...args);
+    } catch (err) {
+      console.error(`socket ${label} failed:`, err);
+      fail('Something went wrong with that action');
+      return undefined;
+    }
+  };
+
+
+  socket.on('createRoom', safely('createRoom', (payload = {}, cb) => {
     const id = newRoomId();
     getRoom(id);
     if (typeof cb === 'function') cb({ roomId: id });
     else socket.emit('roomCreated', { roomId: id });
-  });
+  }));
 
-  socket.on('quickplay', (payload = {}, cb) => {
+  socket.on('quickplay', safely('quickplay', (payload = {}, cb) => {
     const room = quickMatchRoom();
     if (typeof cb === 'function') cb({ roomId: room.id });
     else socket.emit('roomCreated', { roomId: room.id });
-  });
+  }));
 
-  socket.on('join', ({ roomId, token, name, flag } = {}) => {
+  socket.on('join', safely('join', ({ roomId, token, name, flag } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     roomId = String(roomId).toLowerCase().slice(0, 12);
     room = getRoom(roomId);
@@ -466,13 +480,13 @@ io.on('connection', (socket) => {
     }
     socket.emit('you', { playerId, roomId });
     socket.emit('state', stateFor(room.serialize(), room, playerId));
-  });
+  }));
 
-  const guard = (fn) => (...args) => {
+  const guard = (fn) => safely('action', (...args) => {
     if (!room || !playerId) return fail('Join a room first');
     room.lastSeen = Date.now();
     return fn(...args);
-  };
+  });
 
   socket.on('appearance', guard((d = {}) => room.updateAppearance(playerId, d)));
   socket.on('settings', guard((d = {}) => room.updateSettings(playerId, d)));

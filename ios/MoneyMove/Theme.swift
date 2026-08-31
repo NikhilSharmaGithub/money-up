@@ -374,7 +374,9 @@ enum MMStatic {
         "🇹🇭", "🇻🇳", "🇵🇭", "🇮🇩", "🇵🇰", "🇧🇩", "🇱🇰", "🇳🇵", "🇦🇺", "🇳🇿",
         "🇨🇦", "🇲🇽", "🇦🇷", "🇨🇱", "🇨🇴", "🇷🇺", "🇸🇬", "🇲🇾", "🏴‍☠️", "🌍",
     ]
-    static let emotes = ["👍", "😂", "😱", "🔥", "💸", "🎲", "😭", "🤝", "🏠", "🤡"]
+    /// One-tap reactions: the five that answer almost anything at a table.
+    static let reactions = ["👍", "😂", "😱", "🤝", "🔥"]
+    static let emotes = reactions + ["💸", "🎲", "😭", "🏠", "🤡"]
     static let playerColors = [
         "#4ade80", "#60a5fa", "#f472b6", "#fbbf24",
         "#a78bfa", "#fb7185", "#22d3ee", "#f97316",

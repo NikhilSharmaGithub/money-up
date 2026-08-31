@@ -8,6 +8,10 @@ struct GameState: Codable, Equatable {
     var id: String
     var status: String                      // "lobby" | "playing" | "ended"
     var hostId: String?
+    /// This table came out of Quick Play matchmaking.
+    var quick: Bool?
+    /// Epoch ms the matchmade table deals itself in; nil once it has.
+    var quickStartAt: Double?
     var settings: GameSettings
     var mapId: String?
     var map: MapData
@@ -36,6 +40,9 @@ struct GameState: Codable, Equatable {
     func owner(of tile: Int) -> TileOwnership? { ownership[String(tile)] }
 
     var isLobby: Bool { status == "lobby" }
+    /// A matchmade table still filling up: the seats and the clock are the
+    /// whole story, so the host controls stay out of the way.
+    var isQuickWaiting: Bool { isLobby && quick == true && quickStartAt != nil }
     var isPlaying: Bool { status == "playing" }
     var isEnded: Bool { status == "ended" }
 }

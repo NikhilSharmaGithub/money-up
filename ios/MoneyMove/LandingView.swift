@@ -83,9 +83,12 @@ struct LandingView: View {
     // MARK: - tabs
 
     @ViewBuilder private func playTab(_ P: Palette) -> some View {
-        let busy = store.connection == .connecting
+        // Quick Play does its own waiting — it must never grey out the other
+        // ways into a game while it's looking.
+        let busy = store.connection == .connecting && !store.quickSearching
         header(P)
         continueCard(P)
+        quickPlayCard(P)
         playCard(P, busy: busy)
         publicRoomsCard(P)
     }
@@ -494,6 +497,40 @@ struct LandingView: View {
         }
     }
 
+    // MARK: - quick play
+
+    /// The shortest path to a table: one tap and the server seats you wherever
+    /// people are already waiting. It never traps anyone — while the request is
+    /// in flight only this button waits, create and join stay live below.
+    private func quickPlayCard(_ P: Palette) -> some View {
+        let searching = store.quickSearching
+        return MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 9) {
+                Button {
+                    Haptics.tap()
+                    SoundKit.shared.click()
+                    store.quickPlay()
+                } label: {
+                    HStack(spacing: 9) {
+                        if searching {
+                            ProgressView().tint(P.accentInk)
+                        }
+                        Text(searching ? "Finding a table…" : "⚡️  Play now")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                .disabled(searching)
+
+                Text(searching
+                     ? "Looking for a table with room…"
+                     : "Straight into a game with whoever else is playing right now.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+        }
+    }
+
     // MARK: - create / join
 
     private func playCard(_ P: Palette, busy: Bool) -> some View {
@@ -524,7 +561,7 @@ struct LandingView: View {
                 }
 
                 Button("🎲  Create a private game") { store.createRoom() }
-                    .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                     .disabled(busy)
 
                 orDivider(P)

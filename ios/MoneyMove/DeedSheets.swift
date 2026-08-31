@@ -342,6 +342,9 @@ struct DeedSheet: View {
 struct PropertiesSheet: View {
     /// Hands a preselected tile set to the trade flow (picker → composer).
     var openTrade: ((Set<Int>) -> Void)? = nil
+    /// Skips the picker: opens the composer at one player, already asking for
+    /// the tiles handed over here.
+    var askFor: ((String, Set<Int>) -> Void)? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -381,6 +384,122 @@ struct PropertiesSheet: View {
 
     @ViewBuilder
     private func content(_ P: Palette) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            raiseCashCard(P)
+            propertyList(P)
+        }
+    }
+
+    // MARK: - raising cash
+
+    /// Owing money turns this sheet into a rescue plan: what is still missing,
+    /// then the biggest sources of cash first — so paying up is a few taps
+    /// rather than a hunt down the list.
+    @ViewBuilder
+    private func raiseCashCard(_ P: Palette) -> some View {
+        if let turn = store.state?.turn, turn.phase == "debt",
+           let debt = turn.debt, debt.debtor == store.activeId {
+            let cash = store.me?.money ?? 0
+            let short = max(0, debt.amount - cash)
+            let options = raiseOptions
+            let raisable = options.reduce(0) { $0 + $1.amount }
+
+            MMCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    PanelTitle(short > 0 ? "Still to raise" : "You can cover it")
+                    Text(money(short > 0 ? short : debt.amount))
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .foregroundStyle(short > 0 ? P.bad : P.good)
+                    Text(short > 0
+                         ? "You owe \(money(debt.amount)) and hold \(money(cash))."
+                         : "Close this and pay the \(money(debt.amount)).")
+                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+
+                    if short > 0 {
+                        if options.isEmpty {
+                            Text("Nothing left to sell or mortgage.")
+                                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(P.ink2)
+                        } else {
+                            VStack(spacing: 6) {
+                                ForEach(options.prefix(6)) { option in
+                                    raiseRow(option, P)
+                                }
+                            }
+                            Text(raisable >= short
+                                 ? "Biggest first — these add up to \(money(raisable))."
+                                 : "These add up to \(money(raisable)); selling buildings first can unlock more.")
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private struct RaiseOption: Identifiable {
+        let id: String
+        let amount: Int
+        let label: String
+        let action: () -> Void
+    }
+
+    /// Every legal way this seat can turn property into cash right now, worth
+    /// first. Mortgaging is blocked while buildings stand, so the list simply
+    /// re-reads itself after each tap.
+    private var raiseOptions: [RaiseOption] {
+        var out: [RaiseOption] = []
+        for tile in store.myTiles().compactMap({ store.tile($0) }) {
+            let i = tile.index
+            let houses = store.state?.owner(of: i)?.houseCount ?? 0
+            if store.canSellHouse(i), let cost = tile.houseCost, cost > 0 {
+                out.append(RaiseOption(
+                    id: "sell-\(i)",
+                    amount: cost / 2,
+                    label: houses == 5 ? "Sell the hotel on \(tile.name)" : "Sell a house on \(tile.name)",
+                    action: { store.sellHouse(i) }
+                ))
+            }
+            if store.canMortgage(i), let price = tile.price, price > 0 {
+                out.append(RaiseOption(
+                    id: "mortgage-\(i)",
+                    amount: price / 2,
+                    label: "Mortgage \(tile.name)",
+                    action: { store.mortgage(i) }
+                ))
+            }
+        }
+        return out.sorted { $0.amount == $1.amount ? $0.id < $1.id : $0.amount > $1.amount }
+    }
+
+    private func raiseRow(_ option: RaiseOption, _ P: Palette) -> some View {
+        Button {
+            option.action()
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 8) {
+                Text(option.label)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text("+\(money(option.amount))")
+                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.good)
+            }
+            .padding(.vertical, 9)
+            .padding(.horizontal, 11)
+            .background(P.sunken, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - the list
+
+    @ViewBuilder
+    private func propertyList(_ P: Palette) -> some View {
         let mine = store.myTiles().compactMap { store.tile($0) }
 
         if mine.isEmpty {
@@ -475,12 +594,49 @@ struct PropertiesSheet: View {
                         .background(fullSet ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
                 }
             }
+            if let groupKey, let progress, progress.owned == progress.total - 1 {
+                oneAwayLine(groupKey, P)
+            }
             VStack(spacing: 8) {
                 ForEach(tiles) { tile in
                     tileRow(tile, fullSet: fullSet, P: P)
                 }
             }
         }
+    }
+
+    /// The last street of a set, and who is sitting on it — with the ask ready
+    /// to send. Holding three of four is the moment a trade is worth making.
+    @ViewBuilder
+    private func oneAwayLine(_ groupKey: String, _ P: Palette) -> some View {
+        if let missing = missingTile(in: groupKey), let tile = store.tile(missing) {
+            let holder = store.state?.owner(of: missing)?.owner
+            let holderName = holder.flatMap { store.state?.player($0)?.name }
+            HStack(spacing: 8) {
+                Text("🎯").font(.system(size: 13))
+                Text(holderName.map { "1 away — \(tile.name) is with \($0)" }
+                     ?? "1 away — \(tile.name) is still with the bank")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                if let askFor, let holder, holder != store.activeId {
+                    Button("Ask for it") { askFor(holder, [missing]) }
+                        .buttonStyle(MMButtonStyle(kind: .gold))
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(P.goldSoft.opacity(0.6), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(P.gold.opacity(0.5), lineWidth: 1))
+        }
+    }
+
+    /// The one tile of this group the player doesn't hold.
+    private func missingTile(in groupKey: String) -> Int? {
+        guard let idxs = store.state?.map.groups?[groupKey] else { return nil }
+        let missing = idxs.filter { store.state?.owner(of: $0)?.owner != store.activeId }
+        return missing.count == 1 ? missing.first : nil
     }
 
     /// What this tile earns per landing right now — mirrors server rentFor().

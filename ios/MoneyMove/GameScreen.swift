@@ -7,7 +7,7 @@ import SwiftUI
 enum ActiveSheet: Identifiable {
     case deed(Int)
     case properties
-    case trade(from: String, to: String, give: Set<Int>)  // proposing seat → target
+    case trade(from: String, to: String, give: Set<Int>, want: Set<Int>)  // proposing seat → target
     case tradePicker(from: String, give: Set<Int>)        // choose who to trade with first
     case counter(TradeOffer)                              // negotiate an incoming offer
     case chatLog(Int)       // initial tab: 0 chat, 1 log
@@ -18,7 +18,7 @@ enum ActiveSheet: Identifiable {
         switch self {
         case .deed(let i): "deed-\(i)"
         case .properties: "properties"
-        case .trade(let f, let t, _): "trade-\(f)-\(t)"
+        case .trade(let f, let t, _, _): "trade-\(f)-\(t)"
         case .tradePicker(let f, _): "tradepicker-\(f)"
         case .counter(let t): "counter-\(t.id)"
         case .chatLog(let t): "chatlog-\(t)"
@@ -71,7 +71,7 @@ struct GameScreen: View {
                             PlayerStrip(sideInset: 196, onTapPlayer: { p in
                                 if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                                    store.me?.isBankrupt != true {
-                                    sheet = .trade(from: store.activeId, to: p.id, give: [])
+                                    sheet = .trade(from: store.activeId, to: p.id, give: [], want: [])
                                 }
                             })
                             .padding(.horizontal, 196)
@@ -115,7 +115,7 @@ struct GameScreen: View {
                     PlayerStrip(onTapPlayer: { p in
                         if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
                            store.me?.isBankrupt != true {
-                            sheet = .trade(from: store.activeId, to: p.id, give: [])
+                            sheet = .trade(from: store.activeId, to: p.id, give: [], want: [])
                         }
                     })
 
@@ -138,16 +138,20 @@ struct GameScreen: View {
             Group {
                 switch which {
                 case .deed(let i): DeedSheet(tileIndex: i)
-                case .properties: PropertiesSheet(openTrade: { give in
-                    sheet = .tradePicker(from: store.activeId, give: give)
-                })
-                case .trade(let from, let target, let give):
-                    TradeSheet(fromId: from, targetId: target, preselectedGive: give)
+                case .properties: PropertiesSheet(
+                    openTrade: { give in
+                        sheet = .tradePicker(from: store.activeId, give: give)
+                    },
+                    askFor: { target, want in
+                        sheet = .trade(from: store.activeId, to: target, give: [], want: want)
+                    })
+                case .trade(let from, let target, let give, let want):
+                    TradeSheet(fromId: from, targetId: target, preselectedGive: give, preselectedGet: want)
                 case .counter(let trade):
                     TradeSheet(countering: trade)
                 case .tradePicker(let from, let give):
                     TradePickerSheet(fromId: from, give: give,
-                                     pick: { sheet = .trade(from: from, to: $0, give: give) })
+                                     pick: { sheet = .trade(from: from, to: $0, give: give, want: []) })
                 case .chatLog(let tab): ChatLogSheet(initialTab: tab)
                 case .settings: SettingsSheet()
                 case .gameOver: GameOverSheet()
@@ -272,8 +276,13 @@ struct GameScreen: View {
     @ViewBuilder private var bottomPanel: some View {
         if let state = store.state {
             if state.isLobby {
-                LobbyPanel(openSettings: { sheet = .settings })
-                    .frame(maxHeight: .infinity)
+                if state.isQuickWaiting {
+                    QuickMatchPanel()
+                        .frame(maxHeight: .infinity)
+                } else {
+                    LobbyPanel(openSettings: { sheet = .settings })
+                        .frame(maxHeight: .infinity)
+                }
             } else {
                 // The live feed lives inside the board's centre well now, so the
                 // board itself takes the full width and the dock stays at thumbs.
@@ -394,6 +403,10 @@ struct PlayerStrip: View {
 
     var body: some View {
         let P = Palette.current(scheme)
+        // Both fall straight out of the freshest state, so the standings and
+        // the heads-up re-read themselves on every push.
+        let ranks = store.liveRanks
+        let nextUp = store.nextUpId
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(store.state?.players ?? []) { p in
@@ -414,6 +427,12 @@ struct PlayerStrip: View {
                                 if p.isBot == true {
                                     Text("BOT").font(.system(size: 7, weight: .black))
                                         .foregroundStyle(P.ink3)
+                                }
+                                if let rank = ranks[p.id] {
+                                    rankBadge(rank, P)
+                                }
+                                if nextUp == p.id, !isTurn {
+                                    nextTag(store.isLocal(p.id), P)
                                 }
                             }
                             HStack(spacing: 4) {
@@ -454,6 +473,30 @@ struct PlayerStrip: View {
             .frame(minWidth: max(0, UIScreen.main.bounds.width - sideInset * 2))
         }
         .frame(height: 54)
+    }
+
+    /// Live position by net worth, crown on whoever is actually ahead.
+    private func rankBadge(_ rank: Int, _ P: Palette) -> some View {
+        HStack(spacing: 1.5) {
+            if rank == 1 { Text("👑").font(.system(size: 8.5)) }
+            Text("#\(rank)")
+                .font(.system(size: 8.5, weight: .black, design: .rounded))
+                .foregroundStyle(rank == 1 ? P.gold : P.ink3)
+        }
+        .padding(.vertical, 1.5)
+        .padding(.horizontal, 5)
+        .background(rank == 1 ? P.goldSoft : P.sunken, in: Capsule())
+    }
+
+    /// Enough warning to look up before the turn lands — no more than that.
+    private func nextTag(_ mine: Bool, _ P: Palette) -> some View {
+        Text(mine ? "YOU'RE NEXT" : "NEXT")
+            .font(.system(size: 7, weight: .black))
+            .kerning(0.5)
+            .foregroundStyle(mine ? P.gold : P.ink3)
+            .padding(.vertical, 1.5)
+            .padding(.horizontal, 5)
+            .background(mine ? P.goldSoft : P.sunken, in: Capsule())
     }
 }
 

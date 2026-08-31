@@ -209,6 +209,103 @@ struct LobbyPanel: View {
 }
 
 
+// MARK: - quick match waiting room
+
+/// A matchmade table that hasn't dealt itself in yet. There are no host
+/// controls to offer here, so the panel says the only two things that matter:
+/// who has landed so far, and how long the table waits.
+struct QuickMatchPanel: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let players = store.state?.players ?? []
+        let seats = max(players.count, store.state?.settings.maxPlayers ?? players.count)
+
+        VStack(spacing: 12) {
+            HStack(spacing: 9) {
+                ProgressView().tint(P.red).scaleEffect(0.9)
+                Text("Finding players…")
+                    .font(.system(size: 18, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+            }
+            .padding(.top, 4)
+
+            if let startAt = store.state?.quickStartAt {
+                countdown(startAt, P)
+            }
+
+            seatRow(players: players, seats: seats, P)
+
+            Text("\(players.count) of \(seats) seated")
+                .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                .foregroundStyle(P.ink2)
+
+            Text("The table deals itself in when the clock runs out — every seat gets filled either way.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+                .multilineTextAlignment(.center)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+    }
+
+    /// Counts down to the server's deadline the same way the turn clock does,
+    /// so a late join sees the real number rather than a fresh 20.
+    private func countdown(_ startAt: Double, _ P: Palette) -> some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let left = TurnClock.secondsLeft(startAt, at: context.date)
+            VStack(spacing: 1) {
+                Text(left > 0 ? "\(left)" : "…")
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(P.gold)
+                    .contentTransition(.numericText(countsDown: true))
+                    .animation(.snappy(duration: 0.2), value: left)
+                Text(left > 0 ? "seconds to kick-off" : "dealing you in")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .kerning(1)
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.gold.opacity(0.5), lineWidth: 1))
+        }
+    }
+
+    private func seatRow(players: [PlayerState], seats: Int, _ P: Palette) -> some View {
+        HStack(spacing: 8) {
+            ForEach(players) { p in
+                VStack(spacing: 3) {
+                    AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 38, emoji: p.avatar ?? "")
+                    Text(store.isLocal(p.id) ? "You" : p.name)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                }
+                .frame(width: 54)
+                .transition(.scale.combined(with: .opacity))
+            }
+            ForEach(0..<max(0, seats - players.count), id: \.self) { _ in
+                VStack(spacing: 3) {
+                    Circle()
+                        .stroke(P.rule2, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                        .frame(width: 38, height: 38)
+                    Text("open")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+                .frame(width: 54)
+            }
+        }
+        .animation(.spring(duration: 0.35), value: players.count)
+    }
+}
+
 // MARK: - lobby extras
 
 extension LobbyPanel {

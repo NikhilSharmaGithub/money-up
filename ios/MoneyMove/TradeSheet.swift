@@ -23,12 +23,12 @@ struct TradeSheet: View {
     @State private var giveCards: Int
     @State private var getCards: Int
 
-    init(fromId: String, targetId: String, preselectedGive: Set<Int> = []) {
+    init(fromId: String, targetId: String, preselectedGive: Set<Int> = [], preselectedGet: Set<Int> = []) {
         self.fromId = fromId
         self.targetId = targetId
         self.counterOf = nil
         _giveTiles = State(initialValue: preselectedGive)
-        _getTiles = State(initialValue: [])
+        _getTiles = State(initialValue: preselectedGet)
         _giveCash = State(initialValue: 0)
         _getCash = State(initialValue: 0)
         _giveCards = State(initialValue: 0)
@@ -95,6 +95,8 @@ struct TradeSheet: View {
                 header(target: target, P: P)
 
                 dealMeter(P)
+
+                balanceRow(P)
 
                 sideCard(
                     title: "You give",
@@ -198,6 +200,60 @@ struct TradeSheet: View {
         .padding(.vertical, 9)
         .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+
+    // MARK: - balance it
+
+    /// What the deal is short by, from the proposer's point of view: positive
+    /// means this side is getting the better end and owes the difference.
+    private var dealGap: Int {
+        sideWorth(tiles: getTiles, cash: getCash, cards: getCards)
+            - sideWorth(tiles: giveTiles, cash: giveCash, cards: giveCards)
+    }
+
+    /// The most cash the side that owes the difference can still put in.
+    private var balanceRoom: Int {
+        dealGap > 0
+            ? max(0, (fromPlayer?.money ?? 0) - giveCash)
+            : max(0, (store.state?.player(targetId)?.money ?? 0) - getCash)
+    }
+
+    /// Tops up the lighter side with cash until the meter reads even — but
+    /// only with money that side actually has. A deal that can't be paid isn't
+    /// a fair deal, so a short side stays visibly short.
+    @ViewBuilder private func balanceRow(_ P: Palette) -> some View {
+        let gap = dealGap
+        let needed = abs(gap)
+        let room = balanceRoom
+        if needed >= 25 {
+            HStack(spacing: 10) {
+                Text(room == 0
+                     ? (gap > 0 ? "You have no cash left to even this out." : "They have no cash left to even this out.")
+                     : room >= needed
+                        ? "Adds \(money(needed)) to \(gap > 0 ? "your" : "their") side"
+                        : "Only \(money(room)) spare — this gets as close as it can")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                if room > 0 {
+                    Button("⚖️  Balance it") { balance() }
+                        .buttonStyle(MMButtonStyle(kind: .gold))
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func balance() {
+        let gap = dealGap
+        guard gap != 0 else { return }
+        if gap > 0 {
+            giveCash = min(giveCash + gap, max(0, fromPlayer?.money ?? 0))
+        } else {
+            getCash = min(getCash - gap, max(0, store.state?.player(targetId)?.money ?? 0))
+        }
+        Haptics.tap()
     }
 
     // MARK: - one side of the deal
