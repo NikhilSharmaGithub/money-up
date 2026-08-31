@@ -346,6 +346,26 @@ function getRoom(id) {
   return room;
 }
 
+/**
+ * Find the quick-match table a player should drop into: the one that already
+ * has people waiting (fullest first, so tables fill instead of fragmenting),
+ * otherwise a fresh one on a 20-second fuse.
+ */
+function quickMatchRoom() {
+  const waiting = [...rooms.values()]
+    .filter((r) => r.quick && r.status === 'lobby' && r.players.length < r.settings.maxPlayers)
+    .sort((a, b) => b.players.length - a.players.length);
+  if (waiting.length) {
+    // Someone new arriving is worth a moment's grace for others to land too.
+    const room = waiting[0];
+    if (room.players.length === room.settings.maxPlayers - 1) room.armQuickStart(6);
+    return room;
+  }
+  const room = getRoom(newRoomId());
+  room.makeQuickMatch(20);
+  return room;
+}
+
 /** Team chat stays inside the team: strip other teams' messages per viewer. */
 function stateFor(base, room, viewerId) {
   if (!base.chat.some((m) => m.channel === 'team')) return base;
@@ -406,6 +426,12 @@ io.on('connection', (socket) => {
     else socket.emit('roomCreated', { roomId: id });
   });
 
+  socket.on('quickplay', (payload = {}, cb) => {
+    const room = quickMatchRoom();
+    if (typeof cb === 'function') cb({ roomId: room.id });
+    else socket.emit('roomCreated', { roomId: room.id });
+  });
+
   socket.on('join', ({ roomId, token, name, flag } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     roomId = String(roomId).toLowerCase().slice(0, 12);
@@ -433,6 +459,10 @@ io.on('connection', (socket) => {
         tokenSkin: emojiFor(wallet.equipped.token),
         avatar: emojiFor(wallet.equipped.avatar),
       });
+    }
+    if (room.quick && room.status === 'lobby'
+        && room.players.length >= room.settings.maxPlayers) {
+      room.startQuickMatch();
     }
     socket.emit('you', { playerId, roomId });
     socket.emit('state', stateFor(room.serialize(), room, playerId));

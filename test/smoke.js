@@ -617,5 +617,57 @@ console.log('\n▶ targeted rules');
   ok('trade cash clamps to what each side actually holds');
 }
 
+{
+  // Two bots, each one street short, each holding what the other needs. The
+  // brain should spot the swap and offer streets — not cash.
+  const room = new GameRoom('sw', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'x', name: 'X', isBot: true });
+  room.addPlayer({ id: 'y', name: 'Y', isBot: true });
+  room.hostId = 'x';
+  room.settings.randomizeOrder = false;
+  room.start('x');
+
+  const groups = Object.entries(room.map.groups).filter(([, g]) => g.length >= 2);
+  const [, gA] = groups[0];
+  const [, gB] = groups[1];
+  // X owns all of A but one — and that one sits with Y, and vice versa.
+  gA.forEach((i, n) => { room.ownership[i] = { owner: n === 0 ? 'y' : 'x', houses: 0, mortgaged: false }; });
+  gB.forEach((i, n) => { room.ownership[i] = { owner: n === 0 ? 'x' : 'y', houses: 0, mortgaged: false }; });
+
+  room.trades = [];
+  room.botMaybeTrade(room.player('x'));
+  const offer = room.trades[0];
+  if (!offer) fail('bot should have spotted the mutual swap');
+  else if (offer.give.money !== 0 || offer.give.tiles.length !== 1 || offer.get.tiles.length !== 1) {
+    fail(`swap should be street-for-street, got ${JSON.stringify(offer)}`);
+  } else if (offer.give.tiles[0] !== gB[0] || offer.get.tiles[0] !== gA[0]) {
+    fail('swap traded the wrong streets');
+  } else {
+    ok('bots offer the street-for-street swap that completes both sets');
+  }
+
+  // And the receiving bot should take an even swap that finishes its colour.
+  const before = room.trades.length;
+  room.botTradeReply(offer.id);
+  if (room.trades.length !== before - 1) fail('bot never answered the swap');
+  else if (room.own(gB[0])?.owner !== 'y') fail('bot turned down a set-completing swap');
+  else ok('bots accept a swap that completes their own set');
+}
+
+{
+  // Chat and names are masked server-side, so every client sees it the same.
+  const room = new GameRoom('cl', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'bhosdike' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  if (room.player('a').name !== 'Player') fail(`slur name should fall back, got ${room.player('a').name}`);
+  room.sendChat('b', 'you absolute sh1t, nice classic pass');
+  const last = room.chat[room.chat.length - 1].text;
+  if (last.includes('sh1t')) fail('profanity should be masked');
+  if (!last.includes('classic') || !last.includes('pass')) fail(`clean words were eaten: ${last}`);
+  ok('chat and names are filtered on the server');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);

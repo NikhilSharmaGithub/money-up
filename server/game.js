@@ -3,6 +3,7 @@
 
 import { getMap, GROUPS } from './maps.js';
 import { TREASURE, SURPRISE, shuffled } from './cards.js';
+import { banter, cleanText, isAllMasked } from './banter.js';
 
 export const COLORS = [
   '#4ade80', '#60a5fa', '#f472b6', '#fbbf24',
@@ -103,9 +104,10 @@ export class GameRoom {
   addPlayer({ id, name, isBot = false, flag = '' }) {
     if (this.players.length >= this.settings.maxPlayers) return { error: 'Room is full' };
     if (this.status !== 'lobby') return { error: 'Game already started' };
+    const clean = cleanText((name || 'Player').slice(0, 16));
     const player = {
       id,
-      name: (name || 'Player').slice(0, 16),
+      name: isAllMasked(clean) ? 'Player' : clean,
       color: this.freeColor(),
       flag: flag || '',
       team: null,
@@ -221,7 +223,10 @@ export class GameRoom {
   updateAppearance(id, { name, color, flag }) {
     const p = this.player(id);
     if (!p || this.status !== 'lobby') return;
-    if (name) p.name = name.slice(0, 16);
+    if (name) {
+      const clean = cleanText(name.slice(0, 16));
+      p.name = isAllMasked(clean) ? 'Player' : clean;
+    }
     if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
     if (color && COLORS.includes(color) && !this.players.some((x) => x.id !== id && x.color === color)) {
       p.color = color;
@@ -327,11 +332,48 @@ export class GameRoom {
     };
     this.recordWorth();
     this.say('Game started! Good luck.', 'system');
+    const greeter = this.players.filter((x) => this.autoPlayed(x));
+    if (greeter.length) {
+      this.botSay(greeter[Math.floor(Math.random() * greeter.length)], 'greet',
+        {}, { always: true, delay: 2200 });
+    }
     this.say(`${this.players[0].name}'s turn`, 'turn');
     this.armTurnTimer();
     this.push();
     this.maybeBot();
     return { ok: true };
+  }
+
+  // ---------------------------------------------------------- quick match --
+  /**
+   * Turn this room into a drop-in table: public, bot-backed, and on a short
+   * fuse. Whoever is queueing right now plays together; the fuse is what stops
+   * a lone player staring at an empty lobby.
+   */
+  makeQuickMatch(seconds = 20) {
+    this.quick = true;
+    this.settings.isPrivate = false;
+    this.settings.allowBots = true;
+    this.settings.maxPlayers = 4;
+    this.armQuickStart(seconds);
+  }
+
+  armQuickStart(seconds) {
+    clearTimeout(this.timers.quick);
+    if (this.status !== 'lobby') return;
+    this.quickStartAt = Date.now() + seconds * 1000;
+    this.timers.quick = setTimeout(() => this.startQuickMatch(), seconds * 1000);
+    this.timers.quick.unref?.();
+    this.push();
+  }
+
+  /** The fuse burnt down (or the table filled) — deal everyone in. */
+  startQuickMatch() {
+    clearTimeout(this.timers.quick);
+    this.quickStartAt = null;
+    if (this.status !== 'lobby' || !this.players.length) return;
+    this.hostId = this.players[0].id;
+    this.start(this.hostId);
   }
 
   // -------------------------------------------------------------- turn clock --
@@ -698,6 +740,10 @@ export class GameRoom {
           }
           const rent = this.rentFor(index, opts.payMultiplier);
           this.say(`${p.name} pays $${rent} rent to ${owner.name} for ${t.name}`, 'rent');
+          if (rent >= 120) {
+            this.botSay(owner, 'bigRentTaken');
+            this.botSay(p, 'bigRentPaid');
+          }
           this.charge(p, rent, owner, `for ${t.name}`);
         }
         break;
@@ -733,6 +779,7 @@ export class GameRoom {
   }
 
   sendToJail(p) {
+    this.botSay(p, 'jail');
     p.pos = this.cornerIndex('prison');
     p.jail = true;
     p.jailTurns = 0;
@@ -1180,6 +1227,7 @@ export class GameRoom {
       const label = this.winningTeam != null ? TEAMS[this.winningTeam].name : "Nobody";
       const roster = alive.map((p) => p.name).join(" & ");
       this.say(`🏆 Team ${label} wins the game! (${roster})`, "system");
+      this.botFarewell(alive);
     } else {
       if (alive.length > 1) return false;
       this.turnCount++;
@@ -1187,6 +1235,7 @@ export class GameRoom {
       this.status = "ended";
       this.winner = alive[0] || null;
       this.say(`🏆 ${this.winner ? this.winner.name : "Nobody"} wins the game!`, "system");
+      this.botFarewell(alive);
     }
     this.push();
     return true;
@@ -1208,6 +1257,9 @@ export class GameRoom {
       this.say(`${p.name} went bankrupt — assets return to the bank`, 'bankrupt');
     }
     p.money = 0;
+    for (const other of this.players) {
+      if (other.id !== p.id) this.botSay(other, 'bust', { name: p.name });
+    }
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
     // Drop them from any running auction so it can't stall on their bid.
@@ -1395,7 +1447,7 @@ export class GameRoom {
     const ch = channel === 'team' && this.teamsOn && p.team != null ? 'team' : 'all';
     const msg = {
       id: Math.random().toString(36).slice(2), name: p.name, color: p.color, flag: p.flag || '',
-      text: String(text).slice(0, 200), at: Date.now(),
+      text: cleanText(String(text).slice(0, 200)), at: Date.now(),
       channel: ch, team: ch === 'team' ? p.team : null,
     };
     this.chat.push(msg);
@@ -1472,27 +1524,97 @@ export class GameRoom {
    * Once per turn a bot will try to buy the one street it still needs to
    * complete a set, paying well over the odds for it.
    */
-  botMaybeTrade(p) {
-    if (p.money < 600) return;
-    if (this.trades.some((t) => t.from === p.id)) return;
+  /**
+   * A bot types something. Kept deliberately thin: one line at a time across
+   * the whole table, a long cooldown per bot, and most optional lines dropped
+   * on the floor — a bot that comments on everything reads as a machine.
+   */
+  botSay(p, kind, vars = {}, { delay = 1400, always = false } = {}) {
+    if (!p || !this.autoPlayed(p)) return;
+    this.chatter ??= { table: 0, per: {} };
+    const now = Date.now();
+    if (!always) {
+      if (Math.random() < 0.45) return;
+      if (now - this.chatter.table < 6000) return;
+      if (now - (this.chatter.per[p.id] || 0) < 25000) return;
+    }
+    const line = banter(kind, vars);
+    if (!line) return;
+    this.chatter.table = now;
+    this.chatter.per[p.id] = now;
+    // Typing takes a moment, and the pause is what sells it.
+    const timer = setTimeout(() => {
+      if (this.player(p.id)) this.sendChat(p.id, line, 'all');
+    }, delay + Math.random() * 900);
+    timer.unref?.();
+  }
 
+  /** Groups where this player holds everything but one street. */
+  nearSets(playerId) {
+    const out = [];
     for (const [group, idxs] of Object.entries(this.map.groups)) {
-      const mine = idxs.filter((i) => this.own(i)?.owner === p.id);
+      const mine = idxs.filter((i) => this.own(i)?.owner === playerId);
       if (mine.length !== idxs.length - 1) continue;
-      const missing = idxs.find((i) => this.own(i)?.owner && this.own(i).owner !== p.id);
-      if (missing === undefined) continue;
-      const holder = this.player(this.own(missing).owner);
-      if (!holder || holder.bankrupt) continue;
-      if (this.ownsFullGroup(holder.id, group)) continue;
+      const missing = idxs.find((i) => this.own(i)?.owner && this.own(i).owner !== playerId);
+      if (missing !== undefined) out.push({ group, missing, holder: this.own(missing).owner });
+    }
+    return out;
+  }
 
-      const tile = this.tile(missing);
+  botMaybeTrade(p) {
+    if (this.trades.some((t) => t.from === p.id)) return;
+    const wants = this.nearSets(p.id);
+    if (!wants.length) return;
+
+    // Best case: they hold the street I need and I hold the street they need.
+    // A straight swap costs neither of us cash and hands us both a colour, so
+    // it's the offer most likely to actually be taken.
+    for (const want of wants) {
+      const holder = this.player(want.holder);
+      if (!holder || holder.bankrupt) continue;
+      // The street I hand over has to come from a different colour — and one
+      // I'm not myself one short in. Swapping inside the group we're both
+      // chasing just passes the same problem back and forth.
+      const theirs = this.nearSets(holder.id).find((n) => (
+        this.own(n.missing)?.owner === p.id
+        && n.group !== want.group
+        && !wants.some((w) => w.group === n.group)
+      ));
+      if (!theirs) continue;
+      if ((this.own(want.missing).houses || 0) > 0 || (this.own(theirs.missing).houses || 0) > 0) continue;
+      this.proposeTrade(p.id, {
+        to: holder.id,
+        give: { money: 0, tiles: [theirs.missing], cards: 0 },
+        get: { money: 0, tiles: [want.missing], cards: 0 },
+      });
+      this.botSay(p, 'swap', {
+        name: holder.name,
+        mine: this.tile(want.missing).name,
+        yours: this.tile(theirs.missing).name,
+      }, { always: true, delay: 700 });
+      return;
+    }
+
+    // Otherwise buy it, and pay over the odds — a colour is worth more than
+    // the sticker price of the street that completes it.
+    if (p.money < 600) return;
+    for (const want of wants) {
+      const holder = this.player(want.holder);
+      if (!holder || holder.bankrupt) continue;
+      if (this.ownsFullGroup(holder.id, want.group)) continue;
+      if ((this.own(want.missing).houses || 0) > 0) continue;
+      const tile = this.tile(want.missing);
       const offer = Math.min(p.money - 300, Math.round(tile.price * 1.9));
       if (offer < tile.price) continue;
       this.proposeTrade(p.id, {
         to: holder.id,
         give: { money: offer, tiles: [], cards: 0 },
-        get: { money: 0, tiles: [missing], cards: 0 },
+        get: { money: 0, tiles: [want.missing], cards: 0 },
       });
+      // Ahead-of-me players get the friendly pressure; everyone else gets asked.
+      const leading = this.netWorth(holder) > this.netWorth(p) * 1.2;
+      this.botSay(p, leading ? 'nudge' : 'wantTile',
+        { name: holder.name, tile: tile.name }, { always: true, delay: 900 });
       return;
     }
   }
@@ -1535,6 +1657,15 @@ export class GameRoom {
     }
   }
 
+  /** gg from the table once the game is decided. */
+  botFarewell(winners) {
+    const won = new Set((winners || []).map((w) => w.id));
+    for (const p of this.players) {
+      this.botSay(p, won.has(p.id) ? 'win' : 'lost', {},
+        { always: Math.random() < 0.5, delay: 1200 });
+    }
+  }
+
   botTradeReply(tradeId) {
     const trade = this.trades.find((t) => t.id === tradeId);
     if (!trade) return;
@@ -1550,7 +1681,24 @@ export class GameRoom {
     };
     const incoming = valueOf(trade.give, bot);
     const outgoing = valueOf(trade.get, bot);
-    const accept = incoming >= outgoing * 1.15 && bot.money >= trade.get.money;
+
+    // What a street is worth depends entirely on what it finishes. Taking the
+    // deal that completes my colour is worth overpaying for; handing over the
+    // one that completes someone else's is worth being difficult about.
+    const completesForMe = this.nearSets(bot.id)
+      .some((n) => trade.give.tiles.includes(n.missing));
+    const completesForThem = this.nearSets(trade.from)
+      .some((n) => trade.get.tiles.includes(n.missing));
+
+    let bar = 1.15;
+    if (completesForMe) bar = 0.7;        // happily pay a premium for the set
+    if (completesForThem) bar = Math.max(bar, 1.6); // arming a rival costs extra
+    if (completesForMe && completesForThem) bar = 1.0; // an even swap suits us both
+
+    const accept = incoming >= outgoing * bar && bot.money >= trade.get.money;
+    const other = this.player(trade.from);
+    this.botSay(bot, accept ? 'accept' : 'decline', { name: other?.name || '' },
+      { always: true, delay: 500 });
     this.respondTrade(bot.id, tradeId, accept);
   }
 
@@ -1580,8 +1728,12 @@ export class GameRoom {
         jail: p.jail, jailTurns: p.jailTurns, getOutCards: p.getOutCards,
         flag: p.flag, team: p.team,
         tokenSkin: p.tokenSkin || '', avatar: p.avatar || '',
-        bankrupt: p.bankrupt, isBot: p.isBot, connected: p.connected,
-        botControlled: !!p.botControlled,
+        bankrupt: p.bankrupt,
+        // Quick-match tables are seeded with house players so nobody waits
+        // around; the lobby doesn't label who is who.
+        isBot: this.quick ? false : p.isBot,
+        connected: p.connected,
+        botControlled: this.quick ? false : !!p.botControlled,
         timedOut: !!p.timedOut, removedFor: p.removedFor || null,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),
       })),
@@ -1589,6 +1741,8 @@ export class GameRoom {
       turn: this.turn,
       auction: this.auction,
       trades: this.trades,
+      quick: !!this.quick,
+      quickStartAt: this.quickStartAt || null,
       log: this.log.slice(-60),
       chat: this.chat.slice(-50),
       vacationPot: this.vacationPot,
