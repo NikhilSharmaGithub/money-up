@@ -98,6 +98,9 @@ final class GameStore: ObservableObject {
     }()
 
     private func recordMatch(_ state: GameState, outcome: String? = nil) {
+        // A table with no seat of ours on it was only ever watched. Filing it
+        // as a loss would put games this device never played into History.
+        guard state.players.contains(where: { localIds.contains($0.id) }) else { return }
         let winnerName: String
         if let teamIdx = state.winningTeam, let team = state.teamInfo?[safe: teamIdx] {
             winnerName = "Team \(team.name)"
@@ -211,7 +214,14 @@ final class GameStore: ObservableObject {
             }
         case "joinFailed":
             if let dict = args.first as? [String: Any], let msg = dict["message"] as? String {
-                joinError = msg
+                // A table with no seat left still sends its state a beat later,
+                // so the player lands on a board they simply cannot touch. Say
+                // out loud that they are watching — the same line the web
+                // shows — instead of leaving them to work it out.
+                let spectating = dict["spectate"] as? Bool ?? false
+                showToast(spectating ? "\(msg) — you're watching this table 👀" : msg,
+                          isError: !spectating)
+                joinError = spectating ? nil : msg
             }
         default:
             break
@@ -339,6 +349,16 @@ final class GameStore: ObservableObject {
                 break
             }
         }
+        // …and it comes down again the moment the seat is back in play. A
+        // rematch resets everyone, and the explainer used to sit there over
+        // the fresh lobby blocking the whole screen.
+        // …and it comes down again once the seat is back in play, or once the
+        // game is over — "stay and watch how it ends" is a dead offer then,
+        // and the result sheet has to sit on a clean screen.
+        if timedOut, new.isEnded
+            || !new.players.contains(where: { $0.removedFor == "timeout" && localIds.contains($0.id) }) {
+            timedOut = false
+        }
 
         // game over sheet, once — the result lands in History and the win
         // may have paid out coins, so check the wallet with a celebration
@@ -453,6 +473,9 @@ final class GameStore: ObservableObject {
         quickSearching = false
         roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
         lastRoom = roomId ?? ""
+        // A new table starts with only this seat on the device; continueGame()
+        // reads the old count before calling in, so it keeps its guests.
+        lastGuests = 0
         state = nil
         lastTurnPlayer = nil
         if connection == .connected {
@@ -555,6 +578,17 @@ final class GameStore: ObservableObject {
     /// Walk out of a live game for good: the deeds go back to the bank, the
     /// seat stays as a spectator, and it costs a point of karma.
     func quitGame() { emit("quit") }
+
+    /// Hand a dropped player another minute. The server counts one vote per
+    /// seat, so a pass & play device speaks for every seat it holds — otherwise
+    /// the vote could never complete on a phone with two players on it.
+    func grantTime(_ playerId: String) {
+        for seat in localIds where seat != playerId {
+            emitAs(seat, "grantTime", [["id": playerId]])
+        }
+        Haptics.tap()
+    }
+
     func sendChat(_ text: String, channel: String = "all") { emit("chat", [text, channel]) }
 
     /// Team chat exists when teams are on and this player is actually on one.
@@ -647,6 +681,24 @@ final class GameStore: ObservableObject {
     }
 
     func isLocal(_ id: String?) -> Bool { id.map { localIds.contains($0) } ?? false }
+
+    /// Seats the table is being asked to wait for. Never one of this device's
+    /// own — the card is a decision about somebody else, and the player who
+    /// dropped is not the one who gets to vote themselves back in.
+    var awaitingSeats: [AwaitingSeat] {
+        guard let state, state.isPlaying else { return [] }
+        return (state.awaiting ?? []).filter { seat in
+            guard !isLocal(seat.id), let p = state.player(seat.id) else { return false }
+            // The moment they reconnect (or the chair is released) the row goes.
+            return p.connected != true && !p.isBankrupt && !p.wasRemoved
+        }
+    }
+
+    /// True once every seat this device holds has clicked for that player.
+    func hasGrantedTime(_ seat: AwaitingSeat) -> Bool {
+        let mine = localIds.subtracting([seat.id])
+        return !mine.isEmpty && mine.allSatisfy { seat.grantedIds.contains($0) }
+    }
 
     private func socket(for playerId: String) -> SocketIOClient {
         guests.first { $0.token == playerId }?.socket ?? socket

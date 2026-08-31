@@ -60,6 +60,9 @@ struct RootView: View {
         .overlay { cardPopupOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
         .overlay { revealOverlay }
+        // The transitions above only play if the animation lives on a view
+        // that CONTAINS them — hung any deeper and they simply pop in.
+        .animateOverlays(store)
         .preferredColorScheme(nil) // follow the system; dark is the house default at night
     }
 
@@ -78,7 +81,9 @@ struct RootView: View {
             .padding(.horizontal, 17)
             .background(toast.isError ? P.redDeep : P.ink.opacity(scheme == .light ? 1 : 0.25), in: Capsule())
             .background(.ultraThinMaterial, in: Capsule())
-            .padding(.bottom, 24)
+            // The hub's floating tab bar sits about 45pt above the safe area,
+            // and a toast landing behind it is a message nobody reads.
+            .padding(.bottom, store.roomId == nil ? 78 : 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .id(toast.id)
         }

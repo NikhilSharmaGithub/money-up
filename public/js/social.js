@@ -3,7 +3,7 @@
 
 import { api } from './net.js';
 import { escapeHtml } from './board.js';
-import { openDmModal } from './ui.js';
+import { openDmModal, confirmModal } from './ui.js';
 
 let myToken = '';
 
@@ -29,6 +29,8 @@ export async function initSocial({ token, name, flag, onToast, onJoin }) {
     const me = await post('/api/profile', { token, name, flag });
     myCode = me.code;
     $('#myCode').textContent = myCode;
+    // A blip on an earlier visit had hidden the card for good.
+    $('#friendsCard')?.classList.remove('hidden');
   } catch {
     // The server is unreachable — the friends card is useless, so hide it.
     $('#friendsCard')?.classList.add('hidden');
@@ -97,13 +99,19 @@ async function refreshFriends(token, onJoin) {
 
   el.innerHTML = friends.map((f) => {
     const s = STATUS[f.status] || STATUS.offline;
+    // Their game is already under way: the seats are shut, so promise a look
+    // rather than a seat — "Join" only to end up watching reads as a failure.
+    const started = f.status !== 'lobby';
     return `<div class="friend">
       <span class="friend-flag">${escapeHtml(f.avatar || f.flag || '🙂')}</span>
       <span class="friend-name">${escapeHtml(f.name)}</span>
       <span class="friend-status ${s.cls}">${s.label}</span>
       <button class="icon-btn" data-chat="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}" title="Chat">💬</button>
-      ${f.roomId ? `<button class="btn tiny primary" data-join="${escapeHtml(f.roomId)}">Join</button>` : ''}
-      <button class="icon-btn tiny-x" data-drop="${escapeHtml(f.code)}" title="Remove">✕</button>
+      ${f.roomId ? `<button class="btn tiny ${started ? '' : 'primary'}" data-join="${escapeHtml(f.roomId)}"
+          title="${started ? 'Their game has started — you can watch it' : 'Take a seat at their table'}"
+        >${started ? 'Watch' : 'Join'}</button>` : ''}
+      <button class="icon-btn tiny-x" data-drop="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}"
+        title="Remove ${escapeHtml(f.name)}" aria-label="Remove ${escapeHtml(f.name)}">✕</button>
     </div>`;
   }).join('');
 
@@ -113,10 +121,16 @@ async function refreshFriends(token, onJoin) {
   el.querySelectorAll('[data-join]').forEach((b) => {
     b.onclick = () => onJoin(b.dataset.join);
   });
+  // Removing is mutual and there is no undo, and the ✕ sits a thumb's width
+  // from Chat and Join — worth one question first.
   el.querySelectorAll('[data-drop]').forEach((b) => {
-    b.onclick = async () => {
-      await post('/api/friends/remove', { token, code: b.dataset.drop }).catch(() => {});
-      refreshFriends(token, onJoin);
-    };
+    b.onclick = () => confirmModal(
+      `Remove ${b.dataset.name}?`,
+      'You drop off each other\'s lists, and you would both have to swap codes again.',
+      async () => {
+        await post('/api/friends/remove', { token, code: b.dataset.drop }).catch(() => {});
+        refreshFriends(token, onJoin);
+      },
+    );
   });
 }

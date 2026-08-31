@@ -68,8 +68,17 @@ struct DeedSheet: View {
         NavigationStack {
             ScrollView {
                 if let tile = store.tile(tileIndex) {
+                    // Build / sell / mortgage ride directly under the title,
+                    // above the rent table: on a street you own those buttons
+                    // are why the sheet was opened, and eight rows of rent
+                    // figures should never be the thing between them and a
+                    // thumb. Reference numbers read fine underneath.
                     VStack(spacing: 12) {
                         header(tile, P)
+
+                        if tile.isOwnable {
+                            actionButtons(tile, P)
+                        }
 
                         let rows = detailRows(tile)
                         if !rows.isEmpty {
@@ -78,7 +87,6 @@ struct DeedSheet: View {
 
                         if tile.isOwnable {
                             ownerCard(tile, P)
-                            actionButtons(tile, P)
                         }
                     }
                     .padding(14)
@@ -279,9 +287,40 @@ struct DeedSheet: View {
 
                 if tile.type == "property" {
                     buildingLine(houses: houses, houseCost: houseCost, P)
+                    if let why = buildBlocker(tile, own: own) {
+                        Text(why)
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
+    }
+
+    /// Why Build is greyed out. A dead button with no explanation is the most
+    /// common thing a first-timer taps twice and then gives up on.
+    private func buildBlocker(_ tile: TileData, own: TileOwnership) -> String? {
+        guard tile.type == "property", !store.canBuild(tileIndex) else { return nil }
+        if own.isMortgaged { return "Unmortgage this street before you can build." }
+        if own.houseCount >= 5 { return "A hotel is as far as this street goes." }
+        guard let group = tile.group, let idxs = store.state?.map.groups?[group] else { return nil }
+        if !store.ownsFullGroup(store.activeId, group: group) {
+            let name = store.groupInfo(for: tile).map { "\($0.flag) \($0.name)" } ?? "this set"
+            let held = idxs.filter { store.state?.owner(of: $0)?.owner == store.activeId }.count
+            return "Own all of \(name) to build — you hold \(held) of \(idxs.count)."
+        }
+        if idxs.contains(where: { store.state?.owner(of: $0)?.isMortgaged == true }) {
+            return "Nothing can be built while a street in this set is mortgaged."
+        }
+        if store.state?.settings.evenBuild ?? true {
+            let minHouses = idxs.map { store.state?.owner(of: $0)?.houseCount ?? 0 }.min() ?? 0
+            if own.houseCount > minHouses {
+                return "Even build: raise the rest of the set to \(own.houseCount) first."
+            }
+        }
+        return nil
     }
 
     /// What's standing on the street right now, and what the next one costs —
@@ -331,9 +370,11 @@ struct DeedSheet: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(MMButtonStyle(kind: kind))
+        // A blocked move drops to the neutral chip: a saturated green at 40%
+        // still reads as a live button, and people kept tapping it.
+        .buttonStyle(MMButtonStyle(kind: enabled ? kind : .ghost))
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
+        .opacity(enabled ? 1 : 0.5)
     }
 }
 
@@ -588,6 +629,8 @@ struct PropertiesSheet: View {
                     Text(fullSet ? "FULL SET" : "\(progress.owned) of \(progress.total)")
                         .font(.system(size: 8.5, weight: .black))
                         .kerning(0.6)
+                        // Kerned text under-reports its own width and truncates.
+                        .fixedSize()
                         .foregroundStyle(fullSet ? P.accentInk : P.ink3)
                         .padding(.vertical, 3)
                         .padding(.horizontal, 7)
@@ -689,6 +732,7 @@ struct PropertiesSheet: View {
                     Text("MORTGAGED")
                         .font(.system(size: 8, weight: .black))
                         .kerning(0.5)
+                        .fixedSize()
                         .foregroundStyle(P.bad)
                         .padding(.vertical, 3)
                         .padding(.horizontal, 6)

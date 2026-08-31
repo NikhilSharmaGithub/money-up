@@ -72,10 +72,15 @@ struct ChatLogSheet: View {
                         ForEach(visibleChat) { msg in
                             chatRow(msg, P).id(msg.id)
                         }
-                        if channel == "team", visibleChat.isEmpty {
-                            Text("Only your team can read this channel. Plan away.")
+                        if visibleChat.isEmpty {
+                            // An empty column of nothing reads as broken; say
+                            // what the channel is for instead.
+                            Text(channel == "team"
+                                 ? "Only your team can read this channel. Plan away."
+                                 : "Nothing said yet — tap a reaction below or type to start.")
                                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                                 .foregroundStyle(P.ink3)
+                                .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 26)
                         }
@@ -143,6 +148,7 @@ struct ChatLogSheet: View {
                     Text("TEAM")
                         .font(.system(size: 7.5, weight: .black))
                         .kerning(0.5)
+                        .fixedSize()
                         .foregroundStyle(teamColor ?? P.gold)
                         .padding(.vertical, 2)
                         .padding(.horizontal, 5)
@@ -298,7 +304,17 @@ struct AuctionBox: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
 
-    private static let windowSeconds: Double = 20
+    /// Mirrors the server: the room opens on a 20s window, and every bid
+    /// resets it to 12s. Measuring both against 20 made the bar jump back to
+    /// two-thirds after a bid and read as "nearly out of time".
+    private var windowSeconds: Double { auction.leader == nil ? 20 : 12 }
+
+    /// The seat this device bids with: whichever of its players is still in
+    /// the race. Pass & play used to speak only for the primary seat, so a
+    /// guest in the running had no way to bid or pass at all.
+    private var biddingSeat: String? {
+        auction.inRace.first { store.isLocal($0) && store.state?.player($0)?.isBankrupt != true }
+    }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -339,39 +355,61 @@ struct AuctionBox: View {
         TimelineView(.animation) { context in
             let now = context.date.timeIntervalSince1970
             let remaining = max(0, (auction.endsAt ?? 0) / 1000 - now)
-            let fraction = min(1, remaining / Self.windowSeconds)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(P.sunken)
-                    Capsule().fill(P.gold)
-                        .frame(width: max(0, geo.size.width * fraction))
+            let fraction = min(1, remaining / windowSeconds)
+            HStack(spacing: 7) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(P.sunken)
+                        Capsule().fill(remaining <= 5 ? P.bad : P.gold)
+                            .frame(width: max(0, geo.size.width * fraction))
+                    }
                 }
+                .frame(height: 5)
+                // Every other clock in the game shows a number; this one used
+                // to be a bar you had to guess at.
+                Text("\(Int(ceil(remaining)))s")
+                    .font(.system(size: 10.5, weight: .heavy, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(remaining <= 5 ? P.bad : P.ink3)
+                    .fixedSize()
             }
         }
-        .frame(height: 5)
+        .frame(height: 14)
         .padding(.vertical, 2)
     }
 
     @ViewBuilder
     private func bidControls(_ P: Palette) -> some View {
-        if auction.inRace.contains(store.meId), store.me?.isBankrupt != true {
+        if let seat = biddingSeat {
             let next = auction.bid == 0 ? 10 : auction.bid + 10
-            let myMoney = store.me?.money ?? 0
-            let amounts = [next, next + 40, next + 90].filter { $0 <= myMoney }
+            let purse = store.state?.player(seat)?.money ?? 0
+            let amounts = [next, next + 40, next + 90].filter { $0 <= purse }
 
             VStack(spacing: 5) {
-                if !amounts.isEmpty {
+                // Say whose paddle this is when the device holds more than one.
+                if seat != store.meId, let p = store.state?.player(seat) {
+                    Text("bidding as \(p.name)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(css: p.color))
+                        .lineLimit(1)
+                }
+                if amounts.isEmpty {
+                    Text("\(money(next)) is out of reach — you can only pass.")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .multilineTextAlignment(.center)
+                } else {
                     HStack(spacing: 6) {
                         ForEach(amounts, id: \.self) { amount in
                             Button(money(amount)) {
-                                store.bid(amount)
+                                store.bid(amount, as: seat)
                                 Haptics.tap()
                             }
                             .buttonStyle(CompactAuctionButtonStyle(bg: P.gold))
                         }
                     }
                 }
-                Button("Pass") { store.passBid() }
+                Button("Pass") { store.passBid(as: seat) }
                     .buttonStyle(CompactAuctionButtonStyle(bg: P.bad))
             }
         } else {
@@ -608,7 +646,11 @@ struct GameOverSheet: View {
                             .foregroundStyle(P.ink)
                             .lineLimit(1)
                         Spacer()
-                        Text(p.isBankrupt ? "bankrupt" : money(p.netWorth ?? 0))
+                        // A seat the clock took, or one that walked out, was
+                        // never actually bankrupted — don't say it was.
+                        Text(p.isBankrupt
+                             ? (p.wasRemoved ? (p.removedFor == "quit" ? "left the game" : "timed out") : "bankrupt")
+                             : money(p.netWorth ?? 0))
                             .font(.system(size: 13.5, weight: .heavy, design: .rounded))
                             .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
                     }

@@ -19,8 +19,13 @@ struct LandingView: View {
     @State private var storeItems: [StoreItem] = []
     @State private var dmFriend: FriendEntry?
     @State private var rollingName = false
+    /// The shop catalogue came back empty — offer a retry instead of an
+    /// empty page that looks like there is nothing for sale.
+    @State private var storeFailed = false
+    /// SoundKit's own switch, mirrored so the toggle repaints the moment it
+    /// is flipped rather than whenever the next redraw happens along.
+    @AppStorage("mm.sound") private var soundOn = true
     @ObservedObject private var shop = CoinShop.shared
-    @AppStorage("mm.phone") private var phone = ""
 
     struct PublicRoom: Codable, Identifiable {
         var id: String
@@ -115,8 +120,38 @@ struct LandingView: View {
 
         coinPacksSection(P)
 
-        storeSection("🎲 Token skins", "Your piece on the board.", kind: "token", P: P)
-        storeSection("🙂 Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+        if storeItems.isEmpty {
+            shopPlaceholder(P)
+        } else {
+            storeSection("🎲 Token skins", "Your piece on the board.", kind: "token", P: P)
+            storeSection("🙂 Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+        }
+    }
+
+    /// The shelves take a moment to arrive, and they can fail. Either way the
+    /// tab has to say so — an empty Store reads as "nothing for sale".
+    private func shopPlaceholder(_ P: Palette) -> some View {
+        MMCard(padding: 18) {
+            HStack(spacing: 10) {
+                if storeFailed {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(P.bad)
+                    Text("Couldn't load the shop.")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                    Spacer(minLength: 6)
+                    Button("Try again") { Task { await loadStore() } }
+                        .buttonStyle(MMButtonStyle(kind: .ghost))
+                } else {
+                    ProgressView().tint(P.red)
+                    Text("Loading the shop…")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                    Spacer(minLength: 6)
+                }
+            }
+        }
     }
 
     /// Paid top-ups. The server describes the packs; whether they can actually
@@ -126,9 +161,11 @@ struct LandingView: View {
         if !shop.packs.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 PanelTitle("🪙 Get coins")
-                Text(shop.checked && !shop.onSale
-                     ? "Coin packs aren't available yet."
-                     : "Top up when the wins aren't coming fast enough.")
+                // Until the App Store answers the rows are dead, so promising a
+                // top-up would be a lie — say what is actually happening.
+                Text(!shop.checked ? "Checking the App Store…"
+                     : shop.onSale ? "Top up when the wins aren't coming fast enough."
+                     : "Coin packs aren't available yet.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
             }
@@ -215,6 +252,9 @@ struct LandingView: View {
     private func storeCard(_ item: StoreItem, _ P: Palette) -> some View {
         let owned = store.wallet?.owned.contains(item.id) ?? false
         let equipped = store.wallet?.equipped[item.kind] == item.id
+        // What you can't afford yet reads as out of reach rather than looking
+        // identical to everything else until the tap bounces back an error.
+        let affordable = owned || (store.wallet?.coins ?? 0) >= item.price
 
         return Button {
             Task { await buyOrEquip(item, owned: owned, equipped: equipped) }
@@ -227,7 +267,7 @@ struct LandingView: View {
                     .lineLimit(1)
                 Text(equipped ? "✓ Equipped" : owned ? "Tap to equip" : "🪙 \(item.price)")
                     .font(.system(size: 10.5, weight: .heavy, design: .rounded))
-                    .foregroundStyle(equipped ? P.good : owned ? P.ink3 : P.gold)
+                    .foregroundStyle(equipped ? P.good : owned ? P.ink3 : affordable ? P.gold : P.ink3)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
@@ -237,19 +277,26 @@ struct LandingView: View {
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
                     .stroke(equipped ? P.gold : P.rule, lineWidth: equipped ? 1.5 : 1)
             )
+            .opacity(affordable ? 1 : 0.55)
         }
         .buttonStyle(.plain)
     }
 
     private struct StoreReply: Decodable { var ok: Bool?; var error: String?; var coins: Int? }
 
+    /// The cosmetics come from our own server, the coin packs from Apple. The
+    /// App Store lookup can sit there for seconds on a cold launch, so fill the
+    /// shelves first and let StoreKit catch up — otherwise the whole tab is
+    /// blank while a purchase API nobody asked about finishes thinking.
     private func loadStore() async {
         store.refreshWallet()
+        if storeItems.isEmpty {
+            struct Catalog: Decodable { var items: [StoreItem] }
+            let catalog: Catalog? = try? await store.fetchJSON("/api/store")
+            storeItems = catalog?.items ?? []
+            storeFailed = storeItems.isEmpty
+        }
         await shop.load(store)
-        guard storeItems.isEmpty else { return }
-        struct Catalog: Decodable { var items: [StoreItem] }
-        let catalog: Catalog? = try? await store.fetchJSON("/api/store")
-        storeItems = catalog?.items ?? []
     }
 
     private func buyOrEquip(_ item: StoreItem, owned: Bool, equipped: Bool) async {
@@ -258,8 +305,10 @@ struct LandingView: View {
             let reply: StoreReply? = try? await store.fetchJSON(
                 "/api/store/buy", method: "POST",
                 body: ["token": store.token, "itemId": item.id])
-            if let error = reply?.error {
-                store.showToast(error, isError: true)
+            // A request that never landed must not read as a purchase: the
+            // coins only moved if the server said so.
+            guard reply?.ok == true else {
+                store.showToast(reply?.error ?? "Couldn't reach the shop — try again.", isError: true)
                 return
             }
             SoundKit.shared.buy()
@@ -268,7 +317,10 @@ struct LandingView: View {
         // buying auto-equips; tapping an equipped item takes it off
         var body: [String: Any] = ["token": store.token, "slot": item.kind]
         if !equipped { body["itemId"] = item.id }
-        let _: StoreReply? = try? await store.fetchJSON("/api/store/equip", method: "POST", body: body)
+        let worn: StoreReply? = try? await store.fetchJSON("/api/store/equip", method: "POST", body: body)
+        if worn?.ok != true {
+            store.showToast(worn?.error ?? "Couldn't change your look — try again.", isError: true)
+        }
         store.refreshWallet()
     }
 
@@ -278,12 +330,13 @@ struct LandingView: View {
     }
 
     @ViewBuilder private func historyTab(_ P: Palette) -> some View {
-        pageTitle("History", "Every game this device has finished.", P)
+        // Games walked out of land here too, so "finished" would be a lie.
+        pageTitle("History", "Every game this device has played.", P)
         if store.matchHistory.isEmpty {
             MMCard(padding: 22) {
                 VStack(spacing: 8) {
                     Text("🎲").font(.system(size: 36))
-                    Text("No games finished yet")
+                    Text("No games yet")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(P.ink)
                     Text("Play a match — your wins (and your bankruptcies) land here.")
@@ -327,7 +380,16 @@ struct LandingView: View {
     }
 
     private func matchRow(_ match: GameStore.MatchRecord, _ P: Palette) -> some View {
-        MMCard(padding: 13) {
+        // Records saved before the outcome was tracked only have the win flag.
+        let unfinished = (match.outcome ?? (match.won ? "won" : "lost")) == "left"
+        // A table nobody finished has no winner and no turn count to quote —
+        // printing "Nobody · 0 turns" invents a result that never happened.
+        let line = unfinished
+            ? "Left before the end · \(match.players.count) players"
+            : "🏆 \(match.winner) · \(match.players.count) players"
+                + (match.turns > 0 ? " · \(match.turns) turns" : "")
+
+        return MMCard(padding: 13) {
             HStack(spacing: 12) {
                 Text(match.mapIcon).font(.system(size: 26))
                 VStack(alignment: .leading, spacing: 3) {
@@ -336,7 +398,7 @@ struct LandingView: View {
                             .font(.system(size: 14.5, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink)
                             .lineLimit(1)
-                        Text(match.won ? "WON" : "LOST")
+                        Text(unfinished ? "LEFT" : match.won ? "WON" : "LOST")
                             .font(.system(size: 8, weight: .black))
                             .kerning(0.8)
                             .foregroundStyle(match.won ? P.accentInk : P.ink3)
@@ -344,7 +406,7 @@ struct LandingView: View {
                             .padding(.horizontal, 6)
                             .background(match.won ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
                     }
-                    Text("🏆 \(match.winner) · \(match.players.count) players · \(match.turns) turns")
+                    Text(line)
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink2)
                         .lineLimit(1)
@@ -362,8 +424,7 @@ struct LandingView: View {
         }
     }
 
-    /// Who you are at every table: name, flag, equipped look, and a phone
-    /// number that stays on this device only.
+    /// Who you are at every table: name, flag and equipped look.
     private func profileCard(_ P: Palette) -> some View {
         MMCard(padding: 16) {
             VStack(alignment: .leading, spacing: 12) {
@@ -384,18 +445,13 @@ struct LandingView: View {
                     karmaBadge(P)
                 }
 
-                TextField("Your name", text: $store.nickname)
+                TextField("", text: $store.nickname,
+                          prompt: Text("Your name").foregroundStyle(P.ink3))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
                     .submitLabel(.done)
                     .onSubmit { Task { await loadProfile() } }
-                    .padding(11)
-                    .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                TextField("Phone (stays on this device)", text: $phone)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .keyboardType(.phonePad)
                     .padding(11)
                     .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
@@ -445,10 +501,14 @@ struct LandingView: View {
                         .foregroundStyle(P.ink3)
                 }
                 Spacer()
+                // Bound through @AppStorage on the same key SoundKit reads:
+                // a plain get/set on the singleton leaves nothing for SwiftUI
+                // to watch, so the switch only slid over on the next unrelated
+                // redraw.
                 Toggle("", isOn: Binding(
-                    get: { SoundKit.shared.enabled },
+                    get: { soundOn },
                     set: { on in
-                        SoundKit.shared.enabled = on
+                        soundOn = on
                         if on { SoundKit.shared.warmUp(); SoundKit.shared.click() }
                     }
                 ))
@@ -539,7 +599,11 @@ struct LandingView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     PanelTitle("Nickname")
                     HStack(spacing: 8) {
-                        TextField("Your nickname", text: $store.nickname)
+                        // Empty until the player types or taps the dice — a name
+                        // we picked for them reads as their name, and they carry
+                        // it to the table without ever choosing it.
+                        TextField("", text: $store.nickname,
+                                  prompt: Text("Your nickname").foregroundStyle(P.ink3))
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
@@ -567,16 +631,19 @@ struct LandingView: View {
                 orDivider(P)
 
                 HStack(spacing: 8) {
-                    TextField("room code", text: $joinCode)
+                    // Tidying the text inside the binding rather than in an
+                    // onChange matters: writing the field back a frame later
+                    // swallows whatever was typed in between, so a pasted or
+                    // quickly typed code used to arrive with letters missing.
+                    TextField("room code", text: Binding(
+                        get: { joinCode },
+                        set: { joinCode = $0.lowercased().filter { !$0.isWhitespace } }
+                    ))
                         .font(.system(size: 16, weight: .bold, design: .monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.asciiCapable)
                         .onSubmit { joinTapped() }
-                        .onChange(of: joinCode) { _, new in
-                            let cleaned = new.lowercased().filter { !$0.isWhitespace }
-                            if cleaned != new { joinCode = cleaned }
-                        }
                         .padding(12)
                         .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
@@ -709,9 +776,12 @@ struct LandingView: View {
     // MARK: - public rooms
 
     /// Open lobbies anyone can hop into — same list the web landing shows.
-    @ViewBuilder
+    ///
+    /// The poller hangs off a VStack rather than a bare conditional: while the
+    /// list is empty a Group collapses to nothing, an empty view never runs its
+    /// task, and the card could then never appear at all.
     private func publicRoomsCard(_ P: Palette) -> some View {
-        Group {
+        VStack(spacing: 0) {
             if !publicRooms.isEmpty {
                 MMCard(padding: 16) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -761,6 +831,13 @@ struct LandingView: View {
         MMCard {
             DisclosureGroup(isExpanded: $serverOpen) {
                 VStack(alignment: .leading, spacing: 10) {
+                    // Nobody stumbling in here should have to guess what it
+                    // does, or why their friends suddenly can't see them.
+                    Text("Where this app looks for games. Leave it alone unless you are running your own server — pointing somewhere else hides your friends, coins and history.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     TextField("https://…", text: $store.serverURLString)
                         .font(.system(size: 14, weight: .medium, design: .monospaced))
                         .textInputAutocapitalization(.never)
@@ -848,15 +925,17 @@ struct LandingView: View {
                 }
 
                 HStack(spacing: 8) {
-                    TextField("FRIEND CODE", text: $addCode)
+                    // Same reason as the room code: sanitise on the way in, or
+                    // fast typing loses characters to the write-back.
+                    TextField("FRIEND CODE", text: Binding(
+                        get: { addCode },
+                        set: { addCode = String($0.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(6)) }
+                    ))
                         .font(.system(size: 15, weight: .bold, design: .monospaced))
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .keyboardType(.asciiCapable)
-                        .onChange(of: addCode) { _, new in
-                            let cleaned = String(new.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(6))
-                            if cleaned != new { addCode = cleaned }
-                        }
+                        .onSubmit { Task { await addFriend() } }
                         .padding(11)
                         .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(P.rule, lineWidth: 1))
@@ -894,10 +973,15 @@ struct LandingView: View {
         case "playing": ("in a game", P.good)
         default: ("offline", P.ink3)
         }
-        let flag = entry.flag ?? ""
+        // Their equipped face if they have one, their flag otherwise — the
+        // same fallback chain the web friend list uses.
+        let face = [entry.avatar ?? "", entry.flag ?? ""].first { !$0.isEmpty } ?? "🙂"
+        // Their game is already under way, so the seats are shut: promising a
+        // seat and delivering a spectator's view reads as a broken button.
+        let started = entry.status != "lobby"
 
         return HStack(spacing: 10) {
-            Text(flag.isEmpty ? "🌍" : flag)
+            Text(face)
                 .font(.system(size: 20))
 
             VStack(alignment: .leading, spacing: 1) {
@@ -910,7 +994,7 @@ struct LandingView: View {
                     .foregroundStyle(status.tint)
             }
 
-            Spacer()
+            Spacer(minLength: 4)
 
             Button {
                 dmFriend = entry
@@ -922,11 +1006,25 @@ struct LandingView: View {
                     .frame(width: 32, height: 32)
                     .background(P.card, in: Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Message \(entry.name)")
 
             if let roomId = entry.roomId {
-                Button("Join") { store.join(roomId: roomId) }
-                    .buttonStyle(MMButtonStyle(kind: .primary))
+                Button(started ? "Watch" : "Join") { store.join(roomId: roomId) }
+                    .buttonStyle(MMButtonStyle(kind: started ? .ghost : .primary))
             }
+
+            Button {
+                Task { await dropFriend(entry) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(P.ink3)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(entry.name)")
         }
         .padding(10)
         .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -942,22 +1040,19 @@ struct LandingView: View {
     private func loadFriends() async {
         // GameStore.fetchJSON builds its URL with appending(path:), which
         // percent-encodes "?", so this query-string GET is issued directly.
+        // A failed poll keeps whatever is on screen: blanking the list on a
+        // blip tells the player their friends are gone, which they are not.
         guard let base = store.serverURL,
               var comps = URLComponents(url: base.appending(path: "/api/friends"),
-                                        resolvingAgainstBaseURL: false) else {
-            friends = []
-            return
-        }
+                                        resolvingAgainstBaseURL: false) else { return }
         comps.queryItems = [URLQueryItem(name: "token", value: store.token)]
-        guard let url = comps.url else {
-            friends = []
-            return
-        }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            friends = try JSONDecoder().decode([FriendEntry].self, from: data)
-        } catch {
-            friends = []
+        guard let url = comps.url,
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let fresh = try? JSONDecoder().decode([FriendEntry].self, from: data) else { return }
+        // Anyone you can actually walk in on floats to the top, exactly like
+        // the web list — an offline crowd should never bury a live table.
+        friends = fresh.sorted {
+            ($0.roomId != nil ? 0 : 1, $0.name.lowercased()) < ($1.roomId != nil ? 0 : 1, $1.name.lowercased())
         }
     }
 
@@ -972,11 +1067,23 @@ struct LandingView: View {
                 store.showToast(error, isError: true)
             } else {
                 addCode = ""
+                store.showToast("Friend added")
                 await loadFriends()
             }
         } catch {
             store.showToast("Could not add that code", isError: true)
         }
+    }
+
+    /// Friendship is mutual, so dropping someone is the only way out of a code
+    /// you gave away by mistake — the web list has always had this.
+    private func dropFriend(_ entry: FriendEntry) async {
+        Haptics.warn()
+        friends.removeAll { $0.code == entry.code }
+        let _: AddFriendReply? = try? await store.fetchJSON(
+            "/api/friends/remove", method: "POST",
+            body: ["token": store.token, "code": entry.code])
+        await loadFriends()
     }
 }
 
@@ -1040,15 +1147,20 @@ struct DMSheet: View {
                         .submitLabel(.send)
                         .onSubmit { Task { await send() } }
 
+                    // Nothing to send is a dead tap, so let the button say so.
+                    let sendable = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     Button {
                         Task { await send() }
                     } label: {
                         Image(systemName: "paperplane.fill")
                             .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Palette.current(scheme).accentInk)
+                            .foregroundStyle(sendable ? P.accentInk : P.ink3)
                             .frame(width: 36, height: 36)
-                            .background(P.red, in: Circle())
+                            .background(sendable ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken), in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!sendable)
+                    .accessibilityLabel("Send")
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)

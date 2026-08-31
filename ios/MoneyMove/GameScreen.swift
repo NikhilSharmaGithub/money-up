@@ -76,12 +76,16 @@ struct GameScreen: View {
                             })
                             .padding(.horizontal, 196)
 
+                            AwaitingSeatsCard()
+                                .padding(.horizontal, 196)
+
                             BoardView(onTapTile: { sheet = .deed($0) }) {
                                 CenterWell(actionsInWell: true,
                                            openProperties: { sheet = .properties },
                                            openTrade: { sheet = .tradePicker(from: store.activeId, give: []) },
                                            openHistory: { sheet = .chatLog(1) },
-                                           openCounter: { sheet = .counter($0) })
+                                           openCounter: { sheet = .counter($0) },
+                                           openResults: { sheet = .gameOver })
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(.horizontal, 12)
@@ -160,7 +164,29 @@ struct GameScreen: View {
             .environmentObject(store)
         }
         .onChange(of: store.showGameOver) { _, over in
-            if over { sheet = .gameOver }
+            if over {
+                // Whatever sheet was open when the last player fell, the result
+                // is the thing to look at — and SwiftUI will not swap one sheet
+                // for another in the same frame, so close first, present after.
+                if sheet != nil {
+                    sheet = nil
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        if store.showGameOver { sheet = .gameOver }
+                    }
+                } else {
+                    sheet = .gameOver
+                }
+            } else if sheet?.id == ActiveSheet.gameOver.id {
+                // A rematch puts the room back in the lobby; the old result
+                // must not stay up over the new table.
+                sheet = nil
+            }
+        }
+        .onChange(of: store.timedOut) { _, out in
+            // The overlay lives under presented sheets, so a deed sheet left
+            // open would bury the only two buttons it offers.
+            if out { sheet = nil }
         }
         .animateOverlays(store)
         .overlay {
@@ -275,6 +301,11 @@ struct GameScreen: View {
 
     @ViewBuilder private var bottomPanel: some View {
         if let state = store.state {
+            // Held chairs sit right above the dock: the decision belongs with
+            // the buttons, not off in a corner of the board.
+            AwaitingSeatsCard()
+                .padding(.horizontal, 12)
+
             if state.isLobby {
                 if state.isQuickWaiting {
                     QuickMatchPanel()
@@ -286,10 +317,13 @@ struct GameScreen: View {
             } else {
                 // The live feed lives inside the board's centre well now, so the
                 // board itself takes the full width and the dock stays at thumbs.
-                Spacer(minLength: 0)
+                // No spacer here on purpose: the one above the player strip owns
+                // all the slack, so the strip and the dock stay a single cluster
+                // instead of drifting apart with a dead band between them.
                 ActionPanel(openProperties: { sheet = .properties },
                             openTrade: { sheet = .tradePicker(from: store.activeId, give: []) },
-                            openCounter: { sheet = .counter($0) })
+                            openCounter: { sheet = .counter($0) },
+                            openResults: { sheet = .gameOver })
                     .padding(.bottom, 4)
             }
         }
@@ -407,85 +441,130 @@ struct PlayerStrip: View {
         // the heads-up re-read themselves on every push.
         let ranks = store.liveRanks
         let nextUp = store.nextUpId
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(store.state?.players ?? []) { p in
-                    let isTurn = store.state?.isPlaying == true && store.state?.turn?.playerId == p.id
-                    let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
-                    HStack(spacing: 7) {
-                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32, emoji: p.avatar ?? "")
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 4) {
-                                Text(p.name)
-                                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
-                                    .foregroundStyle(P.ink)
-                                    .lineLimit(1)
-                                if p.id == store.state?.hostId {
-                                    Text("HOST").font(.system(size: 7, weight: .black))
-                                        .foregroundStyle(P.gold)
-                                }
-                                if p.isBot == true {
-                                    Text("BOT").font(.system(size: 7, weight: .black))
-                                        .foregroundStyle(P.ink3)
-                                }
-                                if let rank = ranks[p.id] {
-                                    rankBadge(rank, P)
-                                }
-                                if nextUp == p.id, !isTurn {
-                                    nextTag(store.isLocal(p.id), P)
-                                }
-                            }
-                            HStack(spacing: 4) {
-                                Text(p.isBankrupt ? "bankrupt" : money(p.money))
-                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
-                                    .contentTransition(.numericText())
-                                    .animation(.snappy(duration: 0.4), value: p.money)
-                                    .overlay(alignment: .topTrailing) {
-                                        MoneyDeltaBadge(playerId: p.id)
-                                            .offset(x: 30, y: -16)
+        // The chip on the clock is the one worth reading, so the strip drives
+        // itself there; a four-player table is wider than any phone and the
+        // seat that matters used to end up off the right edge.
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(store.state?.players ?? []) { p in
+                        let isTurn = store.state?.isPlaying == true && store.state?.turn?.playerId == p.id
+                        let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
+                        HStack(spacing: 7) {
+                            AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32, emoji: p.avatar ?? "")
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 4) {
+                                    Text(p.name)
+                                        .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                                        .foregroundStyle(P.ink)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: 118, alignment: .leading)
+                                    if p.id == store.state?.hostId {
+                                        Text("HOST").font(.system(size: 7, weight: .black))
+                                            .foregroundStyle(P.gold)
                                     }
-                                let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
-                                if owned > 0, !p.isBankrupt {
-                                    Text("·  \(owned) 🏠")
-                                        .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                                        .foregroundStyle(P.ink3)
+                                    if p.isBot == true {
+                                        Text("BOT").font(.system(size: 7, weight: .black))
+                                            .foregroundStyle(P.ink3)
+                                    }
+                                    if let rank = ranks[p.id] {
+                                        rankBadge(rank, P)
+                                    }
+                                    if nextUp == p.id, !isTurn {
+                                        nextTag(store.isLocal(p.id), P)
+                                    }
                                 }
-                                if isTurn, let endsAt = store.state?.turn?.endsAt {
-                                    TurnClock(endsAt: endsAt, compact: true)
+                                HStack(spacing: 4) {
+                                    Text(standingLabel(p))
+                                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                        .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
+                                        .contentTransition(.numericText())
+                                        .animation(.snappy(duration: 0.4), value: p.money)
+                                    let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
+                                    if owned > 0, !p.isBankrupt {
+                                        Text("·  \(owned) 🏠")
+                                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                                            .foregroundStyle(P.ink3)
+                                    }
+                                    if isTurn, let endsAt = store.state?.turn?.endsAt {
+                                        TurnClock(endsAt: endsAt, compact: true)
+                                    }
                                 }
                             }
                         }
+                        // Badges and the clock get their natural width — squeezed
+                        // into a screen-wide row they used to truncate to "NE…".
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(isTurn ? P.gold : (team.map { Color(css: $0.color) } ?? P.rule),
+                                        lineWidth: isTurn ? 2 : 1)
+                        )
+                        // The floating +/- rides the chip's own top edge, where
+                        // it can't sit on top of the player's name.
+                        .overlay(alignment: .top) {
+                            MoneyDeltaBadge(playerId: p.id)
+                                .offset(y: -13)
+                        }
+                        .opacity(p.isBankrupt ? 0.5 : 1)
+                        .id(p.id)
+                        .onTapGesture { onTapPlayer(p) }
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(isTurn ? P.gold : (team.map { Color(css: $0.color) } ?? P.rule),
-                                    lineWidth: isTurn ? 2 : 1)
-                    )
-                    .opacity(p.isBankrupt ? 0.5 : 1)
-                    .onTapGesture { onTapPlayer(p) }
                 }
+                .padding(.horizontal, 12)
+                .frame(minWidth: max(0, contentWidth - sideInset * 2))
             }
-            .padding(.horizontal, 12)
-            .frame(minWidth: max(0, UIScreen.main.bounds.width - sideInset * 2))
+            .onAppear { scroll(proxy, animated: false) }
+            .onChange(of: store.state?.turn?.playerId) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: store.state?.players.count) { _, _ in scroll(proxy, animated: true) }
         }
         .frame(height: 54)
     }
 
-    /// Live position by net worth, crown on whoever is actually ahead.
-    private func rankBadge(_ rank: Int, _ P: Palette) -> some View {
-        HStack(spacing: 1.5) {
-            if rank == 1 { Text("👑").font(.system(size: 8.5)) }
-            Text("#\(rank)")
-                .font(.system(size: 8.5, weight: .black, design: .rounded))
-                .foregroundStyle(rank == 1 ? P.gold : P.ink3)
+    /// The width the strip should try to fill. Taken from the window rather
+    /// than the screen so a Split View iPad doesn't get a phantom scroll run.
+    private var contentWidth: CGFloat {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
+        return scene?.keyWindow?.bounds.width ?? UIScreen.main.bounds.width
+    }
+
+    /// "bankrupt" is only true for players the game actually beat — a seat the
+    /// clock took, or one that walked out, reads as what really happened.
+    private func standingLabel(_ p: PlayerState) -> String {
+        guard p.isBankrupt else { return money(p.money) }
+        if p.wasRemoved { return p.removedFor == "quit" ? "left" : "timed out" }
+        return "bankrupt"
+    }
+
+    /// Keep the seat on the clock — or this device's own seat between turns —
+    /// inside the visible run of the strip.
+    private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let state = store.state else { return }
+        let target = (state.isPlaying ? state.turn?.playerId : nil) ?? store.meId
+        guard state.players.contains(where: { $0.id == target }) else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .center) }
+        } else {
+            proxy.scrollTo(target, anchor: .center)
         }
-        .padding(.vertical, 1.5)
-        .padding(.horizontal, 5)
-        .background(rank == 1 ? P.goldSoft : P.sunken, in: Capsule())
+    }
+
+    /// Live position by net worth, crown on whoever is actually ahead.
+    /// Crown and number are one text run: as two views the emoji reported a
+    /// narrower width than it drew, and squeezed the "#1" out to "…".
+    private func rankBadge(_ rank: Int, _ P: Palette) -> some View {
+        Text(rank == 1 ? "👑 #1" : "#\(rank)")
+            .font(.system(size: 8.5, weight: .black, design: .rounded))
+            .fixedSize()
+            .foregroundStyle(rank == 1 ? P.gold : P.ink3)
+            .padding(.vertical, 1.5)
+            .padding(.horizontal, 5)
+            .background(rank == 1 ? P.goldSoft : P.sunken, in: Capsule())
     }
 
     /// Enough warning to look up before the turn lands — no more than that.
@@ -493,6 +572,9 @@ struct PlayerStrip: View {
         Text(mine ? "YOU'RE NEXT" : "NEXT")
             .font(.system(size: 7, weight: .black))
             .kerning(0.5)
+            // Kerning adds a trailing gap that Text does not count in its own
+            // ideal width, so without this the tag truncates itself to "NE…".
+            .fixedSize()
             .foregroundStyle(mine ? P.gold : P.ink3)
             .padding(.vertical, 1.5)
             .padding(.horizontal, 5)
@@ -511,6 +593,8 @@ struct CenterWell: View {
     /// this is the whole story.
     var openHistory: (() -> Void)? = nil
     var openCounter: ((TradeOffer) -> Void)? = nil
+    /// Reopens the final standings once the game has ended.
+    var openResults: (() -> Void)? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -521,6 +605,9 @@ struct CenterWell: View {
             if let state = store.state {
                 if let auction = state.auction {
                     AuctionBox(auction: auction)
+                        // Room for the turn clock, which now rides above every
+                        // phase of the well rather than vanishing under a bid.
+                        .padding(.top, state.turn?.endsAt == nil ? 0 : 26)
                 } else if state.isLobby {
                     VStack(spacing: 8) {
                         Text(state.map.icon ?? "🌐").font(.system(size: 26))
@@ -549,6 +636,16 @@ struct CenterWell: View {
                         Text("\(store.state?.winner?.name ?? "Nobody") wins!")
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
                             .foregroundStyle(P.ink)
+                        // The result sheet is dismissable, so the well keeps a
+                        // way back to it — otherwise the standings are gone.
+                        if let openResults {
+                            Button("🏆  Final standings") {
+                                openResults()
+                                Haptics.tap()
+                            }
+                            .buttonStyle(MMButtonStyle(kind: .ghost))
+                            .padding(.top, 2)
+                        }
                     }
                 } else {
                     // The log runs quietly across the whole well; the dice sit
@@ -603,17 +700,12 @@ struct CenterWell: View {
                                 if actionsInWell {
                                     ActionPanel(openProperties: { openProperties?() },
                                                 openTrade: openTrade,
-                                                openCounter: openCounter)
+                                                openCounter: openCounter,
+                                                openResults: openResults)
                                         .frame(maxWidth: min(geo.size.width * 0.74, 470))
                                 }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                        .overlay(alignment: .top) {
-                            if let endsAt = state.turn?.endsAt {
-                                TurnClock(endsAt: endsAt)
-                                    .padding(.top, 6)
-                            }
                         }
                         .overlay(alignment: .bottomTrailing) {
                             if let openHistory {
@@ -623,6 +715,16 @@ struct CenterWell: View {
                         .overlay { DeckIntro(at: store.boardIntroAt) }
                     }
                 }
+            }
+        }
+        // The server puts a deadline on every turn now — the house's seats
+        // included — so the well's clock is a fixture of the table. It hangs
+        // off the whole well rather than the dice layer, because an auction
+        // replaces that layer and the clock must not blink out with it.
+        .overlay(alignment: .top) {
+            if let endsAt = store.state?.turn?.endsAt, store.state?.isPlaying == true {
+                TurnClock(endsAt: endsAt)
+                    .padding(.top, 6)
             }
         }
         .padding(8)
@@ -754,10 +856,16 @@ struct CornerPods: View {
 
     @EnvironmentObject var store: GameStore
 
-    /// Local seats in join order, dealt to corners: first two at the bottom,
-    /// next two across the table.
+    /// Local seats dealt to corners: first two at the bottom, next two across
+    /// the table. This device's own player always leads, so the person holding
+    /// the iPad never finds their own pod printed upside down — the server is
+    /// free to shuffle turn order, and it does.
     private var seats: [PlayerState] {
-        (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
+        let mine = (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
+        guard let i = mine.firstIndex(where: { $0.id == store.meId }) else { return mine }
+        var ordered = mine
+        ordered.insert(ordered.remove(at: i), at: 0)
+        return ordered
     }
 
     var body: some View {
@@ -891,7 +999,9 @@ struct TurnClock: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+        // Driven entirely on this device: the state push only ever hands over a
+        // new deadline, so a quiet turn still counts down second by second.
+        TimelineView(.periodic(from: .now, by: 0.2)) { context in
             let left = Self.secondsLeft(endsAt, at: context.date)
             let urgent = left <= 10
             HStack(spacing: 4) {
@@ -913,10 +1023,145 @@ struct TurnClock: View {
             .animation(.snappy(duration: 0.18), value: left)
         }
         .fixedSize()
+        // A fresh deadline restarts the tick schedule, so the number can never
+        // be left frozen on the last turn's final second.
+        .id(endsAt)
     }
 
     static func secondsLeft(_ endsAt: Double, at now: Date) -> Int {
         max(0, Int(ceil(endsAt / 1000 - now.timeIntervalSince1970)))
+    }
+}
+
+// MARK: - waiting on a dropped seat
+
+/// Somebody's connection went away and the table is holding their chair. The
+/// card carries the only two things the room needs: how long is left, and the
+/// button that buys them another minute. Never shown to the seat being waited
+/// on — that player is not the one who gets to vote themselves back in.
+struct AwaitingSeatsCard: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    @ViewBuilder var body: some View {
+        let seats = store.awaitingSeats
+        if !seats.isEmpty {
+            VStack(spacing: 8) {
+                ForEach(seats) { seat in
+                    row(seat, Palette.current(scheme))
+                }
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.spring(duration: 0.35), value: seats.map(\.id))
+        }
+    }
+
+    private func row(_ seat: AwaitingSeat, _ P: Palette) -> some View {
+        let player = store.state?.player(seat.id)
+        let agreed = store.hasGrantedTime(seat)
+        let count = seat.grantedIds.count
+        // A vote can't need fewer seats than have already clicked.
+        let voters = max(seat.voterCount, count)
+
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 9) {
+                if let player {
+                    AvatarView(name: player.name, colorCSS: player.color,
+                               flag: player.flag ?? "", size: 30, emoji: player.avatar ?? "")
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(player?.name ?? "A player") dropped out")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink)
+                        .lineLimit(1)
+                    Text(seat.isVote
+                         ? "Everyone still at the table has to agree now."
+                         : "Any one of you can hand them another minute.")
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 6)
+                if let until = seat.until {
+                    SeatCountdown(until: until)
+                }
+            }
+
+            if seat.isVote {
+                voteBar(count: count, voters: voters, P)
+            }
+
+            Button {
+                store.grantTime(seat.id)
+            } label: {
+                Text(buttonLabel(seat, agreed: agreed, count: count, voters: voters))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .buttonStyle(MMButtonStyle(kind: agreed ? .ghost : .gold, big: true))
+            .disabled(agreed)
+            .opacity(agreed ? 0.75 : 1)
+        }
+        .padding(11)
+        .background(P.goldSoft.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(P.gold.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    /// After the free favours the button stops being a favour and starts being
+    /// a vote, so it says so and carries the tally with it.
+    private func buttonLabel(_ seat: AwaitingSeat, agreed: Bool, count: Int, voters: Int) -> String {
+        guard seat.isVote else {
+            return agreed ? "✓  Minute granted" : "⏳  Grant a minute"
+        }
+        let tally = "\(count) of \(voters) agreed"
+        return agreed
+            ? "✓  You agreed — waiting on the rest (\(tally))"
+            : "🗳  Everyone must agree — \(tally)"
+    }
+
+    /// One pip per player who still has to click, filled as they do.
+    private func voteBar(count: Int, voters: Int, _ P: Palette) -> some View {
+        HStack(spacing: 4) {
+            ForEach(0..<max(voters, 1), id: \.self) { i in
+                Capsule()
+                    .fill(i < count ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.rule2))
+                    .frame(height: 5)
+            }
+        }
+        .animation(.snappy(duration: 0.25), value: count)
+    }
+}
+
+/// Seconds until a held chair goes back to the board, ticked on this device so
+/// it keeps moving between state pushes.
+private struct SeatCountdown: View {
+    let until: Double
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        TimelineView(.periodic(from: .now, by: 0.2)) { context in
+            let left = TurnClock.secondsLeft(until, at: context.date)
+            VStack(spacing: 0) {
+                Text("\(left)s")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(left <= 15 ? P.bad : P.ink)
+                Text("left")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .kerning(0.5)
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 9)
+            .background(P.card.opacity(0.85), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .fixedSize()
+        .id(until)
     }
 }
 

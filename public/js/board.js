@@ -330,7 +330,12 @@ export function repositionTokens(state) {
 // ══════════════════════════════════════════════════════════ deed rendering ══
 const RENT_LABELS = ['Base rent', 'With 1 house', 'With 2 houses', 'With 3 houses', 'With 4 houses', 'With hotel'];
 
-export function deedMarkup(state, i, { compact = false } = {}) {
+/**
+ * The deed card. `actions` is a slot for the owner's Build / Sell / Mortgage
+ * row: it renders straight under the price, because those are the buttons
+ * people opened the card for — behind the rent table they may as well not exist.
+ */
+export function deedMarkup(state, i, { compact = false, actions = '' } = {}) {
   const tile = state.map.tiles[i];
   if (!tile || !['property', 'airport', 'utility', 'tax'].includes(tile.type)) return null;
 
@@ -370,6 +375,7 @@ export function deedMarkup(state, i, { compact = false } = {}) {
       <span class="deed-title">${escapeHtml(tile.name)}</span>
     </div>
     ${tile.price ? `<div class="deed-price">$${tile.price}</div>` : ''}
+    ${actions}
     <div class="deed-rows">${rows}${mort}${ownerRow}</div>
   </div>`;
 }

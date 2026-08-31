@@ -50,7 +50,7 @@
       <label class="field">
         <span>Your nickname</span>
         <span class="name-row">
-          <input id="nickInput" maxlength="16" placeholder="Nik" autocomplete="off" />
+          <input id="nickInput" maxlength="16" placeholder="Type a nickname" autocomplete="off" />
           <button id="nameDiceBtn" class="btn dice-btn" type="button" title="Give me a name">🎲</button>
         </span>
       </label>
@@ -63,7 +63,7 @@
       </button>
       <div class="or"><span>or join with a code</span></div>
       <form id="joinForm" class="join-row">
-        <input id="codeInput" maxlength="8" placeholder="room code" autocomplete="off" />
+        <input id="codeInput" maxlength="64" placeholder="code or link" autocomplete="off" />
         <button class="btn" type="submit">Join</button>
       </form>
       <div id="publicRooms" class="public-rooms"></div>
@@ -75,7 +75,7 @@
         <button class="code-chip" id="myCode" title="Your friend code — tap to copy">······</button>
       </div>
       <form class="join-row" id="addFriendForm">
-        <input id="friendCode" maxlength="6" placeholder="friend code" autocomplete="off" />
+        <input id="friendCode" class="code-input" maxlength="6" placeholder="friend code" autocomplete="off" />
         <button class="btn small" type="submit">Add</button>
       </form>
       <div id="friendList" class="friend-list"></div>
@@ -86,7 +86,8 @@
       <div><b>8</b><span>players</span></div>
       <div><b>∞</b><span>bankruptcies</span></div>
     </div>
-    <p class="fineprint">An original implementation of the classic property-trading board game.<br />Not affiliated with any trademark holder.</p>
+    <p class="fineprint">An original implementation of the classic property-trading board game.<br />Not affiliated with any trademark holder.<br />
+      <a href="/support.html">Support</a> · <a href="/privacy.html">Privacy</a> · <a href="/app.html">iPhone app</a></p>
   </div>
 </section>
 
@@ -163,6 +164,7 @@
 
   <!-- right column -->
   <aside class="col right">
+    <div id="awaitingWell" class="awaiting-well hidden"></div>
     <div id="playerList" class="player-list"></div>
     <div id="rightPanel" class="right-panel"></div>
   </aside>

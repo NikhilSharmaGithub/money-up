@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Get MoneyMove</title>
+<meta name="theme-color" content="#0c1310" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
 <style>
   body { font-family: system-ui, -apple-system, sans-serif; background: #0c1310; color: #efede2;
          margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; }
@@ -23,8 +25,8 @@
   <h1>MoneyMove</h1>
   <p id="line">Opening the App Store…</p>
   <a class="btn" id="primary" href="https://apps.apple.com/app/id6806881798">Get the iPhone app</a>
-  <a class="btn ghost" href="/">Play in the browser instead</a>
-  <p class="fine">The Android build isn’t out yet — on Android the browser version plays the same.</p>
+  <a class="btn ghost" id="secondary" href="/">Play in the browser instead</a>
+  <p class="fine" id="fine">The Android build isn’t out yet — on Android the browser version plays the same.</p>
 </main>
 <script>
   // Send iPhone and iPad straight to the App Store; everyone else gets the web
@@ -34,12 +36,17 @@
     || (ua.indexOf('Macintosh') > -1 && navigator.maxTouchPoints > 1); // iPadOS lies about being a Mac
   var line = document.getElementById('line');
   var primary = document.getElementById('primary');
+  var secondary = document.getElementById('secondary');
   if (isIOS) {
     location.replace('https://apps.apple.com/app/id6806881798');
   } else if (/Android/.test(ua)) {
     line.textContent = 'The Android app is on the way. Play in your browser for now — same game, same tables.';
     primary.textContent = 'Play in the browser';
     primary.href = '/';
+    // The fallback button now says exactly what the main one says, and the
+    // fine print repeats the paragraph above it — drop both.
+    secondary.remove();
+    document.getElementById('fine').remove();
   } else {
     line.textContent = 'Play right here in the browser, or grab the iPhone app.';
   }

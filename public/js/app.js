@@ -9,10 +9,11 @@ import {
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
+  renderAwaiting,
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
-import { initSocial } from './social.js';
+import { initSocial, stopSocial } from './social.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -58,6 +59,10 @@ let lastLogAt = 0;
 let lastTurnId = null;
 let winnerShown = false;
 let removedShown = false;
+// Set while walking back into a table left mid-game. The server opens a room
+// for any code asked of it, so an abandoned table comes back as an empty lobby
+// wearing the old code — read once, on the first state, to say so out loud.
+let resuming = false;
 
 // ──────────────────────────────────────────────────────────────── actions ──
 const emit = (evt) => (...args) => socket?.emit(evt, ...args);
@@ -93,15 +98,24 @@ const actions = {
   payDebt: emit('payDebt'),
   bankrupt: emit('bankrupt'),
   quit: emit('quit'),
+  grantTime: (id) => socket?.emit('grantTime', { id }),
   chat: emit('chat'),
   rematch: emit('rematch'),
+  // A finished board is a dead end without a way off it, so the result sheet
+  // and the well can both send you home.
+  goHome: () => {
+    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+    goHome();
+  },
 };
 
 // ──────────────────────────────────────────────────────────────── landing ──
 function showLanding() {
   $('#landing').classList.remove('hidden');
   $('#app').classList.add('hidden');
-  $('#nickInput').value = nickname;
+  // A name you picked before is yours again; a first visit gets an empty field
+  // and its placeholder, never a name someone else chose for you.
+  $('#nickInput').value = nickname || '';
 
   // A table you stepped away from mid-game gets a way back in.
   let lastRoom = null;
@@ -110,11 +124,11 @@ function showLanding() {
   cont.classList.toggle('hidden', !lastRoom);
   if (lastRoom) {
     cont.textContent = `▶️ Continue game — room ${lastRoom}`;
-    cont.onclick = () => { sfx.click(); go(lastRoom); };
+    cont.onclick = () => { sfx.click(); resuming = true; go(lastRoom); };
   }
 
   refreshWallet();
-  loadPublicRooms();
+  watchPublicRooms();
   initGoogleSignIn();
   initSocial({
     token, name: nickname, flag: myFlag,
@@ -149,7 +163,12 @@ async function refreshWallet({ celebrate = false } = {}) {
 
 $('#storeBtn').addEventListener('click', () => {
   sfx.click();
-  openStoreModal(token);
+  // Spending in the shop has to show on the chip you spent it from.
+  openStoreModal(token, (coins) => {
+    knownCoins = coins;
+    const chip = $('#coinChip');
+    if (chip) chip.textContent = `🪙 ${coins}`;
+  });
 });
 
 // ---- sign in with Google (only when the server has a client id) ----------
@@ -190,16 +209,35 @@ function initGoogleSignIn() {
   }).catch(() => { /* server offline — landing still works */ });
 }
 
+// Open tables come and go while someone is still reading the landing, so the
+// list keeps itself honest instead of showing whatever was true on arrival.
+let roomsTimer = null;
+
 function loadPublicRooms() {
   fetch(api('/api/rooms')).then((r) => r.json()).then((rooms) => {
     const el = $('#publicRooms');
-    if (!rooms.length) { el.innerHTML = ''; return; }
+    // Don't paint over the "can't reach the server" panel that shares this slot.
+    if (el.querySelector('.server-down')) return;
+    if (!rooms.length) {
+      el.innerHTML = `<div class="pr-title">Public rooms</div>
+        <div class="empty small">No open tables right now — Play now opens one.</div>`;
+      return;
+    }
     el.innerHTML = '<div class="pr-title">Public rooms</div>' + rooms.map((r) => `
-      <button class="public-room" data-room="${r.id}">
-        <span>${r.map}</span><span class="dim">${r.players}/${r.maxPlayers} · ${r.id}</span>
+      <button class="public-room" data-room="${escapeHtml(r.id)}">
+        <span>${escapeHtml(r.map)}</span><span class="dim">${r.players}/${r.maxPlayers} · ${escapeHtml(r.id)}</span>
       </button>`).join('');
     el.querySelectorAll('[data-room]').forEach((c) => { c.onclick = () => go(c.dataset.room); });
   }).catch(() => {});
+}
+
+function watchPublicRooms() {
+  clearInterval(roomsTimer);
+  // A "can't reach the server" panel from an earlier attempt shares this slot
+  // and the poll leaves it alone; arriving at the landing clears the slate.
+  $('#publicRooms').innerHTML = '';
+  loadPublicRooms();
+  roomsTimer = setInterval(loadPublicRooms, 8000);
 }
 
 function go(id) {
@@ -232,12 +270,20 @@ const takeNickname = () => {
  * every way out puts the button back so the rest of the landing stays usable.
  */
 function askForRoom(btn, busyLabel, event) {
+  // Both buttons ask the same server for the same thing, so a second press on
+  // the other one only opens a table nobody ever sits at.
+  const others = [$('#quickBtn'), $('#createBtn')].filter((b) => b && b !== btn);
   btn.disabled = true;
+  others.forEach((b) => { b.disabled = true; });
   btn.dataset.label ||= btn.innerHTML;
   btn.innerHTML = busyLabel;
 
   // Coming back to the landing later must not find it stuck on "Creating…".
-  const restore = () => { btn.disabled = false; btn.innerHTML = btn.dataset.label; };
+  const restore = () => {
+    btn.disabled = false;
+    btn.innerHTML = btn.dataset.label;
+    others.forEach((b) => { b.disabled = false; });
+  };
 
   const s = connect({ timeout: 8000, reconnectionAttempts: 2 });
   let settled = false;
@@ -320,12 +366,30 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
 
+/**
+ * What people actually put in the code box: the code, or the whole invite link
+ * they were sent. A pasted link used to be taken literally and dropped them in
+ * a brand-new room called "http", so pull the code out of either shape.
+ */
+function roomCodeFrom(raw) {
+  const text = String(raw || '').trim();
+  const linked = text.match(/[?&]room=([a-z0-9]+)/i) || text.match(/\/room\/([a-z0-9]+)/i);
+  return (linked ? linked[1] : text).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12);
+}
+
+// Tidy the field as it is typed, so what you see is what will be joined.
+$('#codeInput').addEventListener('input', (e) => {
+  const clean = roomCodeFrom(e.target.value);
+  if (clean !== e.target.value) e.target.value = clean;
+});
+
 $('#joinForm').addEventListener('submit', (e) => {
   e.preventDefault();
   unlock(); sfx.click();
   takeNickname();
-  const code = $('#codeInput').value.trim().toLowerCase();
-  if (code) go(code);
+  const code = roomCodeFrom($('#codeInput').value);
+  if (!code) return toast('Enter a room code, or paste the invite link', 'error');
+  return go(code);
 });
 
 // ───────────────────────────────────────────────────────────── invites ──
@@ -341,6 +405,9 @@ function joinInvite(code) {
     return boot();
   }
   showLanding();
+  // Dismissing the name sheet must not lose the invite: the code is sitting in
+  // the join field behind it, one tap from being used again.
+  $('#codeInput').value = code;
   openJoinNameModal(code, (name) => {
     nickname = name;
     storeName(name);
@@ -355,8 +422,15 @@ function boot() {
   const invite = inviteCode();
   if (invite && !/^\/room\//i.test(location.pathname)) return joinInvite(invite);
 
+  // Whatever sheet the last table left open belongs to that table. A result
+  // screen still sitting over the landing — or over the next game — is the
+  // single most confusing thing this app can put on screen.
+  closeModal();
+  $('#cardPopup').classList.add('hidden');
+
   const match = location.pathname.match(/^\/room\/([a-z0-9]+)/i);
   if (!match) {
+    resuming = false;
     // Reached via browser Back mid-game: release the seat properly (a held
     // socket would stall the room) and leave a way back in.
     if (state?.status === 'playing' && roomId) {
@@ -370,6 +444,9 @@ function boot() {
   }
 
   roomId = match[1].toLowerCase();
+  // Nothing on the landing is on screen any more — stop polling for it.
+  clearInterval(roomsTimer);
+  stopSocial();
   $('#landing').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#shareLink').value = `${location.origin}/?room=${roomId}`;
@@ -393,12 +470,25 @@ function boot() {
       lastMyMoney = null;
       hadAuction = !!s.auction;
       lastAuctionBid = s.auction?.bid || 0;
+      if (resuming) {
+        resuming = false;
+        // An empty lobby where a game was is the table having been packed away.
+        if (s.status === 'lobby' && s.players.length <= 1) {
+          toast('That table has closed — this is a fresh room with the same code');
+          try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        }
+      }
     }
     state = s;
     render();
   });
   socket.on('toast', (t) => toast(t.message, t.type));
-  socket.on('joinFailed', (d) => toast(d.message, 'error'));
+  // No seat left (started, or full). You are still shown the table, so say that
+  // out loud — a bare red "Game already started" reads as a failed navigation.
+  socket.on('joinFailed', (d) => toast(
+    d.spectate ? `${d.message} — you're watching this table 👀` : d.message,
+    d.spectate ? 'info' : 'error',
+  ));
   socket.on('disconnect', () => toast('Connection lost — reconnecting…', 'error'));
   socket.on('connect_error', () => {
     if (state) return; // already in a game, socket.io will keep retrying
@@ -424,6 +514,7 @@ function render() {
   }));
   if (rebuilt) requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
 
+  safe('awaiting', () => renderAwaiting(state, meId, $('#awaitingWell'), actions));
   safe('players', () => renderPlayers(state, meId, $('#playerList'), actions));
   safe('panel', () => renderRightPanel(state, meId, $('#rightPanel'), actions));
   safe('center', () => renderCenter(state, meId, actions));
@@ -477,6 +568,10 @@ function render() {
   if (!meNow?.timedOut) removedShown = false;
 
   // game over
+  if (state.status === 'ended') {
+    // Nothing left to come back to, so the home screen must stop offering it.
+    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+  }
   if (state.status === 'ended' && !winnerShown) {
     winnerShown = true;
     sfx.win();
@@ -558,6 +653,8 @@ const LAST_ROOM_KEY = 'moneymove:lastRoom';
 /** Drops the socket, clears the board and puts the landing back on screen. */
 function goHome() {
   history.pushState({}, '', '/');
+  closeModal();
+  $('#cardPopup').classList.add('hidden');
   if (socket) { socket.close(); socket = null; }
   state = null;
   roomId = null;
@@ -648,6 +745,16 @@ function paintFocus() {
   const on = document.body.classList.contains('focus-board');
   focusBtn.classList.toggle('on', on);
   focusBtn.title = on ? 'Show the side panel' : 'Hide the side panel and enlarge the board';
+  // Focus mode fades out the whole panel this button lives in — and the choice
+  // is remembered — so left where it is, it is the switch that turns itself
+  // off and cannot be turned back on. It moves to the corner of the screen
+  // instead, and goes home to the toolbar when the panel comes back.
+  focusBtn.classList.toggle('floating', on);
+  const host = on ? document.body : $('.brand-actions');
+  if (focusBtn.parentElement !== host) {
+    if (on) host.appendChild(focusBtn);
+    else host.prepend(focusBtn);
+  }
   // the board grew or shrank, so the tokens need to find their tiles again
   requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
 }
@@ -704,7 +811,7 @@ const paletteBar = document.createElement('div');
 paletteBar.id = 'paletteBar';
 paletteBar.className = 'palette-bar hidden';
 paletteBar.innerHTML = PALETTES.map((p) =>
-  `<button class="pswatch" data-pal="${p.id}" title="${p.name}" style="--dot:${p.dot}"></button>`).join('');
+  `<button class="pswatch" data-pal="${p.id}" title="${p.name}" aria-label="${p.name}" style="--dot:${p.dot}"></button>`).join('');
 document.body.appendChild(paletteBar);
 
 function currentPalette() { return document.documentElement.dataset.palette || 'felt'; }
@@ -792,6 +899,9 @@ window.addEventListener('resize', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeModal(); $('#cardPopup').classList.add('hidden'); }
   if (document.activeElement?.tagName === 'INPUT') return;
+  // A sheet on top owns the keyboard: Space must not reach through a trade
+  // composer or a "declare bankruptcy?" prompt and fire the board behind it.
+  if (!$('#modalRoot').classList.contains('hidden')) return;
   if (e.key === ' ' || e.key === 'Enter') {
     const btn = document.querySelector('#centerAction .btn.primary, #centerAction .btn.good');
     if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }

@@ -10,6 +10,8 @@ struct ActionPanel: View {
     let openProperties: () -> Void
     var openTrade: (() -> Void)? = nil
     var openCounter: ((TradeOffer) -> Void)? = nil
+    /// Reopens the final standings — the result sheet can be swiped away.
+    var openResults: (() -> Void)? = nil
     @State private var confirmBankrupt = false
 
     var body: some View {
@@ -18,12 +20,30 @@ struct ActionPanel: View {
             firstIncomingTrade
 
             if store.isMyTurn, let turn = store.state?.turn {
+                turnHeader(P)
                 myTurnControls(turn: turn, P: P)
             } else if store.state?.isPlaying == true {
                 waitingRow(P)
-            } else if store.state?.isEnded == true, store.isHost {
-                Button("🔁  Play again with the same players") { store.rematch() }
-                    .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+            } else if store.state?.isEnded == true {
+                VStack(spacing: 8) {
+                    if store.isHost {
+                        Button("🔁  Play again with the same players") { store.rematch() }
+                            .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                    } else {
+                        Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
+                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if let openResults {
+                        Button("🏆  Final standings") {
+                            openResults()
+                            Haptics.tap()
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                    }
+                }
             }
         }
         .padding(12)
@@ -42,6 +62,35 @@ struct ActionPanel: View {
     }
 
     // MARK: - my turn
+
+    /// Whose hands these buttons are in, and how long they have. On a pass &
+    /// play device the dock serves several seats and looked identical for all
+    /// of them; and the clock only ever showed on OTHER people's turns, which
+    /// is the one turn where the countdown actually costs you something.
+    @ViewBuilder
+    private func turnHeader(_ P: Palette) -> some View {
+        let seat = store.state?.turn?.playerId
+        let mine = seat == store.meId
+        HStack(spacing: 7) {
+            if let p = store.state?.player(seat), !mine {
+                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 20, emoji: p.avatar ?? "")
+                Text("\(p.name)'s turn — pass the phone")
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(P.gold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            } else {
+                Text("Your turn")
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            Spacer(minLength: 6)
+            if let endsAt = store.state?.turn?.endsAt {
+                TurnClock(endsAt: endsAt, compact: true)
+            }
+        }
+        .padding(.horizontal, 2)
+    }
 
     @ViewBuilder
     private func myTurnControls(turn: TurnState, P: Palette) -> some View {
@@ -152,7 +201,32 @@ struct ActionPanel: View {
 
     // MARK: - waiting / trades
 
+    @ViewBuilder
     private func waitingRow(_ P: Palette) -> some View {
+        // Out of the running: the dock would otherwise sit there saying
+        // "…is playing" forever with no hint that your seat is done.
+        if let me = store.state?.player(store.meId), me.isBankrupt {
+            HStack(spacing: 8) {
+                Text(me.wasRemoved
+                     ? (me.removedFor == "quit" ? "🚪" : "⏳")
+                     : "💸")
+                    .font(.system(size: 15))
+                Text(me.wasRemoved
+                     ? "You're out of this game — watching how it ends."
+                     : "You went bankrupt — watching how it ends.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+        } else {
+            liveWaitingRow(P)
+        }
+    }
+
+    private func liveWaitingRow(_ P: Palette) -> some View {
         HStack(spacing: 10) {
             if let current = store.currentPlayer {
                 AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26, emoji: current.avatar ?? "")
@@ -161,6 +235,11 @@ struct ActionPanel: View {
                     .foregroundStyle(P.ink2)
             }
             Spacer()
+            // The clock runs on every turn, not just yours — watching someone
+            // else's tick down is what makes the wait readable.
+            if let endsAt = store.state?.turn?.endsAt {
+                TurnClock(endsAt: endsAt, compact: true)
+            }
             ProgressView().tint(P.red).scaleEffect(0.85)
         }
         .padding(.horizontal, 4)
@@ -195,9 +274,19 @@ struct ActionPanel: View {
                 if let watching = viewerNames(trade) {
                     ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
                 }
+                // Accepting a deal you can't fund just bounces off the server
+                // with a toast; say so before the tap instead.
+                let short = trade.get.money - (store.state?.player(trade.to)?.money ?? 0)
+                if short > 0 {
+                    Text("Short \(money(short)) — sell or mortgage first.")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.bad)
+                }
                 HStack(spacing: 8) {
                     Button("Accept") { store.respondTrade(trade.id, accept: true) }
                         .buttonStyle(MMButtonStyle(kind: .good))
+                        .disabled(short > 0)
+                        .opacity(short > 0 ? 0.45 : 1)
                     if let openCounter {
                         Button("Negotiate") { openCounter(trade) }
                             .buttonStyle(MMButtonStyle(kind: .gold))
@@ -208,9 +297,9 @@ struct ActionPanel: View {
                         store.ignoreTrade(trade.id)
                         Haptics.tap()
                     } label: {
-                        Text("💤")
-                            .font(.system(size: 15))
-                            .frame(width: 26, height: 22)
+                        Text("💤 Later")
+                            .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                            .fixedSize()
                     }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
                     .fixedSize()
@@ -248,8 +337,12 @@ struct ActionPanel: View {
         if let trade = sent.first {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?")…")
-                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(P.ink3)
+                    // Name the deal, not just the recipient — you can't take
+                    // back what you offered if you can't remember it.
+                    Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?"): \(summary(trade.give)) ⇄ \(summary(trade.get))")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(P.ink3)
+                        .lineLimit(2)
                     if let watching = viewerNames(trade) {
                         ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
                     } else if trade.ignored == true {
@@ -273,16 +366,21 @@ struct ActionPanel: View {
         return names.isEmpty ? nil : names.joined(separator: ", ")
     }
 
-    private func tradeLine(label: String, side: TradeSide, color: Color) -> some View {
-        let P = Palette.current(scheme)
+    /// One side of a deal as a single readable phrase.
+    private func summary(_ side: TradeSide) -> String {
         var bits: [String] = []
         if side.money > 0 { bits.append(money(side.money)) }
         bits.append(contentsOf: side.tiles.compactMap { store.tile($0)?.name })
         if side.cards > 0 { bits.append("\(side.cards)× prison card") }
+        return bits.isEmpty ? "nothing" : bits.joined(separator: " · ")
+    }
+
+    private func tradeLine(label: String, side: TradeSide, color: Color) -> some View {
+        let P = Palette.current(scheme)
         return HStack(alignment: .top) {
             Text(label).font(.system(size: 12)).foregroundStyle(P.ink3)
             Spacer()
-            Text(bits.isEmpty ? "nothing" : bits.joined(separator: " · "))
+            Text(summary(side))
                 .font(.system(size: 12.5, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
                 .multilineTextAlignment(.trailing)

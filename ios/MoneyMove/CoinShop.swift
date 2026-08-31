@@ -40,6 +40,10 @@ final class CoinShop: ObservableObject {
             packs = catalog?.packs ?? []
         }
         guard !packs.isEmpty else { return }
+        // One successful lookup is enough — re-asking the App Store every time
+        // the tab opens just blocks on the network for the same answer. A
+        // lookup that came back empty is still worth retrying.
+        guard products.isEmpty else { return }
         let found = (try? await Product.products(for: packs.map(\.productId))) ?? []
         products = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         checked = true

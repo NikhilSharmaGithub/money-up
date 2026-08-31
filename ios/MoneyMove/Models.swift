@@ -19,6 +19,8 @@ struct GameState: Codable, Equatable {
     var teamInfo: [TeamInfo]?
     var winningTeam: Int?
     var players: [PlayerState]
+    /// Seats whose player dropped out and whose chair the table is holding.
+    var awaiting: [AwaitingSeat]?
     var ownership: [String: TileOwnership]  // tile index (stringified) -> owner
     var turn: TurnState?
     var auction: AuctionState?
@@ -140,6 +142,24 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }
     var wasRemoved: Bool { timedOut ?? false }
+}
+
+/// A seat the table is waiting on. The first couple of extensions are a favour
+/// any one player can do alone; after that the server wants everybody's click,
+/// which is why `granted` and `voters` travel with it.
+struct AwaitingSeat: Codable, Equatable, Identifiable {
+    var id: String
+    /// Epoch ms the chair is released if nobody grants more time.
+    var until: Double?
+    var grants: Int?
+    var granted: [String]?
+    var needAll: Bool?
+    var voters: Int?
+
+    var grantedIds: [String] { granted ?? [] }
+    var voterCount: Int { voters ?? 0 }
+    /// One click is no longer enough — everyone still at the table must agree.
+    var isVote: Bool { needAll ?? false }
 }
 
 struct TileOwnership: Codable, Equatable {
@@ -268,6 +288,8 @@ struct FriendEntry: Codable, Identifiable {
     var code: String
     var name: String
     var flag: String?
+    /// Their equipped store face, sent alongside the flag.
+    var avatar: String?
     var roomId: String?
     var status: String?
 

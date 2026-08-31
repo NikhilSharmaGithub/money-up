@@ -119,6 +119,9 @@ export function renderChat(state, el, channel = 'all') {
     : state.chat;
   const sig = `${channel}:${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`;
   if (el.dataset.sig === sig) return;
+  // Scrolled up to re-read something? A new line shouldn't drag you back down
+  // — the game log already behaves this way, and chat should match it.
+  const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40 || !el.dataset.sig;
   el.dataset.sig = sig;
   if (!msgs.length) {
     el.innerHTML = channel === 'team'
@@ -132,7 +135,7 @@ export function renderChat(state, el, channel = 'all') {
       ${m.flag ? `<span class="chat-flag">${escapeHtml(m.flag)}</span>` : ''}<b style="color:${m.color}">${escapeHtml(m.name)}</b>${teamColor ? ` <span class="chat-team-badge" style="color:${teamColor}">TEAM</span>` : ''} ${escapeHtml(m.text)}
     </div>`;
   }).join('');
-  el.scrollTop = el.scrollHeight;
+  if (wasAtBottom) el.scrollTop = el.scrollHeight;
 }
 
 // ───────────────────────────────────────────────────────────── player list ──
@@ -143,6 +146,12 @@ const prevMoney = new Map();
 // later would otherwise show a frozen snapshot.
 let livePlayersState = null;
 
+// A seat whose player was removed is out of the running whatever the money
+// says: it takes no turns, holds no deeds and cannot be traded with. The
+// server usually bankrupts them too, but a rematch clears that flag and leaves
+// the removal behind — so both are checked everywhere the roster asks.
+const isOut = (p) => !!(p.bankrupt || p.timedOut);
+
 /**
  * Live standings by net worth. Seating order breaks ties so two players on the
  * same money don't swap numbers back and forth on every push.
@@ -150,7 +159,7 @@ let livePlayersState = null;
 function rankByWorth(state) {
   const rank = new Map();
   state.players
-    .map((p, seat) => ({ id: p.id, seat, worth: p.netWorth || 0, out: !!p.bankrupt }))
+    .map((p, seat) => ({ id: p.id, seat, worth: p.netWorth || 0, out: isOut(p) }))
     .sort((a, b) => Number(a.out) - Number(b.out) || b.worth - a.worth || a.seat - b.seat)
     .forEach((p, k) => rank.set(p.id, k + 1));
   return rank;
@@ -167,7 +176,7 @@ function nextUpId(state) {
   if (idx < 0) return null;
   for (let step = 1; step < players.length; step++) {
     const cand = players[(idx + step) % players.length];
-    if (cand.bankrupt || cand.skipTurns > 0) continue;
+    if (isOut(cand) || cand.skipTurns > 0) continue;
     return cand.id;
   }
   return null;
@@ -179,22 +188,21 @@ export function renderPlayers(state, meId, el, actions) {
   const nextUp = nextUpId(state);
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
-  const structure = state.players.map((p) => `${p.id}:${p.bankrupt ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
+  const structure = state.players.map((p) => `${p.id}:${isOut(p) ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
     + `:${state.status}:${state.hostId}:${emptySeats}`;
 
   if (el.dataset.structure !== structure) {
     el.dataset.structure = structure;
     el.innerHTML = state.players.map((p) => `
-      <div class="player-card ${p.bankrupt ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
-        <div class="pc-glow"></div>
+      <div class="player-card ${isOut(p) ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
         <span class="prank hidden"></span>
         <div class="avatar ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">
-          ${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}
+          <span class="avatar-face"></span>
           <span class="avatar-ring"></span>
           <span class="avatar-flag"></span>
         </div>
         <div class="pinfo">
-          <div class="pname">${escapeHtml(p.name)}<span class="tags"></span></div>
+          <div class="pname"><span class="pn-text"></span><span class="tags"></span></div>
           <div class="pmoney"></div>
           <div class="chips"></div>
         </div>
@@ -221,6 +229,21 @@ export function renderPlayers(state, meId, el, actions) {
     const isTurn = state.turn?.playerId === p.id && state.status === 'playing';
     card.classList.toggle('turn', isTurn);
     card.classList.toggle('next-up', p.id === nextUp && !isTurn);
+
+    // Renaming yourself in the lobby has to reach the roster: the card is only
+    // rebuilt when the table itself changes, so the name and the initial on
+    // the disc are patched in place like every other live field.
+    const nameEl = card.querySelector('.pn-text');
+    if (nameEl.dataset.v !== p.name) {
+      nameEl.dataset.v = p.name;
+      nameEl.textContent = p.name;
+    }
+    const faceEl = card.querySelector('.avatar-face');
+    const face = p.avatar || (p.name[0] || '?').toUpperCase();
+    if (faceEl.dataset.v !== face) {
+      faceEl.dataset.v = face;
+      faceEl.textContent = face;
+    }
 
     // live position — the leader wears the crown, everyone else their number
     const rankEl = card.querySelector('.prank');
@@ -253,8 +276,12 @@ export function renderPlayers(state, meId, el, actions) {
     if (p.id === meId) tags.push('<i class="tag you">YOU</i>');
     // A quiet heads-up so people look up before the turn lands on them.
     if (p.id === nextUp && !isTurn) tags.push(`<i class="tag next">${p.id === meId ? "YOU'RE NEXT" : 'NEXT'}</i>`);
-    if (p.timedOut) tags.push(`<i class="tag off">${p.removedFor === 'quit' ? 'LEFT' : 'TIMED OUT'}</i>`);
-    else if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
+    // "Timed out" is a story about a game that is running; back in a lobby the
+    // same seat is simply someone who has not come back to the table.
+    if (p.timedOut) {
+      tags.push(`<i class="tag off">${state.status === 'lobby' ? 'NOT BACK'
+        : p.removedFor === 'quit' ? 'LEFT' : 'TIMED OUT'}</i>`);
+    } else if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
     else if (!p.connected && !p.isBot) tags.push('<i class="tag off">AWAY</i>');
     if (p.jail) tags.push('<i class="tag jail">JAIL</i>');
     if (p.skipTurns > 0) tags.push('<i class="tag vac">VACATION</i>');
@@ -265,13 +292,16 @@ export function renderPlayers(state, meId, el, actions) {
 
     // money + delta bubble
     const moneyEl = card.querySelector('.pmoney');
-    const shown = p.timedOut ? '<span class="dim">out of the game</span>'
+    const shown = state.status === 'lobby' ? money(p.money)
+      : p.timedOut ? '<span class="dim">out of the game</span>'
       : p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.money);
     if (moneyEl.dataset.v !== shown) {
       const before = prevMoney.get(p.id);
       moneyEl.dataset.v = shown;
       moneyEl.innerHTML = shown;
-      if (before != null && before !== p.money && !p.bankrupt) {
+      // A rematch resets every wallet at once; that is a new game starting,
+      // not eight players suddenly winning money.
+      if (before != null && before !== p.money && !isOut(p) && state.status === 'playing') {
         spawnDelta(card, p.money - before);
         moneyEl.classList.remove('bump');
         void moneyEl.offsetWidth;
@@ -280,9 +310,10 @@ export function renderPlayers(state, meId, el, actions) {
     }
     prevMoney.set(p.id, p.money);
 
-    // owned set chips
+    // owned set chips — they stay up after the last bankruptcy, because the
+    // final board is exactly what everyone wants to read on the way out.
     const chips = card.querySelector('.chips');
-    if (state.status === 'playing') {
+    if (state.status !== 'lobby') {
       const owned = Object.entries(state.ownership).filter(([, o]) => o.owner === p.id).map(([i]) => Number(i));
       const perGroup = {};
       let rails = 0, utils = 0;
@@ -299,7 +330,7 @@ export function renderPlayers(state, meId, el, actions) {
       }).join('')
         + (rails ? `<i class="chip plain" title="Airports">✈️${rails}</i>` : '')
         + (utils ? `<i class="chip plain" title="Utilities">💡${utils}</i>` : '');
-      const final = html || '<span class="dim">no property yet</span>';
+      const final = html || `<span class="dim">${isOut(p) ? 'nothing left' : 'no property yet'}</span>`;
       if (chips.dataset.v !== final) { chips.dataset.v = final; chips.innerHTML = final; }
     } else if (chips.dataset.v !== 'lobby') {
       chips.dataset.v = 'lobby';
@@ -309,7 +340,7 @@ export function renderPlayers(state, meId, el, actions) {
     // buttons
     const acts = card.querySelector('.player-actions');
     const me = state.players.find((x) => x.id === meId);
-    const canTrade = state.status === 'playing' && p.id !== meId && !p.bankrupt && !me?.bankrupt;
+    const canTrade = state.status === 'playing' && p.id !== meId && !isOut(p) && !isOut(me || {});
     // Nobody hosts a Quick Play table, so nobody gets to throw strangers off it.
     const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId && !state.quick;
     const canPickTeam = state.status === 'lobby' && state.settings.teams > 0
@@ -371,11 +402,22 @@ function debtSig(state, meId) {
   return `${d.amount}:${state.players.find((p) => p.id === meId)?.money}`;
 }
 
+/**
+ * An offer changes without the list of ids changing: someone sets it aside for
+ * later, or opens it and starts reading. Those are the whole point of the
+ * card, so they have to be in the signature or they never reach the screen.
+ */
+function tradeSig(state) {
+  return state.trades
+    .map((t) => `${t.id}${t.ignored ? '!' : ''}${(t.viewers || []).join('.')}`)
+    .join();
+}
+
 export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   const sig = state.status === 'lobby'
     ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${state.quickStartAt || 0}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${state.trades.map((t) => t.id).join()}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}`;
+    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   if (state.status !== 'lobby') renderMyStuff(state, meId, el, actions);
@@ -620,6 +662,10 @@ function raiseCashPanel(state, meId) {
 }
 
 function renderMyStuff(state, meId, el, actions) {
+  const me = state.players.find((p) => p.id === meId);
+  // Once the game is over — or this seat is out of it — the deed buttons only
+  // earn a "Not available" from the server, so the list turns into a record.
+  const live = state.status === 'playing' && !isOut(me || {});
   const mine = Object.entries(state.ownership)
     .filter(([, o]) => o.owner === meId)
     .map(([i, o]) => ({ i: Number(i), ...o }));
@@ -644,11 +690,11 @@ function renderMyStuff(state, meId, el, actions) {
         <span class="prop-name">${escapeHtml(t.name)}</span>
         <span class="prop-houses">${buildings}</span>
         <span class="prop-actions">
-          ${canBuildOn(state, meId, m.i) ? `<button class="btn tiny" data-build="${m.i}" title="Build for $${t.houseCost}">＋</button>` : ''}
-          ${canSellOn(state, meId, m.i) ? `<button class="btn tiny" data-sell="${m.i}" title="Sell a building for $${Math.floor(t.houseCost / 2)}">−</button>` : ''}
+          ${live && canBuildOn(state, meId, m.i) ? `<button class="btn tiny" data-build="${m.i}" title="Build for $${t.houseCost}">＋</button>` : ''}
+          ${live && canSellOn(state, meId, m.i) ? `<button class="btn tiny" data-sell="${m.i}" title="Sell a building for $${Math.floor(t.houseCost / 2)}">−</button>` : ''}
           ${m.mortgaged
-            ? (state.settings.mortgage ? `<button class="btn tiny gold" data-unmort="${m.i}" title="Buy back for $${Math.ceil((t.price / 2) * 1.1)}">↺</button>` : '')
-            : (canMortgage(state, meId, m.i) ? `<button class="btn tiny" data-mort="${m.i}" title="Mortgage for $${Math.floor(t.price / 2)}">🏦</button>` : '')}
+            ? (live && state.settings.mortgage ? `<button class="btn tiny gold" data-unmort="${m.i}" title="Buy back for $${Math.ceil((t.price / 2) * 1.1)}">↺</button>` : '')
+            : (live && canMortgage(state, meId, m.i) ? `<button class="btn tiny" data-mort="${m.i}" title="Mortgage for $${Math.floor(t.price / 2)}">🏦</button>` : '')}
         </span>
       </div>`;
     }).join('');
@@ -672,7 +718,10 @@ function renderMyStuff(state, meId, el, actions) {
 
     <div class="panel">
       <div class="panel-title">Your properties</div>
-      ${mine.length ? sections : '<div class="empty">Nothing owned yet — land on a street and buy it.</div>'}
+      ${mine.length ? sections : `<div class="empty">${
+        isOut(me || {}) ? 'Your deeds went back to the bank. You are watching from the rail now 👀'
+          : state.status === 'ended' ? 'You finished with nothing on the board.'
+          : 'Nothing owned yet — land on a street and buy it.'}</div>`}
     </div>
 
     ${state.settings.vacationCash ? `<div class="panel pot">
@@ -817,11 +866,20 @@ export function renderCenter(state, meId, actions) {
   }
 
   // game over ────────────────────────────────────────────────────────────
+  // Closing the result sheet used to leave an empty board with no way on, so
+  // the well keeps the two moves that are left: read it again, or go home.
   if (state.status === 'ended') {
-    actionEl.innerHTML = '';
+    actionEl.innerHTML = `<div class="row-2">
+        <button class="btn" id="cStandings">📊 Final standings</button>
+        <button class="btn ghost" id="cHome">🏠 Back to home</button>
+      </div>
+      ${state.hostId === meId ? '<button class="btn primary wide wrap" id="cAgain">🔁 Play again with the same players</button>' : ''}`;
     statusEl.innerHTML = state.winner
       ? `<div class="win-line" style="color:${state.winner.color}">🏆 ${escapeHtml(state.winner.name)} wins!</div>`
       : '<div class="win-line">Game over</div>';
+    on('#cStandings', () => showGameOver(state, meId, actions));
+    on('#cHome', () => actions.goHome?.());
+    on('#cAgain', actions.rematch);
     return;
   }
 
@@ -832,17 +890,25 @@ export function renderCenter(state, meId, actions) {
     const leader = state.players.find((p) => p.id === a.leader);
     const inRace = a.inRace.includes(meId);
     const min = a.bid === 0 ? 10 : a.bid + 10;
+    // The leading bid is escrowed out of the leader's wallet the moment it
+    // lands, so their real ceiling is the cash still showing plus the money
+    // already on the table — read off the wallet alone it looks lower.
+    const purse = (me?.money || 0) + (a.leader === meId ? a.bid : 0);
+    const steps = [min, min + 40, min + 90].filter((v) => v <= purse);
     cardEl.innerHTML = deedMarkup(state, a.tile, { compact: true }) || '';
     actionEl.innerHTML = `
       <div class="auction-box">
         <div class="auction-label">🔨 Auction</div>
         <div class="auction-bid">${money(a.bid)}</div>
-        <div class="dim small">${leader ? `leading: <b style="color:${leader.color}">${escapeHtml(leader.name)}</b>` : 'no bids yet'}</div>
+        <div class="dim small">${leader
+          ? `leading: <b style="color:${leader.color}">${escapeHtml(leader.name)}${a.leader === meId ? ' (you)' : ''}</b>`
+          : 'no bids yet'}</div>
         <div class="auction-timer"><i id="auctionBar"></i></div>
         ${inRace ? `<div class="bid-row">
-            ${[min, min + 40, min + 90].filter((v) => v <= (me?.money || 0)).map((v) => `<button class="btn small" data-bid="${v}">${money(v)}</button>`).join('')}
+            ${steps.map((v) => `<button class="btn small" data-bid="${v}">${money(v)}</button>`).join('')}
             <button class="btn small bad" id="passBid">Pass</button>
-          </div>`
+          </div>
+          ${steps.length ? '' : `<div class="dim small mt">${money(min)} is the next bid — more than you can raise. Passing is the only move left.</div>`}`
         : '<div class="dim small mt">You are out of this auction</div>'}
       </div>`;
     statusEl.innerHTML = '';
@@ -952,7 +1018,7 @@ function syncQuickCountdown(endsAt) {
 // The deadline rides along with the state, but the seconds are counted here:
 // a push can be minutes old after a sleeping tab, and a chip frozen on "42s"
 // reads as a broken game.
-const clock = { endsAt: null, playerId: null, mine: false };
+const clock = { endsAt: null, total: 0, playerId: null, mine: false };
 let clockTimer = null;
 
 const clockText = (secs) => (secs >= 60
@@ -960,17 +1026,31 @@ const clockText = (secs) => (secs >= 60
   : `${secs}s`);
 
 export function syncTurnClock(state, meId) {
-  const live = state.status === 'playing' && state.turn?.endsAt ? state.turn : null;
+  const playing = state.status === 'playing';
+  const live = playing && state.turn?.endsAt ? state.turn : null;
   clock.endsAt = live?.endsAt || null;
   clock.playerId = live?.playerId || null;
   clock.mine = !!live && live.playerId === meId;
+  clock.total = Math.max(0, Number(state.settings?.turnSeconds) || 0) * 1000;
   paintTurnClock();
-  if (clock.endsAt && !clockTimer) clockTimer = setInterval(paintTurnClock, 250);
-  else if (!clock.endsAt && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+  // Every turn carries a deadline now, the seats the house plays included, so
+  // the ticker runs for the whole game instead of being torn down and rebuilt
+  // around each turn — a clock that stops between turns reads as a dead table.
+  if (playing && !clockTimer) clockTimer = setInterval(paintTurnClock, 200);
+  else if (!playing && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+}
+
+/** Whole seconds left on the turn, or null when this table runs no shot clock. */
+function clockSeconds() {
+  if (!clock.endsAt) return null;
+  const left = clock.endsAt - Date.now();
+  // A device whose own clock sits minutes behind the server's would otherwise
+  // show "9:58" on a sixty-second turn; the turn length is the honest ceiling.
+  return Math.max(0, Math.ceil((clock.total ? Math.min(left, clock.total) : left) / 1000));
 }
 
 function paintTurnClock() {
-  const secs = clock.endsAt ? Math.max(0, Math.ceil((clock.endsAt - Date.now()) / 1000)) : null;
+  const secs = clockSeconds();
   const urgent = secs !== null && secs <= 10;
 
   document.querySelectorAll('.player-card').forEach((card) => {
@@ -991,14 +1071,100 @@ function paintTurnClock() {
   well.classList.toggle('urgent', urgent);
 }
 
+// ──────────────────────────────────────────── holding a dropped chair ──
+// A seat is only held for as long as the table agrees to hold it, so the card
+// has to answer three things at a glance: who we are waiting for, how long is
+// left, and — once the free favours are spent — how many people still have to
+// click before the minute lands.
+let awaitTimer = null;
+
+export function renderAwaiting(state, meId, el, actions) {
+  if (!el) return;
+  const seats = (state.status === 'playing' ? state.awaiting || [] : [])
+    .map((a) => ({ ...a, granted: a.granted || [], player: state.players.find((p) => p.id === a.id) }))
+    // Nobody is asked to wait for themselves, and a chair whose player is back
+    // — or that has already gone back to the board — is nobody's problem.
+    .filter((a) => a.player && a.id !== meId && !a.player.connected && !a.player.timedOut);
+
+  el.classList.toggle('hidden', !seats.length);
+
+  // Only the countdown moves between pushes, and rebuilding a button under a
+  // finger swallows the tap that was already on its way to it.
+  const sig = seats.map((a) => `${a.id}:${a.needAll ? 1 : 0}:${a.granted.join(',')}:${a.voters}:${a.until}`).join('|');
+  if (el.dataset.sig !== sig) {
+    el.dataset.sig = sig;
+    el.innerHTML = seats.map((a) => awaitCard(a, meId)).join('');
+    el.querySelectorAll('[data-grant]').forEach((b) => {
+      b.onclick = () => { sfx.click(); actions.grantTime(b.dataset.grant); };
+    });
+  }
+  paintAwaiting();
+  if (seats.length && !awaitTimer) awaitTimer = setInterval(paintAwaiting, 250);
+  else if (!seats.length && awaitTimer) { clearInterval(awaitTimer); awaitTimer = null; }
+}
+
+function awaitCard(a, meId) {
+  const p = a.player;
+  // A vote only exists once one click is no longer enough, so before that
+  // nobody is ever locked out of the button.
+  const voted = a.needAll && a.granted.includes(meId);
+  const need = Math.max(1, a.voters);
+  const agreed = Math.min(a.granted.length, need);
+  // With nobody else left to ask, a "vote" is just you clicking again — so the
+  // card drops the ballot language rather than counting you as a missing voter.
+  const alone = need <= 1;
+
+  const label = !a.needAll || alone ? '⏳ Grant a minute'
+    : voted ? `✓ You agreed · ${agreed} of ${need}`
+    : `🤝 Vote to wait · ${agreed} of ${need} agreed`;
+  const note = !a.needAll
+    ? 'Any one player can do this alone for now.'
+    : alone ? 'You are the only one left to ask — keep the seat open as long as you like.'
+      : voted ? 'Waiting on the rest of the table — everyone has to click.'
+      : `${need - agreed} more ${need - agreed === 1 ? 'player has' : 'players have'} to agree before the minute lands.`;
+
+  return `<div class="await-card">
+    <div class="aw-head">
+      <span class="avatar sm" style="background:${p.color}">${escapeHtml((p.name[0] || '?').toUpperCase())}</span>
+      <div class="aw-who">
+        <b>${escapeHtml(p.name)}</b> dropped out
+        <span class="aw-left" data-until="${Number(a.until) || 0}"></span>
+      </div>
+    </div>
+    ${a.needAll && !alone ? `<div class="aw-votes">${Array.from({ length: need },
+      (_, k) => `<i class="${k < agreed ? 'on' : ''}"></i>`).join('')}</div>` : ''}
+    <button class="btn small wide ${voted ? 'ghost' : 'gold'}"
+      data-grant="${escapeHtml(a.id)}" ${voted ? 'disabled' : ''}>${label}</button>
+    <span class="aw-note">${note}</span>
+  </div>`;
+}
+
+function paintAwaiting() {
+  document.querySelectorAll('.aw-left').forEach((el) => {
+    const secs = Math.max(0, Math.ceil((Number(el.dataset.until) - Date.now()) / 1000));
+    el.textContent = secs ? `Seat goes back to the board in ${clockText(secs)}` : 'Letting the seat go…';
+    el.classList.toggle('urgent', secs > 0 && secs <= 10);
+  });
+}
+
 let auctionRaf = null;
+// A bid buys the auction a fresh, shorter deadline than the one it opened
+// with, so the bar has to be measured against the stretch it is actually
+// counting down — a fixed span would refill to two-thirds and read as a
+// timer that shrank when it had in fact just been extended.
+const auctionSpan = { endsAt: 0, ms: 1 };
+
 function animateAuctionBar(a) {
   cancelAnimationFrame(auctionRaf);
+  if (auctionSpan.endsAt !== a.endsAt) {
+    auctionSpan.endsAt = a.endsAt;
+    auctionSpan.ms = Math.max(1, a.endsAt - Date.now());
+  }
   const step = () => {
     const bar = document.getElementById('auctionBar');
     if (!bar) return;
     const left = Math.max(0, a.endsAt - Date.now());
-    bar.style.width = `${Math.min(100, (left / 20000) * 100)}%`;
+    bar.style.width = `${Math.min(100, (left / auctionSpan.ms) * 100)}%`;
     if (left > 0) auctionRaf = requestAnimationFrame(step);
   };
   step();
@@ -1042,14 +1208,22 @@ export function showTurnBanner(player, isMe) {
 // ─────────────────────────────────────────────────────────────── modals ──
 // ─────────────────────────────────────────────────────────────── store ──
 
-/** The cosmetics shop: token skins for the board piece, avatars for the chip. */
-export function openStoreModal(token) {
+/**
+ * The cosmetics shop: token skins for the board piece, avatars for the chip.
+ *
+ * `onWallet` is called whenever the balance moves, so the coin chip the player
+ * came from doesn't sit there showing what they had before they spent it.
+ * `scrollTo` restores the scroll position when the sheet redraws itself after a
+ * purchase — equipping an avatar used to throw you back to the top of the shop.
+ */
+export function openStoreModal(token, onWallet, scrollTo = 0) {
   Promise.all([
     fetch(api('/api/store')).then((r) => r.json()),
     fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json()),
   ]).then(([storeData, wallet]) => {
     const items = storeData.items || [];
     const packs = storeData.packs || [];
+    const coins = wallet.coins ?? 0;
     const section = (kind, title, sub) => `
       <h3 class="map-section">${title}</h3>
       <p class="sub">${sub}</p>
@@ -1057,8 +1231,10 @@ export function openStoreModal(token) {
         ${items.filter((i) => i.kind === kind).map((i) => {
           const owned = wallet.owned?.includes(i.id);
           const equipped = wallet.equipped?.[i.kind] === i.id;
-          return `<button class="store-card ${equipped ? 'equipped' : owned ? 'owned' : ''}"
-                    data-item="${i.id}" data-kind="${i.kind}" data-owned="${owned ? 1 : 0}">
+          const locked = !owned && coins < i.price;
+          return `<button class="store-card ${equipped ? 'equipped' : owned ? 'owned' : ''} ${locked ? 'locked' : ''}"
+                    data-item="${i.id}" data-kind="${i.kind}" data-owned="${owned ? 1 : 0}"
+                    title="${locked ? `${i.price - coins} more coins needed` : escapeHtml(i.name)}">
             <span class="sc-emoji">${i.emoji}</span>
             <span class="sc-name">${escapeHtml(i.name)}</span>
             <span class="sc-price">${equipped ? '✓ Equipped' : owned ? 'Tap to equip' : `🪙 ${i.price}`}</span>
@@ -1085,14 +1261,20 @@ export function openStoreModal(token) {
     openModal(`
       <div class="store-head">
         <h2>Store</h2>
-        <span class="coin-chip">🪙 ${wallet.coins ?? 0}</span>
+        <span class="coin-chip">🪙 ${coins}</span>
+        <button class="icon-btn sheet-x" id="stX" title="Close the store" aria-label="Close the store">✕</button>
       </div>
       <p class="sub">Win games to earn coins — 50 for a quick match, 100 when it goes long. Everything here is pure style.</p>
       ${packSection}
       ${section('token', '🎲 Token skins', 'Your piece on the board.')}
       ${section('avatar', '🙂 Avatars', 'Your face in the player chip.')}
       <div class="modal-actions"><button class="btn ghost" id="stClose">Close</button></div>`, (root) => {
+      const sheet = $('.modal', root);
+      sheet.scrollTop = scrollTo;
+      onWallet?.(coins);
       $('#stClose', root).onclick = closeModal;
+      // The shop is long enough that its only way out used to be a scroll away.
+      $('#stX', root).onclick = closeModal;
       root.querySelectorAll('[data-item]').forEach((card) => {
         card.onclick = async () => {
           sfx.click();
@@ -1100,6 +1282,7 @@ export function openStoreModal(token) {
           const kind = card.dataset.kind;
           const owned = card.dataset.owned === '1';
           const equipped = card.classList.contains('equipped');
+          const at = sheet.scrollTop;
           try {
             if (!owned) {
               const res = await fetch(api('/api/store/buy'), {
@@ -1115,7 +1298,7 @@ export function openStoreModal(token) {
               body: JSON.stringify({ token, slot: kind, itemId: equipped ? null : id }),
             });
             closeModal();
-            openStoreModal(token);   // re-render with fresh wallet
+            openStoreModal(token, onWallet, at);   // re-render with fresh wallet
           } catch {
             toast('Store is unreachable', 'error');
           }
@@ -1134,9 +1317,11 @@ export function openDmModal(token, code, name) {
     <form id="dmForm" class="chat-form">
       <input id="dmInput" maxlength="300" placeholder="Message ${escapeHtml(name)}…" autocomplete="off" />
       <button class="icon-btn send" type="submit">➤</button>
-    </form>`, (root) => {
+    </form>
+    <div class="modal-actions"><button class="btn ghost" id="dmClose">Close</button></div>`, (root) => {
     const list = $('#dmList', root);
     let lastSig = '';
+    $('#dmClose', root).onclick = closeModal;
 
     const paint = (messages, me) => {
       const sig = `${messages.length}:${messages[messages.length - 1]?.at || 0}`;
@@ -1148,8 +1333,10 @@ export function openDmModal(token, code, name) {
       list.scrollTop = list.scrollHeight;
     };
 
+    // `root` is the permanent modal host, so watching it never ends the poll —
+    // the list itself is what closing the sheet takes out of the document.
     const load = async () => {
-      if (!document.body.contains(root)) { clearInterval(timer); return; }
+      if (!document.body.contains(list)) { clearInterval(timer); return; }
       try {
         const d = await fetch(api(`/api/dm?token=${encodeURIComponent(token)}&code=${encodeURIComponent(code)}`))
           .then((r) => r.json());
@@ -1166,10 +1353,22 @@ export function openDmModal(token, code, name) {
       if (!text) return;
       input.value = '';
       sfx.click();
-      await fetch(api('/api/dm'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, code, text }),
-      }).catch(() => toast('Message did not send', 'error'));
+      try {
+        // A refused message (they dropped you as a friend, say) came back as a
+        // 400 the old code never read, so the line just vanished.
+        const res = await fetch(api('/api/dm'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, code, text }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          input.value = text;
+          toast(d.error || 'Message did not send', 'error');
+        }
+      } catch {
+        input.value = text;
+        toast('Message did not send', 'error');
+      }
       load();
     });
   });
@@ -1179,6 +1378,18 @@ export function openDmModal(token, code, name) {
 // leave the numbers fresh, so it registers a repainter the render loop calls.
 let deedRepaint = null;
 
+// Some sheets announce themselves to the table while they are open — the trade
+// composer tells the other side you are reading their offer. That has to be
+// taken back however the sheet goes away, Escape and a replacing sheet
+// included, or the table is told you are still reading it forever.
+let modalCleanup = null;
+export function onModalClose(fn) { modalCleanup = fn; }
+function runModalCleanup() {
+  const done = modalCleanup;
+  modalCleanup = null;
+  done?.();
+}
+
 /** Redraws whatever open modal has to follow the live game. */
 export function syncOpenModals(state) {
   deedRepaint?.(state);
@@ -1187,6 +1398,7 @@ export function syncOpenModals(state) {
 export function closeModal() {
   const root = $('#modalRoot');
   deedRepaint = null;
+  runModalCleanup();
   root.classList.add('hidden');
   root.innerHTML = '';
 }
@@ -1194,6 +1406,7 @@ export function closeModal() {
 function openModal(html, onMount, extraClass = '') {
   const root = $('#modalRoot');
   deedRepaint = null; // a new sheet replaces whatever was repainting
+  runModalCleanup();  // …and a replaced sheet is a closed one
   root.classList.remove('hidden');
   root.innerHTML = `<div class="modal ${extraClass}">${html}</div>`;
   root.onclick = (e) => { if (e.target === root) closeModal(); };
@@ -1257,7 +1470,7 @@ export function openJoinNameModal(roomId, onJoin) {
 export function openLeaveModal({ onKeepSeat, onQuit }) {
   openModal(`
     <h2>Leaving the table?</h2>
-    <p class="sub">Game chal rahi hai — pick how you go.</p>
+    <p class="sub">The game is still running — pick how you go.</p>
     <div class="leave-choices">
       <button class="leave-choice" id="lBack">
         <b>↩️ I'll come back</b>
@@ -1295,9 +1508,11 @@ export function showRemovedOverlay({ onHome, onWatch }) {
 }
 
 /**
- * The tap-up / tap-down row under a deed you own. Sell sits left of the
- * building count and build sits right of it, so a whole street can be taken to
- * a hotel without the sheet closing between taps.
+ * The tap-up / tap-down row on a deed you own. Sell sits left of the building
+ * count and build sits right of it, so a whole street can be taken to a hotel
+ * without the sheet closing between taps. It rides high on the card — right
+ * under the price — with the building count and the next-cost line, so the
+ * rent table never has to be scrolled past to reach a button.
  */
 function quickBuildBar(state, meId, i) {
   const tile = state.map.tiles[i];
@@ -1322,10 +1537,25 @@ function quickBuildBar(state, meId, i) {
     : houses ? '🏠'.repeat(houses)
     : 'No buildings yet';
 
+  // Why the ＋ is greyed out matters more than that it is: "even build" is the
+  // rule people meet first and understand last, so it gets named.
+  const group = street ? (state.map.groups[tile.group] || []) : [];
+  const wholeSet = group.length > 0 && group.every((g) => state.ownership[g]?.owner === meId);
+  const setMortgaged = wholeSet && group.some((g) => state.ownership[g]?.mortgaged);
+  const evenBlocked = wholeSet && !setMortgaged && state.settings.evenBuild
+    && houses > Math.min(...group.map((g) => state.ownership[g].houses || 0));
+  const behind = evenBlocked
+    ? group.filter((g) => (state.ownership[g].houses || 0) < houses)
+      .map((g) => state.map.tiles[g].name)
+    : [];
+
   const next = !street ? 'Airports and utilities can only be mortgaged.'
     : own.mortgaged ? `Buy the mortgage back for $${liftCost} before building.`
     : houses === 5 ? 'Fully built — nothing more to add.'
-    : !buildable ? (canSellOn(state, meId, i) ? `Sell a building back for $${sellBack}.` : 'You need the whole set, unmortgaged, to build.')
+    : evenBlocked ? `Even build — put a house on ${behind.join(' and ')} first.`
+    : setMortgaged ? 'Lift the mortgage on the rest of this set before building.'
+    : !wholeSet ? 'You need every street of this country to build.'
+    : !buildable ? 'You cannot build here right now.'
     : `Next ${houses === 4 ? 'hotel' : 'house'} costs $${houseCost}${!canAfford ? ' — short on cash' : ''}`;
 
   return `<div class="quick-build">
@@ -1339,8 +1569,12 @@ function quickBuildBar(state, meId, i) {
         <span class="qb-count">${houses === 5 ? '🏨' : houses}<small>${houses === 5 ? '' : '/5'}</small></span>
         <button class="qb-btn" data-qb-build title="Build for $${houseCost}" ${buildable && canAfford ? '' : 'disabled'}>＋</button>` : ''}
       ${own.mortgaged
-        ? `<button class="qb-btn mort gold" data-qb-unmort title="Buy the mortgage back" ${canLift && cash >= liftCost ? '' : 'disabled'}>↺ Buy back $${liftCost}</button>`
-        : `<button class="qb-btn mort" data-qb-mort title="Mortgage this deed" ${mortgageable ? '' : 'disabled'}>🏦 Mortgage $${mortValue}</button>`}
+        ? `<button class="qb-btn mort gold" data-qb-unmort title="${escapeHtml(!state.settings.mortgage ? 'Mortgages are switched off on this table'
+            : cash < liftCost ? `You need $${liftCost} to buy this mortgage back` : 'Buy the mortgage back')}"
+            ${canLift && cash >= liftCost ? '' : 'disabled'}>↺ Buy back $${liftCost}</button>`
+        : `<button class="qb-btn mort" data-qb-mort title="${escapeHtml(!state.settings.mortgage ? 'Mortgages are switched off on this table'
+            : group.some((g) => (state.ownership[g]?.houses || 0) > 0) ? 'Sell the buildings on this set first'
+            : 'Mortgage this deed')}" ${mortgageable ? '' : 'disabled'}>🏦 Mortgage $${mortValue}</button>`}
     </div>
   </div>`;
 }
@@ -1353,9 +1587,8 @@ export function openDeedModal(state, i, meId, actions) {
   const paint = (s, sheet) => {
     const own = s.ownership[i];
     const me = s.players.find((p) => p.id === meId);
-    const isMine = own?.owner === meId && !me?.bankrupt;
-    sheet.innerHTML = `${deedMarkup(s, i)}
-      ${isMine ? quickBuildBar(s, meId, i) : ''}
+    const isMine = own?.owner === meId && !isOut(me || {}) && s.status === 'playing';
+    sheet.innerHTML = `${deedMarkup(s, i, { actions: isMine ? quickBuildBar(s, meId, i) : '' })}
       <div class="modal-actions"><button class="btn ghost" data-deed-close>Close</button></div>`;
     sheet.querySelector('[data-deed-close]').onclick = closeModal;
     const tap = (attr, fn, sound) => {
@@ -1527,10 +1760,21 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       const cap = Math.max(0, Number(el.max) || 0);
       return Math.min(cap, Math.max(0, Math.round(Number(el.value) || 0)));
     };
+    // Prison cards are a typed number, and the server quietly clamps what it
+    // gets — so the same clamp runs here, or the running total would promise
+    // more than the offer actually carries.
+    const cardsOf = (prefix) => {
+      const el = root.querySelector(`input[data-cards="${prefix}"]`);
+      if (!el) return 0;
+      const cap = Math.max(0, Number(el.max) || 0);
+      const value = Math.min(cap, Math.max(0, Math.floor(Number(el.value) || 0)));
+      if (el.value !== '' && Number(el.value) !== value) el.value = String(value);
+      return value;
+    };
     const collect = (prefix) => ({
       tiles: [...root.querySelectorAll(`input[data-side="${prefix}"]:checked`)].map((i) => Number(i.value)),
       money: cashOf(prefix),
-      cards: Number(root.querySelector(`input[data-cards="${prefix}"]`)?.value || 0),
+      cards: cardsOf(prefix),
     });
 
     /** Moves the value pill under the thumb and fills the track behind it. */
@@ -1587,13 +1831,20 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       }
     };
 
-    // While the composer is open on their offer, they can see you're reading it.
-    const watching = prefill?.counterOf != null;
-    if (watching) actions.tradeViewing?.(prefill.counterOf, true);
-    const stopWatching = () => { if (watching) actions.tradeViewing?.(prefill.counterOf, false); };
-    if (watching) {
-      const rootEl = root.closest('.modal-root') || root;
-      rootEl.onclick = (e) => { if (e.target === rootEl) { stopWatching(); closeModal(); } };
+    // While the composer is open on their offer, they can see you're reading
+    // it. Hung on closeModal() so every exit takes it back — Escape and the
+    // backdrop used to leave the other side reading "👀 is viewing…" for good.
+    // By then the offer may be gone (answered, or replaced by this counter),
+    // and telling the server about a trade it has dropped only earns a
+    // "Trade not found" — so the live roster decides whether to bother.
+    if (prefill?.counterOf != null) {
+      const offerId = prefill.counterOf;
+      actions.tradeViewing?.(offerId, true);
+      onModalClose(() => {
+        if (livePlayersState?.trades?.some((t) => t.id === offerId)) {
+          actions.tradeViewing?.(offerId, false);
+        }
+      });
     }
 
     // Negotiating: seed the form with their offer flipped to this side.
@@ -1617,12 +1868,17 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
     refresh();
 
     $('#tBalance', root).onclick = () => { sfx.click(); balance(); };
-    $('#tCancel', root).onclick = () => { stopWatching(); closeModal(); };
+    $('#tCancel', root).onclick = closeModal;
     $('#tSend', root).onclick = () => {
       sfx.trade();
       // A counter-offer replaces the one it answers (declining it also clears
-      // the viewer flag server-side, so no separate viewing=false needed).
-      if (prefill?.counterOf != null) actions.respondTrade(prefill.counterOf, false);
+      // the viewer flag server-side, so no separate viewing=false needed —
+      // and sending one for an offer the server has just dropped would only
+      // come back as an error).
+      if (prefill?.counterOf != null) {
+        onModalClose(null);
+        actions.respondTrade(prefill.counterOf, false);
+      }
       actions.proposeTrade({ to: targetId, give: collect('give'), get: collect('get') });
       closeModal();
     };
@@ -1707,9 +1963,13 @@ export function showGameOver(state, meId, actions) {
       ${state.hostId === meId
         ? '<button class="btn primary big wrap" id="gAgain">🔁 Play again with the same players</button>'
         : '<div class="dim small go-wait">Sit tight — the host can deal the same table again.</div>'}
-      <button class="btn ghost" id="gClose">Close</button>
+      <div class="row-2">
+        <button class="btn ghost" id="gHome">🏠 Back to home</button>
+        <button class="btn ghost" id="gClose">Stay on this board</button>
+      </div>
     </div>`, (root) => {
     $('#gClose', root).onclick = closeModal;
+    $('#gHome', root).onclick = () => { sfx.click(); closeModal(); actions.goHome?.(); };
     const again = $('#gAgain', root);
     if (again) again.onclick = () => { closeModal(); actions.rematch(); };
   });
@@ -1723,7 +1983,11 @@ export function showCard(card) {
   el.innerHTML = `
     <div class="cp-ico">${card.deck === 'treasure' ? '🧰' : '❓'}</div>
     <div class="cp-kind">${card.deck === 'treasure' ? 'Treasure' : 'Surprise'}</div>
-    <div class="cp-text">${escapeHtml(card.text)}</div>`;
+    <div class="cp-text">${escapeHtml(card.text)}</div>
+    <div class="cp-hint">tap to dismiss</div>`;
+  // It lands square on the action dock, so a player who has already read it
+  // can put it away instead of waiting out the timer to reach Roll or End.
+  el.onclick = () => { clearTimeout(cardTimer); el.classList.add('hidden'); };
   sfx.card();
   clearTimeout(cardTimer);
   cardTimer = setTimeout(() => el.classList.add('hidden'), 3400);

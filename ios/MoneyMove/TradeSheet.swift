@@ -227,10 +227,13 @@ struct TradeSheet: View {
         let room = balanceRoom
         if needed >= 25 {
             HStack(spacing: 10) {
+                // "your side" read as "in your favour" right under a meter
+                // saying the deal already tilts your way. Say who pays.
                 Text(room == 0
                      ? (gap > 0 ? "You have no cash left to even this out." : "They have no cash left to even this out.")
                      : room >= needed
-                        ? "Adds \(money(needed)) to \(gap > 0 ? "your" : "their") side"
+                        ? (gap > 0 ? "You'd put in \(money(needed)) to make it even"
+                                   : "They'd put in \(money(needed)) to make it even")
                         : "Only \(money(room)) spare — this gets as close as it can")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)

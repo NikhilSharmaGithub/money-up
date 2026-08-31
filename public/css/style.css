@@ -27,6 +27,14 @@
   --gold:       #a97b1d;
   --gold-soft:  #f7edd8;
 
+  /* Ink for words printed straight onto the page instead of onto a card — the
+     landing hero and the in-game wordmark. Same as --ink on every table except
+     the crimson daytime one, whose page is a deep red. */
+  --page-ink:    var(--ink);
+  --page-ink-2:  var(--ink-2);
+  --page-ink-3:  var(--ink-3);
+  --page-accent: var(--red);
+
   /* board */
   --board-bg:      #fdfbf4;
   --tile-face:     #ffffff;
@@ -111,6 +119,9 @@
   --red: #d92037; --red-deep: #a4142a; --red-soft: #fdecee; --red-ink: #7d0f20;
   --gold: #b7791f; --gold-soft: #fdf3e0;
   --board-bg: #fffaf7; --tile-face: #ffffff; --tile-corner: #fffdfb;
+  /* The only light table with a dark page: dark ink would vanish into it. */
+  --page-ink: #fff6f7; --page-ink-2: rgba(255, 246, 247, .84);
+  --page-ink-3: rgba(255, 246, 247, .62); --page-accent: #ffd0d6;
 }
 :root[data-palette="crimson"][data-theme="dark"] {
   --page: #150a0e; --page-2: #0d0508; --card: #211319; --paper-2: #2b1a21;
@@ -211,8 +222,10 @@
   background: var(--gold-soft); border: 1px solid var(--gold);
   border-radius: 99px; padding: 2px 9px;
 }
-.store-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.store-head { display: flex; align-items: center; gap: 10px; }
+.store-head h2 { flex: 1; min-width: 0; }
 .store-head .coin-chip { font-size: 15px; padding: 4px 13px; }
+.sheet-x { flex: none; font-size: 15px; line-height: 1; }
 .store-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
 .store-card {
   font: inherit; cursor: pointer; text-align: center;
@@ -224,6 +237,10 @@
 .store-card:hover { transform: translateY(-2px); border-color: var(--gold); }
 .store-card.owned { border-color: var(--rule-2); }
 .store-card.equipped { border-color: var(--gold); background: var(--gold-soft); }
+/* Priced out of reach: still tappable (the toast says why), but it shouldn't
+   look identical to something you can actually walk out with. */
+.store-card.locked { opacity: .5; border-style: dashed; }
+.store-card.locked:hover { transform: none; border-color: var(--rule-2); }
 .sc-emoji { font-size: 34px; line-height: 1.1; }
 .sc-name { font-size: 12.5px; font-weight: 800; color: var(--ink); }
 .sc-price { font-size: 11px; font-weight: 750; color: var(--gold); }
@@ -264,7 +281,6 @@
 }
 .pswatch:hover { transform: scale(1.18); }
 .pswatch.on { border-color: var(--ink); transform: scale(1.12); }
-.palette-float { position: absolute; top: 14px; right: 56px; font-size: 19px; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -368,7 +384,16 @@ input::placeholder { color: var(--ink-3); }
 select { cursor: pointer; }
 
 /* ───────────────────────────────────────────────────────────── landing ── */
-.landing { position: fixed; inset: 0; display: grid; place-items: center; z-index: 40; padding: 22px; overflow: auto; }
+/* minmax(0, 1fr) pins the column to the screen. Left as an auto track it grew
+   to the widest line the card could produce — the tagline on one line — and
+   dragged the whole landing sideways on a phone. */
+.landing {
+  position: fixed; inset: 0; z-index: 40; padding: 22px; overflow: auto;
+  display: grid; grid-template-columns: minmax(0, 1fr); place-items: center;
+}
+/* The mood blobs are decoration: clipped to the screen, or they widen the
+   landing and drag the whole card sideways on a phone. */
+.landing-bg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .landing-bg span {
   position: absolute; border-radius: 50%; filter: blur(80px); opacity: .35;
   animation: float 15s ease-in-out infinite;
@@ -381,11 +406,14 @@ select { cursor: pointer; }
   50%      { transform: translate(26px, -32px) scale(1.12); }
 }
 
-.landing-inner { width: min(430px, 94vw); text-align: center; position: relative; }
-.logo { font-size: 25px; font-weight: 900; letter-spacing: -.8px; color: var(--ink); }
-.logo span { color: var(--red); }
+/* 100% of the padded grid area, not 94vw: viewport units ignore the scrollbar,
+   so the card used to hang past the right edge once the page grew tall enough
+   to scroll. The top gap keeps the wordmark clear of the two float buttons. */
+.landing-inner { width: min(430px, 100%); padding-top: 38px; text-align: center; position: relative; }
+.logo { font-size: 25px; font-weight: 900; letter-spacing: -.8px; color: var(--page-ink); }
+.logo span { color: var(--page-accent); }
 .logo.xl { font-size: clamp(42px, 9vw, 64px); line-height: 1.02; }
-.tagline { color: var(--ink-2); margin: 12px 0 28px; font-size: 15.5px; }
+.tagline { color: var(--page-ink-2); margin: 12px 0 28px; font-size: 15.5px; }
 
 .landing-card {
   background: var(--card);
@@ -404,6 +432,9 @@ select { cursor: pointer; }
 .or::before { left: 0; } .or::after { right: 0; }
 .join-row { display: flex; gap: 8px; }
 .join-row input { text-transform: lowercase; letter-spacing: 2px; text-align: center; font-weight: 700; }
+/* Friend codes are handed out in capitals, so they must be typed back in
+   capitals — the shared lowercase rule made the field disagree with the chip. */
+.join-row input.code-input { text-transform: uppercase; }
 
 .public-rooms { margin-top: 18px; display: grid; gap: 6px; }
 .pr-title { font-size: 11.5px; color: var(--ink-3); text-align: left; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; }
@@ -417,17 +448,23 @@ select { cursor: pointer; }
 
 .landing-feats { display: flex; justify-content: center; gap: 30px; margin-top: 24px; }
 .landing-feats div { display: flex; flex-direction: column; }
-.landing-feats b { font-size: 22px; font-weight: 800; color: var(--red); }
-.landing-feats span { font-size: 11.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
-.fineprint { margin-top: 22px; font-size: 11px; color: var(--ink-3); line-height: 1.6; }
+.landing-feats b { font-size: 22px; font-weight: 800; color: var(--page-accent); }
+.landing-feats span { font-size: 11.5px; color: var(--page-ink-3); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+.fineprint { margin-top: 22px; font-size: 11px; color: var(--page-ink-3); line-height: 1.6; }
+/* Support and the privacy policy existed but nothing on the web ever linked
+   to them; they belong with the small print, not louder than it. */
+.fineprint a { color: var(--page-ink-3); text-decoration: underline; }
+.fineprint a:hover { color: var(--page-ink-2); }
 
+/* A warning panel painted in fixed pinks was unreadable on every dark table —
+   dark maroon body text on a dark card. It wears the palette now. */
 .server-down {
   display: flex; flex-direction: column; gap: 7px; text-align: left;
-  background: var(--red-soft); border: 1px solid #f3c3ca;
+  background: var(--paper-2); border: 1px solid var(--bad);
   border-radius: var(--r-sm); padding: 12px 14px;
 }
-.server-down b { font-size: 13px; color: var(--red-ink); }
-.server-down span { font-size: 11.5px; color: #8a3a46; line-height: 1.5; }
+.server-down b { font-size: 13px; color: var(--bad); }
+.server-down span { font-size: 11.5px; color: var(--ink-2); line-height: 1.5; }
 .server-down code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: 11px; word-break: break-all; }
 .server-form { display: flex; gap: 6px; margin-top: 4px; }
 .server-form input { padding: 8px 10px; font-size: 12px; }
@@ -439,11 +476,12 @@ select { cursor: pointer; }
 .code-chip {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 13px; font-weight: 700; letter-spacing: 2px;
-  background: var(--red-soft); border: 1px solid #f0c2c9; color: var(--red-ink);
+  background: var(--red-soft); border: 1px solid var(--red); color: var(--red-ink);
   padding: 5px 11px; border-radius: 8px; cursor: pointer;
   transition: background .15s, transform .12s var(--pop);
 }
-.code-chip:hover { background: #fbdde1; transform: translateY(-1px); }
+/* Hover used to wash the chip near-white, which hid its own light-on-dark text. */
+.code-chip:hover { background: color-mix(in srgb, var(--red) 20%, var(--card)); transform: translateY(-1px); }
 
 .friend-list { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; max-height: 230px; overflow-y: auto; }
 .friend {
@@ -481,8 +519,16 @@ select { cursor: pointer; }
   color: var(--ink-3); margin-bottom: 9px; font-weight: 750;
 }
 
-.brand { display: flex; align-items: center; justify-content: space-between; padding: 2px 5px; }
-.brand-actions { display: flex; gap: 2px; }
+/* On a phone the row is wider than the screen, and the last icon out — the way
+   off the table — was the one that fell off it. Let it wrap instead. */
+.brand { display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap; padding: 2px 5px; }
+.brand-actions { display: flex; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+/* Seven equal squares fit the side column; left to size themselves the emoji
+   ones ran wide and pushed Leave, Sound and Help off the panel entirely. */
+.brand-actions .icon-btn {
+  flex: none; width: 28px; height: 28px; padding: 0;
+  display: grid; place-items: center; font-size: 15px; line-height: 1;
+}
 
 .share-row { display: flex; gap: 7px; }
 .share-row input { font-size: 12px; padding: 8px 11px; }
@@ -510,6 +556,18 @@ select { cursor: pointer; }
 .log-line.treasure { color: #9a6112; }
 .log-line.surprise { color: #a3246c; }
 .log-line.build    { color: #3a5bb5; }
+
+/* Those six hues are mixed for pale paper. On the dark tables they sat at
+   1.9–3.2 against the panel, which made "rolled 3 + 2 = 5" and "bought Rome
+   for $160" — the two lines people actually read — almost invisible. Same
+   colours, lifted until they carry on a dark card, in every palette. */
+:root[data-theme="dark"] .log-line.dice     { color: #a99bf0; }
+:root[data-theme="dark"] .log-line.buy      { color: #6ab6ee; }
+:root[data-theme="dark"] .log-line.jail,
+:root[data-theme="dark"] .log-line.warn     { color: #f0894f; }
+:root[data-theme="dark"] .log-line.treasure { color: #e0aa4e; }
+:root[data-theme="dark"] .log-line.surprise { color: #f07ab5; }
+:root[data-theme="dark"] .log-line.build    { color: #8aa8f0; }
 
 .chat-panel { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
 .chat-list { flex: 0 1 auto; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 5px; min-height: 34px; }
@@ -814,9 +872,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 
 /* ─────────────────────────────────────────────────────────── player list ── */
 .player-list { display: flex; flex-direction: column; gap: 8px; }
+/* The clock and the Trade button only appear on some cards, and on a narrow
+   column they used to squeeze the name, the cash and the set chips into a
+   sliver. They wrap onto their own line instead of crushing the seat. */
 .player-card {
   position: relative;
   display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; row-gap: 6px;
   background: var(--card); border: 1px solid var(--rule);
   border-radius: var(--r); padding: 10px 11px;
   box-shadow: var(--shadow-sm);
@@ -838,7 +900,8 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .avatar-flag { position: absolute; bottom: -3px; right: -5px; font-size: 13px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .3)); }
 .avatar.sm .avatar-flag { font-size: 10px; bottom: -2px; right: -4px; }
 
-.pinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pinfo { flex: 1 1 108px; min-width: 108px; display: flex; flex-direction: column; gap: 2px; }
+.pn-text { overflow: hidden; text-overflow: ellipsis; }
 .pname { font-size: 13.5px; font-weight: 750; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .pmeta { font-size: 11.5px; color: var(--ink-3); }
 .tags { display: inline-flex; gap: 3px; flex-wrap: wrap; }
@@ -853,7 +916,7 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .tag.card { background: var(--gold-soft); color: var(--gold); }
 .tag.team { font-weight: 800; }
 
-.pmoney { font-size: 14px; color: var(--good); font-weight: 800; }
+.pmoney { font-size: 14px; color: var(--good); font-weight: 800; white-space: nowrap; }
 .pmoney.bump { animation: bump .45s var(--pop); }
 @keyframes bump { 40% { transform: scale(1.16); } }
 
@@ -1082,22 +1145,34 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   background: var(--card); animation: cardIn .4s var(--pop);
 }
 .card-popup.treasure { border-color: var(--gold); background: var(--gold-soft); }
+/* The Surprise card is pinned pink paper in both themes, so its ink has to be
+   pinned too: on the dark palettes var(--ink) is near-white and the card's own
+   text disappeared into the background. */
 .card-popup.surprise { border-color: #d63384; background: #fdeaf3; }
+.card-popup.surprise .cp-text { color: #2c0f1d; }
+.card-popup.surprise .cp-kind { color: #93325f; }
 .cp-ico { font-size: 40px; }
 .cp-kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-3); margin: 7px 0 9px; font-weight: 750; }
 .cp-text { font-size: 15.5px; line-height: 1.5; font-weight: 650; color: var(--ink); }
+.card-popup { cursor: pointer; }
+.cp-hint { margin-top: 10px; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-3); opacity: .75; }
 @keyframes cardIn { from { transform: translate(-50%, -50%) scale(.72) rotate(-6deg); opacity: 0; } }
 
 /* ────────────────────────────────────────────────────────────── toasts ── */
+/* Full width so a wrapping message gets the whole screen to wrap in — anchored
+   at left:50% it only ever had half of it. It must not swallow taps either. */
 .toast-root {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 20px; left: 0; right: 0;
   z-index: 80; display: flex; flex-direction: column; gap: 8px; align-items: center;
+  pointer-events: none;
 }
 .toast {
   display: flex; align-items: center; gap: 8px;
   background: var(--ink); color: var(--card);
   padding: 11px 17px; border-radius: 99px; font-size: 13.5px; font-weight: 550;
   box-shadow: var(--shadow); animation: toastIn .28s var(--pop);
+  /* Long messages have to wrap: unbounded they ran off both edges of a phone. */
+  max-width: min(92vw, 420px); text-align: center; line-height: 1.35;
 }
 .toast.error { background: var(--red-deep); }
 .toast.out { animation: toastOut .3s ease forwards; }
@@ -1134,6 +1209,12 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   .board-center { inset: 15%; }
   .center-logo { display: none; }
   .deed.compact { width: min(180px, 94%); font-size: 10px; }
+  /* The middle of the board is barely 250px tall on a phone. A full rent
+     table there pushed the very Buy button it belongs to down over the tiles,
+     and clipped the name of the street off the top — so the well keeps the
+     name and the price, and the table stays one tap away on the tile. */
+  .center-panel { gap: 10px; }
+  .center-card .deed-rows { display: none; }
   .turn-banner-fly { top: 8%; }
   .tb-avatar { width: 25px; height: 25px; font-size: 12px; }
   .tb-text { font-size: 14px; }
@@ -1175,20 +1256,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 }
 .seat-dot.filled { border: none; box-shadow: 0 1px 3px rgba(60, 30, 35, .3); }
 
-/* theme toggle sits with the other brand actions, and floats on the landing */
-.theme-float {
-  position: absolute; top: 0; right: 0;
-  background: rgba(255, 255, 255, .16); border-radius: 50%;
+/* Theme toggle sits with the other brand actions in game, and pairs up with the
+   table-style button on the landing. Both sit in a row above the logo: parked
+   on top of it they printed over the wordmark at every width. */
+.theme-float, .palette-float {
+  position: absolute; top: 0; font-size: 17px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: 50%; line-height: 1; padding: 6px 8px;
 }
-:root[data-theme="dark"] .theme-float { background: rgba(255, 255, 255, .08); }
-.landing .logo { color: #fff; }
-.landing .logo span { color: #f2cd8b; }
-.landing .tagline { color: rgba(255, 255, 255, .82); }
-.landing .fineprint { color: rgba(255, 255, 255, .55); }
-.landing .landing-feats span { color: rgba(255, 255, 255, .6); }
-.landing .landing-feats b { color: #fff; }
-.landing .or { color: rgba(255, 255, 255, .6); }
-.brand .logo { color: var(--ink); }
+.theme-float { right: 0; }
+.palette-float { right: 42px; }
+/* The landing wore hard-coded white text for a dark hero it never had: on a
+   light table the wordmark, tagline and stats vanished into the page. */
 
 /* Theme changes ease instead of snapping. */
 .panel, .player-card, .landing-card, .tile, .board, .center-panel, .modal, .btn, input, select {
@@ -1214,6 +1293,14 @@ body.focus-board .app { grid-template-columns: 0 minmax(0, 1fr) clamp(242px, 18v
 body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden; }
 .col.left { transition: opacity .2s var(--ease); }
 #focusBtn.on { color: var(--red); background: var(--red-soft); }
+/* Parked on the screen while the panel it belongs to is hidden, so there is
+   always a way back to the side panel. */
+#focusBtn.floating {
+  position: fixed; top: 12px; left: 12px; z-index: 60;
+  width: 34px; height: 34px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--rule); border-radius: 10px;
+  background: var(--card); box-shadow: var(--shadow-sm);
+}
 
 @media (max-width: 1024px) {
   body.focus-board .app { grid-template-columns: 1fr; }
@@ -1230,10 +1317,12 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 }
 .karma-chip.low { color: var(--bad); border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, var(--card)); }
 
+.name-row { display: flex; gap: 8px; align-items: stretch; }
 .name-row input { flex: 1; min-width: 0; }
 /* `.field span` dresses every caption inside a label and would stack this row
    vertically, so the row has to out-specify it — hence `.field .name-row`
-   carrying the layout rather than `.name-row` alone. */
+   carrying the layout rather than `.name-row` alone. Outside a label (the
+   invite modal) the plain rule above is what keeps the dice beside the field. */
 .field .name-row {
   display: flex; gap: 8px; align-items: stretch;
   margin-bottom: 0; font-size: 16px; font-weight: 400; color: var(--ink);
@@ -1241,7 +1330,9 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .dice-btn { flex: none; padding: 0 14px; font-size: 18px; }
 
 /* ── store: coin packs (bought in the iOS app, shown here) ── */
-.pack-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
+/* 96px so all three packs still sit on one row on a phone — at 118 the third
+   one dropped to a line of its own. */
+.pack-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
 .pack-card {
   position: relative; text-align: center; text-decoration: none; color: var(--ink);
   display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -1305,8 +1396,10 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .cs-max { display: block; font-size: 11px; color: var(--ink-3); font-weight: 650; }
 
 /* ── deed sheet: quick build bar ── */
+/* It lives inside the deed now, between the price and the rent table, so it is
+   inset from the card edge rather than stacked under it. */
 .quick-build {
-  margin-top: 12px; padding: 11px 12px; border-radius: var(--r);
+  margin: 10px 13px 4px; padding: 11px 12px; border-radius: var(--r);
   background: var(--paper-2); border: 1px solid var(--rule);
 }
 .qb-status { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; text-align: center; }
@@ -1338,6 +1431,25 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .turn-clock-well { font-size: 13px; font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .turn-clock-well.urgent { color: var(--bad); animation: clockPulse .9s ease-in-out infinite; }
 @keyframes clockPulse { 50% { opacity: .5; transform: scale(1.06); } }
+
+/* ── holding a dropped player's chair ── */
+/* It sits above the roster in brass so it reads as a decision the table owes
+   somebody, not as another status line about them. */
+.awaiting-well { flex: none; display: flex; flex-direction: column; gap: 8px; }
+.await-card {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--card); border: 1px solid var(--gold); border-radius: var(--r);
+  padding: 11px 12px; box-shadow: var(--shadow-sm);
+}
+.aw-head { display: flex; align-items: center; gap: 9px; }
+.aw-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 12.5px; color: var(--ink-2); }
+.aw-who b { color: var(--ink); font-weight: 850; }
+.aw-left { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.aw-left.urgent { color: var(--bad); font-weight: 800; }
+.aw-votes { display: flex; gap: 4px; }
+.aw-votes i { flex: 1; height: 4px; border-radius: 99px; background: var(--rule-2); transition: background .2s var(--ease); }
+.aw-votes i.on { background: var(--gold); }
+.aw-note { font-size: 11px; color: var(--ink-3); line-height: 1.35; }
 
 /* ── leaving for good, and the removed-from-play overlay ── */
 .leave-choices { display: flex; flex-direction: column; gap: 8px; }
@@ -1418,7 +1530,9 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   padding: 5px 0; border-bottom: 1px solid var(--rule);
 }
 .raise-row:last-child { border-bottom: none; }
-.raise-what { flex: 1; min-width: 0; font-size: 12px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "Sell a building on Frankfurt" is longer than the column: clipped to
+   "…on Frankf…" it hid the one word that says which deed you are spending. */
+.raise-what { flex: 1; min-width: 0; font-size: 12px; font-weight: 650; line-height: 1.35; }
 .good-text { color: var(--good); font-weight: 750; }
 .bad-text  { color: var(--bad); font-weight: 750; }
 
