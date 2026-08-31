@@ -9,6 +9,7 @@ enum ActiveSheet: Identifiable {
     case properties
     case trade(from: String, to: String, give: Set<Int>)  // proposing seat → target
     case tradePicker(from: String, give: Set<Int>)        // choose who to trade with first
+    case counter(TradeOffer)                              // negotiate an incoming offer
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
     case gameOver
@@ -19,6 +20,7 @@ enum ActiveSheet: Identifiable {
         case .properties: "properties"
         case .trade(let f, let t, _): "trade-\(f)-\(t)"
         case .tradePicker(let f, _): "tradepicker-\(f)"
+        case .counter(let t): "counter-\(t.id)"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
         case .gameOver: "gameover"
@@ -78,7 +80,8 @@ struct GameScreen: View {
                                 CenterWell(actionsInWell: true,
                                            openProperties: { sheet = .properties },
                                            openTrade: { sheet = .tradePicker(from: store.activeId, give: []) },
-                                           openHistory: { sheet = .chatLog(1) })
+                                           openHistory: { sheet = .chatLog(1) },
+                                           openCounter: { sheet = .counter($0) })
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(.horizontal, 12)
@@ -140,6 +143,8 @@ struct GameScreen: View {
                 })
                 case .trade(let from, let target, let give):
                     TradeSheet(fromId: from, targetId: target, preselectedGive: give)
+                case .counter(let trade):
+                    TradeSheet(countering: trade)
                 case .tradePicker(let from, let give):
                     TradePickerSheet(fromId: from, give: give,
                                      pick: { sheet = .trade(from: from, to: $0, give: give) })
@@ -257,7 +262,8 @@ struct GameScreen: View {
                 // board itself takes the full width and the dock stays at thumbs.
                 Spacer(minLength: 0)
                 ActionPanel(openProperties: { sheet = .properties },
-                            openTrade: { sheet = .tradePicker(from: store.activeId, give: []) })
+                            openTrade: { sheet = .tradePicker(from: store.activeId, give: []) },
+                            openCounter: { sheet = .counter($0) })
                     .padding(.bottom, 4)
             }
         }
@@ -441,6 +447,7 @@ struct CenterWell: View {
     /// Opens the full game log — the ghosted feed behind the dice is a teaser,
     /// this is the whole story.
     var openHistory: (() -> Void)? = nil
+    var openCounter: ((TradeOffer) -> Void)? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -532,7 +539,8 @@ struct CenterWell: View {
                                 // here, in the middle of the table.
                                 if actionsInWell {
                                     ActionPanel(openProperties: { openProperties?() },
-                                                openTrade: openTrade)
+                                                openTrade: openTrade,
+                                                openCounter: openCounter)
                                         .frame(maxWidth: min(geo.size.width * 0.74, 470))
                                 }
                             }

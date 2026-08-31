@@ -8,22 +8,45 @@ struct TradeSheet: View {
     /// The seat making the offer — a corner pod trades as its own player.
     let fromId: String
     let targetId: String
+    /// When negotiating, the incoming offer this one replaces — it gets
+    /// declined the moment the counter-offer goes out.
+    let counterOf: Int?
 
     @EnvironmentObject var store: GameStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
     @State private var giveTiles: Set<Int>
-    @State private var getTiles: Set<Int> = []
-    @State private var giveCash = 0
-    @State private var getCash = 0
-    @State private var giveCards = 0
-    @State private var getCards = 0
+    @State private var getTiles: Set<Int>
+    @State private var giveCash: Int
+    @State private var getCash: Int
+    @State private var giveCards: Int
+    @State private var getCards: Int
 
     init(fromId: String, targetId: String, preselectedGive: Set<Int> = []) {
         self.fromId = fromId
         self.targetId = targetId
+        self.counterOf = nil
         _giveTiles = State(initialValue: preselectedGive)
+        _getTiles = State(initialValue: [])
+        _giveCash = State(initialValue: 0)
+        _getCash = State(initialValue: 0)
+        _giveCards = State(initialValue: 0)
+        _getCards = State(initialValue: 0)
+    }
+
+    /// Negotiate an incoming offer: open the composer pre-filled with the
+    /// same deal seen from this seat's side, ready to be nudged and returned.
+    init(countering trade: TradeOffer) {
+        self.fromId = trade.to
+        self.targetId = trade.from
+        self.counterOf = trade.id
+        _giveTiles = State(initialValue: Set(trade.get.tiles))
+        _getTiles = State(initialValue: Set(trade.give.tiles))
+        _giveCash = State(initialValue: trade.get.money)
+        _getCash = State(initialValue: trade.give.money)
+        _giveCards = State(initialValue: trade.get.cards)
+        _getCards = State(initialValue: trade.give.cards)
     }
 
     private var fromPlayer: PlayerState? { store.state?.player(fromId) }
@@ -39,14 +62,14 @@ struct TradeSheet: View {
                 }
             }
             .background(P.sheet.ignoresSafeArea())
-            .navigationTitle("Trade")
+            .navigationTitle(counterOf == nil ? "Trade" : "Negotiate")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") { send() }
+                    Button(counterOf == nil ? "Send" : "Counter") { send() }
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .disabled(store.state?.player(targetId) == nil)
                 }
@@ -346,8 +369,13 @@ struct TradeSheet: View {
             return
         }
 
+        // A counter-offer replaces the deal on the table: decline theirs,
+        // then send ours back the other way.
+        if let counterOf, store.state?.trades.contains(where: { $0.id == counterOf }) == true {
+            store.respondTrade(counterOf, accept: false)
+        }
         store.proposeTrade(from: fromId, to: targetId, give: give, get: get)
-        store.showToast("Offer sent")
+        store.showToast(counterOf == nil ? "Offer sent" : "Counter-offer sent")
         dismiss()
     }
 }

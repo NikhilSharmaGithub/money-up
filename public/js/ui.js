@@ -519,6 +519,14 @@ function renderMyStuff(state, meId, el, actions) {
   el.querySelectorAll('[data-decline]').forEach((b) => {
     b.onclick = () => { sfx.click(); actions.respondTrade(Number(b.dataset.decline), false); };
   });
+  el.querySelectorAll('[data-negotiate]').forEach((b) => {
+    b.onclick = () => {
+      sfx.click();
+      const t = state.trades.find((x) => x.id === Number(b.dataset.negotiate));
+      // Counter their offer: same deal, seen from this side of the table.
+      if (t) openTradeModal(state, meId, t.from, actions, { give: t.get, get: t.give, counterOf: t.id });
+    };
+  });
   const rb = $('#rematchBtn', el);
   if (rb) rb.onclick = () => actions.rematch();
 }
@@ -540,6 +548,7 @@ function tradeCard(state, t) {
       <button class="btn good small" data-accept="${t.id}">Accept</button>
       <button class="btn bad small" data-decline="${t.id}">Decline</button>
     </div>
+    <button class="btn small wide" style="margin-top:6px" data-negotiate="${t.id}">🤝 Negotiate</button>
   </div>`;
 }
 
@@ -997,7 +1006,7 @@ export function openHelpModal() {
   });
 }
 
-export function openTradeModal(state, meId, targetId, actions) {
+export function openTradeModal(state, meId, targetId, actions, prefill = null) {
   const me = state.players.find((p) => p.id === meId);
   const them = state.players.find((p) => p.id === targetId);
   const listFor = (playerId) => Object.entries(state.ownership)
@@ -1029,8 +1038,10 @@ export function openTradeModal(state, meId, targetId, actions) {
     </div>`;
 
   openModal(`
-    <h2>Trade with ${escapeHtml(them.name)}</h2>
-    <p class="sub">Tick what each side puts on the table. Streets with buildings can't move.</p>
+    <h2>${prefill?.counterOf != null ? 'Negotiate' : 'Trade'} with ${escapeHtml(them.name)}</h2>
+    <p class="sub">${prefill?.counterOf != null
+      ? 'Their offer is on the table — nudge it your way and send it back.'
+      : "Tick what each side puts on the table. Streets with buildings can't move."}</p>
     <div class="trade-grid">
       ${side(me, listFor(meId), 'give')}
       <div class="trade-arrow">⇄</div>
@@ -1043,7 +1054,7 @@ export function openTradeModal(state, meId, targetId, actions) {
     </div>
     <div class="modal-actions">
       <button class="btn ghost" id="tCancel">Cancel</button>
-      <button class="btn primary" id="tSend">Send offer</button>
+      <button class="btn primary" id="tSend">${prefill?.counterOf != null ? 'Send counter-offer' : 'Send offer'}</button>
     </div>`, (root) => {
     const collect = (prefix) => ({
       tiles: [...root.querySelectorAll(`input[data-side="${prefix}"]:checked`)].map((i) => Number(i.value)),
@@ -1065,12 +1076,29 @@ export function openTradeModal(state, meId, targetId, actions) {
         : diff > 0 ? `+${money(diff)} your way` : `${money(-diff)} in their favour`;
       v.className = !give && !get ? 'dim' : Math.abs(diff) < 25 ? 'dim' : diff > 0 ? 'good-text' : 'bad-text';
     };
+    // Negotiating: seed the form with their offer flipped to this side.
+    if (prefill) {
+      const seed = (prefix, side) => {
+        (side.tiles || []).forEach((i) => {
+          const box = root.querySelector(`input[data-side="${prefix}"][value="${i}"]`);
+          if (box && !box.disabled) box.checked = true;
+        });
+        const cash = root.querySelector(`input[data-cash="${prefix}"]`);
+        if (cash && side.money) cash.value = side.money;
+        const cards = root.querySelector(`input[data-cards="${prefix}"]`);
+        if (cards && side.cards) cards.value = side.cards;
+      };
+      seed('give', prefill.give || {});
+      seed('get', prefill.get || {});
+    }
     root.querySelectorAll('input').forEach((i) => { i.oninput = refresh; i.onchange = refresh; });
     refresh();
 
     $('#tCancel', root).onclick = closeModal;
     $('#tSend', root).onclick = () => {
       sfx.trade();
+      // A counter-offer replaces the one it answers.
+      if (prefill?.counterOf != null) actions.respondTrade(prefill.counterOf, false);
       actions.proposeTrade({ to: targetId, give: collect('give'), get: collect('get') });
       closeModal();
     };

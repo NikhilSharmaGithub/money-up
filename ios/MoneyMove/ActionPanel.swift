@@ -9,6 +9,7 @@ struct ActionPanel: View {
     @Environment(\.colorScheme) private var scheme
     let openProperties: () -> Void
     var openTrade: (() -> Void)? = nil
+    var openCounter: ((TradeOffer) -> Void)? = nil
     @State private var confirmBankrupt = false
 
     var body: some View {
@@ -191,6 +192,10 @@ struct ActionPanel: View {
                 HStack(spacing: 8) {
                     Button("Accept") { store.respondTrade(trade.id, accept: true) }
                         .buttonStyle(MMButtonStyle(kind: .good))
+                    if let openCounter {
+                        Button("Negotiate") { openCounter(trade) }
+                            .buttonStyle(MMButtonStyle(kind: .gold))
+                    }
                     Button("Decline") { store.respondTrade(trade.id, accept: false) }
                         .buttonStyle(MMButtonStyle(kind: .bad))
                 }
