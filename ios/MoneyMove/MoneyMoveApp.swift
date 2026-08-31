@@ -50,6 +50,11 @@ struct RootView: View {
             }
         }
         .id(themeID)   // full repaint when the table style changes
+        .onAppear {
+            // A coin pack approved after the app closed still has to pay out —
+            // the listener lives up here so it outlasts every screen.
+            CoinShop.shared.watchTransactions(store)
+        }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }

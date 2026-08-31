@@ -14,6 +14,9 @@ const STORE = path.join(__dirname, '..', 'data', 'social.json');
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1
 const MAX_FRIENDS = 100;
+const KARMA_MAX = 100;
+/** Bumped whenever coin values are rescaled, so wallets migrate exactly once. */
+const ECON_VERSION = 2;
 
 /** @type {Map<string, {token:string, code:string, name:string, flag:string, friends:string[], seen:number}>} */
 const profiles = new Map();
@@ -92,10 +95,32 @@ export function profileFor(token, { name, flag } = {}) {
   p.coins ??= 0;
   p.owned ??= [];
   p.equipped ??= {};
+  // Transaction ids already credited — a receipt can never pay out twice.
+  p.purchases ??= [];
+  // Karma is a politeness score: everyone starts full, walking out on a live
+  // game or letting the clock run out costs a point.
+  p.karma ??= KARMA_MAX;
+  // The coin economy was rescaled 50x when paid packs arrived; old wallets
+  // are converted once so nobody's balance silently shrinks in value.
+  if (p.econ !== ECON_VERSION) {
+    if (p.econ === undefined && p.coins > 0) p.coins *= 50;
+    p.econ = ECON_VERSION;
+  }
   p.seen = Date.now();
   save();
   return p;
 }
+
+/** Politeness score, 0–100. Leaving a live game or timing out costs a point. */
+export function bumpKarma(token, delta) {
+  const p = profileFor(token);
+  if (!p) return null;
+  p.karma = Math.max(0, Math.min(KARMA_MAX, p.karma + delta));
+  save();
+  return p.karma;
+}
+
+export const karmaOf = (token) => profileFor(token)?.karma ?? KARMA_MAX;
 
 const publicView = (p) => ({
   code: p.code, name: p.name || 'Player', flag: p.flag || '',
@@ -106,7 +131,27 @@ const publicView = (p) => ({
 export function walletOf(token) {
   const p = profileFor(token);
   if (!p) return null;
-  return { coins: p.coins, owned: p.owned, equipped: p.equipped };
+  return { coins: p.coins, owned: p.owned, equipped: p.equipped, karma: p.karma };
+}
+
+/**
+ * Credit a verified store purchase. `transactionId` comes from the platform
+ * receipt the caller already verified — replaying one is a no-op, so a
+ * retried network call can never mint a second batch of coins.
+ */
+export function creditPurchase(token, transactionId, coins) {
+  const p = profileFor(token);
+  if (!p) return { error: 'Unknown player' };
+  const txn = String(transactionId || '');
+  if (!txn) return { error: 'Missing transaction' };
+  if (p.purchases.includes(txn)) return { ok: true, coins: p.coins, duplicate: true };
+  const amount = Math.max(0, Math.floor(Number(coins) || 0));
+  if (!amount) return { error: 'Nothing to credit' };
+  p.purchases.push(txn);
+  if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
+  p.coins += amount;
+  save();
+  return { ok: true, coins: p.coins };
 }
 
 /** Winning pays out — a coin or two, longer games pay the bigger purse. */

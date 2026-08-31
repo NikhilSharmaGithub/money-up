@@ -293,28 +293,35 @@ struct TradeSheet: View {
         .opacity(hasHouses ? 0.45 : 1)
     }
 
+    /// A slider instead of a keypad: the track ends at the player's own cash,
+    /// so an amount they don't have can't be dragged to, and the deal meter
+    /// above re-totals with every pixel of the thumb.
     private func cashRow(value: Binding<Int>, limit: Int, P: Palette) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+        let cap = max(0, limit)
+        let shown = min(max(0, value.wrappedValue), cap)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
                 Text("Cash")
                     .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink)
-                Text("up to \(money(max(0, limit)))")
-                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                Spacer()
+                Text(money(shown))
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(shown > 0 ? P.ink : P.ink3)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.2), value: shown)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 11)
+                    .background(P.sunken, in: Capsule())
+                    .overlay(Capsule().stroke(P.rule, lineWidth: 1))
             }
-            Spacer()
-            TextField("0", text: clampedText(value, limit: limit))
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.trailing)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(P.ink)
-                .frame(width: 76)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 8)
-                .background(P.sunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Stepper("", value: clampedValue(value, limit: limit), in: 0...max(0, limit), step: 10)
-                .labelsHidden()
+            Slider(value: cashSlider(value, limit: cap), in: 0...Double(max(cap, 1)), step: 1)
+                .tint(P.red)
+                .disabled(cap == 0)
+                .opacity(cap == 0 ? 0.45 : 1)
+            Text(cap == 0 ? "no cash to offer" : "up to \(money(cap))")
+                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
         }
     }
 
@@ -369,16 +376,12 @@ struct TradeSheet: View {
         return P.ink3
     }
 
-    /// TextField binding that only accepts digits and clamps into 0...limit.
-    /// Zero renders as an empty field (the placeholder shows the 0) so typing
-    /// "150" can never glue itself onto a leftover digit and become "1500".
-    private func clampedText(_ value: Binding<Int>, limit: Int) -> Binding<String> {
+    /// Slider binding onto the Int cash amount, re-clamped on the way in as
+    /// well as out — the limit can shrink while the sheet is open.
+    private func cashSlider(_ value: Binding<Int>, limit: Int) -> Binding<Double> {
         Binding(
-            get: { value.wrappedValue == 0 ? "" : String(value.wrappedValue) },
-            set: { s in
-                let n = Int(s.filter(\.isNumber)) ?? 0
-                value.wrappedValue = min(max(0, n), max(0, limit))
-            }
+            get: { Double(min(max(0, value.wrappedValue), max(0, limit))) },
+            set: { value.wrappedValue = min(max(0, Int($0.rounded())), max(0, limit)) }
         )
     }
 

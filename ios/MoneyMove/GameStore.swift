@@ -49,6 +49,9 @@ final class GameStore: ObservableObject {
     @Published var cardPopup: LastCard?
     @Published var turnBanner: PlayerState?
     @Published var showGameOver = false
+    /// This device's seat was taken out by the clock — drives the full-screen
+    /// explainer. Cleared when the player chooses to stay and watch.
+    @Published var timedOut = false
     /// Set when a game begins — drives the board's deal-in animation.
     @Published var boardIntroAt: Date?
     /// "🇮🇳 India holds the priciest streets this game!"
@@ -306,6 +309,7 @@ final class GameStore: ObservableObject {
         // A fresh game: deal the board in and announce this game's top country.
         if new.isPlaying && old?.isPlaying != true {
             boardIntroAt = Date()
+            timedOut = false
             SoundKit.shared.shuffleDeal()
             if let top = new.map.tiles.filter({ $0.type == "property" }).max(by: { ($0.price ?? 0) < ($1.price ?? 0) }),
                let g = top.group, let info = new.groups[g] {
@@ -317,6 +321,18 @@ final class GameStore: ObservableObject {
                     try? await Task.sleep(for: .seconds(3.4))
                     if !Task.isCancelled { self?.reveal = nil }
                 }
+            }
+        }
+
+        // Losing your chair to the clock is not something to discover by
+        // scrolling the log — raise the overlay the moment it lands.
+        if let old {
+            for p in new.players where p.removedFor == "timeout" && localIds.contains(p.id) {
+                guard old.player(p.id)?.removedFor != "timeout" else { continue }
+                timedOut = true
+                SoundKit.shared.lose()
+                Haptics.warn()
+                break
             }
         }
 
@@ -446,6 +462,7 @@ final class GameStore: ObservableObject {
         roomId = nil
         state = nil
         joinError = nil
+        timedOut = false
         lastTurnPlayer = nil
         lastCardAt = 0
         lastRoom = ""
@@ -494,6 +511,9 @@ final class GameStore: ObservableObject {
     func unmortgage(_ tile: Int) { emitAsActive("unmortgage", [tile]) }
     func payDebt() { emitAsActive("payDebt") }
     func declareBankrupt() { emitAsActive("bankrupt") }
+    /// Walk out of a live game for good: the deeds go back to the bank, the
+    /// seat stays as a spectator, and it costs a point of karma.
+    func quitGame() { emit("quit") }
     func sendChat(_ text: String, channel: String = "all") { emit("chat", [text, channel]) }
 
     /// Team chat exists when teams are on and this player is actually on one.

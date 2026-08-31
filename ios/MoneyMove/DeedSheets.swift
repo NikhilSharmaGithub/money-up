@@ -231,28 +231,109 @@ struct DeedSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
+    /// The quick build bar. Raising a hotel is four taps in a row, so the
+    /// buttons stay put and stay live: nothing here dismisses the sheet, and a
+    /// move the rules refuse greys out instead of disappearing under a thumb.
     @ViewBuilder
     private func actionButtons(_ tile: TileData, _ P: Palette) -> some View {
-        if let own = store.state?.owner(of: tileIndex), own.owner == store.meId {
-            VStack(spacing: 8) {
-                if store.canBuild(tileIndex), let hc = tile.houseCost {
-                    Button("🏗 Build (\(money(hc)))") { store.build(tileIndex) }
-                        .buttonStyle(MMButtonStyle(kind: .good, big: true))
+        if let own = store.state?.owner(of: tileIndex), own.owner == store.activeId {
+            let houses = own.houseCount
+            let houseCost = tile.houseCost ?? 0
+            let price = tile.price ?? 0
+            VStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    if tile.type == "property" {
+                        quickButton(icon: "hammer.fill",
+                                    caption: houses == 4 ? "Hotel" : "Build",
+                                    detail: money(houseCost),
+                                    kind: .good,
+                                    enabled: store.canBuild(tileIndex) && houseCost > 0) {
+                            store.build(tileIndex)
+                        }
+                        quickButton(icon: "minus.circle.fill",
+                                    caption: houses == 5 ? "Sell hotel" : "Sell",
+                                    detail: "+\(money(houseCost / 2))",
+                                    kind: .ghost,
+                                    enabled: store.canSellHouse(tileIndex)) {
+                            store.sellHouse(tileIndex)
+                        }
+                    }
+                    if own.isMortgaged {
+                        quickButton(icon: "arrow.uturn.backward.circle.fill",
+                                    caption: "Unmortgage",
+                                    detail: money(unmortgageCost(price)),
+                                    kind: .primary,
+                                    enabled: store.state?.settings.mortgage != false && price > 0) {
+                            store.unmortgage(tileIndex)
+                        }
+                    } else {
+                        quickButton(icon: "banknote.fill",
+                                    caption: "Mortgage",
+                                    detail: "+\(money(price / 2))",
+                                    kind: .gold,
+                                    enabled: store.canMortgage(tileIndex)) {
+                            store.mortgage(tileIndex)
+                        }
+                    }
                 }
-                if store.canSellHouse(tileIndex), let hc = tile.houseCost {
-                    Button("Sell building (+\(money(hc / 2)))") { store.sellHouse(tileIndex) }
-                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
-                }
-                if store.canMortgage(tileIndex), let price = tile.price {
-                    Button("Mortgage (+\(money(price / 2)))") { store.mortgage(tileIndex) }
-                        .buttonStyle(MMButtonStyle(kind: .gold, big: true))
-                }
-                if own.isMortgaged, store.state?.settings.mortgage != false, let price = tile.price {
-                    Button("Unmortgage (\(money(unmortgageCost(price))))") { store.unmortgage(tileIndex) }
-                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+
+                if tile.type == "property" {
+                    buildingLine(houses: houses, houseCost: houseCost, P)
                 }
             }
         }
+    }
+
+    /// What's standing on the street right now, and what the next one costs —
+    /// the two numbers a repeat-tapper is actually watching.
+    private func buildingLine(houses: Int, houseCost: Int, _ P: Palette) -> some View {
+        let standing = houses == 5 ? "Hotel standing"
+            : houses == 0 ? "No buildings yet"
+            : "\(houses) house\(houses == 1 ? "" : "s")"
+        let next = houses >= 5 ? "fully built"
+            : houseCost == 0 ? "—"
+            : "next \(houses == 4 ? "hotel" : "house") \(money(houseCost))"
+
+        return HStack(spacing: 7) {
+            Text(houses == 5 ? "🏨" : houses > 0 ? String(repeating: "🏠", count: houses) : "🏗")
+                .font(.system(size: 12))
+            Text(standing)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(P.ink2)
+            Spacer(minLength: 6)
+            Text(next)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(P.ink3)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(P.sunken, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private func quickButton(
+        icon: String, caption: String, detail: String,
+        kind: MMButtonStyle.Kind, enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+            Haptics.tap()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .bold))
+                Text(caption)
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .opacity(0.85)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(MMButtonStyle(kind: kind))
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
     }
 }
 

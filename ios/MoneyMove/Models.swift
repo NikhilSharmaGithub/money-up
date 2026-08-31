@@ -54,6 +54,8 @@ struct GameSettings: Codable, Equatable {
     var startingCash: Int
     var randomizeOrder: Bool?
     var teams: Int?
+    /// Seconds a human gets per turn before the table moves on; 0 = clock off.
+    var turnSeconds: Int?
 }
 
 struct MapData: Codable, Equatable {
@@ -123,9 +125,14 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var connected: Bool?
     var skipTurns: Int?
     var netWorth: Int?
+    /// Removed from play rather than beaten: the seat stays in the roster as a
+    /// spectator, and the deeds went back to the bank.
+    var timedOut: Bool?
+    var removedFor: String?                 // "timeout" | "quit"
 
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }
+    var wasRemoved: Bool { timedOut ?? false }
 }
 
 struct TileOwnership: Codable, Equatable {
@@ -145,6 +152,8 @@ struct TurnState: Codable, Equatable {
     var pending: PendingAction?
     var debt: DebtState?
     var rolledThisTurn: Bool?
+    /// Epoch milliseconds this player's turn expires; null when no clock.
+    var endsAt: Double?
 }
 
 struct PendingAction: Codable, Equatable {
@@ -278,6 +287,19 @@ struct Wallet: Codable {
     var coins: Int
     var owned: [String]
     var equipped: [String: String]          // slot -> item id
+    /// 0...100, docked when someone walks out on a live table.
+    var karma: Int?
+}
+
+/// One paid top-up from GET /api/store. `productId` is what StoreKit sells.
+struct CoinPack: Codable, Identifiable {
+    var id: String
+    var productId: String
+    var coins: Int
+    var price: String                       // "4.99" — the fallback display price
+    var emoji: String
+    var name: String
+    var bonus: Int                          // extra %, 0 for the plain pack
 }
 
 struct DMessage: Codable, Identifiable {

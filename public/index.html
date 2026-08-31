@@ -43,10 +43,16 @@
         <div id="googleSignIn"></div>
         <span id="authStatus" class="dim small"></span>
       </div>
-      <button id="storeBtn" class="btn wide store-btn">🛍️ Store <span id="coinChip" class="coin-chip">🪙 0</span></button>
+      <div class="wallet-row">
+        <button id="storeBtn" class="btn store-btn">🛍️ Store <span id="coinChip" class="coin-chip">🪙 0</span></button>
+        <span id="karmaChip" class="karma-chip hidden" title="Karma — leaving a live game costs 1">💚 100 karma</span>
+      </div>
       <label class="field">
         <span>Your nickname</span>
-        <input id="nickInput" maxlength="16" placeholder="Nik" autocomplete="off" />
+        <span class="name-row">
+          <input id="nickInput" maxlength="16" placeholder="Nik" autocomplete="off" />
+          <button id="nameDiceBtn" class="btn dice-btn" type="button" title="Give me a name">🎲</button>
+        </span>
       </label>
       <button id="createBtn" class="btn primary big">
         <span class="btn-ico">🎲</span> Create a private game
@@ -143,6 +149,7 @@
           <div id="centerCard" class="center-card"></div>
           <div id="centerAction" class="center-action"></div>
           <div id="centerStatus" class="center-status"></div>
+          <div id="centerClock" class="turn-clock-well hidden"></div>
         </div>
       </div>
 

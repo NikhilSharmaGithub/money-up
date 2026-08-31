@@ -30,6 +30,8 @@ export const DEFAULT_SETTINGS = {
   startingCash: 2500,
   randomizeOrder: true,
   teams: 0, // 0 = free-for-all, otherwise how many teams share the board
+  /** Seconds a human gets per turn before the table moves on. 0 turns it off. */
+  turnSeconds: 90,
 };
 
 const AUCTION_SECONDS = 20;
@@ -67,6 +69,8 @@ export class GameRoom {
     this.lastCard = null;
     this.lastMove = null;
     this.timers = {};
+    /** Set by the server so the room can report karma-worthy exits. */
+    this.hooks = {};
     this.createdAt = Date.now();
     this.version = 0;
   }
@@ -324,9 +328,89 @@ export class GameRoom {
     this.recordWorth();
     this.say('Game started! Good luck.', 'system');
     this.say(`${this.players[0].name}'s turn`, 'turn');
+    this.armTurnTimer();
     this.push();
     this.maybeBot();
     return { ok: true };
+  }
+
+  // -------------------------------------------------------------- turn clock --
+  /**
+   * Give whoever holds the turn a fresh shot clock. Bots and bot-held seats
+   * don't need one, and every real action re-arms it — the clock is there to
+   * stop a table stalling on someone who walked away, not to rush a thinker
+   * mid-turn.
+   */
+  armTurnTimer() {
+    clearTimeout(this.timers.turn);
+    this.timers.turn = null;
+    if (!this.turn) return;
+    const seconds = Math.max(0, Math.floor(Number(this.settings.turnSeconds) || 0));
+    const p = this.player(this.turn.playerId);
+    if (this.status !== 'playing' || !seconds || !p || this.autoPlayed(p)) {
+      if (this.turn) this.turn.endsAt = null;
+      return;
+    }
+    const id = p.id;
+    this.turn.endsAt = Date.now() + seconds * 1000;
+    this.timers.turn = setTimeout(() => this.turnTimedOut(id), seconds * 1000 + 250);
+    this.timers.turn.unref?.();
+  }
+
+  /**
+   * The clock ran out. The table matters more than the empty chair: their
+   * deeds go back to the bank and play moves on, but they keep their seat in
+   * the roster so their client can offer "watch how it ends".
+   */
+  turnTimedOut(id) {
+    if (this.status !== 'playing') return;
+    if (this.turn?.playerId !== id) return;
+    const p = this.player(id);
+    if (!p || p.bankrupt || this.autoPlayed(p)) return;
+    this.say(`${p.name} ran out of time and was removed`, 'leave');
+    this.removeFromPlay(p, 'timeout');
+  }
+
+  /** Any deliberate move by the player on the clock buys them a fresh one. */
+  touchTurnClock(id) {
+    if (this.status !== 'playing' || this.turn?.playerId !== id) return;
+    const before = this.turn.endsAt;
+    this.armTurnTimer();
+    if (this.turn.endsAt !== before) this.push();
+  }
+
+  /** Walking out on a live game — the deliberate version of a timeout. */
+  quit(id) {
+    const p = this.player(id);
+    if (!p) return { error: 'Unknown player' };
+    if (this.status !== 'playing') return this.leave(id) ?? { ok: true };
+    if (p.bankrupt) return { ok: true };
+    this.say(`${p.name} left the game`, 'leave');
+    this.removeFromPlay(p, 'quit');
+    return { ok: true };
+  }
+
+  /**
+   * Take a player out of the running without handing anyone a windfall: their
+   * streets go back on the market, their cash leaves with them, and the turn
+   * order simply skips the chair from now on.
+   */
+  removeFromPlay(p, reason) {
+    p.bankrupt = true;      // the turn loop already skips these
+    p.timedOut = true;      // …but the client shows a different story
+    p.removedFor = reason;
+    for (const i of this.tilesOf(p.id)) delete this.ownership[i];
+    p.money = 0;
+    if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
+    this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
+    if (this.auction) {
+      this.auction.inRace = this.auction.inRace.filter((x) => x !== p.id);
+      if (this.auction.leader === p.id) this.auction.leader = null;
+    }
+    this.hooks.karma?.(p.id, -1, reason);
+    if (this.checkGameEnd()) return;
+    if (this.turn?.playerId === p.id) this.nextTurn();
+    else this.push();
   }
 
   // ------------------------------------------------------------ turn helpers --
@@ -1283,6 +1367,7 @@ export class GameRoom {
       this.turnCount++;
       this.recordWorth();
       this.say(`${cand.name}'s turn`, 'turn');
+      this.armTurnTimer();
       this.push();
       this.maybeBot();
       return;
@@ -1497,6 +1582,7 @@ export class GameRoom {
         tokenSkin: p.tokenSkin || '', avatar: p.avatar || '',
         bankrupt: p.bankrupt, isBot: p.isBot, connected: p.connected,
         botControlled: !!p.botControlled,
+        timedOut: !!p.timedOut, removedFor: p.removedFor || null,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),
       })),
       ownership: this.ownership,

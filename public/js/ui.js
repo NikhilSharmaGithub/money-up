@@ -165,6 +165,7 @@ export function renderPlayers(state, meId, el, actions) {
           <div class="pmoney"></div>
           <div class="chips"></div>
         </div>
+        <span class="turn-clock hidden"></span>
         <div class="player-actions"></div>
         <div class="delta-slot"></div>
       </div>`).join('')
@@ -204,7 +205,8 @@ export function renderPlayers(state, meId, el, actions) {
     if (p.isBot) tags.push('<i class="tag bot">BOT</i>');
     if (state.hostId === p.id) tags.push('<i class="tag host">HOST</i>');
     if (p.id === meId) tags.push('<i class="tag you">YOU</i>');
-    if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
+    if (p.timedOut) tags.push(`<i class="tag off">${p.removedFor === 'quit' ? 'LEFT' : 'TIMED OUT'}</i>`);
+    else if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
     else if (!p.connected && !p.isBot) tags.push('<i class="tag off">AWAY</i>');
     if (p.jail) tags.push('<i class="tag jail">JAIL</i>');
     if (p.skipTurns > 0) tags.push('<i class="tag vac">VACATION</i>');
@@ -215,7 +217,8 @@ export function renderPlayers(state, meId, el, actions) {
 
     // money + delta bubble
     const moneyEl = card.querySelector('.pmoney');
-    const shown = p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.money);
+    const shown = p.timedOut ? '<span class="dim">out of the game</span>'
+      : p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.money);
     if (moneyEl.dataset.v !== shown) {
       const before = prevMoney.get(p.id);
       moneyEl.dataset.v = shown;
@@ -728,6 +731,49 @@ function phaseHint(state, p) {
   return 'wrapping up…';
 }
 
+// ─────────────────────────────────────────────────────────── turn clock ──
+// The deadline rides along with the state, but the seconds are counted here:
+// a push can be minutes old after a sleeping tab, and a chip frozen on "42s"
+// reads as a broken game.
+const clock = { endsAt: null, playerId: null, mine: false };
+let clockTimer = null;
+
+const clockText = (secs) => (secs >= 60
+  ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+  : `${secs}s`);
+
+export function syncTurnClock(state, meId) {
+  const live = state.status === 'playing' && state.turn?.endsAt ? state.turn : null;
+  clock.endsAt = live?.endsAt || null;
+  clock.playerId = live?.playerId || null;
+  clock.mine = !!live && live.playerId === meId;
+  paintTurnClock();
+  if (clock.endsAt && !clockTimer) clockTimer = setInterval(paintTurnClock, 250);
+  else if (!clock.endsAt && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+}
+
+function paintTurnClock() {
+  const secs = clock.endsAt ? Math.max(0, Math.ceil((clock.endsAt - Date.now()) / 1000)) : null;
+  const urgent = secs !== null && secs <= 10;
+
+  document.querySelectorAll('.player-card').forEach((card) => {
+    const el = card.querySelector('.turn-clock');
+    if (!el) return;
+    const on = secs !== null && card.dataset.pid === clock.playerId;
+    el.classList.toggle('hidden', !on);
+    if (!on) return;
+    el.textContent = `⏱ ${clockText(secs)}`;
+    el.classList.toggle('urgent', urgent);
+  });
+
+  const well = $('#centerClock');
+  if (!well) return;
+  well.classList.toggle('hidden', secs === null);
+  if (secs === null) return;
+  well.textContent = clock.mine ? `⏱ ${clockText(secs)} left on your turn` : `⏱ ${clockText(secs)}`;
+  well.classList.toggle('urgent', urgent);
+}
+
 let auctionRaf = null;
 function animateAuctionBar(a) {
   cancelAnimationFrame(auctionRaf);
@@ -786,6 +832,7 @@ export function openStoreModal(token) {
     fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json()),
   ]).then(([storeData, wallet]) => {
     const items = storeData.items || [];
+    const packs = storeData.packs || [];
     const section = (kind, title, sub) => `
       <h3 class="map-section">${title}</h3>
       <p class="sub">${sub}</p>
@@ -802,12 +849,29 @@ export function openStoreModal(token) {
         }).join('')}
       </div>`;
 
+    // The web build has no payment processor behind it, so the packs are a
+    // shop window: they say what a top-up costs and point at the iOS app.
+    const packSection = packs.length ? `
+      <h3 class="map-section">🪙 Coin packs</h3>
+      <p class="sub">Coin packs are purchased in the iOS app.
+        <a class="pack-link" href="/app.html" target="_blank" rel="noopener">Get MoneyMove for iPhone →</a></p>
+      <div class="pack-grid">
+        ${packs.map((p) => `<a class="pack-card" href="/app.html" target="_blank" rel="noopener">
+          <span class="pk-emoji">${p.emoji}</span>
+          ${p.bonus ? `<span class="pk-bonus">+${p.bonus}%</span>` : ''}
+          <span class="pk-coins">🪙 ${p.coins}</span>
+          <span class="pk-name">${escapeHtml(p.name)}</span>
+          <span class="pk-price">$${escapeHtml(p.price)}</span>
+        </a>`).join('')}
+      </div>` : '';
+
     openModal(`
       <div class="store-head">
         <h2>Store</h2>
         <span class="coin-chip">🪙 ${wallet.coins ?? 0}</span>
       </div>
-      <p class="sub">Win games to earn coins — 1 for a quick match, 2 when it goes long. Everything here is pure style.</p>
+      <p class="sub">Win games to earn coins — 50 for a quick match, 100 when it goes long. Everything here is pure style.</p>
+      ${packSection}
       ${section('token', '🎲 Token skins', 'Your piece on the board.')}
       ${section('avatar', '🙂 Avatars', 'Your face in the player chip.')}
       <div class="modal-actions"><button class="btn ghost" id="stClose">Close</button></div>`, (root) => {
@@ -894,14 +958,25 @@ export function openDmModal(token, code, name) {
   });
 }
 
+// The deed sheet outlives the state that opened it — building from it must
+// leave the numbers fresh, so it registers a repainter the render loop calls.
+let deedRepaint = null;
+
+/** Redraws whatever open modal has to follow the live game. */
+export function syncOpenModals(state) {
+  deedRepaint?.(state);
+}
+
 export function closeModal() {
   const root = $('#modalRoot');
+  deedRepaint = null;
   root.classList.add('hidden');
   root.innerHTML = '';
 }
 
 function openModal(html, onMount, extraClass = '') {
   const root = $('#modalRoot');
+  deedRepaint = null; // a new sheet replaces whatever was repainting
   root.classList.remove('hidden');
   root.innerHTML = `<div class="modal ${extraClass}">${html}</div>`;
   root.onclick = (e) => { if (e.target === root) closeModal(); };
@@ -921,33 +996,165 @@ export function confirmModal(title, body, onYes) {
   }, 'small');
 }
 
-export function openDeedModal(state, i, meId, actions) {
-  const deed = deedMarkup(state, i);
-  if (!deed) return;
+// ────────────────────────────────────────────────────── random nickname ──
+// The server hands out the real list; these two columns only exist so the
+// dice still work when it is asleep.
+const NAME_ADJECTIVES = ['Lucky', 'Bold', 'Royal', 'Swift', 'Golden', 'Cheeky', 'Wild', 'Neon', 'Jolly', 'Turbo'];
+const NAME_NOUNS = ['Tycoon', 'Baron', 'Trader', 'Broker', 'Tiger', 'Falcon', 'Rocket', 'Seth', 'Raja', 'Boss'];
+
+export async function randomName() {
+  try {
+    const d = await fetch(api('/api/name')).then((r) => r.json());
+    if (d?.name) return String(d.name).slice(0, 16);
+  } catch { /* offline — the local pair below still reads like a table name */ }
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  return `${pick(NAME_ADJECTIVES)} ${pick(NAME_NOUNS)}`.slice(0, 16);
+}
+
+/** A stranger arriving on a share link needs a name before they can sit down. */
+export function openJoinNameModal(roomId, onJoin) {
+  openModal(`
+    <h2>What should we call you?</h2>
+    <p class="sub">You have been invited to room <b>${escapeHtml(roomId)}</b>. Pick a name and take a seat.</p>
+    <div class="name-row">
+      <input id="jnName" maxlength="16" placeholder="Nickname" autocomplete="off" />
+      <button class="btn dice-btn" id="jnDice" type="button" title="Give me a name">🎲</button>
+    </div>
+    <div class="modal-actions"><button class="btn primary wide" id="jnGo">Join the game</button></div>`, (root) => {
+    const input = $('#jnName', root);
+    input.focus();
+    $('#jnDice', root).onclick = async () => { sfx.click(); input.value = await randomName(); };
+    const join = () => {
+      const name = input.value.trim().slice(0, 16);
+      if (!name) return toast('Type a name, or roll the dice for one', 'error');
+      sfx.click();
+      closeModal();
+      onJoin(name);
+    };
+    $('#jnGo', root).onclick = join;
+    input.onkeydown = (e) => { if (e.key === 'Enter') join(); };
+  }, 'small');
+}
+
+/** Two ways out of a live game, spelled out — one keeps the chair, one doesn't. */
+export function openLeaveModal({ onKeepSeat, onQuit }) {
+  openModal(`
+    <h2>Leaving the table?</h2>
+    <p class="sub">Game chal rahi hai — pick how you go.</p>
+    <div class="leave-choices">
+      <button class="leave-choice" id="lBack">
+        <b>↩️ I'll come back</b>
+        <span>A bot holds your seat and your properties. Continue from the home screen any time.</span>
+      </button>
+      <button class="leave-choice bad" id="lQuit">
+        <b>🚪 Leave for good</b>
+        <span>Your deeds go back to the bank and the table plays on without you.</span>
+      </button>
+    </div>
+    <p class="karma-note">Leaving or timing out costs 1 karma.</p>
+    <div class="modal-actions"><button class="btn ghost" id="lStay">Stay in the game</button></div>`, (root) => {
+    $('#lStay', root).onclick = closeModal;
+    $('#lBack', root).onclick = () => { sfx.click(); closeModal(); onKeepSeat(); };
+    $('#lQuit', root).onclick = () => { sfx.click(); closeModal(); onQuit(); };
+  }, 'small');
+}
+
+/** The clock ran out on this seat — say so plainly and offer both exits. */
+export function showRemovedOverlay({ onHome, onWatch }) {
+  openModal(`
+    <div class="removed-mark">⏳</div>
+    <h2 class="removed-title">Your time ran out</h2>
+    <p class="sub">You were removed to keep the game moving. You can head back or stay and watch how it ends.</p>
+    <p class="karma-note">Leaving or timing out costs 1 karma.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="rHome">Back to home</button>
+      <button class="btn primary" id="rWatch">Stay and watch</button>
+    </div>`, (root) => {
+    // A stray click on the felt shouldn't decide this for them.
+    root.onclick = null;
+    $('#rHome', root).onclick = () => { sfx.click(); closeModal(); onHome(); };
+    $('#rWatch', root).onclick = () => { sfx.click(); closeModal(); onWatch?.(); };
+  }, 'small removed-modal');
+}
+
+/**
+ * The tap-up / tap-down row under a deed you own. Sell sits left of the
+ * building count and build sits right of it, so a whole street can be taken to
+ * a hotel without the sheet closing between taps.
+ */
+function quickBuildBar(state, meId, i) {
   const tile = state.map.tiles[i];
   const own = state.ownership[i];
-  const isMine = own?.owner === meId;
+  const me = state.players.find((p) => p.id === meId);
+  const cash = me?.money || 0;
+  const houses = own.houses || 0;
+  const street = tile.type === 'property';
+  const houseCost = tile.houseCost || 0;
+  const sellBack = Math.floor(houseCost / 2);
+  const mortValue = Math.floor((tile.price || 0) / 2);
+  const liftCost = Math.ceil(((tile.price || 0) / 2) * 1.1);
 
-  openModal(`${deed}
-    ${isMine ? `<div class="modal-actions">
-      ${canBuildOn(state, meId, i) ? `<button class="btn" id="dBuild">🏗️ Build ($${tile.houseCost})</button>` : ''}
-      ${canSellOn(state, meId, i) ? '<button class="btn ghost" id="dSell">Sell building</button>' : ''}
+  const buildable = street && canBuildOn(state, meId, i);
+  const sellable = canSellOn(state, meId, i);
+  const canAfford = cash >= houseCost;
+  const mortgageable = canMortgage(state, meId, i);
+  const canLift = own.mortgaged && state.settings.mortgage;
+
+  const level = own.mortgaged ? '🏦 Mortgaged'
+    : houses === 5 ? '🏨 Hotel'
+    : houses ? '🏠'.repeat(houses)
+    : 'No buildings yet';
+
+  const next = !street ? 'Airports and utilities can only be mortgaged.'
+    : own.mortgaged ? `Buy the mortgage back for $${liftCost} before building.`
+    : houses === 5 ? 'Fully built — nothing more to add.'
+    : !buildable ? (canSellOn(state, meId, i) ? `Sell a building back for $${sellBack}.` : 'You need the whole set, unmortgaged, to build.')
+    : `Next ${houses === 4 ? 'hotel' : 'house'} costs $${houseCost}${!canAfford ? ' — short on cash' : ''}`;
+
+  return `<div class="quick-build">
+    <div class="qb-status">
+      <span class="qb-level">${level}</span>
+      <span class="qb-next">${escapeHtml(next)}</span>
+    </div>
+    <div class="qb-row">
+      ${street ? `
+        <button class="qb-btn" data-qb-sell title="Sell a building for $${sellBack}" ${sellable ? '' : 'disabled'}>−</button>
+        <span class="qb-count">${houses === 5 ? '🏨' : houses}<small>${houses === 5 ? '' : '/5'}</small></span>
+        <button class="qb-btn" data-qb-build title="Build for $${houseCost}" ${buildable && canAfford ? '' : 'disabled'}>＋</button>` : ''}
       ${own.mortgaged
-        ? (state.settings.mortgage ? `<button class="btn gold" id="dUnmort">Buy back ($${Math.ceil((tile.price / 2) * 1.1)})</button>` : '')
-        : (canMortgage(state, meId, i) ? `<button class="btn ghost" id="dMort">Mortgage ($${Math.floor(tile.price / 2)})</button>` : '')}
-      <button class="btn ghost" id="dClose">Close</button>
-    </div>`
-    : '<div class="modal-actions"><button class="btn ghost" id="dClose">Close</button></div>'}
-  `, (root) => {
-    const hook = (id, fn, sound) => {
-      const b = $(id, root);
-      if (b) b.onclick = () => { (sound || sfx.click)(); fn(i); closeModal(); };
+        ? `<button class="qb-btn mort gold" data-qb-unmort title="Buy the mortgage back" ${canLift && cash >= liftCost ? '' : 'disabled'}>↺ Buy back $${liftCost}</button>`
+        : `<button class="qb-btn mort" data-qb-mort title="Mortgage this deed" ${mortgageable ? '' : 'disabled'}>🏦 Mortgage $${mortValue}</button>`}
+    </div>
+  </div>`;
+}
+
+export function openDeedModal(state, i, meId, actions) {
+  if (!deedMarkup(state, i)) return;
+
+  // Every tap redraws this sheet from the state the server sends back, so the
+  // counts and prices under the buttons are never a turn behind.
+  const paint = (s, sheet) => {
+    const own = s.ownership[i];
+    const me = s.players.find((p) => p.id === meId);
+    const isMine = own?.owner === meId && !me?.bankrupt;
+    sheet.innerHTML = `${deedMarkup(s, i)}
+      ${isMine ? quickBuildBar(s, meId, i) : ''}
+      <div class="modal-actions"><button class="btn ghost" data-deed-close>Close</button></div>`;
+    sheet.querySelector('[data-deed-close]').onclick = closeModal;
+    const tap = (attr, fn, sound) => {
+      const b = sheet.querySelector(`[${attr}]`);
+      if (b && !b.disabled) b.onclick = () => { (sound || sfx.click)(); fn(i); };
     };
-    hook('#dBuild', actions.build, sfx.build);
-    hook('#dSell', actions.sellHouse);
-    hook('#dMort', actions.mortgage, sfx.cash);
-    hook('#dUnmort', actions.unmortgage, sfx.cash);
-    $('#dClose', root).onclick = closeModal;
+    tap('data-qb-build', actions.build, sfx.build);
+    tap('data-qb-sell', actions.sellHouse);
+    tap('data-qb-mort', actions.mortgage, sfx.cash);
+    tap('data-qb-unmort', actions.unmortgage, sfx.cash);
+  };
+
+  openModal('', (root) => {
+    const sheet = $('.modal', root);
+    paint(state, sheet);
+    deedRepaint = (s) => paint(s, sheet);
   }, 'deed-modal');
 }
 
@@ -1058,8 +1265,16 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
           </label>`;
         }).join('') : '<div class="empty small">No properties</div>'}
       </div>
-      <label class="field tight"><span>Cash · max ${money(player.money)}</span>
-        <input type="number" min="0" max="${player.money}" value="" placeholder="0" data-cash="${prefix}" /></label>
+      <div class="cash-slider">
+        <span class="cs-label">Cash</span>
+        <div class="cs-track" style="--pct:0">
+          <input type="range" min="0" max="${Math.max(0, player.money)}" step="1" value="0"
+                 data-cash="${prefix}" ${player.money > 0 ? '' : 'disabled'}
+                 aria-label="Cash from ${escapeHtml(player.name)}" />
+          <b class="cs-bubble" data-cash-out="${prefix}">$0</b>
+        </div>
+        <span class="cs-max">max ${money(player.money)}</span>
+      </div>
       ${player.getOutCards ? `<label class="field tight"><span>Prison cards · max ${player.getOutCards}</span>
         <input type="number" min="0" max="${player.getOutCards}" value="" placeholder="0" data-cards="${prefix}" /></label>` : ''}
     </div>`;
@@ -1083,16 +1298,37 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       <button class="btn ghost" id="tCancel">Cancel</button>
       <button class="btn primary" id="tSend">${prefill?.counterOf != null ? 'Send counter-offer' : 'Send offer'}</button>
     </div>`, (root) => {
+    // The slider's max already stops it, but a clamp here means no hand-edited
+    // range can put more cash on the table than that side actually holds.
+    const cashOf = (prefix) => {
+      const el = root.querySelector(`input[data-cash="${prefix}"]`);
+      if (!el) return 0;
+      const cap = Math.max(0, Number(el.max) || 0);
+      return Math.min(cap, Math.max(0, Math.round(Number(el.value) || 0)));
+    };
     const collect = (prefix) => ({
       tiles: [...root.querySelectorAll(`input[data-side="${prefix}"]:checked`)].map((i) => Number(i.value)),
-      money: Number(root.querySelector(`input[data-cash="${prefix}"]`)?.value || 0),
+      money: cashOf(prefix),
       cards: Number(root.querySelector(`input[data-cards="${prefix}"]`)?.value || 0),
     });
+
+    /** Moves the value pill under the thumb and fills the track behind it. */
+    const paintCash = (prefix) => {
+      const el = root.querySelector(`input[data-cash="${prefix}"]`);
+      if (!el) return;
+      const cap = Math.max(0, Number(el.max) || 0);
+      const value = cashOf(prefix);
+      el.closest('.cs-track')?.style.setProperty('--pct', cap ? value / cap : 0);
+      const out = root.querySelector(`[data-cash-out="${prefix}"]`);
+      if (out) out.textContent = money(value);
+    };
     // Face value only — it ignores how badly you need that last street.
     const worth = (side) => side.money + side.cards * 50
       + side.tiles.reduce((sum, i) => sum + state.map.tiles[i].price, 0);
 
     const refresh = () => {
+      paintCash('give');
+      paintCash('get');
       const give = worth(collect('give'));
       const get = worth(collect('get'));
       $('#giveTotal', root).textContent = money(give);
@@ -1119,8 +1355,10 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
           const box = root.querySelector(`input[data-side="${prefix}"][value="${i}"]`);
           if (box && !box.disabled) box.checked = true;
         });
+        // Their old offer can name more cash than this side holds today, and
+        // the slider must never seed above its own maximum.
         const cash = root.querySelector(`input[data-cash="${prefix}"]`);
-        if (cash && side.money) cash.value = side.money;
+        if (cash && side.money) cash.value = Math.min(side.money, Number(cash.max) || 0);
         const cards = root.querySelector(`input[data-cards="${prefix}"]`);
         if (cards && side.cards) cards.value = side.cards;
       };

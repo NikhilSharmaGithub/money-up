@@ -15,6 +15,8 @@ struct SettingsSheet: View {
     /// Server-side defaults (server/game.js DEFAULT_SETTINGS) used only when
     /// a field is missing from the broadcast state.
     private static let startingCashOptions = [500, 1000, 1500, 2000, 2500, 3000, 5000]
+    /// Seconds on the turn clock; 0 hands the table all the time in the world.
+    private static let turnClockOptions = [0, 30, 60, 90, 120, 180]
 
     private var canEdit: Bool { store.isHost && store.state?.isLobby == true }
 
@@ -274,6 +276,25 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 12) {
                 PanelTitle("Rules")
 
+                menuRow(title: "Turn clock",
+                        value: currentTurnSeconds == 0 ? "Off" : "\(currentTurnSeconds)s", P: P) {
+                    ForEach(Self.turnClockOptions, id: \.self) { n in
+                        Button {
+                            store.updateSettings(["turnSeconds": n])
+                        } label: {
+                            let label = n == 0 ? "Off" : "\(n) seconds"
+                            if n == currentTurnSeconds {
+                                Label(label, systemImage: "checkmark")
+                            } else {
+                                Text(label)
+                            }
+                        }
+                    }
+                }
+                Text("Run out of time and the table moves on without you.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                divider(P)
                 toggleRow(title: "x2 rent on full sets",
                           caption: "Unimproved streets earn double once you own the whole set.",
                           binding: boolSetting("x2rent", { $0.x2rent }, default: false),
@@ -365,6 +386,7 @@ struct SettingsSheet: View {
 
     private var currentMaxPlayers: Int { store.state?.settings.maxPlayers ?? 4 }
     private var currentStartingCash: Int { store.state?.settings.startingCash ?? 2500 }
+    private var currentTurnSeconds: Int { store.state?.settings.turnSeconds ?? 90 }
     private var currentTeams: Int { store.state?.settings.teams ?? 0 }
 
     /// Binds a toggle straight to the broadcast settings — flipping it emits

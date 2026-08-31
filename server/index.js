@@ -9,8 +9,11 @@ import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
   allProfiles, attachLogin, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
+  bumpKarma, creditPurchase,
 } from './social.js';
-import { STORE_ITEMS, itemById, emojiFor } from './store.js';
+import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
+import { randomName } from './names.js';
+import { verifySignedTransaction } from './appstore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -90,7 +93,10 @@ app.get('/api/dm', (req, res) => {
 });
 
 // ---- store & wallet ------------------------------------------------------
-app.get('/api/store', (_req, res) => res.json({ items: STORE_ITEMS }));
+app.get('/api/store', (_req, res) => res.json({ items: STORE_ITEMS, packs: COIN_PACKS }));
+
+/** A nickname for anyone who'd rather not think of one. */
+app.get('/api/name', (_req, res) => res.json({ name: randomName() }));
 
 app.get('/api/wallet', (req, res) => {
   const w = walletOf(String(req.query.token || '').slice(0, 64));
@@ -105,6 +111,27 @@ app.post('/api/store/buy', (req, res) => {
   const result = buyItem(String(token || '').slice(0, 64), item);
   if (result.error) return res.status(400).json(result);
   res.json(result);
+});
+
+/**
+ * Credit a coin pack. The client sends the platform's signed transaction —
+ * never a bare pack id — and coins appear only once that receipt proves it
+ * came from Apple and hasn't already been redeemed.
+ */
+app.post('/api/store/redeem', async (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 64);
+  const signed = String(req.body?.signedTransaction || '');
+  if (!token) return res.status(400).json({ error: 'Missing identity' });
+
+  const verdict = await verifySignedTransaction(signed, { bundleId: 'com.moneymove.game' });
+  if (verdict.error) return res.status(400).json({ error: verdict.error });
+
+  const pack = packByProductId(verdict.payload.productId);
+  if (!pack) return res.status(400).json({ error: 'Unknown product' });
+
+  const result = creditPurchase(token, verdict.payload.transactionId, pack.coins);
+  if (result.error) return res.status(400).json(result);
+  res.json({ ...result, pack: pack.id });
 });
 
 app.post('/api/store/equip', (req, res) => {
@@ -185,10 +212,10 @@ function recordTransitions(room) {
   }
   if (room.status === 'ended' && prev === 'playing') {
     stats.gamesEnded++;
-    // Winning pays: one coin for a quick game, two once it went the distance.
+    // Winning pays: 50 coins for a quick game, 100 once it went the distance.
     // Team games pay every human on the winning side.
     const turns = room.turnCount || 0;
-    const payout = turns >= 40 ? 2 : 1;
+    const payout = turns >= 40 ? 100 : 50;
     const winners = room.winningTeam != null
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
@@ -312,6 +339,8 @@ function newRoomId() {
 function getRoom(id) {
   if (rooms.has(id)) return rooms.get(id);
   const room = new GameRoom(id, broadcast);
+  // Walking out on a live table, or letting the clock run out, costs karma.
+  room.hooks.karma = (token, delta) => bumpKarma(token, delta);
   rooms.set(id, room);
   socketsOf.set(id, new Set());
   return room;
@@ -441,23 +470,30 @@ io.on('connection', (socket) => {
   }));
   socket.on('start', guard(() => ok(room.start(playerId))));
 
-  socket.on('roll', guard(() => ok(room.roll(playerId))));
-  socket.on('buy', guard(() => ok(room.buy(playerId))));
-  socket.on('skipBuy', guard(() => ok(room.skipBuy(playerId))));
-  socket.on('bid', guard((amount) => ok(room.bid(playerId, amount))));
-  socket.on('passBid', guard(() => ok(room.passBid(playerId))));
-  socket.on('endTurn', guard(() => ok(room.endTurn(playerId))));
-  socket.on('jailPay', guard(() => ok(room.jailPay(playerId))));
-  socket.on('jailCard', guard(() => ok(room.jailCard(playerId))));
+  /** Like `guard`, but the move also resets this player's shot clock. */
+  const onTurn = (fn) => guard((...args) => {
+    const res = fn(...args);
+    room.touchTurnClock(playerId);
+    return res;
+  });
 
-  socket.on('build', guard((tile) => ok(room.build(playerId, Number(tile)))));
-  socket.on('sellHouse', guard((tile) => {
+  socket.on('roll', onTurn(() => ok(room.roll(playerId))));
+  socket.on('buy', onTurn(() => ok(room.buy(playerId))));
+  socket.on('skipBuy', onTurn(() => ok(room.skipBuy(playerId))));
+  socket.on('bid', onTurn((amount) => ok(room.bid(playerId, amount))));
+  socket.on('passBid', onTurn(() => ok(room.passBid(playerId))));
+  socket.on('endTurn', onTurn(() => ok(room.endTurn(playerId))));
+  socket.on('jailPay', onTurn(() => ok(room.jailPay(playerId))));
+  socket.on('jailCard', onTurn(() => ok(room.jailCard(playerId))));
+
+  socket.on('build', onTurn((tile) => ok(room.build(playerId, Number(tile)))));
+  socket.on('sellHouse', onTurn((tile) => {
     if (!room.sellHouse(playerId, Number(tile))) fail('Cannot sell that building');
   }));
-  socket.on('mortgage', guard((tile) => {
+  socket.on('mortgage', onTurn((tile) => {
     if (!room.mortgage(playerId, Number(tile))) fail('Cannot mortgage that property');
   }));
-  socket.on('unmortgage', guard((tile) => ok(room.unmortgage(playerId, Number(tile)))));
+  socket.on('unmortgage', onTurn((tile) => ok(room.unmortgage(playerId, Number(tile)))));
 
   socket.on('trade:propose', guard((d = {}) => ok(room.proposeTrade(playerId, d))));
   socket.on('trade:respond', guard(({ id, accept } = {}) => ok(room.respondTrade(playerId, id, !!accept))));
@@ -465,8 +501,9 @@ io.on('connection', (socket) => {
   socket.on('trade:ignore', guard(({ id, ignored } = {}) => ok(room.ignoreTrade(playerId, id, ignored !== false))));
   socket.on('trade:viewing', guard(({ id, viewing } = {}) => ok(room.setTradeViewing(playerId, id, !!viewing))));
 
-  socket.on('payDebt', guard(() => ok(room.payDebt(playerId))));
+  socket.on('payDebt', onTurn(() => ok(room.payDebt(playerId))));
   socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));
+  socket.on('quit', guard(() => ok(room.quit(playerId))));
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
   socket.on('rematch', guard(() => {

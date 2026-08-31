@@ -7,7 +7,8 @@ import {
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
-  confetti, openDeedModal, openHelpModal, openStoreModal,
+  confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
+  openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
 } from './ui.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
@@ -56,6 +57,7 @@ let lastCardAt = 0;
 let lastLogAt = 0;
 let lastTurnId = null;
 let winnerShown = false;
+let removedShown = false;
 
 // ──────────────────────────────────────────────────────────────── actions ──
 const emit = (evt) => (...args) => socket?.emit(evt, ...args);
@@ -90,6 +92,7 @@ const actions = {
   tradeViewing: (id, viewing) => socket?.emit('trade:viewing', { id, viewing }),
   payDebt: emit('payDebt'),
   bankrupt: emit('bankrupt'),
+  quit: emit('quit'),
   chat: emit('chat'),
   rematch: emit('rematch'),
 };
@@ -110,7 +113,7 @@ function showLanding() {
     cont.onclick = () => { sfx.click(); go(lastRoom); };
   }
 
-  refreshCoins();
+  refreshWallet();
   loadPublicRooms();
   initGoogleSignIn();
   initSocial({
@@ -120,15 +123,23 @@ function showLanding() {
   });
 }
 
-// ---- store & coins -------------------------------------------------------
+// ---- store, coins & karma ------------------------------------------------
 let knownCoins = null;
 
-async function refreshCoins({ celebrate = false } = {}) {
+async function refreshWallet({ celebrate = false } = {}) {
   try {
     const w = await fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json());
     if (typeof w.coins !== 'number') return;
     const chip = $('#coinChip');
     if (chip) chip.textContent = `🪙 ${w.coins}`;
+    // Karma only ever goes down by walking out, so it sits beside the coins as
+    // a reminder rather than a score to chase.
+    const karma = $('#karmaChip');
+    if (karma && typeof w.karma === 'number') {
+      karma.textContent = `💚 ${w.karma} karma`;
+      karma.classList.toggle('low', w.karma < 60);
+      karma.classList.remove('hidden');
+    }
     if (celebrate && knownCoins != null && w.coins > knownCoins) {
       toast(`🪙 +${w.coins - knownCoins} coin${w.coins - knownCoins > 1 ? 's' : ''} earned — spend them in the Store!`);
     }
@@ -199,6 +210,15 @@ function go(id) {
 $('#nickInput').addEventListener('change', (e) => {
   nickname = e.target.value.trim().slice(0, 16);
   storeName(nickname);
+});
+
+// Nobody should be stuck at the door for want of a nickname.
+$('#nameDiceBtn').addEventListener('click', async () => {
+  sfx.click();
+  const name = await randomName();
+  $('#nickInput').value = name;
+  nickname = name;
+  storeName(name);
 });
 
 $('#createBtn').addEventListener('click', () => {
@@ -283,8 +303,33 @@ $('#joinForm').addEventListener('submit', (e) => {
   if (code) go(code);
 });
 
+// ───────────────────────────────────────────────────────────── invites ──
+// A share link arrives as /?room=CODE, which any host can serve; the older
+// /room/CODE links still work and are handled by boot() itself.
+const inviteCode = () => (new URLSearchParams(location.search).get('room') || '')
+  .trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Strangers are asked what to call them first; regulars walk straight in. */
+function joinInvite(code) {
+  if (nickname) {
+    history.replaceState({}, '', `/room/${code}`);
+    return boot();
+  }
+  showLanding();
+  openJoinNameModal(code, (name) => {
+    nickname = name;
+    storeName(name);
+    $('#nickInput').value = name;
+    go(code);
+  });
+  return undefined;
+}
+
 // ─────────────────────────────────────────────────────────────────── boot ──
 function boot() {
+  const invite = inviteCode();
+  if (invite && !/^\/room\//i.test(location.pathname)) return joinInvite(invite);
+
   const match = location.pathname.match(/^\/room\/([a-z0-9]+)/i);
   if (!match) {
     // Reached via browser Back mid-game: release the seat properly (a held
@@ -302,10 +347,11 @@ function boot() {
   roomId = match[1].toLowerCase();
   $('#landing').classList.add('hidden');
   $('#app').classList.remove('hidden');
-  $('#shareLink').value = `${location.origin}/room/${roomId}`;
+  $('#shareLink').value = `${location.origin}/?room=${roomId}`;
   resetBoard();
   lastTurnId = null;
   winnerShown = false;
+  removedShown = false;
 
   if (socket) socket.close();
   socket = connect();
@@ -357,6 +403,8 @@ function render() {
   safe('panel', () => renderRightPanel(state, meId, $('#rightPanel'), actions));
   safe('center', () => renderCenter(state, meId, actions));
   safe('dice', () => renderDice(state));
+  safe('clock', () => syncTurnClock(state, meId));
+  safe('modals', () => syncOpenModals(state));
   safe('log', () => renderLog(state, $('#logList')));
   safe('chatChannels', () => syncChatChannels(state));
   safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
@@ -388,6 +436,21 @@ function render() {
     }, delay);
   }
 
+  // removed from play — the clock ran out on this seat. A quit is the player's
+  // own doing, so it never gets the "your time ran out" story.
+  const meNow = state.players.find((p) => p.id === meId);
+  if (state.status === 'playing' && meNow?.timedOut && meNow.removedFor !== 'quit' && !removedShown) {
+    removedShown = true;
+    showRemovedOverlay({
+      onHome: () => {
+        try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        goHome();
+      },
+      onWatch: () => toast('Staying on as a spectator 👀'),
+    });
+  }
+  if (!meNow?.timedOut) removedShown = false;
+
   // game over
   if (state.status === 'ended' && !winnerShown) {
     winnerShown = true;
@@ -395,7 +458,7 @@ function render() {
     confetti();
     setTimeout(() => showGameOver(state, meId, actions), 700);
     // did the win pay out? the wallet knows
-    setTimeout(() => refreshCoins({ celebrate: true }), 1200);
+    setTimeout(() => refreshWallet({ celebrate: true }), 1200);
   }
   if (state.status !== 'ended') winnerShown = false;
 }
@@ -467,21 +530,37 @@ $('#addLocalBtn').addEventListener('click', () => {
 
 const LAST_ROOM_KEY = 'moneymove:lastRoom';
 
-$('#leaveBtn').addEventListener('click', () => {
-  // Mid-game, leaving deserves a second thought — a bot holds the seat and
-  // the landing screen offers a way back in.
-  if (state?.status === 'playing') {
-    const stay = !window.confirm('Game chal rahi hai! A bot will hold your seat — you can continue from the home screen. Leave?');
-    if (stay) return;
-    try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
-  } else {
-    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
-  }
+/** Drops the socket, clears the board and puts the landing back on screen. */
+function goHome() {
   history.pushState({}, '', '/');
   if (socket) { socket.close(); socket = null; }
   state = null;
+  roomId = null;
   resetBoard();
   showLanding();
+}
+
+$('#leaveBtn').addEventListener('click', () => {
+  sfx.click();
+  // Mid-game, leaving deserves a second thought — and a choice: a bot can hold
+  // the seat, or the deeds can go back to the bank for good.
+  if (state?.status === 'playing') {
+    openLeaveModal({
+      onKeepSeat: () => {
+        try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
+        goHome();
+      },
+      onQuit: () => {
+        actions.quit();
+        try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        // Let the quit reach the server before the socket goes down under it.
+        setTimeout(goHome, 150);
+      },
+    });
+    return;
+  }
+  try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+  goHome();
 });
 
 // Closing the tab mid-game gets the browser's own "are you sure".

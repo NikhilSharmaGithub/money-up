@@ -18,6 +18,8 @@ struct LandingView: View {
     @State private var publicRooms: [PublicRoom] = []
     @State private var storeItems: [StoreItem] = []
     @State private var dmFriend: FriendEntry?
+    @State private var rollingName = false
+    @ObservedObject private var shop = CoinShop.shared
     @AppStorage("mm.phone") private var phone = ""
 
     struct PublicRoom: Codable, Identifiable {
@@ -103,13 +105,89 @@ struct LandingView: View {
         }
         .task { await loadStore() }
 
-        Text("1 coin for winning a quick game, 2 when it goes long. Everything here is pure style — never pay-to-win.")
+        Text("50 coins for winning a quick game, 100 when it goes long. Everything here is pure style — never pay-to-win.")
             .font(.system(size: 12, weight: .medium, design: .rounded))
             .foregroundStyle(P.ink3)
             .frame(maxWidth: .infinity, alignment: .leading)
 
+        coinPacksSection(P)
+
         storeSection("🎲 Token skins", "Your piece on the board.", kind: "token", P: P)
         storeSection("🙂 Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+    }
+
+    /// Paid top-ups. The server describes the packs; whether they can actually
+    /// be bought is StoreKit's call, and until the products exist in App Store
+    /// Connect the section says so quietly rather than throwing an error.
+    @ViewBuilder private func coinPacksSection(_ P: Palette) -> some View {
+        if !shop.packs.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                PanelTitle("🪙 Get coins")
+                Text(shop.checked && !shop.onSale
+                     ? "Coin packs aren't available yet."
+                     : "Top up when the wins aren't coming fast enough.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 8) {
+                ForEach(shop.packs) { pack in
+                    packRow(pack, P)
+                }
+            }
+        }
+    }
+
+    private func packRow(_ pack: CoinPack, _ P: Palette) -> some View {
+        let live = shop.products[pack.productId] != nil
+        let busy = shop.buying == pack.id
+
+        return Button {
+            Task { await shop.buy(pack, with: store) }
+        } label: {
+            HStack(spacing: 12) {
+                Text(pack.emoji).font(.system(size: 30))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(pack.name)
+                            .font(.system(size: 14.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        if pack.bonus > 0 {
+                            Text("+\(pack.bonus)%")
+                                .font(.system(size: 9, weight: .black))
+                                .kerning(0.4)
+                                .foregroundStyle(P.accentInk)
+                                .padding(.vertical, 2.5)
+                                .padding(.horizontal, 6)
+                                .background(P.gold, in: Capsule())
+                        }
+                    }
+                    Text("🪙 \(pack.coins) coins")
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+                Spacer(minLength: 6)
+                if busy {
+                    ProgressView().tint(P.red)
+                } else {
+                    Text(shop.priceLabel(for: pack))
+                        .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                        .foregroundStyle(live ? P.accentInk : P.ink3)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 13)
+                        .background(live ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken), in: Capsule())
+                }
+            }
+            .padding(.vertical, 11)
+            .padding(.horizontal, 13)
+            .background(P.card, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(P.rule, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!live || busy)
+        .opacity(live ? 1 : 0.55)
     }
 
     @ViewBuilder private func storeSection(_ title: String, _ sub: String, kind: String, P: Palette) -> some View {
@@ -164,6 +242,7 @@ struct LandingView: View {
 
     private func loadStore() async {
         store.refreshWallet()
+        await shop.load(store)
         guard storeItems.isEmpty else { return }
         struct Catalog: Decodable { var items: [StoreItem] }
         let catalog: Catalog? = try? await store.fetchJSON("/api/store")
@@ -299,6 +378,7 @@ struct LandingView: View {
                         }
                     }
                     Spacer()
+                    karmaBadge(P)
                 }
 
                 TextField("Your name", text: $store.nickname)
@@ -323,6 +403,25 @@ struct LandingView: View {
                     flagGrid(P)
                 }
             }
+        }
+    }
+
+    /// Karma starts full and is only ever docked for walking out on a table
+    /// that's still playing — so the number is really a promise to finish.
+    private func karmaBadge(_ P: Palette) -> some View {
+        let karma = store.wallet?.karma ?? 100
+        let tint: Color = karma >= 80 ? P.good : karma >= 50 ? P.gold : P.bad
+        return VStack(alignment: .trailing, spacing: 3) {
+            Text("🤝 \(karma) karma")
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(tint)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .background(P.sunken, in: Capsule())
+                .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 1))
+            Text("play to the end to keep it")
+                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(P.ink3)
         }
     }
 
@@ -402,13 +501,26 @@ struct LandingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 6) {
                     PanelTitle("Nickname")
-                    TextField("Your nickname", text: $store.nickname)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .padding(12)
-                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
+                    HStack(spacing: 8) {
+                        TextField("Your nickname", text: $store.nickname)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .padding(12)
+                            .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
+
+                        Button {
+                            Task { await rollNickname() }
+                        } label: {
+                            Image(systemName: "die.face.5.fill")
+                                .font(.system(size: 17, weight: .bold))
+                                .frame(width: 24, height: 26)
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .gold))
+                        .disabled(rollingName)
+                        .accessibilityLabel("Pick a random nickname")
+                    }
                 }
 
                 Button("🎲  Create a private game") { store.createRoom() }
@@ -481,6 +593,29 @@ struct LandingView: View {
                 .fixedSize()
             Rectangle().fill(P.rule).frame(height: 1)
         }
+    }
+
+    /// A name for anyone who'd rather not think of one. The server owns the
+    /// word lists; if it can't be reached, this device still has something to
+    /// put in the field.
+    private func rollNickname() async {
+        rollingName = true
+        defer { rollingName = false }
+        SoundKit.shared.click()
+        Haptics.tap()
+        struct NameReply: Decodable { var name: String? }
+        let reply: NameReply? = try? await store.fetchJSON("/api/name")
+        let picked = (reply?.name ?? "").trimmingCharacters(in: .whitespaces)
+        store.nickname = picked.isEmpty ? Self.offlineName() : picked
+    }
+
+    /// Same shape as server/names.js — two short words that fit a player chip.
+    private static func offlineName() -> String {
+        let adjectives = ["Lucky", "Bold", "Sneaky", "Royal", "Swift", "Golden",
+                          "Silent", "Cheeky", "Grand", "Wild", "Clever", "Turbo"]
+        let nouns = ["Tycoon", "Baron", "Mogul", "Trader", "Broker", "Hustler",
+                     "Duke", "Tiger", "Rocket", "Ninja", "Seth", "Boss"]
+        return "\(adjectives.randomElement() ?? "Lucky") \(nouns.randomElement() ?? "Seth")"
     }
 
     private func joinTapped() {

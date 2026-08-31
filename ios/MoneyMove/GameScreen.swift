@@ -159,6 +159,13 @@ struct GameScreen: View {
             if over { sheet = .gameOver }
         }
         .animateOverlays(store)
+        .overlay {
+            if store.timedOut {
+                TimedOutOverlay(onHome: { store.leaveRoom() },
+                                onStay: { store.timedOut = false })
+            }
+        }
+        .animation(.spring(duration: 0.35), value: store.timedOut)
     }
 
     private var connectionLabel: String {
@@ -196,9 +203,17 @@ struct GameScreen: View {
                     store.lastRoom = room
                     store.lastGuests = guestCount
                 }
-                Button("Leave for good", role: .destructive) { store.leaveRoom() }
+                Button("Leave for good", role: .destructive) {
+                    // The quit has to reach the server before the socket goes
+                    // away — it's what hands the streets back to the bank.
+                    store.quitGame()
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        store.leaveRoom()
+                    }
+                }
             } message: {
-                Text("A bot holds your seat while you're away. You can continue from the home screen.")
+                Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good returns your streets to the bank and costs 1 karma.")
             }
 
             HStack(spacing: 6) {
@@ -235,9 +250,11 @@ struct GameScreen: View {
         .padding(.horizontal, 12)
     }
 
+    /// The web client reads ?room= on load, so this link seats a friend at the
+    /// same table straight from a browser — no app install in the way.
     private var shareURL: URL {
-        let base = store.serverURLString
-        return URL(string: "\(base)/room/\(store.roomId ?? "")") ?? URL(string: base)!
+        let home = "https://money-up-nine.vercel.app/"
+        return URL(string: "\(home)?room=\(store.roomId ?? "")") ?? URL(string: home)!
     }
 
     private func iconButton(_ system: String, _ P: Palette, action: @escaping () -> Void) -> some View {
@@ -415,6 +432,9 @@ struct PlayerStrip: View {
                                         .font(.system(size: 9.5, weight: .bold, design: .rounded))
                                         .foregroundStyle(P.ink3)
                                 }
+                                if isTurn, let endsAt = store.state?.turn?.endsAt {
+                                    TurnClock(endsAt: endsAt, compact: true)
+                                }
                             }
                         }
                     }
@@ -545,6 +565,12 @@ struct CenterWell: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .overlay(alignment: .top) {
+                            if let endsAt = state.turn?.endsAt {
+                                TurnClock(endsAt: endsAt)
+                                    .padding(.top, 6)
+                            }
                         }
                         .overlay(alignment: .bottomTrailing) {
                             if let openHistory {
@@ -750,6 +776,9 @@ private struct PlayerPod: View {
                         .animation(.snappy(duration: 0.4), value: player.money)
                 }
                 Spacer(minLength: 0)
+                if isTurn, let endsAt = store.state?.turn?.endsAt {
+                    TurnClock(endsAt: endsAt, compact: true)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 MoneyDeltaBadge(playerId: player.id)
@@ -800,6 +829,106 @@ private struct PlayerPod: View {
                 .padding(.vertical, 8)
                 .background(prominent ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken),
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+}
+
+// MARK: - turn clock
+
+/// The seconds left on the current turn, counted down on this device from the
+/// server's deadline. It leans on TimelineView rather than a Timer so every
+/// copy on screen — well, chip, corner pod — ticks off the same clock.
+struct TurnClock: View {
+    /// Epoch milliseconds the turn expires (turn.endsAt).
+    let endsAt: Double
+    /// Compact = the small countdown riding a player chip or pod.
+    var compact = false
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let left = Self.secondsLeft(endsAt, at: context.date)
+            let urgent = left <= 10
+            HStack(spacing: 4) {
+                if !compact {
+                    Image(systemName: "timer")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                Text("\(left)s")
+                    .font(.system(size: compact ? 10.5 : 13, weight: .heavy, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(urgent ? P.bad : P.ink2)
+            .padding(.vertical, compact ? 2.5 : 5)
+            .padding(.horizontal, compact ? 6 : 11)
+            .background(urgent ? P.redSoft : P.sunken, in: Capsule())
+            .overlay(Capsule().stroke(urgent ? P.bad.opacity(0.55) : P.rule, lineWidth: 1))
+            // The last ten seconds get a heartbeat, once a second.
+            .scaleEffect(urgent && !left.isMultiple(of: 2) ? 1.07 : 1)
+            .animation(.snappy(duration: 0.18), value: left)
+        }
+        .fixedSize()
+    }
+
+    static func secondsLeft(_ endsAt: Double, at now: Date) -> Int {
+        max(0, Int(ceil(endsAt / 1000 - now.timeIntervalSince1970)))
+    }
+}
+
+// MARK: - timed-out overlay
+
+/// The clock ran out on this device's seat. It takes over the screen because
+/// it changes what the player can do next — but the game is still worth
+/// watching, so staying is offered as loudly as leaving.
+struct TimedOutOverlay: View {
+    let onHome: () -> Void
+    let onStay: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                Text("⏳").font(.system(size: 46))
+                Text("Your time ran out")
+                    .font(.system(size: 22, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                Text("You were removed to keep the game moving. You can head back or stay and watch how it ends.")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                    .multilineTextAlignment(.center)
+
+                VStack(spacing: 8) {
+                    Button("Back to home") {
+                        onHome()
+                        Haptics.tap()
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+
+                    Button("Stay and watch") {
+                        onStay()
+                        Haptics.tap()
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                }
+                .padding(.top, 4)
+
+                Text("Leaving or timing out costs 1 karma.")
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(24)
+            .frame(maxWidth: 340)
+            .background(P.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(P.rule, lineWidth: 1))
+            .shadow(color: .black.opacity(0.45), radius: 30, y: 14)
+            .padding(.horizontal, 26)
+            .transition(.scale(scale: 0.86).combined(with: .opacity))
         }
     }
 }

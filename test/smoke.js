@@ -555,5 +555,67 @@ console.log('\n▶ targeted rules');
   ok('trade ignore + viewer presence');
 }
 
+{
+  // The shot clock removes a silent player without paying anyone off, and
+  // the seat stays in the roster so their client can keep watching.
+  const room = new GameRoom('to', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.addPlayer({ id: 'c', name: 'C' }); // three, so losing one doesn't end it
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  let karmaHits = [];
+  room.hooks.karma = (id, delta) => karmaHits.push([id, delta]);
+  room.start('a');
+  const a = room.player('a');
+  const bCash = room.player('b').money;
+  room.buyFor?.(a, 1);
+  room.ownership[1] = { owner: 'a', houses: 0, mortgaged: false };
+  if (!room.turn.endsAt) fail('turn should carry a deadline');
+  room.turnTimedOut('a');
+  if (!a.timedOut) fail('timeout should mark the player');
+  if (room.ownership[1]) fail('timed-out player\'s deeds should return to the bank');
+  if (room.player('b').money !== bCash) fail('a timeout must not pay the other players');
+  if (!room.players.some((p) => p.id === 'a')) fail('seat should stay in the roster to spectate');
+  if (room.turn.playerId !== 'b') fail('play should move on');
+  if (JSON.stringify(karmaHits) !== JSON.stringify([['a', -1]])) fail(`karma hook wrong: ${JSON.stringify(karmaHits)}`);
+  ok('turn timeout removes the player and moves on');
+}
+
+{
+  // Turning the clock off means no deadline at all.
+  const room = new GameRoom('to2', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.addPlayer({ id: 'c', name: 'C' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.settings.turnSeconds = 0;
+  room.start('a');
+  if (room.turn.endsAt) fail('turnSeconds 0 should disable the clock');
+  room.quit('a');
+  if (!room.player('a').timedOut || room.turn.playerId !== 'b') fail('quit should hand the turn on');
+  ok('clock can be switched off; quitting still frees the seat');
+}
+
+{
+  // A trade can never offer money the sender does not have.
+  const room = new GameRoom('mx', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  room.player('a').money = 100;
+  const res = room.proposeTrade('a', { to: 'b', give: { money: 1000 }, get: {} });
+  if (res.trade.give.money !== 100) fail(`over-offer should clamp to cash on hand, got ${res.trade.give.money}`);
+  const neg = room.proposeTrade('a', { to: 'b', give: { money: -50 }, get: { money: 20 } });
+  if (neg.trade.give.money !== 0) fail('negative cash should clamp to zero');
+  ok('trade cash clamps to what each side actually holds');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);

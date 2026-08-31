@@ -1219,3 +1219,138 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   body.focus-board .app { grid-template-columns: 1fr; }
   body.focus-board .col.left { display: none; }
 }
+
+/* ── landing: wallet row, karma and the name dice ── */
+.wallet-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.wallet-row .store-btn { flex: 1; margin-top: 0; }
+.karma-chip {
+  flex: none; font-size: 12.5px; font-weight: 850; white-space: nowrap;
+  color: var(--good); background: var(--good-soft);
+  border: 1px solid var(--good); border-radius: 99px; padding: 8px 12px;
+}
+.karma-chip.low { color: var(--bad); border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, var(--card)); }
+
+.name-row { display: flex; gap: 8px; align-items: stretch; }
+.name-row input { flex: 1; min-width: 0; }
+/* The label rule dresses every span inside a .field — this row takes its own
+   size back so the nickname input isn't shrunk to caption text. */
+.field .name-row { margin-bottom: 0; font-size: 16px; font-weight: 400; color: var(--ink); }
+.dice-btn { flex: none; padding: 0 14px; font-size: 18px; }
+
+/* ── store: coin packs (bought in the iOS app, shown here) ── */
+.pack-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
+.pack-card {
+  position: relative; text-align: center; text-decoration: none; color: var(--ink);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 14px 8px 12px; border-radius: var(--r);
+  background: var(--paper-2); border: 1.5px solid var(--rule-2);
+  transition: transform .15s var(--pop), border-color .15s;
+}
+.pack-card:hover { transform: translateY(-2px); border-color: var(--gold); }
+.pk-emoji { font-size: 32px; line-height: 1.1; }
+.pk-coins { font-size: 14.5px; font-weight: 900; color: var(--gold); }
+.pk-name { font-size: 12px; font-weight: 750; color: var(--ink-2); }
+.pk-price {
+  margin-top: 5px; font-size: 12.5px; font-weight: 850;
+  background: var(--card); border: 1px solid var(--rule-2); border-radius: 99px; padding: 2px 11px;
+}
+.pk-bonus {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 9.5px; font-weight: 850; color: #fff;
+  background: var(--good); border-radius: 99px; padding: 2px 6px;
+}
+.pack-link { color: var(--gold); font-weight: 750; text-decoration: none; white-space: nowrap; }
+.pack-link:hover { text-decoration: underline; }
+
+/* ── trade: cash slider ── */
+.cash-slider { margin-top: 10px; }
+.cs-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.cs-track { position: relative; height: 46px; }
+.cs-track input[type="range"] {
+  position: absolute; top: 6px; left: 0; width: 100%; height: 18px;
+  -webkit-appearance: none; appearance: none;
+  background: transparent; border: none; box-shadow: none; padding: 0; cursor: pointer;
+}
+.cs-track input[type="range"]:focus { box-shadow: none; }
+.cs-track input[type="range"]:focus-visible { outline: 2px solid var(--red); outline-offset: 4px; border-radius: 99px; }
+.cs-track input[type="range"]:disabled { opacity: .45; cursor: not-allowed; }
+.cs-track input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 99px;
+  background: linear-gradient(90deg, var(--red) 0 calc(var(--pct) * 100%), var(--rule-2) calc(var(--pct) * 100%) 100%);
+}
+.cs-track input[type="range"]::-moz-range-track {
+  height: 6px; border-radius: 99px;
+  background: linear-gradient(90deg, var(--red) 0 calc(var(--pct) * 100%), var(--rule-2) calc(var(--pct) * 100%) 100%);
+}
+.cs-track input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px; margin-top: -6px; border-radius: 50%;
+  background: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+}
+.cs-track input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
+  background: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+}
+/* The pill rides the thumb: half a thumb in, then across the track it can reach. */
+.cs-bubble {
+  position: absolute; top: 27px; left: calc(9px + var(--pct) * (100% - 18px));
+  transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  font-size: 12px; font-weight: 850; color: var(--red-ink);
+  background: var(--red-soft); border: 1px solid var(--red);
+  border-radius: 99px; padding: 1px 9px;
+}
+.cs-max { display: block; font-size: 11px; color: var(--ink-3); font-weight: 650; }
+
+/* ── deed sheet: quick build bar ── */
+.quick-build {
+  margin-top: 12px; padding: 11px 12px; border-radius: var(--r);
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.qb-status { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; text-align: center; }
+.qb-level { font-size: 15px; font-weight: 850; letter-spacing: 1px; }
+.qb-next { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+.qb-row { display: flex; align-items: center; gap: 6px; }
+.qb-btn {
+  font: inherit; flex: none; cursor: pointer;
+  min-width: 40px; padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--card); border: 1px solid var(--rule-2); color: var(--ink);
+  font-size: 15px; font-weight: 850; line-height: 1;
+  transition: transform .12s var(--pop), border-color .16s, color .16s;
+}
+.qb-btn:hover:not(:disabled) { border-color: var(--red); color: var(--red-deep); }
+.qb-btn:active:not(:disabled) { transform: scale(.94); }
+.qb-btn:disabled { opacity: .38; cursor: not-allowed; }
+.qb-btn.mort { flex: 1; font-size: 12.5px; font-weight: 750; }
+.qb-btn.gold { border-color: var(--gold); color: var(--gold); }
+.qb-count { flex: 1; text-align: center; font-size: 17px; font-weight: 900; }
+.qb-count small { font-size: 11px; font-weight: 700; color: var(--ink-3); }
+
+/* ── turn clock ── */
+.turn-clock {
+  flex: none; font-size: 11.5px; font-weight: 850; font-variant-numeric: tabular-nums;
+  color: var(--ink-2); background: var(--paper-2);
+  border: 1px solid var(--rule-2); border-radius: 99px; padding: 3px 8px;
+}
+.turn-clock.urgent { color: #fff; background: var(--bad); border-color: var(--bad); animation: clockPulse .9s ease-in-out infinite; }
+.turn-clock-well { font-size: 13px; font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.turn-clock-well.urgent { color: var(--bad); animation: clockPulse .9s ease-in-out infinite; }
+@keyframes clockPulse { 50% { opacity: .5; transform: scale(1.06); } }
+
+/* ── leaving for good, and the removed-from-play overlay ── */
+.leave-choices { display: flex; flex-direction: column; gap: 8px; }
+.leave-choice {
+  font: inherit; width: 100%; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 14px; border-radius: var(--r);
+  background: var(--paper-2); border: 1px solid var(--rule-2); color: var(--ink);
+  transition: transform .12s var(--pop), border-color .16s, background .16s;
+}
+.leave-choice:hover { transform: translateY(-1px); border-color: var(--red); background: var(--red-soft); }
+.leave-choice.bad:hover { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, var(--card)); }
+.leave-choice b { font-size: 14px; font-weight: 850; }
+.leave-choice span { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
+.karma-note { margin-top: 12px; text-align: center; font-size: 12px; font-weight: 750; color: var(--gold); }
+.removed-mark { font-size: 44px; text-align: center; line-height: 1.1; }
+.removed-title { text-align: center; }
+.removed-modal .sub { text-align: center; }
+.removed-modal .modal-actions { justify-content: center; }
