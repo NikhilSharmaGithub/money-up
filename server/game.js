@@ -146,15 +146,7 @@ export class GameRoom {
         if (t.viewers?.includes(id)) t.viewers = t.viewers.filter((v) => v !== id);
       }
       this.say(`${p.name} lost connection — holding their seat`, 'leave');
-      clearTimeout(this.timers[`grace:${id}`]);
-      this.timers[`grace:${id}`] = setTimeout(() => {
-        const still = this.player(id);
-        if (!still || still.connected || still.bankrupt) return;
-        still.botControlled = true;
-        this.say(`${still.name} didn't come back — a bot is taking over`, 'leave');
-        this.push();
-        if (this.turn?.playerId === id) this.scheduleBot(600);
-      }, RECONNECT_GRACE_MS);
+      this.holdSeat(p, RECONNECT_GRACE_MS);
     }
     this.push();
   }
@@ -163,6 +155,7 @@ export class GameRoom {
     const p = this.player(id);
     if (!p) return false;
     clearTimeout(this.timers[`grace:${id}`]);
+    if (this.awaiting) delete this.awaiting[id];
     const wasBot = p.botControlled;
     p.connected = true;
     p.botControlled = false;
@@ -344,6 +337,68 @@ export class GameRoom {
     return { ok: true };
   }
 
+  // -------------------------------------------------------- holding a seat --
+  /**
+   * Somebody's connection dropped. The table gets to decide how long to wait:
+   * the first couple of extensions are a favour any one player can do, after
+   * that everyone still at the table has to agree — otherwise one kind player
+   * could keep a dead chair alive forever.
+   */
+  holdSeat(p, ms) {
+    this.awaiting ??= {};
+    const seat = this.awaiting[p.id] ??= { grants: 0, granted: [] };
+    seat.until = Date.now() + ms;
+    seat.granted = [];
+    clearTimeout(this.timers[`grace:${p.id}`]);
+    this.timers[`grace:${p.id}`] = setTimeout(() => this.seatRanOut(p.id), ms + 200);
+    this.timers[`grace:${p.id}`].unref?.();
+    this.push();
+  }
+
+  /** Everyone present, minus the player we're waiting on. */
+  votersFor(id) {
+    return this.players.filter((x) => (
+      x.id !== id && !x.bankrupt && !x.isBot && x.connected
+    ));
+  }
+
+  /** How many free extensions a single player can hand out before it takes a vote. */
+  static get FREE_GRANTS() { return 2; }
+
+  grantTime(voterId, targetId) {
+    const target = this.player(targetId);
+    const voter = this.player(voterId);
+    const seat = this.awaiting?.[targetId];
+    if (!target || !voter || !seat) return { error: 'Nobody is waiting on that seat' };
+    if (target.connected) return { error: 'They are already back' };
+    if (voterId === targetId) return { error: 'You cannot grant your own time' };
+
+    const needAll = seat.grants >= GameRoom.FREE_GRANTS;
+    if (!seat.granted.includes(voterId)) seat.granted.push(voterId);
+
+    const voters = this.votersFor(targetId).map((x) => x.id);
+    const everyone = voters.length > 0 && voters.every((v) => seat.granted.includes(v));
+    if (needAll && !everyone) {
+      this.say(`${voter.name} wants to wait for ${target.name} (${seat.granted.length}/${voters.length})`, 'info');
+      this.push();
+      return { ok: true, pending: true };
+    }
+
+    seat.grants++;
+    this.say(`${target.name} gets another minute`, 'info');
+    this.holdSeat(target, 60000);
+    return { ok: true };
+  }
+
+  /** Nobody granted more time — the chair goes back to the board. */
+  seatRanOut(id) {
+    const p = this.player(id);
+    if (!p || p.connected || p.bankrupt || this.status !== 'playing') return;
+    delete this.awaiting?.[id];
+    this.say(`${p.name} never came back`, 'leave');
+    this.removeFromPlay(p, 'timeout');
+  }
+
   // ---------------------------------------------------------- quick match --
   /**
    * Turn this room into a drop-in table: public, bot-backed, and on a short
@@ -389,12 +444,16 @@ export class GameRoom {
     if (!this.turn) return;
     const seconds = Math.max(0, Math.floor(Number(this.settings.turnSeconds) || 0));
     const p = this.player(this.turn.playerId);
-    if (this.status !== 'playing' || !seconds || !p || this.autoPlayed(p)) {
+    if (this.status !== 'playing' || !seconds || !p) {
       if (this.turn) this.turn.endsAt = null;
       return;
     }
-    const id = p.id;
+    // Every turn carries a visible deadline, including the seats the house is
+    // playing — a clock that blinks out on some turns reads as broken, and on
+    // a quick-match table it would also give the house players away.
     this.turn.endsAt = Date.now() + seconds * 1000;
+    if (this.autoPlayed(p)) return;      // …but only a real player can run out of time
+    const id = p.id;
     this.timers.turn = setTimeout(() => this.turnTimedOut(id), seconds * 1000 + 250);
     this.timers.turn.unref?.();
   }
@@ -438,6 +497,8 @@ export class GameRoom {
    * order simply skips the chair from now on.
    */
   removeFromPlay(p, reason) {
+    clearTimeout(this.timers[`grace:${p.id}`]);
+    if (this.awaiting) delete this.awaiting[p.id];
     p.bankrupt = true;      // the turn loop already skips these
     p.timedOut = true;      // …but the client shows a different story
     p.removedFor = reason;
@@ -1415,6 +1476,10 @@ export class GameRoom {
         debt: null,
         rolledThisTurn: false,
       };
+      // If their turn comes round while they're still away, a bot plays it so
+      // the table never stalls on an empty chair. Coming back takes it straight
+      // off them again — a refresh alone never costs anyone a turn.
+      if (!cand.connected && !cand.isBot) cand.botControlled = true;
       cand.doublesInARow = 0;
       this.turnCount++;
       this.recordWorth();
@@ -1742,6 +1807,11 @@ export class GameRoom {
       auction: this.auction,
       trades: this.trades,
       quick: !!this.quick,
+      awaiting: Object.entries(this.awaiting || {}).map(([id, a]) => ({
+        id, until: a.until, grants: a.grants,
+        granted: a.granted, needAll: a.grants >= GameRoom.FREE_GRANTS,
+        voters: this.votersFor(id).length,
+      })),
       quickStartAt: this.quickStartAt || null,
       log: this.log.slice(-60),
       chat: this.chat.slice(-50),

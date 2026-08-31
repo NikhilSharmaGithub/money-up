@@ -548,6 +548,7 @@ io.on('connection', (socket) => {
   socket.on('payDebt', onTurn(() => ok(room.payDebt(playerId))));
   socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));
   socket.on('quit', guard(() => ok(room.quit(playerId))));
+  socket.on('grantTime', guard(({ id } = {}) => ok(room.grantTime(playerId, String(id || '')))));
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
   socket.on('rematch', guard(() => {

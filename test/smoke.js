@@ -669,5 +669,62 @@ console.log('\n▶ targeted rules');
   ok('chat and names are filtered on the server');
 }
 
+{
+  // A dropped player's chair is held, and the table decides how long: two
+  // favours anyone can do alone, after that it takes everyone still playing.
+  const room = new GameRoom('hold', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+
+  room.removePlayer('c');
+  const seat = () => room.awaiting?.c;
+  if (!seat()) fail('a dropped player should leave a seat to wait on');
+  if (room.player('c').botControlled) fail('a bot must not take over the moment someone drops');
+
+  // First two extensions: one player is enough.
+  const first = room.grantTime('a', 'c');
+  if (!first.ok || first.pending) fail('the first minute should not need a vote');
+  const second = room.grantTime('b', 'c');
+  if (!second.ok || second.pending) fail('the second minute should not need a vote');
+  if (seat().grants !== 2) fail(`expected 2 grants, got ${seat().grants}`);
+
+  // Third: now it takes the whole table.
+  const third = room.grantTime('a', 'c');
+  if (!third.pending) fail('past two favours a single click should not be enough');
+  if (seat().grants !== 2) fail('a pending vote must not extend the clock');
+  const fourth = room.grantTime('b', 'c');
+  if (fourth.pending) fail('once everyone has clicked the minute should land');
+  if (seat().grants !== 3) fail('the granted minute never counted');
+
+  if (room.grantTime('c', 'c').error === undefined) fail('you cannot grant your own time');
+
+  // Nobody grants again — the chair goes back to the board.
+  room.seatRanOut('c');
+  if (!room.player('c').timedOut) fail('an abandoned seat should leave play');
+  if (room.awaiting?.c) fail('the wait should be cleared once it resolves');
+  ok('a dropped seat is held, extended by agreement, and finally released');
+}
+
+{
+  // Every turn shows a deadline — including the ones the house plays, so the
+  // clock never blinks out and never gives a bot away.
+  const room = new GameRoom('clk', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addBot();
+  room.addBot();
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  for (let i = 0; i < 4; i++) {
+    if (!room.turn.endsAt) { fail('a turn went by with no clock on it'); break; }
+    room.nextTurn();
+  }
+  ok('every turn carries a visible clock');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);
