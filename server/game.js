@@ -135,6 +135,10 @@ export class GameRoom {
       // Keep the seat warm: a refresh or a flaky network shouldn't instantly
       // hand your turn to a bot. Only after the grace period does one step in.
       p.connected = false;
+      // A gone player can't be "viewing" any offer.
+      for (const t of this.trades) {
+        if (t.viewers?.includes(id)) t.viewers = t.viewers.filter((v) => v !== id);
+      }
       this.say(`${p.name} lost connection — holding their seat`, 'leave');
       clearTimeout(this.timers[`grace:${id}`]);
       this.timers[`grace:${id}`] = setTimeout(() => {
@@ -1218,6 +1222,31 @@ export class GameRoom {
     return { ok: true };
   }
 
+  /** Set an incoming offer aside: it leaves the recipient's action dock but
+   *  stays in everyone's trade list until answered, countered, or cancelled. */
+  ignoreTrade(id, tradeId, ignored = true) {
+    const trade = this.trades.find((t) => t.id === tradeId && t.to === id);
+    if (!trade) return { error: 'Trade not found' };
+    trade.ignored = !!ignored;
+    if (trade.ignored && trade.viewers?.includes(id)) {
+      trade.viewers = trade.viewers.filter((v) => v !== id);
+    }
+    this.push();
+    return { ok: true };
+  }
+
+  /** Live presence on an offer — "Ravi is looking at your trade right now". */
+  setTradeViewing(id, tradeId, viewing) {
+    const trade = this.trades.find((t) => t.id === tradeId);
+    if (!trade || !this.player(id)) return { error: 'Trade not found' };
+    const list = trade.viewers || [];
+    const has = list.includes(id);
+    if (viewing === has) return { ok: true }; // no change — don't spam pushes
+    trade.viewers = viewing ? [...list, id] : list.filter((v) => v !== id);
+    this.push();
+    return { ok: true };
+  }
+
   // ---------------------------------------------------------------- end turn --
   endTurn(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
@@ -1307,7 +1336,13 @@ export class GameRoom {
   }
 
   scheduleBotTrade(tradeId) {
-    setTimeout(() => this.botTradeReply(tradeId), 1500);
+    // A little theatre: the bot "opens" the offer, reads it for a moment
+    // (the sender sees who's viewing), then answers.
+    setTimeout(() => {
+      const t = this.trades.find((x) => x.id === tradeId);
+      if (t) this.setTradeViewing(t.to, tradeId, true);
+    }, 800);
+    setTimeout(() => this.botTradeReply(tradeId), 2600);
   }
 
   runBot() {

@@ -527,5 +527,33 @@ console.log('\n▶ targeted rules');
   ok('no salary for backwards vacation teleport');
 }
 
+{
+  // Ignore parks an offer without killing it; viewers track live presence
+  // and vanish with the trade.
+  const room = new GameRoom('ig', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const res = room.proposeTrade('a', { to: 'b', give: { money: 100 }, get: {} });
+  const tid = res.trade.id;
+  if (room.ignoreTrade('a', tid).error === undefined) fail('only the recipient may ignore');
+  room.ignoreTrade('b', tid);
+  let t = room.trades.find((x) => x.id === tid);
+  if (t?.ignored !== true) fail('ignore should park the offer');
+  if (!room.trades.includes(t)) fail('ignored offer must stay in the list');
+  room.setTradeViewing('b', tid, true);
+  if (!t.viewers?.includes('b')) fail('viewing should record the viewer');
+  room.ignoreTrade('b', tid, false);
+  if (t.ignored !== false) fail('un-ignore should bring the offer back');
+  room.setTradeViewing('b', tid, true);
+  room.respondTrade('b', tid, false);
+  if (room.trades.some((x) => x.id === tid)) fail('declined trade should be gone');
+  if (room.setTradeViewing('b', tid, false).error === undefined) fail('viewing a dead trade should error');
+  ok('trade ignore + viewer presence');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);

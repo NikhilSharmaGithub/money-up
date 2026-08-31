@@ -181,6 +181,10 @@ struct TradeOffer: Codable, Equatable, Identifiable {
     var give: TradeSide
     var get: TradeSide
     var at: Double?
+    /// Recipient parked it — out of the dock, still in the list.
+    var ignored: Bool?
+    /// Player ids currently looking at this offer.
+    var viewers: [String]?
 }
 
 struct LogLine: Codable, Equatable, Identifiable {

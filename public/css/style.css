@@ -969,6 +969,12 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .trade-line.good b { color: var(--good); }
 .trade-line.bad b { color: var(--bad); }
 .trade-offer .row-2 { margin-top: 9px; }
+.trade-offer.ignored { border-color: var(--rule); opacity: 0.8; }
+.trade-viewing {
+  font-size: 11.5px; font-weight: 650; color: var(--gold);
+  padding: 3px 0 1px; animation: viewingPulse 1.6s ease-in-out infinite;
+}
+@keyframes viewingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 /* ────────────────────────────────────────────────────────────── modals ── */
 .modal-root {

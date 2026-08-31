@@ -462,6 +462,8 @@ io.on('connection', (socket) => {
   socket.on('trade:propose', guard((d = {}) => ok(room.proposeTrade(playerId, d))));
   socket.on('trade:respond', guard(({ id, accept } = {}) => ok(room.respondTrade(playerId, id, !!accept))));
   socket.on('trade:cancel', guard(({ id } = {}) => ok(room.cancelTrade(playerId, id))));
+  socket.on('trade:ignore', guard(({ id, ignored } = {}) => ok(room.ignoreTrade(playerId, id, ignored !== false))));
+  socket.on('trade:viewing', guard(({ id, viewing } = {}) => ok(room.setTradeViewing(playerId, id, !!viewing))));
 
   socket.on('payDebt', guard(() => ok(room.payDebt(playerId))));
   socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));

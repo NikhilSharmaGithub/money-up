@@ -479,10 +479,13 @@ function renderMyStuff(state, meId, el, actions) {
   const outgoing = state.trades.filter((t) => t.from === meId);
 
   el.innerHTML = `
-    ${incoming.map((t) => tradeCard(state, t)).join('')}
+    ${incoming.map((t) => tradeCard(state, t, meId)).join('')}
     ${outgoing.map((t) => `<div class="panel">
       <div class="panel-title">Offer sent</div>
-      <div class="dim small">Waiting for ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')}…</div>
+      <div class="dim small">${t.ignored
+        ? `💤 ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')} set it aside for later`
+        : `Waiting for ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')}…`}</div>
+      ${tradeViewerLine(state, t, meId)}
       <button class="btn small wide" style="margin-top:8px" data-cancel="${t.id}">Cancel offer</button>
     </div>`).join('')}
 
@@ -513,6 +516,8 @@ function renderMyStuff(state, meId, el, actions) {
   wire('mort', actions.mortgage, sfx.cash);
   wire('unmort', actions.unmortgage, sfx.cash);
   wire('cancel', actions.cancelTrade, sfx.click);
+  wire('ignore', (id) => actions.ignoreTrade(id, true), sfx.click);
+  wire('unignore', (id) => actions.ignoreTrade(id, false), sfx.click);
   el.querySelectorAll('[data-accept]').forEach((b) => {
     b.onclick = () => { sfx.trade(); actions.respondTrade(Number(b.dataset.accept), true); };
   });
@@ -531,7 +536,16 @@ function renderMyStuff(state, meId, el, actions) {
   if (rb) rb.onclick = () => actions.rematch();
 }
 
-function tradeCard(state, t) {
+/** "👀 Ravi is viewing…" — everyone on the offer except yourself. */
+function tradeViewerLine(state, t, meId) {
+  const names = (t.viewers || []).filter((v) => v !== meId)
+    .map((v) => state.players.find((p) => p.id === v)?.name)
+    .filter(Boolean);
+  if (!names.length) return '';
+  return `<div class="trade-viewing">👀 ${names.map(escapeHtml).join(', ')} ${names.length > 1 ? 'are' : 'is'} viewing…</div>`;
+}
+
+function tradeCard(state, t, meId) {
   const from = state.players.find((p) => p.id === t.from);
   const describe = (side) => {
     const bits = [];
@@ -540,15 +554,28 @@ function tradeCard(state, t) {
     if (side.cards) bits.push(`${side.cards}× prison card`);
     return bits.length ? bits.map(escapeHtml).join(' · ') : 'nothing';
   };
+
+  // Set aside: stays in the list as a quiet one-liner until you pick it back up.
+  if (t.ignored) {
+    return `<div class="panel trade-offer ignored">
+      <div class="trade-line"><span>🤝 From ${escapeHtml(from?.name || '')}</span><b class="dim">💤 set aside</b></div>
+      <button class="btn small wide" data-unignore="${t.id}">Review offer</button>
+    </div>`;
+  }
+
   return `<div class="panel trade-offer">
     <div class="panel-title">🤝 Offer from ${escapeHtml(from?.name || '')}</div>
     <div class="trade-line good"><span>You get</span><b>${describe(t.give)}</b></div>
     <div class="trade-line bad"><span>You give</span><b>${describe(t.get)}</b></div>
+    ${tradeViewerLine(state, t, meId)}
     <div class="row-2">
       <button class="btn good small" data-accept="${t.id}">Accept</button>
       <button class="btn bad small" data-decline="${t.id}">Decline</button>
     </div>
-    <button class="btn small wide" style="margin-top:6px" data-negotiate="${t.id}">🤝 Negotiate</button>
+    <div class="row-2" style="margin-top:6px">
+      <button class="btn small" data-negotiate="${t.id}">🤝 Negotiate</button>
+      <button class="btn ghost small" data-ignore="${t.id}" title="Keep it in the list, decide later">💤 Later</button>
+    </div>
   </div>`;
 }
 
@@ -1076,6 +1103,15 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
         : diff > 0 ? `+${money(diff)} your way` : `${money(-diff)} in their favour`;
       v.className = !give && !get ? 'dim' : Math.abs(diff) < 25 ? 'dim' : diff > 0 ? 'good-text' : 'bad-text';
     };
+    // While the composer is open on their offer, they can see you're reading it.
+    const watching = prefill?.counterOf != null;
+    if (watching) actions.tradeViewing?.(prefill.counterOf, true);
+    const stopWatching = () => { if (watching) actions.tradeViewing?.(prefill.counterOf, false); };
+    if (watching) {
+      const rootEl = root.closest('.modal-root') || root;
+      rootEl.onclick = (e) => { if (e.target === rootEl) { stopWatching(); closeModal(); } };
+    }
+
     // Negotiating: seed the form with their offer flipped to this side.
     if (prefill) {
       const seed = (prefix, side) => {
@@ -1094,10 +1130,11 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
     root.querySelectorAll('input').forEach((i) => { i.oninput = refresh; i.onchange = refresh; });
     refresh();
 
-    $('#tCancel', root).onclick = closeModal;
+    $('#tCancel', root).onclick = () => { stopWatching(); closeModal(); };
     $('#tSend', root).onclick = () => {
       sfx.trade();
-      // A counter-offer replaces the one it answers.
+      // A counter-offer replaces the one it answers (declining it also clears
+      // the viewer flag server-side, so no separate viewing=false needed).
       if (prefill?.counterOf != null) actions.respondTrade(prefill.counterOf, false);
       actions.proposeTrade({ to: targetId, give: collect('give'), get: collect('get') });
       closeModal();

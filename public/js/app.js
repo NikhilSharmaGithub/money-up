@@ -86,6 +86,8 @@ const actions = {
   proposeTrade: emit('trade:propose'),
   respondTrade: (id, accept) => socket?.emit('trade:respond', { id, accept }),
   cancelTrade: (id) => socket?.emit('trade:cancel', { id }),
+  ignoreTrade: (id, ignored = true) => socket?.emit('trade:ignore', { id, ignored }),
+  tradeViewing: (id, viewing) => socket?.emit('trade:viewing', { id, viewing }),
   payDebt: emit('payDebt'),
   bankrupt: emit('bankrupt'),
   chat: emit('chat'),

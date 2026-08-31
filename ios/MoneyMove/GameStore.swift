@@ -523,6 +523,18 @@ final class GameStore: ObservableObject {
         let from = state?.trades.first { $0.id == id }?.from ?? meId
         emitAs(localIds.contains(from) ? from : meId, "trade:cancel", [["id": id]])
     }
+    /// Set an offer aside: it leaves the dock but stays in the trade list.
+    func ignoreTrade(_ id: Int, ignored: Bool = true) {
+        let target = state?.trades.first { $0.id == id }?.to ?? meId
+        emitAs(localIds.contains(target) ? target : meId, "trade:ignore", [["id": id, "ignored": ignored]])
+    }
+    /// Live "👀 is viewing" presence on an offer. Guarded so a sheet closing
+    /// after the trade already resolved never emits against a dead offer.
+    func setTradeViewing(_ id: Int, _ viewing: Bool, as seat: String? = nil) {
+        guard state?.trades.contains(where: { $0.id == id }) == true else { return }
+        let who = seat.flatMap { localIds.contains($0) ? $0 : nil } ?? meId
+        emitAs(who, "trade:viewing", [["id": id, "viewing": viewing]])
+    }
 
     // MARK: - derived helpers (mirror the web client's rule mirrors)
 

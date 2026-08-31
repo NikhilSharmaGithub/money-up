@@ -167,28 +167,34 @@ struct ActionPanel: View {
         .padding(.vertical, 2)
     }
 
-    /// Only the topmost incoming offer lives in the dock; more stack behind a
-    /// count. Pass & play: offers to ANY seat on this device show up here.
+    /// Only the topmost live incoming offer takes over the dock; offers set
+    /// aside with 💤 collapse into a one-line chip until picked back up.
+    /// Pass & play: offers to ANY seat on this device show up here.
     @ViewBuilder private var firstIncomingTrade: some View {
         let P = Palette.current(scheme)
         let mine = (store.state?.trades ?? []).filter { store.isLocal($0.to) }
+        let active = mine.filter { $0.ignored != true }
+        let parked = mine.filter { $0.ignored == true }
         let sent = (store.state?.trades ?? []).filter { store.isLocal($0.from) }
 
-        if let trade = mine.first {
+        if let trade = active.first {
             let from = store.state?.player(trade.from)
             let forGuest = trade.to != store.meId ? store.state?.player(trade.to) : nil
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     PanelTitle("🤝 Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")")
                     Spacer()
-                    if mine.count > 1 {
-                        Text("+\(mine.count - 1) more")
+                    if active.count > 1 {
+                        Text("+\(active.count - 1) more")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(P.ink3)
                     }
                 }
                 tradeLine(label: "You get", side: trade.give, color: P.good)
                 tradeLine(label: "You give", side: trade.get, color: P.bad)
+                if let watching = viewerNames(trade) {
+                    ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
+                }
                 HStack(spacing: 8) {
                     Button("Accept") { store.respondTrade(trade.id, accept: true) }
                         .buttonStyle(MMButtonStyle(kind: .good))
@@ -198,22 +204,73 @@ struct ActionPanel: View {
                     }
                     Button("Decline") { store.respondTrade(trade.id, accept: false) }
                         .buttonStyle(MMButtonStyle(kind: .bad))
+                    Button {
+                        store.ignoreTrade(trade.id)
+                        Haptics.tap()
+                    } label: {
+                        Text("💤")
+                            .font(.system(size: 15))
+                            .frame(width: 26, height: 22)
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+                    .fixedSize()
                 }
             }
             .padding(10)
             .background(P.goldSoft.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.gold.opacity(0.6), lineWidth: 1))
+            .id(trade.id)
+            .onAppear { store.setTradeViewing(trade.id, true, as: trade.to) }
+            .onDisappear { store.setTradeViewing(trade.id, false, as: trade.to) }
+        }
+
+        if !parked.isEmpty {
+            Button {
+                if let t = parked.first { store.ignoreTrade(t.id, ignored: false) }
+                Haptics.tap()
+            } label: {
+                HStack(spacing: 6) {
+                    Text("💤 \(parked.count == 1 ? "1 offer" : "\(parked.count) offers") set aside")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                    Spacer()
+                    Text("Review")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.gold)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
         }
 
         if let trade = sent.first {
             HStack {
-                Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?")…")
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(P.ink3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?")…")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(P.ink3)
+                    if let watching = viewerNames(trade) {
+                        ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
+                    } else if trade.ignored == true {
+                        Text("💤 Set aside for later")
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
+                }
                 Spacer()
                 Button("Cancel") { store.cancelTrade(trade.id) }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }
         }
+    }
+
+    /// Everyone looking at the offer right now, minus this device's own seats.
+    private func viewerNames(_ trade: TradeOffer) -> String? {
+        let names = (trade.viewers ?? [])
+            .filter { !store.isLocal($0) }
+            .compactMap { store.state?.player($0)?.name }
+        return names.isEmpty ? nil : names.joined(separator: ", ")
     }
 
     private func tradeLine(label: String, side: TradeSide, color: Color) -> some View {
@@ -236,5 +293,24 @@ struct ActionPanel: View {
         Text(text)
             .font(.system(size: 12.5, weight: .medium, design: .rounded))
             .foregroundStyle(P.ink3)
+    }
+}
+
+/// The gently pulsing "👀 … is viewing" presence line.
+struct ViewingLine: View {
+    let text: String
+    let color: Color
+    @State private var dim = false
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(color)
+            .opacity(dim ? 0.4 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                    dim = true
+                }
+            }
     }
 }

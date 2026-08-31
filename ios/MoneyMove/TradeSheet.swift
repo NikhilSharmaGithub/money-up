@@ -77,6 +77,14 @@ struct TradeSheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .onAppear {
+            // Negotiating: the other side sees you're reading their offer.
+            if let counterOf { store.setTradeViewing(counterOf, true, as: fromId) }
+        }
+        .onDisappear {
+            // Harmless after a counter was sent — the store skips dead offers.
+            if let counterOf { store.setTradeViewing(counterOf, false, as: fromId) }
+        }
     }
 
     // MARK: - main content
@@ -85,6 +93,8 @@ struct TradeSheet: View {
         ScrollView {
             VStack(spacing: 12) {
                 header(target: target, P: P)
+
+                dealMeter(P)
 
                 sideCard(
                     title: "You give",
@@ -143,6 +153,51 @@ struct TradeSheet: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 4)
+    }
+
+    // MARK: - deal meter
+
+    /// Face value of one side of the deal — cash + card value + sticker prices.
+    /// Face value only; it can't know how badly you need that last street.
+    private func sideWorth(tiles: Set<Int>, cash: Int, cards: Int) -> Int {
+        cash + cards * 50 + tiles.reduce(0) { $0 + (store.tile($1)?.price ?? 0) }
+    }
+
+    /// Live "You give $X ⇄ You get $Y — verdict" strip, mirroring the web
+    /// composer, so a lopsided deal announces itself before it's sent.
+    private func dealMeter(_ P: Palette) -> some View {
+        let give = sideWorth(tiles: giveTiles, cash: giveCash, cards: giveCards)
+        let get = sideWorth(tiles: getTiles, cash: getCash, cards: getCards)
+        let diff = get - give
+        let verdict: (String, Color) = (give == 0 && get == 0) ? ("build a deal below", P.ink3)
+            : abs(diff) < 25 ? ("even trade", P.ink3)
+            : diff > 0 ? ("+\(money(diff)) your way", P.good)
+            : ("\(money(-diff)) in their favour", P.bad)
+
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("You give").font(.system(size: 10, weight: .semibold)).foregroundStyle(P.ink3)
+                Text(money(give))
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.bad)
+            }
+            Spacer()
+            Text(verdict.0)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(verdict.1)
+                .multilineTextAlignment(.center)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("You get").font(.system(size: 10, weight: .semibold)).foregroundStyle(P.ink3)
+                Text(money(get))
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.good)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
     // MARK: - one side of the deal
