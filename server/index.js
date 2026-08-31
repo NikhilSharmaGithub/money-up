@@ -400,6 +400,14 @@ setInterval(() => {
   for (const [id, room] of rooms) {
     const live = socketsOf.get(id)?.size || 0;
     const idleFor = Date.now() - (room.lastSeen || room.createdAt);
+    // A table nobody is watching is just bots playing to an empty room, burning
+    // a timer a second for nothing. Once it has been quiet for a few minutes —
+    // long enough that a refresh or a phone locking can't be mistaken for it —
+    // stop the game. The room itself lingers for the usual half hour.
+    if (live === 0 && room.status === 'playing' && idleFor > 3 * 60 * 1000) {
+      room.status = 'ended';
+      room.dispose();
+    }
     if (live === 0 && idleFor > 30 * 60 * 1000) {
       room.dispose();
       rooms.delete(id);
