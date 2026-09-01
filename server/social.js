@@ -274,14 +274,46 @@ export function allProfiles() {
 }
 
 /** Records an external login (google/apple) against the identity token. */
-export function attachLogin(token, provider, subject, name) {
+export function attachLogin(token, provider, subject, name, { email, picture } = {}) {
   const p = profileFor(token, { name });
   if (!p) return null;
   const stored = profiles.get(token);
   stored.login = { provider, subject, at: Date.now() };
   if (name) stored.name = name;
+  // The photo and address are display-only — they make the signed-in state
+  // visible, they are never used to look anything up.
+  if (email) stored.email = String(email).slice(0, 120);
+  if (picture) stored.picture = String(picture).slice(0, 400);
   saveSoon();
-  return { code: stored.code, name: stored.name };
+  return { code: stored.code, name: stored.name, picture: stored.picture || '' };
+}
+
+/** Unlink the provider — the anonymous device identity stays untouched. */
+export function detachLogin(token) {
+  const stored = profiles.get(token);
+  if (!stored) return { ok: true };
+  delete stored.login;
+  delete stored.email;
+  delete stored.picture;
+  saveSoon();
+  return { ok: true };
+}
+
+/** Who this device is, for the profile chip: sign-in state included. */
+export function meView(token) {
+  const p = profileFor(token);
+  if (!p) return null;
+  const stored = profiles.get(token);
+  return {
+    code: stored.code,
+    name: stored.name || '',
+    flag: stored.flag || '',
+    coins: stored.coins ?? 0,
+    karma: stored.karma ?? 100,
+    provider: stored.login?.provider || null,
+    email: stored.email || '',
+    picture: stored.picture || '',
+  };
 }
 
 function saveSoon() { save(); }

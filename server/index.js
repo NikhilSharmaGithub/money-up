@@ -8,7 +8,7 @@ import { GameRoom, COLORS } from './game.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
-  allProfiles, attachLogin, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
+  allProfiles, attachLogin, detachLogin, meView, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
   bumpKarma, creditPurchase,
 } from './social.js';
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
@@ -201,8 +201,9 @@ app.post('/api/auth/google', async (req, res) => {
     const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
       .then((r) => r.json());
     if (info.aud !== GOOGLE_CLIENT_ID) return res.status(401).json({ error: 'Token was not issued for this app' });
-    const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, info.name || info.email);
-    res.json({ ok: true, name: linked?.name || info.name || '', code: linked?.code });
+    const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, info.name || info.email,
+      { email: info.email, picture: info.picture });
+    res.json({ ok: true, name: linked?.name || info.name || '', code: linked?.code, picture: linked?.picture || '' });
   } catch {
     res.status(401).json({ error: 'Could not verify the Google token' });
   }
@@ -210,6 +211,17 @@ app.post('/api/auth/google', async (req, res) => {
 
 // The native flow on iOS: Apple has already authenticated the user on-device;
 // we record the stable user id against this install's identity token.
+/** Who am I — drives the profile chip. Includes the sign-in state. */
+app.get('/api/me', (req, res) => {
+  const me = meView(String(req.query.token || '').slice(0, 64));
+  if (!me) return res.status(400).json({ error: 'Missing identity' });
+  res.json(me);
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.json(detachLogin(String(req.body?.token || '').slice(0, 64)));
+});
+
 app.post('/api/auth/apple', (req, res) => {
   const { token, userId, name } = req.body || {};
   if (!token || !userId) return res.status(400).json({ error: 'Missing token or userId' });

@@ -130,6 +130,7 @@ function showLanding() {
   renderResumeList();
 
   refreshWallet();
+  refreshProfileChip();
   watchPublicRooms();
   initGoogleSignIn();
   initSocial({
@@ -175,6 +176,77 @@ $('#storeBtn').addEventListener('click', () => {
 
 // ---- sign in with Google (only when the server has a client id) ----------
 let googleInitDone = false;
+/**
+ * The signed-in state, made visible: a photo chip by the theme buttons with
+ * the account behind it one tap away. Signing in used to change almost
+ * nothing on screen, which read as the button not working.
+ */
+async function refreshProfileChip() {
+  const chip = $('#profileChip');
+  const menu = $('#profileMenu');
+  if (!chip) return;
+  let me = null;
+  try {
+    me = await fetch(api(`/api/me?token=${encodeURIComponent(token)}`)).then((r) => r.json());
+  } catch { return; }
+  if (!me?.provider) {
+    chip.classList.add('hidden');
+    menu.classList.add('hidden');
+    return;
+  }
+  const initial = (me.name || '?').trim()[0]?.toUpperCase() || '?';
+  const photo = me.picture
+    ? `<img src="${me.picture.replace(/"/g, '')}" alt="" referrerpolicy="no-referrer" />`
+    : initial;
+  chip.innerHTML = photo;
+  chip.classList.remove('hidden');
+  // A signed-in device doesn't need to be sold the sign-in button again.
+  $('#authRow')?.classList.add('hidden');
+
+  chip.onclick = () => {
+    if (!menu.classList.contains('hidden')) { menu.classList.add('hidden'); return; }
+    menu.innerHTML = `
+      <div class="pm-head">
+        <span class="pm-photo">${photo}</span>
+        <span>
+          <div class="pm-name">${escapeText(me.name || 'Player')}</div>
+          ${me.email ? `<div class="pm-mail">${escapeText(me.email)}</div>` : ''}
+        </span>
+      </div>
+      <div class="pm-row"><span>Friend code</span><b>${escapeText(me.code || '')}</b></div>
+      <div class="pm-row"><span>Coins</span><b>${Number(me.coins) || 0}</b></div>
+      <div class="pm-row"><span>Karma</span><b>${Number(me.karma) || 0}</b></div>
+      <div class="pm-row"><span>Signed in with</span><b>${me.provider === 'apple' ? 'Apple' : 'Google'}</b></div>
+      <div class="pm-actions">
+        <button class="btn small wide" id="pmSignOut">Sign out</button>
+      </div>`;
+    menu.classList.remove('hidden');
+    $('#pmSignOut').onclick = async () => {
+      try {
+        await fetch(api('/api/auth/logout'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+      } catch { /* the chip check below sorts it out */ }
+      menu.classList.add('hidden');
+      $('#authRow')?.classList.remove('hidden');
+      toast('Signed out — your seat, coins and friends stay with this device');
+      refreshProfileChip();
+    };
+  };
+  // A tap anywhere else folds the menu away.
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) {
+      menu.classList.add('hidden');
+    }
+  });
+}
+
+const escapeText = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
 function initGoogleSignIn() {
   if (googleInitDone) return;
   fetch(api('/api/auth/config')).then((r) => r.json()).then((cfg) => {
@@ -197,6 +269,7 @@ function initGoogleSignIn() {
               if (out.name) { $('#nickInput').value = out.name; storeName(out.name); }
               $('#authStatus').textContent = `Signed in as ${out.name || 'you'} · code ${out.code || ''}`;
               toast('Signed in with Google');
+              refreshProfileChip();
             } else {
               toast(out.error || 'Sign-in failed', 'error');
             }

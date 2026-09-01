@@ -1352,6 +1352,42 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 /* Theme toggle sits with the other brand actions in game, and pairs up with the
    table-style button on the landing. Both sit in a row above the logo: parked
    on top of it they printed over the wordmark at every width. */
+/* Signed-in presence: the chip is the proof that the Google button did
+   something, and the menu behind it holds the details. */
+.profile-chip {
+  position: absolute; top: 0; right: 84px; z-index: 5;
+  width: 34px; height: 34px; border-radius: 50%; padding: 0;
+  border: 2px solid var(--gold); background: var(--card);
+  overflow: hidden; cursor: pointer;
+  display: grid; place-items: center;
+  font-weight: 850; font-size: 14px; color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.profile-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.profile-menu {
+  position: absolute; top: 42px; right: 0; z-index: 30;
+  width: min(280px, 86vw); padding: 14px;
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: var(--r); box-shadow: var(--shadow);
+  text-align: left;
+}
+.pm-head { display: flex; gap: 11px; align-items: center; margin-bottom: 10px; }
+.pm-photo {
+  width: 44px; height: 44px; border-radius: 50%; overflow: hidden; flex: none;
+  border: 2px solid var(--gold); background: var(--paper-2);
+  display: grid; place-items: center; font-weight: 850; font-size: 18px; color: var(--ink);
+}
+.pm-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pm-name { font-weight: 800; font-size: 14.5px; color: var(--ink); line-height: 1.25; }
+.pm-mail { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+.pm-row {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 12.5px; color: var(--ink-2); padding: 5px 0;
+  border-top: 1px solid var(--rule);
+}
+.pm-row b { color: var(--ink); font-weight: 750; }
+.pm-actions { margin-top: 10px; display: flex; gap: 8px; }
+
 .theme-float, .palette-float {
   position: absolute; top: 0; font-size: 17px;
   background: var(--paper-2); border: 1px solid var(--rule);
