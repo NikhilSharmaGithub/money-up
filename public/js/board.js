@@ -2,7 +2,7 @@
 // buildings on every update, and animates player tokens on a floating layer so
 // they can hop tile-by-tile instead of teleporting.
 
-import { ART, utilityArt, icon, groupBanner } from './icons.js';
+import { ART, utilityArt, icon, groupFlag } from './icons.js';
 import { sfx } from './sound.js';
 
 let builtMapId = null;
@@ -67,16 +67,16 @@ function tileMarkup(tile, groups) {
   const g = tile.group ? groups[tile.group] : null;
   const price = tile.price ? `<span class="tile-price">${tile.price}$</span>` : '';
   // A country used to fly an emoji — missing outright on Windows, and a
-  // different vendor's drawing on every other platform. The medallion now
-  // carries a pennant in the group's own colour, which is the identity the
-  // rest of the tile is already painted with.
-  const banner = (colour) => `<span class="medal">${groupBanner(colour)}</span>`;
+  // different vendor's drawing on every other platform — and Windows draws no
+  // flag at all. Countries get their flag drawn instead; the regional boards
+  // keep their pictograph, which every platform does have a glyph for.
+  const banner = (group) => `<span class="medal">${groupFlag(group?.flag, group?.color)}</span>`;
   const art = (drawing, cls = '') => `<span class="tile-art ${cls}">${drawing}</span>`;
 
   let body;
   switch (tile.type) {
     case 'property':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${banner(g?.color)}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${banner(g)}`;
       break;
     case 'airport':
       body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.airport)}`;
@@ -378,7 +378,7 @@ export function deedMarkup(state, i, { compact = false, actions = '' } = {}) {
   return `<div class="deed${compact ? ' compact' : ''}">
     <div class="deed-head" style="background:${headColor}">
       <span class="deed-flag">${g
-        ? groupBanner('currentColor')
+        ? groupFlag(g.flag, 'currentColor')
         : tile.type === 'airport' ? ART.airport
           : tile.type === 'utility' ? utilityArt(tile.icon)
           : ART.tax}</span>

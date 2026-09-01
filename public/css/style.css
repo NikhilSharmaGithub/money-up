@@ -1277,6 +1277,10 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .lobby-map { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; font-weight: 600; }
 /* The seats a table is still waiting on. Faces rather than dots, so a player
    sitting through the countdown can watch the table assemble. */
+/* The regional boards mark their groups with a pictograph rather than a flag;
+   it sits on the same optical line as the drawn ones. */
+.group-mark { font-size: 1.05em; line-height: 1; vertical-align: -.1em; }
+
 .seat-row { display: flex; gap: 10px; justify-content: center; margin: 8px 0 8px; flex-wrap: wrap; }
 .seat-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; }
 .seat-face {

@@ -114,7 +114,7 @@ struct DeedSheet: View {
     private func headerBadge(_ tile: TileData, group: GroupInfo?, ink: Color) -> some View {
         switch tile.type {
         case "property":
-            if group != nil { Art.groupBanner(ink, size: 24) }
+            if let group { Art.groupFlag(group.flag, ink, size: 24) }
         case "airport":
             Art.icon(.plane, size: 22, tint: ink)
         case "utility":

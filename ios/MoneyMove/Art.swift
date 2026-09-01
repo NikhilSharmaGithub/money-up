@@ -540,3 +540,118 @@ private enum ArtCanvas {
         }
     }
 }
+
+// ------------------------------------------------------------------ flags --
+// Country flags, drawn rather than typed — matching public/js/icons.js so the
+// board reads the same on every platform. Simplified to stay legible at 13pt:
+// right colours, right layout, no detail nobody can see.
+
+private struct FlagArt {
+    let bands: [(Color, CGFloat, CGFloat)]      // colour, x or y start, extent
+    let vertical: Bool
+    let motif: (GraphicsContext) -> Void
+
+    init(vertical: Bool = false,
+         bands: [(Color, CGFloat, CGFloat)] = [],
+         motif: @escaping (GraphicsContext) -> Void = { _ in }) {
+        self.vertical = vertical
+        self.bands = bands
+        self.motif = motif
+    }
+}
+
+private let hex = { (v: UInt32) in Color(
+    red: Double((v >> 16) & 0xFF) / 255,
+    green: Double((v >> 8) & 0xFF) / 255,
+    blue: Double(v & 0xFF) / 255) }
+
+/// A board group's mark. Countries get their flag drawn; the regional boards
+/// keep their pictograph, which every platform has a glyph for.
+struct GroupFlag: View {
+    @Environment(\.colorScheme) private var scheme
+    let mark: String
+    let colour: Color
+    var size: CGFloat = 18
+
+    var body: some View {
+        let key = mark.replacingOccurrences(of: "\u{FE0F}", with: "")
+        if let art = GroupFlag.art[key] {
+            Canvas { ctx, sz in
+                ctx.scaleBy(x: sz.width / 32, y: sz.height / 32)
+                ctx.fill(A.rrect(1, 6, 30, 20, 2.5), with: .color(.white))
+                for (c, start, extent) in art.bands {
+                    ctx.fill(art.vertical ? A.rect(start, 6, extent, 20) : A.rect(1, start, 30, extent),
+                             with: .color(c))
+                }
+                art.motif(ctx)
+                ctx.stroke(A.rrect(1, 6, 30, 20, 2.5), with: .color(.black.opacity(0.22)), lineWidth: 1)
+            }
+            .frame(width: size, height: size)
+        } else if !mark.isEmpty {
+            Text(mark).font(.system(size: size * 0.82))
+        } else {
+            GroupBanner(colour: colour, size: size)
+        }
+    }
+
+    private static let art: [String: FlagArt] = [
+        "\u{1F1EE}\u{1F1F3}": FlagArt(bands: [(hex(0xFF9933), 6, 6.7), (.white, 12.7, 6.6), (hex(0x138808), 19.3, 6.7)]) { ctx in
+            ctx.stroke(A.circle(16, 16, 2.7), with: .color(hex(0x004466)), lineWidth: 1.1)
+        },
+        "\u{1F1EC}\u{1F1E7}": FlagArt(bands: [(hex(0x012169), 6, 20)]) { ctx in
+            ctx.stroke(A.line([(1, 6), (31, 26)]), with: .color(.white), lineWidth: 4.4)
+            ctx.stroke(A.line([(31, 6), (1, 26)]), with: .color(.white), lineWidth: 4.4)
+            ctx.stroke(A.line([(1, 6), (31, 26)]), with: .color(hex(0xC8102E)), lineWidth: 2)
+            ctx.stroke(A.line([(31, 6), (1, 26)]), with: .color(hex(0xC8102E)), lineWidth: 2)
+            ctx.stroke(A.line([(16, 6), (16, 26)]), with: .color(.white), lineWidth: 6.6)
+            ctx.stroke(A.line([(1, 16), (31, 16)]), with: .color(.white), lineWidth: 6.6)
+            ctx.stroke(A.line([(16, 6), (16, 26)]), with: .color(hex(0xC8102E)), lineWidth: 3.6)
+            ctx.stroke(A.line([(1, 16), (31, 16)]), with: .color(hex(0xC8102E)), lineWidth: 3.6)
+        },
+        "\u{1F1FA}\u{1F1F8}": FlagArt(bands: [(hex(0xB31942), 6, 2.85), (hex(0xB31942), 11.7, 2.85),
+                                             (hex(0xB31942), 17.4, 2.85), (hex(0xB31942), 23.1, 2.9)]) { ctx in
+            ctx.fill(A.rect(1, 6, 13, 11.4), with: .color(hex(0x0A3161)))
+            for (x, y) in [(4.5, 9.0), (8.0, 9.0), (11.5, 9.0), (6.2, 12.0), (9.8, 12.0), (4.5, 15.0), (8.0, 15.0), (11.5, 15.0)] {
+                ctx.fill(A.circle(x, y, 0.9), with: .color(.white))
+            }
+        },
+        "\u{1F1E7}\u{1F1F7}": FlagArt(bands: [(hex(0x009C3B), 6, 20)]) { ctx in
+            ctx.fill(A.poly([(16, 8), (28.5, 16), (16, 24), (3.5, 16)]), with: .color(hex(0xFFDF00)))
+            ctx.fill(A.circle(16, 16, 4.4), with: .color(hex(0x002776)))
+        },
+        "\u{1F1E9}\u{1F1EA}": FlagArt(bands: [(.black, 6, 6.7), (hex(0xDD0000), 12.7, 6.6), (hex(0xFFCE00), 19.3, 6.7)]),
+        "\u{1F1EB}\u{1F1F7}": FlagArt(vertical: true, bands: [(hex(0x0055A4), 1, 10), (.white, 11, 10), (hex(0xEF4135), 21, 10)]),
+        "\u{1F1EE}\u{1F1F9}": FlagArt(vertical: true, bands: [(hex(0x009246), 1, 10), (.white, 11, 10), (hex(0xCE2B37), 21, 10)]),
+        "\u{1F1E8}\u{1F1F3}": FlagArt(bands: [(hex(0xDE2910), 6, 20)]) { ctx in
+            ctx.fill(A.star(7.5, 13.6, 4.2, 1.8), with: .color(hex(0xFFDE00)))
+            for (x, y) in [(14.0, 9.4), (16.6, 11.6), (16.6, 14.8), (14.0, 17.0)] {
+                ctx.fill(A.circle(x, y, 1), with: .color(hex(0xFFDE00)))
+            }
+        },
+        "\u{1F1EF}\u{1F1F5}": FlagArt { ctx in
+            ctx.fill(A.circle(16, 16, 6), with: .color(hex(0xBC002D)))
+        },
+        "\u{1F1EE}\u{1F1F1}": FlagArt { ctx in
+            ctx.fill(A.rect(1, 7.6, 30, 3), with: .color(hex(0x0038B8)))
+            ctx.fill(A.rect(1, 21.4, 30, 3), with: .color(hex(0x0038B8)))
+            ctx.stroke(A.poly([(16, 11.4), (19.4, 17.3), (12.6, 17.3)]), with: .color(hex(0x0038B8)), lineWidth: 1.1)
+            ctx.stroke(A.poly([(16, 20.6), (12.6, 14.7), (19.4, 14.7)]), with: .color(hex(0x0038B8)), lineWidth: 1.1)
+        },
+        "\u{1F1E8}\u{1F1E6}": FlagArt(vertical: true, bands: [(hex(0xD80621), 1, 8), (hex(0xD80621), 23, 8)]) { ctx in
+            ctx.fill(A.star(16, 16, 5.5, 2.2), with: .color(hex(0xD80621)))
+        },
+        "\u{1F1F9}\u{1F1F7}": FlagArt(bands: [(hex(0xE30A17), 6, 20)]) { ctx in
+            ctx.fill(A.circle(14, 16, 5), with: .color(.white))
+            ctx.fill(A.circle(15.8, 16, 4), with: .color(hex(0xE30A17)))
+            ctx.fill(A.star(21, 16.2, 3.2, 1.4), with: .color(.white))
+        },
+        "\u{1F1F7}\u{1F1F4}": FlagArt(vertical: true, bands: [(hex(0x002B7F), 1, 10), (hex(0xFCD116), 11, 10), (hex(0xCE1126), 21, 10)]),
+        "\u{1F1EE}\u{1F1EA}": FlagArt(vertical: true, bands: [(hex(0x169B62), 1, 10), (.white, 11, 10), (hex(0xFF883E), 21, 10)]),
+    ]
+}
+
+extension Art {
+    static func groupFlag(_ mark: String?, _ colour: Color, size: CGFloat = 18) -> GroupFlag {
+        GroupFlag(mark: mark ?? "", colour: colour, size: size)
+    }
+}

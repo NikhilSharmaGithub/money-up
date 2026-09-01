@@ -2,7 +2,7 @@
 // chat, toasts and the celebratory bits.
 
 import { escapeHtml, deedMarkup } from './board.js';
-import { icon, groupBanner } from './icons.js';
+import { icon, groupBanner, groupFlag } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
 
@@ -684,7 +684,7 @@ function renderMyStuff(state, meId, el, actions) {
 
   const sections = Object.entries(byGroup).map(([key, list]) => {
     const g = state.groups[key];
-    const title = g ? `${groupBanner(g.color)} ${escapeHtml(g.name)}`
+    const title = g ? `${groupFlag(g.flag, g.color)} ${escapeHtml(g.name)}`
       : key === '__air' ? `${icon('plane')} Airports`
       : `${icon('bulb')} Utilities`;
     const complete = g && list.length === state.map.groups[key].length;

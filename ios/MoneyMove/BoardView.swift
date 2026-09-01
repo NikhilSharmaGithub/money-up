@@ -265,7 +265,7 @@ struct TileView: View {
             case "property":
                 // The country's pennant, in the group's own colour — a drawn
                 // banner says the same thing a flag emoji did on every device.
-                Art.groupBanner(group.map { Color(css: $0.color) } ?? P.ink3, size: 13)
+                Art.groupFlag(group?.flag, group.map { Color(css: $0.color) } ?? P.ink3, size: 13)
                 nameText(P)
                 if houses == 5 {
                     Art.icon(.hotel, size: 11)

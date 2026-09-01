@@ -527,3 +527,84 @@ export function groupBanner(colour, size, cls = '') {
   return `<svg viewBox="0 0 32 32" fill="none" class="ico${cls ? ` ${cls}` : ''}"${dim}` +
     ` aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
 }
+
+// ------------------------------------------------------------------ flags --
+// Country flags, drawn rather than typed. Flag emoji are a pair of regional
+// indicator letters, and Windows ships no glyph for them at all — those players
+// saw two empty boxes where the board's flag belonged. These are simplified to
+// read at 13px: the right colours, the right layout, no fine detail nobody can
+// see anyway.
+
+const flag = (body) =>
+  `<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#fff"/>${body}` +
+  `<rect x="1" y="6" width="30" height="20" rx="2.5" fill="none" stroke="#000" stroke-opacity=".22"/>`;
+
+const FLAG_ART = {
+  '\u{1F1EE}\u{1F1F3}': flag(`<rect x="1" y="6" width="30" height="6.7" rx="2.5" fill="#f93"/>
+    <rect x="1" y="12.7" width="30" height="6.6" fill="#fff"/>
+    <rect x="1" y="19.3" width="30" height="6.7" rx="2.5" fill="#138808"/>
+    <circle cx="16" cy="16" r="2.7" fill="none" stroke="#046" stroke-width="1.1"/>`),
+  '\u{1F1EC}\u{1F1E7}': flag(`<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#012169"/>
+    <path d="M1 6 31 26M31 6 1 26" stroke="#fff" stroke-width="4.4"/>
+    <path d="M1 6 31 26M31 6 1 26" stroke="#c8102e" stroke-width="2"/>
+    <path d="M16 6v20M1 16h30" stroke="#fff" stroke-width="6.6"/>
+    <path d="M16 6v20M1 16h30" stroke="#c8102e" stroke-width="3.6"/>`),
+  '\u{1F1FA}\u{1F1F8}': flag(`<g fill="#b31942">
+      <rect x="1" y="6" width="30" height="2.85"/><rect x="1" y="11.7" width="30" height="2.85"/>
+      <rect x="1" y="17.4" width="30" height="2.85"/><rect x="1" y="23.1" width="30" height="2.9"/></g>
+    <rect x="1" y="6" width="13" height="11.4" fill="#0a3161"/>
+    <g fill="#fff"><circle cx="4.5" cy="9" r=".9"/><circle cx="8" cy="9" r=".9"/><circle cx="11.5" cy="9" r=".9"/>
+      <circle cx="6.2" cy="12" r=".9"/><circle cx="9.8" cy="12" r=".9"/>
+      <circle cx="4.5" cy="15" r=".9"/><circle cx="8" cy="15" r=".9"/><circle cx="11.5" cy="15" r=".9"/></g>`),
+  '\u{1F1E7}\u{1F1F7}': flag(`<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#009c3b"/>
+    <path d="M16 8 28.5 16 16 24 3.5 16z" fill="#ffdf00"/>
+    <circle cx="16" cy="16" r="4.4" fill="#002776"/>
+    <path d="M11.9 14.6a12 12 0 0 1 8.3 2.2" stroke="#fff" stroke-width="1.1" fill="none"/>`),
+  '\u{1F1E9}\u{1F1EA}': flag(`<rect x="1" y="6" width="30" height="6.7" rx="2.5" fill="#000"/>
+    <rect x="1" y="12.7" width="30" height="6.6" fill="#d00"/>
+    <rect x="1" y="19.3" width="30" height="6.7" rx="2.5" fill="#ffce00"/>`),
+  '\u{1F1EB}\u{1F1F7}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#0055a4"/>
+    <rect x="11" y="6" width="10" height="20" fill="#fff"/>
+    <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ef4135"/>`),
+  '\u{1F1EE}\u{1F1F9}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#009246"/>
+    <rect x="11" y="6" width="10" height="20" fill="#fff"/>
+    <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ce2b37"/>`),
+  '\u{1F1E8}\u{1F1F3}': flag(`<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#de2910"/>
+    <path d="M7.5 9.4 8.6 12.6 11.9 12.6 9.2 14.6 10.3 17.8 7.5 15.8 4.7 17.8 5.8 14.6 3.1 12.6 6.4 12.6z" fill="#ffde00"/>
+    <g fill="#ffde00"><circle cx="14" cy="9.4" r="1"/><circle cx="16.6" cy="11.6" r="1"/>
+      <circle cx="16.6" cy="14.8" r="1"/><circle cx="14" cy="17" r="1"/></g>`),
+  '\u{1F1EF}\u{1F1F5}': flag(`<circle cx="16" cy="16" r="6" fill="#bc002d"/>`),
+  '\u{1F1EE}\u{1F1F1}': flag(`<rect x="1" y="7.6" width="30" height="3" fill="#0038b8"/>
+    <rect x="1" y="21.4" width="30" height="3" fill="#0038b8"/>
+    <path d="M16 11.4 19.4 17.3 12.6 17.3z" fill="none" stroke="#0038b8" stroke-width="1.1"/>
+    <path d="M16 20.6 12.6 14.7 19.4 14.7z" fill="none" stroke="#0038b8" stroke-width="1.1"/>`),
+  '\u{1F1E8}\u{1F1E6}': flag(`<rect x="1" y="6" width="8" height="20" rx="2.5" fill="#d80621"/>
+    <rect x="23" y="6" width="8" height="20" rx="2.5" fill="#d80621"/>
+    <path d="M16 10.5 17.5 14 20 13 18.8 16.5 21 17.2 16.8 19.4 17.2 21.5 16 21 14.8 21.5 15.2 19.4 11 17.2 13.2 16.5 12 13 14.5 14z" fill="#d80621"/>`),
+  '\u{1F1F9}\u{1F1F7}': flag(`<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#e30a17"/>
+    <circle cx="14" cy="16" r="5" fill="#fff"/><circle cx="15.8" cy="16" r="4" fill="#e30a17"/>
+    <path d="M21 13.2 22 15.4 24.3 15.4 22.5 16.9 23.2 19.1 21 17.8 18.8 19.1 19.5 16.9 17.7 15.4 20 15.4z" fill="#fff"/>`),
+  '\u{1F1F7}\u{1F1F4}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#002b7f"/>
+    <rect x="11" y="6" width="10" height="20" fill="#fcd116"/>
+    <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ce1126"/>`),
+  '\u{1F1EE}\u{1F1EA}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#169b62"/>
+    <rect x="11" y="6" width="10" height="20" fill="#fff"/>
+    <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ff883e"/>`),
+};
+
+/**
+ * A board group's mark. Real countries get their flag drawn; the regional
+ * boards use pictograph emoji (a castle for Rajasthan, a lion for Gujarat)
+ * which every platform does have a glyph for, so those pass straight through.
+ * Anything unrecognised falls back to a pennant in the group's own colour.
+ */
+export function groupFlag(mark, colour, size, cls = '') {
+  const art = FLAG_ART[String(mark || '').replace(/\uFE0F/g, '')];
+  if (art) {
+    const dim = size == null ? '' : ` style="width:${px(size)};height:${px(size)}"`;
+    return `<svg viewBox="0 0 32 32" fill="none" class="ico${cls ? ` ${cls}` : ''}"${dim}` +
+      ` aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">${art}</svg>`;
+  }
+  if (mark) return `<span class="group-mark" aria-hidden="true">${mark}</span>`;
+  return groupBanner(colour, size, cls);
+}
