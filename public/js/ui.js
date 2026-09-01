@@ -853,13 +853,18 @@ export function renderCenter(state, meId, actions) {
         <div class="room-code">${searching ? '⚡ Quick Play' : `Room <b>${escapeHtml(state.id)}</b>`}</div>
         <div class="lobby-map">${state.map.icon} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
       </div>
-      <div class="seat-dots">${Array.from({ length: seats }, (_, i) => {
+      <div class="seat-row">${Array.from({ length: seats }, (_, i) => {
         const p = state.players[i];
-        return p
-          ? `<span class="seat-dot filled" style="background:${p.color}" title="${escapeHtml(p.name)}"></span>`
-          : '<span class="seat-dot"></span>';
+        // Waiting is nicer when you can see the table filling up, so each seat
+        // shows who took it rather than an anonymous dot.
+        if (!p) return '<div class="seat-slot open"><span class="seat-face"></span><span class="seat-name">open</span></div>';
+        const face = p.avatar || (p.name[0] || '?').toUpperCase();
+        return `<div class="seat-slot">
+          <span class="seat-face" style="background:${p.color}">${escapeHtml(face)}</span>
+          <span class="seat-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+        </div>`;
       }).join('')}</div>
-      <div class="dim small">${seated} of ${seats} seats taken</div>`;
+      <div class="dim small">${seated} of ${seats} ${seated === 1 ? 'seat' : 'seats'} taken</div>`;
     on('#cStart', actions.start);
     paintQuickCountdown();
     return;

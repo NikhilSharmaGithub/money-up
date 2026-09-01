@@ -1254,6 +1254,27 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 /* lobby centre */
 .lobby-head { margin-bottom: 10px; }
 .lobby-map { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; font-weight: 600; }
+/* The seats a table is still waiting on. Faces rather than dots, so a player
+   sitting through the countdown can watch the table assemble. */
+.seat-row { display: flex; gap: 10px; justify-content: center; margin: 8px 0 8px; flex-wrap: wrap; }
+.seat-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; }
+.seat-face {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 850; color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .28);
+  animation: seatIn .32s var(--pop);
+}
+.seat-slot.open .seat-face {
+  background: transparent; border: 2px dashed var(--rule-2); box-shadow: none; animation: none;
+}
+.seat-name {
+  font-size: 10.5px; font-weight: 700; color: var(--ink-2);
+  max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.seat-slot.open .seat-name { color: var(--ink-3); font-weight: 600; }
+@keyframes seatIn { from { transform: scale(.5); opacity: 0; } }
+
 .seat-dots { display: flex; gap: 6px; justify-content: center; margin: 4px 0 8px; }
 .seat-dot {
   width: 11px; height: 11px; border-radius: 50%;
