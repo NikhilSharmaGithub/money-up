@@ -122,7 +122,13 @@ export function handleWebhook(rawBody, signatureHeader) {
   const pack = COIN_PACKS.find((p) => p.id === session.metadata?.packId);
   if (!token || !pack) return { error: 'Session carries no wallet' };
 
-  const credited = creditPurchase(token, `stripe:${session.id}`, pack.coins);
+  const credited = creditPurchase(token, `stripe:${session.id}`, pack.coins, {
+    provider: 'stripe',
+    packId: pack.id,
+    // Stripe reports the charge in cents; fall back to the pack's list price
+    // if an old session somehow arrives without one.
+    usd: (Number(session.amount_total) || Math.round(Number(pack.price) * 100)) / 100,
+  });
   if (credited.error) return credited;
   console.log(`stripe: credited ${pack.coins} coins to ${token.slice(0, 12)}… (${session.id})`);
   return { ok: true, coins: credited.coins };

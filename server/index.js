@@ -9,12 +9,13 @@ import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
-  bumpKarma, creditPurchase,
+  bumpKarma, creditPurchase, ledgerView, adminCredit,
 } from './social.js';
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
 import { stripeEnabled, createCheckout, handleWebhook } from './stripe.js';
+import { adminPageHTML } from './adminPage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -164,7 +165,9 @@ app.post('/api/store/redeem', async (req, res) => {
   const pack = packByProductId(verdict.payload.productId);
   if (!pack) return res.status(400).json({ error: 'Unknown product' });
 
-  const result = creditPurchase(token, verdict.payload.transactionId, pack.coins);
+  const result = creditPurchase(token, verdict.payload.transactionId, pack.coins, {
+    provider: 'apple', packId: pack.id, usd: Number(pack.price) || 0,
+  });
   if (result.error) return res.status(400).json(result);
   res.json({ ...result, pack: pack.id });
 });
@@ -299,65 +302,118 @@ const adminGuard = (req, res) => {
 
 app.get('/api/admin/data', (req, res) => {
   if (!adminGuard(req, res)) return;
+  const now = Date.now();
+  const profs = allProfiles();
+  const ledger = ledgerView();
+  const paid = ledger.filter((e) => e.usd > 0);
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const round2 = (n) => Math.round(n * 100) / 100;
+
+  const coinsInCirculation = profs.reduce((n, p) => n + (p.coins || 0), 0);
+  const avgKarma = profs.length
+    ? round2(profs.reduce((n, p) => n + (p.karma ?? 100), 0) / profs.length)
+    : null;
+
+  // Ten karma buckets: 0-9, 10-19, ... with 100 folded into the top one.
+  const karmaBuckets = Array.from({ length: 10 }, () => 0);
+  for (const p of profs) karmaBuckets[Math.min(9, Math.floor((p.karma ?? 100) / 10))]++;
+
+  // Net worth walks the ownership map; never let a half-built room 500 the
+  // whole dashboard over it.
+  const safeNetWorth = (room, p) => {
+    try { return room.netWorth(p); } catch { return null; }
+  };
+
   res.json({
     totals: {
       gamesStarted: stats.gamesStarted,
       gamesEnded: stats.gamesEnded,
       liveRooms: rooms.size,
       liveSockets: [...socketsOf.values()].reduce((n, s) => n + s.size, 0),
-      profiles: allProfiles().length,
+      profiles: profs.length,
+      coinsInCirculation,
+      avgKarma,
+    },
+    revenue: {
+      // The ledger began with a deploy; purchases before its first entry
+      // exist only as dedupe ids with no amounts, so they are not counted.
+      since: ledger[0]?.at || null,
+      total: round2(paid.reduce((n, e) => n + e.usd, 0)),
+      last7d: round2(paid.filter((e) => e.at >= weekAgo).reduce((n, e) => n + e.usd, 0)),
+      purchases: paid.length,
+    },
+    ledger: ledger.slice(-1000),
+    economy: {
+      coinsInCirculation,
+      avgKarma,
+      signedIn: profs.filter((p) => p.login).length,
+      anonymous: profs.filter((p) => !p.login).length,
+      karmaBuckets,
+      topWallets: [...profs]
+        .sort((a, b) => (b.coins || 0) - (a.coins || 0))
+        .slice(0, 20)
+        .map((p) => ({ code: p.code, name: p.name, coins: p.coins || 0, karma: p.karma })),
     },
     rooms: [...rooms.values()].map((r) => ({
       id: r.id, status: r.status, map: r.map.name,
-      players: r.players.map((p) => `${p.name}${p.isBot ? ' 🤖' : ''}`),
+      players: r.players.map((p) => ({
+        name: p.name, isBot: !!p.isBot,
+        bankrupt: !!p.bankrupt, connected: p.connected !== false,
+        money: typeof p.money === 'number' ? p.money : null,
+        netWorth: safeNetWorth(r, p),
+      })),
       sockets: socketsOf.get(r.id)?.size || 0,
       turns: r.turnCount || 0,
+      ageMs: now - (r.createdAt || now),
+      quick: !!r.quick,
     })),
     recentGames: stats.recent,
-    profiles: allProfiles(),
+    profiles: profs,
   });
 });
 
 app.get('/admin', (req, res) => {
   if (!adminGuard(req, res)) return;
-  res.type('html').send(`<!doctype html><meta charset="utf-8">
-<title>MoneyMove Admin</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body{font-family:system-ui,sans-serif;background:#0c1310;color:#efede2;margin:0;padding:24px}
-  h1{font-size:22px} h2{font-size:15px;margin:26px 0 8px;color:#adb6ac;text-transform:uppercase;letter-spacing:1px}
-  .tiles{display:flex;gap:12px;flex-wrap:wrap}
-  .tile{background:#16211c;border:1px solid #24332c;border-radius:14px;padding:14px 20px;min-width:120px}
-  .tile b{font-size:24px;display:block;color:#e3a93c}
-  table{border-collapse:collapse;width:100%;font-size:13px}
-  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #24332c}
-  th{color:#78827a;font-weight:600}
-  .ok{color:#4fd98b}.warn{color:#e3a93c}
-</style>
-<h1>🎲 MoneyMove — Master Admin</h1>
-<div class="tiles" id="tiles"></div>
-<h2>Live rooms</h2><table id="rooms"></table>
-<h2>Recent games</h2><table id="games"></table>
-<h2>Profiles</h2><table id="profiles"></table>
-<script>
-  const key = new URLSearchParams(location.search).get('key');
-  async function refresh() {
-    const d = await fetch('/api/admin/data?key=' + encodeURIComponent(key)).then(r => r.json());
-    const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-    tiles.innerHTML = Object.entries(d.totals).map(([k, v]) =>
-      '<div class="tile"><b>' + esc(v) + '</b>' + esc(k) + '</div>').join('');
-    rooms.innerHTML = '<tr><th>room</th><th>status</th><th>map</th><th>players</th><th>sockets</th><th>turns</th></tr>' +
-      d.rooms.map(r => '<tr><td>' + esc(r.id) + '</td><td class="' + (r.status === 'playing' ? 'ok' : 'warn') + '">' + esc(r.status) +
-        '</td><td>' + esc(r.map) + '</td><td>' + esc(r.players.join(', ')) + '</td><td>' + esc(r.sockets) + '</td><td>' + esc(r.turns) + '</td></tr>').join('');
-    games.innerHTML = '<tr><th>when</th><th>room</th><th>map</th><th>winner</th><th>players</th><th>turns</th></tr>' +
-      d.recentGames.map(g => '<tr><td>' + new Date(g.at).toLocaleString() + '</td><td>' + esc(g.roomId) + '</td><td>' + esc(g.map) +
-        '</td><td class="ok">' + esc(g.winner || '—') + '</td><td>' + esc(g.players.join(', ')) + '</td><td>' + esc(g.turns) + '</td></tr>').join('');
-    profiles.innerHTML = '<tr><th>code</th><th>name</th><th>flag</th><th>friends</th><th>status</th><th>login</th></tr>' +
-      d.profiles.map(p => '<tr><td>' + esc(p.code) + '</td><td>' + esc(p.name) + '</td><td>' + esc(p.flag) + '</td><td>' + esc(p.friends) +
-        '</td><td>' + esc(p.status) + (p.roomId ? ' (' + esc(p.roomId) + ')' : '') + '</td><td>' + esc(p.login ? p.login.provider : '—') + '</td></tr>').join('');
-  }
-  refresh(); setInterval(refresh, 5000);
-</script>`);
+  res.type('html').send(adminPageHTML);
+});
+
+// Admin actions arrive as POSTs carrying the key in the body, so a mutating
+// URL never lands in an access log with the key attached.
+const adminBodyGuard = (req, res) => {
+  if ((req.body?.key || '') === ADMIN_KEY) return true;
+  res.status(401).json({ error: 'Missing or wrong admin key' });
+  return false;
+};
+
+/** Grant coins to a friend code — recorded in the ledger as provider 'admin'. */
+app.post('/api/admin/credit', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const result = adminCredit(req.body?.code, req.body?.coins, req.body?.reason);
+  if (result.error) return res.status(400).json(result);
+  console.log(`admin: credited ${result.coins} total to ${result.code} (+${Math.floor(Number(req.body?.coins))})`);
+  res.json(result);
+});
+
+/** Tear a room down — the same disposal the idle reaper performs. */
+app.post('/api/admin/close-room', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const id = String(req.body?.roomId || '').toLowerCase().slice(0, 12);
+  const room = rooms.get(id);
+  if (!room) return res.status(404).json({ error: 'No such room' });
+  io.to(id).emit('toast', { type: 'error', message: 'This table was closed by the admin' });
+  // Pull the survivors out of the socket.io channel too: room ids get reissued
+  // once a room is deleted, and a lingering socket must not overhear the next
+  // tenant of the same id.
+  io.in(id).socketsLeave(id);
+  for (const pid of seatsOf.get(id)?.keys() || []) clearPresence(pid);
+  room.status = 'ended';
+  room.dispose();
+  rooms.delete(id);
+  socketsOf.delete(id);
+  seatsOf.delete(id);
+  lastStatus.delete(id);
+  console.log(`admin: closed room ${id}`);
+  res.json({ ok: true });
 });
 
 app.get(/^\/room\/.*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));

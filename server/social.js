@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE = path.join(__dirname, '..', 'data', 'social.json');
+const LEDGER_STORE = path.join(__dirname, '..', 'data', 'ledger.json');
+const LEDGER_MAX = 5000;
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1
 const MAX_FRIENDS = 100;
@@ -56,6 +58,55 @@ function save() {
     }
   }, 1500);
   saveTimer.unref?.();
+}
+
+// ------------------------------------------------------------------ ledger --
+// Every coin credit that had money (or an operator) behind it, in order. This
+// file is the revenue source of truth from the moment it was added — earlier
+// purchases live only in each profile's dedupe list, with no amounts.
+/** @type {Array<{at:number, provider:string, packId:string|null, usd:number, coins:number, token:string, txn:string, note?:string}>} */
+let ledger = [];
+
+function loadLedger() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(LEDGER_STORE, 'utf8'));
+    if (Array.isArray(raw)) ledger = raw;
+    if (ledger.length) console.log(`  ledger: restored ${ledger.length} entr${ledger.length === 1 ? 'y' : 'ies'}`);
+  } catch {
+    // no ledger yet — it begins with the first credit after this deploy
+  }
+}
+
+let ledgerTimer = null;
+function saveLedger() {
+  clearTimeout(ledgerTimer);
+  ledgerTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(path.dirname(LEDGER_STORE), { recursive: true });
+      fs.writeFileSync(LEDGER_STORE, JSON.stringify(ledger));
+    } catch (err) {
+      console.warn('ledger: could not persist —', err.message);
+    }
+  }, 1500);
+  ledgerTimer.unref?.();
+}
+
+function appendLedger(entry) {
+  ledger.push(entry);
+  if (ledger.length > LEDGER_MAX) ledger.splice(0, ledger.length - LEDGER_MAX);
+  saveLedger();
+}
+
+/**
+ * Read view for the admin dashboard. The raw identity token is a secret that
+ * must never reach a browser, so entries go out carrying the public friend
+ * code instead.
+ */
+export function ledgerView() {
+  return ledger.map(({ token, ...entry }) => ({
+    ...entry,
+    code: profiles.get(token)?.code || null,
+  }));
 }
 
 // ---------------------------------------------------------------- profiles --
@@ -139,7 +190,7 @@ export function walletOf(token) {
  * receipt the caller already verified — replaying one is a no-op, so a
  * retried network call can never mint a second batch of coins.
  */
-export function creditPurchase(token, transactionId, coins) {
+export function creditPurchase(token, transactionId, coins, meta = {}) {
   const p = profileFor(token);
   if (!p) return { error: 'Unknown player' };
   const txn = String(transactionId || '');
@@ -150,6 +201,15 @@ export function creditPurchase(token, transactionId, coins) {
   p.purchases.push(txn);
   if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
   p.coins += amount;
+  appendLedger({
+    at: Date.now(),
+    provider: String(meta.provider || 'unknown'),
+    packId: meta.packId ? String(meta.packId) : null,
+    usd: Math.round((Number(meta.usd) || 0) * 100) / 100,
+    coins: amount,
+    token,
+    txn,
+  });
   save();
   return { ok: true, coins: p.coins };
 }
@@ -161,6 +221,33 @@ export function awardCoins(token, amount) {
   p.coins += amount;
   save();
   return p.coins;
+}
+
+/**
+ * An operator grant from the admin dashboard: resolve the public friend code
+ * back to a wallet, pay it through awardCoins, and record the grant in the
+ * same ledger real purchases use — provider 'admin', zero dollars, reason
+ * attached so the books explain themselves later.
+ */
+export function adminCredit(rawCode, amount, reason) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  const token = byCode.get(code);
+  if (!token) return { error: 'No player with that code' };
+  const coins = Math.floor(Number(amount) || 0);
+  if (coins <= 0 || coins > 1000000) return { error: 'Credit between 1 and 1,000,000 coins' };
+  const balance = awardCoins(token, coins);
+  appendLedger({
+    at: Date.now(),
+    provider: 'admin',
+    packId: null,
+    usd: 0,
+    coins,
+    token,
+    txn: `admin:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    note: String(reason || '').slice(0, 140),
+  });
+  const p = profiles.get(token);
+  return { ok: true, code, name: p?.name || '', coins: balance };
 }
 
 export function buyItem(token, item) {
@@ -265,12 +352,16 @@ export function friendsOf(token) {
 // ---------------------------------------------------------------- presence --
 /** Everything the admin dashboard needs — read-only snapshot. */
 export function allProfiles() {
-  return [...profiles.values()].map((p) => ({
-    code: p.code, name: p.name || '', flag: p.flag || '',
-    friends: (p.friends || []).length,
-    roomId: p.roomId || null, status: p.status || 'offline',
-    login: p.login || null,
-  }));
+  return [...profiles.values()].map((p) => {
+    const at = presence.get(p.token);
+    return {
+      code: p.code, name: p.name || '', flag: p.flag || '',
+      friends: (p.friends || []).length,
+      coins: p.coins ?? 0, karma: p.karma ?? KARMA_MAX,
+      roomId: at?.roomId || null, status: at?.status || 'offline',
+      login: p.login || null, email: p.email || null,
+    };
+  });
 }
 
 /** Records an external login (google/apple) against the identity token. */
@@ -327,3 +418,4 @@ export function setPresence(token, roomId, status = 'lobby') {
 export const clearPresence = (token) => presence.delete(token);
 
 load();
+loadLedger();
