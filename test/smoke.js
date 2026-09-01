@@ -758,24 +758,20 @@ console.log('\n▶ targeted rules');
   const b = room.player('b');
 
   // The rule only wakes once the board is sold out — while a street is still
-  // unowned, Bo could yet land on it and build a colour of their own. Deal the
-  // whole board out between the two of them first.
+  // unowned, Bo could yet land on it and build a colour of their own. Ava takes
+  // the whole board except the one colour Bo is short in, which also keeps the
+  // wall down to a single street so the roll has nothing to choose between.
+  const [g1, g2] = Object.entries(room.map.groups);
   room.map.tiles.forEach((t, i) => {
-    if (t.type === 'property') room.ownership[i] = { owner: i % 2 ? 'a' : 'b', houses: 0, mortgaged: false };
+    if (t.type === 'property') room.ownership[i] = { owner: 'a', houses: 0, mortgaged: false };
   });
   // Ava owns a colour outright and has built on all of it.
-  const [g1, g2] = Object.entries(room.map.groups);
   for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
   // Bo holds all of another colour but the last street, which Ava owns.
   const blocked = g2[1];
   blocked.forEach((i, n) => {
     room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
   });
-  // …and Bo must not accidentally hold a full colour of their own.
-  for (const [key, idxs] of Object.entries(room.map.groups)) {
-    if (key === g1[0] || key === g2[0]) continue;
-    if (idxs.every((i) => room.own(i)?.owner === 'b')) room.ownership[idxs[0]].owner = 'a';
-  }
   const wall = blocked[0];
   const price = Math.ceil(room.tile(wall).price * 1.7);
   b.money = price + 50;

@@ -1501,6 +1501,11 @@ export class GameRoom {
     const from = this.player(trade.from);
     const to = this.player(trade.to);
     if (!accept) {
+      // The asker remembers what they were refused, so the table doesn't spend
+      // the rest of the game watching the same offer bounce back and forth.
+      if (from) {
+        from.refused = [...(from.refused || []), ...trade.get.tiles].slice(-8);
+      }
       this.say(`${to.name} declined the trade from ${from.name}`, 'trade');
       this.push();
       return { ok: true };
@@ -1613,6 +1618,8 @@ export class GameRoom {
       cand.doublesInARow = 0;
       this.turnCount++;
       this.recordWorth();
+      this.noteLeader();
+      this.maybeSmallTalk();
       this.say(`${cand.name}'s turn`, 'turn');
       this.armTurnTimer();
       this.push();
@@ -1726,12 +1733,18 @@ export class GameRoom {
    */
   botSay(p, kind, vars = {}, { delay = 1400, always = false } = {}) {
     if (!p || !this.autoPlayed(p)) return;
+    // Only the house players on a quick table talk. When someone deliberately
+    // adds bots to their own game they know exactly what they're playing
+    // against, and a bot making small talk at them is just noise.
+    if (!this.quick) return;
     this.chatter ??= { table: 0, per: {} };
     const now = Date.now();
     if (!always) {
-      if (Math.random() < 0.45) return;
-      if (now - this.chatter.table < 6000) return;
-      if (now - (this.chatter.per[p.id] || 0) < 25000) return;
+      // Enough of a filter that nobody comments on everything, loose enough
+      // that a table actually sounds inhabited.
+      if (Math.random() < 0.22) return;
+      if (now - this.chatter.table < 3500) return;
+      if (now - (this.chatter.per[p.id] || 0) < 12000) return;
     }
     const line = banter(kind, vars);
     if (!line) return;
@@ -1742,6 +1755,44 @@ export class GameRoom {
       if (this.player(p.id)) this.sendChat(p.id, line, 'all');
     }, delay + Math.random() * 900);
     timer.unref?.();
+  }
+
+  /**
+   * Who is in front, and who just lost that spot. A table where nobody ever
+   * reacts to the scoreboard reads as four people playing alone in the same
+   * room, so the new leader gets to enjoy it and someone gets to needle the
+   * old one.
+   */
+  noteLeader() {
+    const alive = this.active;
+    if (alive.length < 2) return;
+    const ranked = [...alive].sort((a, b) => this.netWorth(b) - this.netWorth(a));
+    const leader = ranked[0];
+    // A nose ahead isn't a lead worth crowing about.
+    if (this.netWorth(leader) < this.netWorth(ranked[1]) * 1.15) return;
+    const previous = this.leaderId;
+    if (leader.id === previous) {
+      // Still in front — occasionally let them enjoy it out loud.
+      if (Math.random() < 0.22) this.botSay(leader, 'boast', {}, { delay: 2200 });
+      return;
+    }
+    this.leaderId = leader.id;
+    if (!previous) return;              // first leader of the game isn't news
+    const dethroned = this.player(previous);
+    this.botSay(leader, 'overtake', {}, { delay: 1800 });
+    if (dethroned && !dethroned.bankrupt) {
+      const heckler = alive.find((x) => x.id !== leader.id && x.id !== previous && this.autoPlayed(x));
+      this.botSay(heckler, 'tease', { name: dethroned.name }, { delay: 3400 });
+      this.botSay(dethroned, 'unlucky', {}, { delay: 4200 });
+    }
+  }
+
+  /** Every so often, someone says something that isn't about the board. */
+  maybeSmallTalk() {
+    if (this.turnCount < 4 || Math.random() > 0.18) return;
+    const bots = this.active.filter((x) => this.autoPlayed(x));
+    if (!bots.length) return;
+    this.botSay(bots[Math.floor(Math.random() * bots.length)], 'smallTalk', {}, { delay: 2600 });
   }
 
   /** Groups where this player holds everything but one street. */
@@ -1758,6 +1809,10 @@ export class GameRoom {
 
   botMaybeTrade(p) {
     if (this.trades.some((t) => t.from === p.id)) return;
+    // Asking again the moment you were turned down is how two bots end up
+    // pestering each other every turn for the rest of the game. Give it a
+    // few turns, and never re-send an offer that was just refused.
+    if (this.turnCount - (p.lastAskedAt ?? -99) < 6) return;
     const wants = this.nearSets(p.id);
     if (!wants.length) return;
 
@@ -1777,6 +1832,8 @@ export class GameRoom {
       ));
       if (!theirs) continue;
       if ((this.own(want.missing).houses || 0) > 0 || (this.own(theirs.missing).houses || 0) > 0) continue;
+      if (p.refused?.includes(want.missing)) continue;
+      p.lastAskedAt = this.turnCount;
       this.proposeTrade(p.id, {
         to: holder.id,
         give: { money: 0, tiles: [theirs.missing], cards: 0 },
@@ -1786,7 +1843,7 @@ export class GameRoom {
         name: holder.name,
         mine: this.tile(want.missing).name,
         yours: this.tile(theirs.missing).name,
-      }, { always: true, delay: 700 });
+      }, { delay: 700 });
       return;
     }
 
@@ -1801,6 +1858,8 @@ export class GameRoom {
       const tile = this.tile(want.missing);
       const offer = Math.min(p.money - 300, Math.round(tile.price * 1.9));
       if (offer < tile.price) continue;
+      if (p.refused?.includes(want.missing)) continue;
+      p.lastAskedAt = this.turnCount;
       this.proposeTrade(p.id, {
         to: holder.id,
         give: { money: offer, tiles: [], cards: 0 },
@@ -1809,7 +1868,7 @@ export class GameRoom {
       // Ahead-of-me players get the friendly pressure; everyone else gets asked.
       const leading = this.netWorth(holder) > this.netWorth(p) * 1.2;
       this.botSay(p, leading ? 'nudge' : 'wantTile',
-        { name: holder.name, tile: tile.name }, { always: true, delay: 900 });
+        { name: holder.name, tile: tile.name }, { delay: 900 });
       return;
     }
   }

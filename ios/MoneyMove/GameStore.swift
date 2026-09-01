@@ -842,7 +842,7 @@ final class GameStore: ObservableObject {
         let s = SocketIOClient()
         s.onStatus = { [weak self] status in
             Task { @MainActor in
-                guard status == .connected, let self else { return }
+                guard status == .connected else { return }
                 s.emit("join", [[
                     "roomId": roomId,
                     "token": guestToken,
@@ -935,3 +935,4 @@ enum Haptics {
     static func warn() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
     static func turn() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
 }
+
