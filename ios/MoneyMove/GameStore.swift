@@ -47,6 +47,11 @@ final class GameStore: ObservableObject {
     @Published var connection: SocketIOClient.Status = .disconnected
     @Published var toast: ToastMessage?
     @Published var cardPopup: LastCard?
+    /// The deadlock rule, raised as a card the one time it is news.
+    @Published var reliefPopup: ReliefCard?
+    /// Which explainer this device has already read. Kept on disk against its
+    /// server timestamp so rejoining the same table doesn't re-teach the rule.
+    @AppStorage("mm.reliefSeen") private var reliefSeenAt: Double = 0
     @Published var turnBanner: PlayerState?
     @Published var showGameOver = false
     /// This device's seat was taken out by the clock — drives the full-screen
@@ -130,6 +135,81 @@ final class GameStore: ObservableObject {
         if let data = try? JSONEncoder().encode(matchHistory) {
             UserDefaults.standard.set(data, forKey: "mm.history")
         }
+    }
+
+    // MARK: - games left unfinished
+
+    /// A table this device walked away from mid-game. The server holds the
+    /// seat (a bot plays it), so these stay rejoinable until the game actually
+    /// ends — unlike MatchRecord, which is the story of a game already over.
+    struct UnfinishedGame: Codable, Identifiable, Equatable {
+        var roomId: String
+        var mapName: String
+        var mapIcon: String
+        var players: [String]
+        /// Last moment this device saw the table live.
+        var leftAt: Date
+        /// Pass & play seats this device also held there, so a resume can put
+        /// every one of them back at the table.
+        var guests: Int
+
+        var id: String { roomId }
+    }
+
+    /// Newest first; five is as far back as a room code is worth keeping.
+    @Published var unfinishedGames: [UnfinishedGame] = {
+        guard let data = UserDefaults.standard.data(forKey: "mm.unfinished"),
+              let list = try? JSONDecoder().decode([UnfinishedGame].self, from: data) else { return [] }
+        return list
+    }()
+    static let maxUnfinished = 5
+    /// The table a resume is waiting to hear back from — see the check in
+    /// apply(), which is the only way to tell a live game from a dead code.
+    private var resumeCheck: String?
+    private var unfinishedSavedAt = Date.distantPast
+
+    private func saveUnfinished() {
+        unfinishedSavedAt = Date()
+        if let data = try? JSONEncoder().encode(unfinishedGames) {
+            UserDefaults.standard.set(data, forKey: "mm.unfinished")
+        }
+    }
+
+    /// Remember the table we are sitting at, so History can offer it back.
+    private func noteUnfinished(_ state: GameState) {
+        guard state.isPlaying, !state.id.isEmpty,
+              state.players.contains(where: { localIds.contains($0.id) }) else { return }
+        let entry = UnfinishedGame(roomId: state.id,
+                                   mapName: state.map.name,
+                                   mapIcon: state.map.icon ?? "",
+                                   players: state.players.map(\.name),
+                                   leftAt: Date(),
+                                   guests: guests.count)
+        let known = unfinishedGames.first { $0.roomId == state.id }
+        unfinishedGames.removeAll { $0.roomId == state.id }
+        unfinishedGames.insert(entry, at: 0)
+        unfinishedGames = Array(unfinishedGames.prefix(Self.maxUnfinished))
+        // Only the timestamp moves on most pushes, and writing the defaults
+        // once per dice roll buys nothing.
+        let sameTable = known?.players == entry.players && known?.mapName == entry.mapName
+            && known?.guests == entry.guests
+        if !sameTable || Date().timeIntervalSince(unfinishedSavedAt) > 20 { saveUnfinished() }
+    }
+
+    /// That game is over, or the room no longer exists: stop offering it.
+    func dropUnfinished(_ room: String) {
+        guard unfinishedGames.contains(where: { $0.roomId == room }) || lastRoom == room else { return }
+        unfinishedGames.removeAll { $0.roomId == room }
+        if lastRoom == room { lastRoom = ""; lastGuests = 0 }
+        saveUnfinished()
+    }
+
+    /// Rejoin one of them. The newest entry is the same table the landing
+    /// screen's Continue card points at, so both go down the same path.
+    func resume(_ game: UnfinishedGame) {
+        lastRoom = game.roomId
+        lastGuests = game.guests
+        continueGame()
     }
 
     // MARK: - wallet & store
@@ -238,6 +318,24 @@ final class GameStore: ObservableObject {
         let old = state
         state = new
 
+        // Coming back to a table the server has already forgotten: a join on a
+        // dead code quietly opens a NEW room under it, so the game never
+        // "fails" to load — it just isn't there. An empty lobby where a game
+        // in progress should be is exactly what gone looks like.
+        if let want = resumeCheck, new.id == want {
+            resumeCheck = nil
+            if new.isLobby, new.players.count <= guests.count + 1 {
+                dropUnfinished(want)
+                showToast("That table is gone — the game finished without you", isError: true)
+                leaveRoom()
+                return
+            }
+        }
+
+        // Keep History's list of tables still waiting for this device honest.
+        noteUnfinished(new)
+        if new.isEnded { dropUnfinished(new.id) }
+
         // Money moved: float a +/- badge on everyone whose cash changed, and
         // give the seats on THIS device their own gain/loss sound — losing
         // money makes that little "ishh", gaining rings like a till.
@@ -310,6 +408,17 @@ final class GameStore: ObservableObject {
                     SoundKit.shared.card()
                 }
             }
+        }
+
+        // The deadlock rule explains itself the one time it becomes possible.
+        // The server keeps the card in every push from then on, so the `at`
+        // stamp — not its presence — is what makes it news, and the stamp is
+        // remembered on disk so a rejoin doesn't teach the rule twice.
+        if let relief = new.reliefCard, relief.at != reliefSeenAt {
+            reliefSeenAt = relief.at
+            withAnimation { reliefPopup = relief }
+            SoundKit.shared.card()
+            Haptics.tap()
         }
 
         // turn banner — when the turn passes to someone new
@@ -479,6 +588,7 @@ final class GameStore: ObservableObject {
         quickSearching = false
         roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
         lastRoom = roomId ?? ""
+        resumeCheck = nil
         // A new table starts with only this seat on the device; continueGame()
         // reads the old count before calling in, so it keeps its guests.
         lastGuests = 0
@@ -497,7 +607,11 @@ final class GameStore: ObservableObject {
     func continueGame() {
         guard !lastRoom.isEmpty else { return }
         let guestsToRestore = lastGuests
-        join(roomId: lastRoom)
+        let want = lastRoom
+        join(roomId: want)
+        // join() clears this for a plain join; a resume is the one case where
+        // the room is expected to already hold a game of ours.
+        resumeCheck = want
         guard let url = serverURL, let roomId else { return }
         for number in 2...(max(2, guestsToRestore + 1)) where guestsToRestore > 0 {
             let guestToken = "\(token)_p\(number)"
@@ -520,9 +634,12 @@ final class GameStore: ObservableObject {
     }
 
     func leaveRoom() {
-        // Walking out mid-game still deserves a History line.
+        // Walking out mid-game still deserves a History line — and the table
+        // itself goes on the "still open" list with the time we left on it.
         if let state, state.isPlaying {
             recordMatch(state, outcome: "left")
+            noteUnfinished(state)
+            saveUnfinished()
         }
         guests.forEach { $0.socket.close() }
         guests = []
@@ -537,6 +654,7 @@ final class GameStore: ObservableObject {
         lastCardAt = 0
         lastRoom = ""
         lastGuests = 0
+        resumeCheck = nil
     }
 
     // MARK: - intents (mirror public/js actions)
@@ -583,7 +701,12 @@ final class GameStore: ObservableObject {
     func declareBankrupt() { emitAsActive("bankrupt") }
     /// Walk out of a live game for good: the deeds go back to the bank, the
     /// seat stays as a spectator, and it costs a point of karma.
-    func quitGame() { emit("quit") }
+    func quitGame() {
+        // Leaving for good: there is nothing here to come back to, so the
+        // table drops off History's "still open" list with it.
+        if let roomId { dropUnfinished(roomId) }
+        emit("quit")
+    }
 
     /// Hand a dropped player another minute. The server counts one vote per
     /// seat, so a pass & play device speaks for every seat it holds — otherwise

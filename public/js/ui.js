@@ -418,11 +418,16 @@ function tradeSig(state) {
     .join();
 }
 
+/** A lap walked while deadlocked changes the panel, so it has to be in the key. */
+function lapSig(state) {
+  return state.players.map((p) => p.blockedLaps || 0).join('');
+}
+
 export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   const sig = state.status === 'lobby'
     ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${state.quickStartAt || 0}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}`;
+    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   if (state.status !== 'lobby') renderMyStuff(state, meId, el, actions);
@@ -523,7 +528,10 @@ function renderSettings(state, meId, el, actions) {
       </div>
       <div class="setting">
         <span class="s-icon">${icon('key')}</span>
-        <div class="s-body"><div class="s-name">Private room</div><div class="s-desc">Only people with the link can join</div></div>
+        <div class="s-body"><div class="s-name">Private room</div>
+          <div class="s-desc">${state.settings.isPrivate
+            ? 'Only people with the link can join. Switch it off to list this table under All rooms.'
+            : 'Listed under All rooms — anyone can take a free seat.'}</div></div>
         <label class="switch"><input type="checkbox" data-set="isPrivate" ${state.settings.isPrivate ? 'checked' : ''} ${dis} />
           <span class="track"></span><span class="thumb"></span></label>
       </div>
@@ -666,6 +674,48 @@ function raiseCashPanel(state, meId) {
     </div>`;
 }
 
+// Laps a blocked player walks before the board steps in, and what the street
+// then costs. Copy only — the server owns the rule.
+const RELIEF_LAPS = 4;
+const RELIEF_MARKUP = '1.7x';
+
+/**
+ * The deadlock rule counts laps in the background, which is exactly the sort of
+ * thing a player discovers only when a street vanishes from under them. It gets
+ * a quiet panel instead of a toast per lap: how far the count has got, and what
+ * lands at the end of it — read from both sides of the table.
+ */
+function deadlockPanel(state, meId) {
+  if (state.status !== 'playing') return '';
+  const stuck = state.players.find((p) => (p.blockedLaps || 0) > 0 && !p.bankrupt);
+  if (!stuck) return '';
+
+  const walked = Math.min(RELIEF_LAPS, stuck.blockedLaps);
+  const left = Math.max(0, RELIEF_LAPS - walked);
+  const laps = left === 1 ? 'one more lap' : `${left} more laps`;
+  const pips = Array.from({ length: RELIEF_LAPS }, (_, i) =>
+    `<i class="${i < walked ? 'on' : ''}"></i>`).join('');
+
+  const body = stuck.id === meId
+    ? `You hold all but one street of a colour, so you can never build.
+       ${left ? `After ${laps} past START the` : 'On your next lap past START the'}
+       street you are missing changes hands for ${RELIEF_MARKUP} its price — if you
+       can pay for it on the day. A trade gets there sooner.`
+    : `${escapeHtml(stuck.name)} holds all but one street of a colour and cannot build.
+       ${left ? `After ${laps} past START the` : 'On their next lap past START the'}
+       board moves that street to them for ${RELIEF_MARKUP} its price. Trading it
+       yourself is the version you set the terms of.`;
+
+  return `<div class="panel deadlock">
+      <div class="panel-title">${icon('scales')} Deadlock rule</div>
+      <div class="dl-laps">
+        <span class="lap-pips">${pips}</span>
+        <span class="dl-count">${walked} of ${RELIEF_LAPS} laps</span>
+      </div>
+      <div class="dim small">${body}</div>
+    </div>`;
+}
+
 function renderMyStuff(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   // Once the game is over — or this seat is out of it — the deed buttons only
@@ -713,6 +763,7 @@ function renderMyStuff(state, meId, el, actions) {
 
   el.innerHTML = `
     ${raiseCashPanel(state, meId)}
+    ${deadlockPanel(state, meId)}
     ${incoming.map((t) => tradeCard(state, t, meId)).join('')}
     ${outgoing.map((t) => `<div class="panel">
       <div class="panel-title">Offer sent</div>
@@ -1039,17 +1090,19 @@ const clockText = (secs) => (secs >= 60
 
 export function syncTurnClock(state, meId) {
   const playing = state.status === 'playing';
+  // A table where one person is playing the house's seats runs no shot clock,
+  // and the server says so by sending no deadline. That is not "zero seconds
+  // left" — there is nothing to count, so nothing is shown.
   const live = playing && state.turn?.endsAt ? state.turn : null;
   clock.endsAt = live?.endsAt || null;
   clock.playerId = live?.playerId || null;
   clock.mine = !!live && live.playerId === meId;
   clock.total = Math.max(0, Number(state.settings?.turnSeconds) || 0) * 1000;
   paintTurnClock();
-  // Every turn carries a deadline now, the seats the house plays included, so
-  // the ticker runs for the whole game instead of being torn down and rebuilt
-  // around each turn — a clock that stops between turns reads as a dead table.
-  if (playing && !clockTimer) clockTimer = setInterval(paintTurnClock, 200);
-  else if (!playing && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+  // Turns carry their own deadline, so the ticker runs across the whole game
+  // rather than being torn down and rebuilt around each one — a clock that
+  // stops between turns reads as a dead table.
+  if (playing && clock.endsAt && !clockTimer) clockTimer = setInterval(paintTurnClock, 200);
 }
 
 /** Whole seconds left on the turn, or null when this table runs no shot clock. */
@@ -1070,17 +1123,23 @@ function paintTurnClock() {
     if (!el) return;
     const on = secs !== null && card.dataset.pid === clock.playerId;
     el.classList.toggle('hidden', !on);
-    if (!on) return;
+    // Emptied rather than left as it was: a hidden chip still holding "0s" is
+    // one stylesheet accident away from being on screen.
+    if (!on) { el.textContent = ''; el.classList.remove('urgent'); return; }
     el.textContent = clockText(secs);
     el.classList.toggle('urgent', urgent);
   });
 
   const well = $('#centerClock');
-  if (!well) return;
-  well.classList.toggle('hidden', secs === null);
-  if (secs === null) return;
-  well.textContent = clock.mine ? `${clockText(secs)} left on your turn` : clockText(secs);
-  well.classList.toggle('urgent', urgent);
+  if (well) {
+    well.classList.toggle('hidden', secs === null);
+    well.classList.toggle('urgent', secs !== null && urgent);
+    well.textContent = secs === null ? ''
+      : clock.mine ? `${clockText(secs)} left on your turn` : clockText(secs);
+  }
+
+  // Nothing to count — stop the ticker until a turn arrives that has an end.
+  if (secs === null && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
 }
 
 // ──────────────────────────────────────────── holding a dropped chair ──
@@ -2007,12 +2066,20 @@ export function showGameOver(state, meId, actions) {
 
 // ──────────────────────────────────────────────────────────── card popup ──
 let cardTimer = null;
-export function showCard(card) {
+const CARD_ART = { treasure: 'toolbox', surprise: 'question', rule: 'scales' };
+
+/**
+ * The deck cards, and anything else that deserves the same treatment: a card
+ * carrying its own `title` names itself, and `hold` buys reading time for the
+ * ones that are a rule rather than a payout.
+ */
+export function showCard(card, { hold = 3400 } = {}) {
   const el = $('#cardPopup');
   el.className = `card-popup ${card.deck}`;
+  const kind = card.title || (card.deck === 'treasure' ? 'Treasure' : 'Surprise');
   el.innerHTML = `
-    <div class="cp-ico">${icon(card.deck === 'treasure' ? 'toolbox' : 'question')}</div>
-    <div class="cp-kind">${card.deck === 'treasure' ? 'Treasure' : 'Surprise'}</div>
+    <div class="cp-ico">${icon(CARD_ART[card.deck] || 'question')}</div>
+    <div class="cp-kind">${escapeHtml(kind)}</div>
     <div class="cp-text">${escapeHtml(card.text)}</div>
     <div class="cp-hint">tap to dismiss</div>`;
   // It lands square on the action dock, so a player who has already read it
@@ -2020,7 +2087,7 @@ export function showCard(card) {
   el.onclick = () => { clearTimeout(cardTimer); el.classList.add('hidden'); };
   sfx.card();
   clearTimeout(cardTimer);
-  cardTimer = setTimeout(() => el.classList.add('hidden'), 3400);
+  cardTimer = setTimeout(() => el.classList.add('hidden'), hold);
 }
 
 // ────────────────────────────────────────────────────────────── confetti ──

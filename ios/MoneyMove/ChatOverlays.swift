@@ -360,31 +360,36 @@ struct AuctionBox: View {
         .padding(.horizontal, 6)
     }
 
+    /// No deadline, no countdown: an auction at a table with nobody to wait
+    /// for runs until it is settled, and a bar pinned at 0s would be a lie.
+    @ViewBuilder
     private func countdownBar(_ P: Palette) -> some View {
-        TimelineView(.animation) { context in
-            let now = context.date.timeIntervalSince1970
-            let remaining = max(0, (auction.endsAt ?? 0) / 1000 - now)
-            let fraction = min(1, remaining / windowSeconds)
-            HStack(spacing: 7) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(P.sunken)
-                        Capsule().fill(remaining <= 5 ? P.bad : P.gold)
-                            .frame(width: max(0, geo.size.width * fraction))
+        if let endsAt = auction.endsAt {
+            TimelineView(.animation) { context in
+                let now = context.date.timeIntervalSince1970
+                let remaining = max(0, endsAt / 1000 - now)
+                let fraction = min(1, remaining / windowSeconds)
+                HStack(spacing: 7) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(P.sunken)
+                            Capsule().fill(remaining <= 5 ? P.bad : P.gold)
+                                .frame(width: max(0, geo.size.width * fraction))
+                        }
                     }
+                    .frame(height: 5)
+                    // Every other clock in the game shows a number; this one used
+                    // to be a bar you had to guess at.
+                    Text("\(Int(ceil(remaining)))s")
+                        .font(.system(size: 10.5, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(remaining <= 5 ? P.bad : P.ink3)
+                        .fixedSize()
                 }
-                .frame(height: 5)
-                // Every other clock in the game shows a number; this one used
-                // to be a bar you had to guess at.
-                Text("\(Int(ceil(remaining)))s")
-                    .font(.system(size: 10.5, weight: .heavy, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(remaining <= 5 ? P.bad : P.ink3)
-                    .fixedSize()
             }
+            .frame(height: 14)
+            .padding(.vertical, 2)
         }
-        .frame(height: 14)
-        .padding(.vertical, 2)
     }
 
     @ViewBuilder

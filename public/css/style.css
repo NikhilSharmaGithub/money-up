@@ -452,12 +452,49 @@ select { cursor: pointer; }
 .public-rooms { margin-top: 18px; display: grid; gap: 6px; }
 .pr-title { font-size: 11.5px; color: var(--ink-3); text-align: left; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; }
 .public-room {
-  display: flex; justify-content: space-between; align-items: center; width: 100%;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%;
   background: var(--paper-2); border: 1px solid var(--rule);
   border-radius: var(--r-sm); padding: 9px 13px; font-size: 13px; cursor: pointer;
   color: var(--ink); transition: border-color .15s, background .15s;
 }
 .public-room:hover { border-color: var(--red); background: var(--red-soft); }
+.pr-name {
+  display: flex; align-items: center; gap: 6px; font-weight: 650;
+  /* "The Great White North" on a narrow phone must not shove the room code and
+     its tag off the row. */
+  min-width: 0; overflow: hidden; white-space: nowrap;
+}
+.pr-meta { display: flex; align-items: center; gap: 8px; flex: none; }
+.pr-tag {
+  font-style: normal; font-size: 9.5px; font-weight: 800; letter-spacing: .7px;
+  text-transform: uppercase; border-radius: 99px; padding: 2px 7px;
+  border: 1px solid currentColor;
+}
+.pr-tag.open { color: var(--good); }
+.pr-tag.busy { color: var(--ink-3); }
+/* A game already under way is still worth seeing — it is the difference between
+   "nobody plays this" and "there is a table on right now" — so it is listed and
+   labelled rather than hidden. It reads as a room to watch, not a seat to take. */
+.public-room.busy { background: transparent; border-style: dashed; color: var(--ink-2); }
+.public-room.busy:hover { border-color: var(--rule-2); background: var(--paper-2); }
+
+/* ---- unfinished games ---- */
+.resume-list { display: grid; gap: 6px; margin: -6px 0 14px; text-align: left; }
+.resume-row { display: flex; gap: 6px; align-items: stretch; }
+.resume-go {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left;
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: 8px 12px; cursor: pointer; color: var(--ink);
+  transition: border-color .15s, background .15s;
+}
+.resume-go:hover { border-color: var(--gold); background: var(--gold-soft); }
+.rr-main { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-sub { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rr-x {
+  flex: none; width: 30px; background: none; border: 1px solid var(--rule);
+  border-radius: var(--r-sm); color: var(--ink-3); font-size: 15px; cursor: pointer;
+}
+.rr-x:hover { color: var(--bad); border-color: var(--bad); }
 
 .landing-feats { display: flex; justify-content: center; gap: 30px; margin-top: 24px; }
 .landing-feats div { display: flex; flex-direction: column; }
@@ -1177,6 +1214,11 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   border-color: var(--ink-surprise); background: var(--tile-surprise);
 }
 .card-popup.surprise .cp-kind { color: var(--ink-surprise); }
+/* Not a card drawn off a deck — the house explaining one of its own rules. It
+   wears the brass accent every table has rather than a deck's colours. */
+.card-popup.rule { border-color: var(--gold); background: var(--gold-soft); }
+.card-popup.rule .cp-kind { color: var(--gold); }
+.card-popup.rule .cp-text { font-size: 14px; font-weight: 600; }
 .cp-ico { font-size: 40px; }
 .cp-kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-3); margin: 7px 0 9px; font-weight: 750; }
 .cp-text { font-size: 15.5px; line-height: 1.5; font-weight: 650; color: var(--ink); }
@@ -1571,6 +1613,18 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 }
 .one-away span { flex: 1; min-width: 120px; }
 .one-away b { color: var(--ink); font-weight: 800; }
+
+/* ── the deadlock rule counting laps in the background ── */
+/* Calm on purpose: this is a rule ticking over several turns, not an alarm. */
+.panel.deadlock { border-color: color-mix(in srgb, var(--gold) 45%, var(--rule)); }
+.dl-laps { display: flex; align-items: center; gap: 9px; margin: 2px 0 8px; }
+.lap-pips { display: flex; gap: 5px; }
+.lap-pips i {
+  width: 13px; height: 6px; border-radius: 99px;
+  background: var(--rule-2); transition: background .3s;
+}
+.lap-pips i.on { background: var(--gold); }
+.dl-count { font-size: 11px; font-weight: 800; letter-spacing: .4px; color: var(--gold); }
 
 /* ── owing money: the shortfall, then the biggest levers ── */
 .raise-panel { border-color: var(--bad); }

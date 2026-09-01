@@ -21,6 +21,7 @@ struct ActionPanel: View {
 
             if store.isMyTurn, let turn = store.state?.turn {
                 turnHeader(P)
+                deadlockLine(P)
                 myTurnControls(turn: turn, P: P)
             } else if store.state?.isPlaying == true {
                 waitingRow(P)
@@ -84,11 +85,29 @@ struct ActionPanel: View {
                     .foregroundStyle(P.ink3)
             }
             Spacer(minLength: 6)
-            if let endsAt = store.state?.turn?.endsAt {
-                TurnClock(endsAt: endsAt, compact: true)
-            }
+            TurnClock(endsAt: store.state?.turn?.endsAt, compact: true)
         }
         .padding(.horizontal, 2)
+    }
+
+    /// The deadlock rule is counting for this seat. It says the number and the
+    /// way out, once per turn, and then gets out of the way — the rule already
+    /// introduced itself as a card the first time it could ever apply.
+    @ViewBuilder
+    private func deadlockLine(_ P: Palette) -> some View {
+        if let me = store.me, me.lapsBlocked > 0, !me.isBankrupt {
+            HStack(spacing: 6) {
+                Art.icon(.scales, size: 13, tint: P.gold)
+                Text("\(me.lapsToRelief) lap\(me.lapsToRelief == 1 ? "" : "s") until the street you're missing changes hands — or trade for it first.")
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 9)
+            .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
     }
 
     @ViewBuilder
@@ -236,10 +255,9 @@ struct ActionPanel: View {
             }
             Spacer()
             // The clock runs on every turn, not just yours — watching someone
-            // else's tick down is what makes the wait readable.
-            if let endsAt = store.state?.turn?.endsAt {
-                TurnClock(endsAt: endsAt, compact: true)
-            }
+            // else's tick down is what makes the wait readable. A table with
+            // only one person at it has no clock, and then it shows nothing.
+            TurnClock(endsAt: store.state?.turn?.endsAt, compact: true)
             ProgressView().tint(P.red).scaleEffect(0.85)
         }
         .padding(.horizontal, 4)

@@ -31,6 +31,10 @@ struct GameState: Codable, Equatable {
     var winner: WinnerInfo?
     var lastCard: LastCard?
     var lastMove: LastMove?
+    /// The deadlock rule's one-time explainer, set the first time this table
+    /// could ever hit it. It rides every push from then on, so it is the `at`
+    /// stamp — not its presence — that says whether it is news.
+    var reliefCard: ReliefCard?
     var history: [WorthPoint]?              // net-worth series, sent once the game ends
     var version: Int
 
@@ -138,10 +142,18 @@ struct PlayerState: Codable, Equatable, Identifiable {
     /// spectator, and the deeds went back to the bank.
     var timedOut: Bool?
     var removedFor: String?                 // "timeout" | "quit"
+    /// Laps walked while the deadlock rule was counting for this seat, 0...4.
+    var blockedLaps: Int?
 
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }
     var wasRemoved: Bool { timedOut ?? false }
+
+    /// Laps the server has counted, and the same number the way a player wants
+    /// to read it — how many are LEFT. RELIEF_LAPS in server/game.js.
+    static let reliefLaps = 4
+    var lapsBlocked: Int { blockedLaps ?? 0 }
+    var lapsToRelief: Int { max(0, PlayerState.reliefLaps - lapsBlocked) }
 }
 
 /// A seat the table is waiting on. The first couple of extensions are a favour
@@ -254,6 +266,14 @@ struct WinnerInfo: Codable, Equatable {
     var id: String
     var name: String
     var color: String
+}
+
+/// The house explaining a rule rather than the deck dealing a card: shown once
+/// to both players the first time a two-player table could deadlock.
+struct ReliefCard: Codable, Equatable {
+    var title: String
+    var text: String
+    var at: Double
 }
 
 struct LastCard: Codable, Equatable {

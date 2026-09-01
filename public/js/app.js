@@ -113,7 +113,7 @@ const actions = {
   // A finished board is a dead end without a way off it, so the result sheet
   // and the well can both send you home.
   goHome: () => {
-    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+    forgetGame(roomId);
     goHome();
   },
 };
@@ -126,15 +126,8 @@ function showLanding() {
   // and its placeholder, never a name someone else chose for you.
   $('#nickInput').value = nickname || '';
 
-  // A table you stepped away from mid-game gets a way back in.
-  let lastRoom = null;
-  try { lastRoom = localStorage.getItem('moneymove:lastRoom'); } catch { /* private mode */ }
-  const cont = $('#continueBtn');
-  cont.classList.toggle('hidden', !lastRoom);
-  if (lastRoom) {
-    cont.innerHTML = `${icon('replay')} Continue game — room ${escapeHtml(lastRoom)}`;
-    cont.onclick = () => { sfx.click(); resuming = true; go(lastRoom); };
-  }
+  // Tables stepped away from mid-game get a way back in.
+  renderResumeList();
 
   refreshWallet();
   watchPublicRooms();
@@ -221,21 +214,47 @@ function initGoogleSignIn() {
 // Open tables come and go while someone is still reading the landing, so the
 // list keeps itself honest instead of showing whatever was true on arrival.
 let roomsTimer = null;
+// What the last poll saw, so a remembered game can say whether it is still on.
+let liveRooms = new Map();
 
-function loadPublicRooms() {
+/**
+ * Every public table, not only the ones still filling up. A game already under
+ * way can't be joined — but "there is a game on right now" is a far better
+ * thing to read than an empty box, so it is listed and labelled as what it is.
+ */
+function loadRoomList() {
   fetch(api('/api/rooms')).then((r) => r.json()).then((rooms) => {
+    if (!Array.isArray(rooms)) return;
+    // The same answer settles which remembered games are still there.
+    pruneGamesAgainst(rooms);
+    renderResumeList();
+
     const el = $('#publicRooms');
     // Don't paint over the "can't reach the server" panel that shares this slot.
     if (el.querySelector('.server-down')) return;
     if (!rooms.length) {
-      el.innerHTML = `<div class="pr-title">Public rooms</div>
-        <div class="empty small">No open tables right now — Play now opens one.</div>`;
+      el.innerHTML = `<div class="pr-title">All rooms</div>
+        <div class="empty small">Not a single table open right now — yours would be the
+          first. <button class="link-btn" id="prPlayNow" type="button">Play now</button>
+          opens one, and it shows up here for everyone else.</div>`;
+      $('#prPlayNow').onclick = () => $('#quickBtn').click();
       return;
     }
-    el.innerHTML = '<div class="pr-title">Public rooms</div>' + rooms.map((r) => `
-      <button class="public-room" data-room="${escapeHtml(r.id)}">
-        <span>${escapeHtml(r.map)}</span><span class="dim">${r.players}/${r.maxPlayers} · ${escapeHtml(r.id)}</span>
-      </button>`).join('');
+    el.innerHTML = '<div class="pr-title">All rooms</div>' + rooms.map((r) => {
+      const playing = r.status === 'playing';
+      const label = r.joinable ? 'Join' : playing ? 'In progress' : 'Full';
+      const title = r.joinable ? `Take a seat at ${r.map}`
+        : playing ? 'Already under way — you can watch this one'
+        : 'Every seat is taken — you can watch this one';
+      return `<button class="public-room ${r.joinable ? '' : 'busy'}" data-room="${escapeHtml(r.id)}"
+          title="${escapeHtml(title)}">
+        <span class="pr-name">${r.quick ? icon('bolt') : ''}${escapeHtml(r.map)}</span>
+        <span class="pr-meta">
+          <span class="dim">${r.players}/${r.maxPlayers} · ${escapeHtml(r.id)}</span>
+          <i class="pr-tag ${r.joinable ? 'open' : 'busy'}">${label}</i>
+        </span>
+      </button>`;
+    }).join('');
     el.querySelectorAll('[data-room]').forEach((c) => { c.onclick = () => go(c.dataset.room); });
   }).catch(() => {});
 }
@@ -245,8 +264,8 @@ function watchPublicRooms() {
   // A "can't reach the server" panel from an earlier attempt shares this slot
   // and the poll leaves it alone; arriving at the landing clears the slate.
   $('#publicRooms').innerHTML = '';
-  loadPublicRooms();
-  roomsTimer = setInterval(loadPublicRooms, 8000);
+  loadRoomList();
+  roomsTimer = setInterval(loadRoomList, 8000);
 }
 
 function go(id) {
@@ -442,9 +461,7 @@ function boot() {
     resuming = false;
     // Reached via browser Back mid-game: release the seat properly (a held
     // socket would stall the room) and leave a way back in.
-    if (state?.status === 'playing' && roomId) {
-      try { localStorage.setItem(LAST_ROOM_KEY, roomId); } catch { /* blocked */ }
-    }
+    rememberGame();
     if (socket) { socket.close(); socket = null; }
     state = null;
     roomId = null;
@@ -481,10 +498,15 @@ function boot() {
       lastAuctionBid = s.auction?.bid || 0;
       if (resuming) {
         resuming = false;
-        // An empty lobby where a game was is the table having been packed away.
-        if (s.status === 'lobby' && s.players.length <= 1) {
-          toast('That table has closed — this is a fresh room with the same code');
-          try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        // An empty lobby where a game was is the table having been packed away,
+        // and a finished one is nothing to come back to. Either way the shelf
+        // must not keep offering it — this is the "join failed" half of the
+        // check that /api/rooms cannot make for a private room.
+        if (s.status === 'ended' || (s.status === 'lobby' && s.players.length <= 1)) {
+          toast(s.status === 'ended'
+            ? 'That game finished without you'
+            : 'That table has closed — this is a fresh room with the same code');
+          forgetGame(roomId);
         }
       }
     }
@@ -551,15 +573,14 @@ function render() {
   if (state.lastCard && state.lastCard.at !== lastCardAt) {
     lastCardAt = state.lastCard.at;
     const card = state.lastCard;
-    const mv = state.lastMove;
-    const steps = mv && mv.steps && Math.abs(mv.at - card.at) < 2500 ? Math.abs(mv.steps) : 0;
-    const delay = steps ? steps * 120 + 350 : 0;
     setTimeout(() => {
       if (state?.lastCard?.at !== card.at) return; // superseded meanwhile
       $('#cardPopup').classList.remove('hidden');
       showCard(card);
-    }, delay);
+    }, moveDelay(card.at));
   }
+
+  safe('relief', showReliefCardOnce);
 
   // removed from play — the clock ran out on this seat. A quit is the player's
   // own doing, so it never gets the "your time ran out" story.
@@ -568,7 +589,7 @@ function render() {
     removedShown = true;
     showRemovedOverlay({
       onHome: () => {
-        try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        forgetGame(roomId);
         goHome();
       },
       onWatch: () => toast('Staying on as a spectator'),
@@ -578,8 +599,8 @@ function render() {
 
   // game over
   if (state.status === 'ended') {
-    // Nothing left to come back to, so the home screen must stop offering it.
-    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+    // Nothing left to come back to, so the shelf must stop offering it.
+    forgetGame(roomId);
   }
   if (state.status === 'ended' && !winnerShown) {
     winnerShown = true;
@@ -590,6 +611,46 @@ function render() {
     setTimeout(() => refreshWallet({ celebrate: true }), 1200);
   }
   if (state.status !== 'ended') winnerShown = false;
+}
+
+/** Long enough for the piece to finish walking to whatever caused the card. */
+function moveDelay(at) {
+  const mv = state?.lastMove;
+  const steps = mv && mv.steps && Math.abs(mv.at - at) < 2500 ? Math.abs(mv.steps) : 0;
+  return steps ? steps * 120 + 350 : 0;
+}
+
+// ─────────────────────────────────────────────────────── deadlock rule ──
+// The server explains the deadlock rule once, the first time a table could ever
+// hit it, by hanging a card on the state. State is pushed dozens of times a
+// turn and survives a refresh, so "once" has to be remembered here: in memory
+// for this session, and in storage for the next one. A handful of marks is
+// plenty — one per table, and pass-and-play windows share the same storage.
+const RELIEF_SEEN_KEY = 'moneymove:reliefSeen';
+let reliefShownAt = 0;
+
+function reliefMarks() {
+  return (safeGet(localStorage, RELIEF_SEEN_KEY) || '').split('|').filter(Boolean);
+}
+
+function showReliefCardOnce() {
+  const rc = state.reliefCard;
+  if (!rc || reliefShownAt === rc.at) return;
+  // Per identity as well as per table: two pass-and-play windows on one machine
+  // share a localStorage, and both players are meant to read this.
+  const mark = `${roomId}:${rc.at}:${meId}`;
+  reliefShownAt = rc.at;
+  if (reliefMarks().includes(mark)) return;
+  safeSet(localStorage, RELIEF_SEEN_KEY, [...reliefMarks().slice(-3), mark].join('|'));
+
+  // It lands as someone passes START, so it waits for the piece to get there
+  // instead of covering the board mid-step.
+  setTimeout(() => {
+    if (state?.reliefCard?.at !== rc.at) return;
+    $('#cardPopup').classList.remove('hidden');
+    // A rule to read, not a payout to glance at — it stays up long enough.
+    showCard({ deck: 'rule', title: rc.title, text: rc.text }, { hold: 12000 });
+  }, moveDelay(rc.at));
 }
 
 /** Turns fresh log lines into sound effects. */
@@ -657,7 +718,155 @@ $('#addLocalBtn').addEventListener('click', () => {
   else toast('New window opened — that player picks their own name and colour');
 });
 
-const LAST_ROOM_KEY = 'moneymove:lastRoom';
+// ────────────────────────────────────────────────── unfinished games ──
+// Walking out of a live table is usually "back in a minute", so the browser
+// keeps a short shelf of the games it left rather than only the last one. Each
+// entry carries enough to recognise the table without asking the server: the
+// board, when you left, and who was sitting at it.
+const GAMES_KEY = 'moneymove:games';
+const LAST_ROOM_KEY = 'moneymove:lastRoom'; // the single room this replaced
+const MAX_GAMES = 5;
+// The server stops a game nobody is watching after a few minutes and clears the
+// room out half an hour later, so an entry this old cannot still be a table.
+const GAME_TTL = 12 * 60 * 60 * 1000;
+
+function writeGames(list) {
+  safeSet(localStorage, GAMES_KEY, JSON.stringify(list.slice(0, MAX_GAMES)));
+}
+
+/** The shelf, oldest junk and stale entries already dropped. */
+function readGames() {
+  const raw = safeGet(localStorage, GAMES_KEY);
+  let list = [];
+  try { list = JSON.parse(raw || '[]'); } catch { /* someone else's key */ }
+  if (!Array.isArray(list)) list = [];
+
+  // Anyone mid-upgrade still has the old single room in hand; it becomes the
+  // first entry on the shelf instead of being thrown away.
+  const old = safeGet(localStorage, LAST_ROOM_KEY);
+  if (old) {
+    try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+    if (!list.some((g) => g && g.id === old)) list.unshift({ id: old, at: Date.now(), map: '', players: [] });
+  }
+
+  const fresh = list
+    .filter((g) => g && typeof g.id === 'string' && Date.now() - (g.at || 0) < GAME_TTL)
+    .slice(0, MAX_GAMES);
+  // Only when something actually changed: this is read on every rooms poll.
+  if (JSON.stringify(fresh) !== (raw || '[]')) writeGames(fresh);
+  return fresh;
+}
+
+/** Called on the way out of a live table — newest first, five deep. */
+function rememberGame() {
+  if (!roomId || state?.status !== 'playing') return;
+  writeGames([{
+    id: roomId,
+    map: state.map?.name || '',
+    at: Date.now(),
+    // Two half-finished games are told apart by who you were playing, not by a
+    // five-letter code, so the rest of the table is worth keeping.
+    players: state.players
+      .filter((p) => p.id !== meId && !p.bankrupt && !p.timedOut)
+      .map((p) => p.name).slice(0, 8),
+    // A public table can be checked against /api/rooms later. A private one
+    // never appears there, so its absence would prove nothing.
+    open: !state.settings?.isPrivate,
+  }, ...readGames().filter((g) => g.id !== roomId)]);
+}
+
+function forgetGame(id) {
+  if (!id) return;
+  const list = readGames();
+  const kept = list.filter((g) => g.id !== id);
+  if (kept.length === list.length) return;
+  writeGames(kept);
+  renderResumeList();
+}
+
+/**
+ * A remembered public table that the server no longer lists has either finished
+ * or been packed away, so it comes off the shelf. A private one is never listed
+ * in the first place: those leave when a rejoin finds nothing, when the game
+ * ends under you, or when the entry simply ages out.
+ */
+function pruneGamesAgainst(rooms) {
+  liveRooms = new Map(rooms.map((r) => [r.id, r]));
+  const list = readGames();
+  const kept = list.filter((g) => !g.open || liveRooms.has(g.id));
+  if (kept.length !== list.length) writeGames(kept);
+}
+
+const agoText = (at) => {
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  return hrs === 1 ? 'an hour ago' : `${hrs} hours ago`;
+};
+
+/** "Ravi, Mo and 2 more" — a roster that fits on one line. */
+const whoText = (names) => {
+  if (!names?.length) return '';
+  if (names.length <= 3) return names.map(escapeHtml).join(', ');
+  return `${names.slice(0, 2).map(escapeHtml).join(', ')} and ${names.length - 2} more`;
+};
+
+function resumeGame(id) {
+  sfx.click();
+  resuming = true;
+  go(id);
+}
+
+let resumeHtml = '';
+
+/**
+ * The newest unfinished game keeps the big Continue button it always had; the
+ * ones behind it get a list, so a game left the day before is not lost the
+ * moment a second one is started.
+ */
+function renderResumeList() {
+  const games = readGames();
+  const cont = $('#continueBtn');
+  const list = $('#resumeList');
+  if (!cont || !list) return;
+
+  cont.classList.toggle('hidden', !games.length);
+  if (games[0]) {
+    const top = games[0];
+    cont.innerHTML = `${icon('replay')} Continue — ${top.map ? `${escapeHtml(top.map)} · ` : ''}room ${escapeHtml(top.id)}`;
+    cont.onclick = () => resumeGame(top.id);
+  }
+
+  const rest = games.slice(1);
+  list.classList.toggle('hidden', !rest.length);
+  const html = !rest.length ? '' : `<div class="pr-title">Also unfinished</div>${rest.map((g) => {
+    const live = liveRooms.get(g.id);
+    const who = whoText(g.players);
+    return `<div class="resume-row">
+        <button class="resume-go" data-resume="${escapeHtml(g.id)}" type="button">
+          <span class="rr-main">${escapeHtml(g.map || `Room ${g.id}`)}</span>
+          <span class="rr-sub">${who ? `${who} · ` : ''}left ${agoText(g.at)}${
+            live ? ` · ${live.status === 'playing' ? 'still on' : 'in the lobby'}` : ''}</span>
+        </button>
+        <button class="rr-x" data-forget="${escapeHtml(g.id)}" type="button"
+          title="Forget this game" aria-label="Forget this game">×</button>
+      </div>`;
+  }).join('')}`;
+
+  // The rooms poll calls this every few seconds. Repainting an unchanged list
+  // would move a row out from under a finger mid-tap.
+  if (html === resumeHtml) return;
+  resumeHtml = html;
+  list.innerHTML = html;
+
+  list.querySelectorAll('[data-resume]').forEach((b) => {
+    b.onclick = () => resumeGame(b.dataset.resume);
+  });
+  list.querySelectorAll('[data-forget]').forEach((b) => {
+    b.onclick = () => { sfx.click(); forgetGame(b.dataset.forget); };
+  });
+}
 
 /** Drops the socket, clears the board and puts the landing back on screen. */
 function goHome() {
@@ -678,26 +887,26 @@ $('#leaveBtn').addEventListener('click', () => {
   if (state?.status === 'playing') {
     openLeaveModal({
       onKeepSeat: () => {
-        try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
+        rememberGame();
         goHome();
       },
       onQuit: () => {
         actions.quit();
-        try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+        forgetGame(roomId);
         // Let the quit reach the server before the socket goes down under it.
         setTimeout(goHome, 150);
       },
     });
     return;
   }
-  try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
+  forgetGame(roomId);
   goHome();
 });
 
 // Closing the tab mid-game gets the browser's own "are you sure".
 window.addEventListener('beforeunload', (e) => {
   if (state?.status !== 'playing') return;
-  try { localStorage.setItem(LAST_ROOM_KEY, roomId || ''); } catch { /* private mode */ }
+  rememberGame();
   e.preventDefault();
   e.returnValue = '';
 });

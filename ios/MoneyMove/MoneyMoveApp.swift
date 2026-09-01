@@ -58,6 +58,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }
+        .overlay { reliefOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
         .overlay { revealOverlay }
         // The transitions above only play if the animation lives on a view
@@ -127,6 +128,45 @@ struct RootView: View {
         }
     }
 
+    /// The deadlock rule, the one time it becomes possible. Same card
+    /// treatment as a Treasure draw, but it waits to be dismissed instead of
+    /// timing out — it is a rule to read, not a result to glance at.
+    @ViewBuilder private var reliefOverlay: some View {
+        let P = Palette.current(scheme)
+        if let relief = store.reliefPopup {
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture { withAnimation { store.reliefPopup = nil } }
+
+                VStack(spacing: 12) {
+                    Art.icon(.scales, size: 44, tint: P.gold)
+                    Text(relief.title.uppercased())
+                        .font(.system(size: 11, weight: .bold)).kerning(2)
+                        .foregroundStyle(P.ink3)
+                    Text(relief.text)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(P.ink)
+                    Text("Trading the street yourselves settles it first — the board only steps in if nobody does.")
+                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(P.ink3)
+                    Button("Got it") { withAnimation { store.reliefPopup = nil } }
+                        .buttonStyle(MMButtonStyle(kind: .gold, big: true))
+                        .padding(.top, 2)
+                }
+                .padding(24)
+                .frame(maxWidth: 340)
+                .background(P.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(P.gold, lineWidth: 2))
+                .shadow(color: .black.opacity(0.4), radius: 26, y: 12)
+                .padding(.horizontal, 24)
+            }
+            .transition(.opacity)
+        }
+    }
+
     @ViewBuilder private var revealOverlay: some View {
         let P = Palette.current(scheme)
         if let reveal = store.reveal {
@@ -179,6 +219,7 @@ extension View {
         self
             .animation(.spring(duration: 0.35), value: store.toast)
             .animation(.spring(duration: 0.4), value: store.cardPopup)
+            .animation(.spring(duration: 0.4), value: store.reliefPopup)
             .animation(.spring(duration: 0.4), value: store.turnBanner)
             .animation(.spring(duration: 0.45, bounce: 0.3), value: store.reveal)
     }

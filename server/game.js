@@ -465,6 +465,14 @@ export class GameRoom {
     if (this.active.length !== 2) return [];
     const rival = this.active.find((x) => x.id !== p.id);
     if (!rival) return [];
+
+    // While a single street is still unsold, nothing is decided — landing on
+    // it could hand this player a colour tomorrow. The rule is only for a
+    // board where that can never happen again, so it waits until every street
+    // has an owner.
+    const streets = this.map.tiles.filter((t) => t.type === 'property');
+    if (streets.some((t) => !this.own(t.index)?.owner)) return [];
+
     const groups = Object.entries(this.map.groups);
     if (groups.some(([g]) => this.ownsFullGroup(p.id, g))) return [];
     const rivalBuilt = groups.some(([g, idxs]) => (

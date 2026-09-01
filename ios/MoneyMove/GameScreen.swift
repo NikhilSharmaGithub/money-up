@@ -439,6 +439,11 @@ struct PlayerStrip: View {
     var sideInset: CGFloat = 0
     let onTapPlayer: (PlayerState) -> Void
 
+    /// How far the floating +/- badge rides above a chip's top edge, and the
+    /// headroom the strip has to keep clear for it.
+    private static let badgeLift: CGFloat = 15
+    private static let badgeRoom: CGFloat = 22
+
     var body: some View {
         let P = Palette.current(scheme)
         // Both fall straight out of the freshest state, so the standings and
@@ -491,8 +496,11 @@ struct PlayerStrip: View {
                                             .foregroundStyle(P.ink3)
                                         Art.icon(.houses, size: 10, tint: P.ink3)
                                     }
-                                    if isTurn, let endsAt = store.state?.turn?.endsAt {
-                                        TurnClock(endsAt: endsAt, compact: true)
+                                    if p.lapsBlocked > 0, !p.isBankrupt {
+                                        DeadlockLaps(left: p.lapsToRelief)
+                                    }
+                                    if isTurn {
+                                        TurnClock(endsAt: store.state?.turn?.endsAt, compact: true)
                                     }
                                 }
                             }
@@ -508,11 +516,14 @@ struct PlayerStrip: View {
                                 .stroke(isTurn ? P.gold : (team.map { Color(css: $0.color) } ?? P.rule),
                                         lineWidth: isTurn ? 2 : 1)
                         )
-                        // The floating +/- rides the chip's own top edge, where
-                        // it can't sit on top of the player's name.
-                        .overlay(alignment: .top) {
+                        // The floating +/- rides the chip's right shoulder,
+                        // clear of the name and the money underneath it. Hung
+                        // from the trailing edge rather than centred, a long
+                        // amount grows back across the chip's own top instead
+                        // of out over the seats either side of it.
+                        .overlay(alignment: .topTrailing) {
                             MoneyDeltaBadge(playerId: p.id)
-                                .offset(y: -13)
+                                .offset(x: 6, y: -Self.badgeLift)
                         }
                         .opacity(p.isBankrupt ? 0.5 : 1)
                         .id(p.id)
@@ -525,8 +536,15 @@ struct PlayerStrip: View {
             .onAppear { scroll(proxy, animated: false) }
             .onChange(of: store.state?.turn?.playerId) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: store.state?.players.count) { _, _ in scroll(proxy, animated: true) }
+            // A scroll view clips to its own bounds, which is what was slicing
+            // the top off every money badge. Turning that clip off and drawing
+            // our own keeps the sides tight — chips must still scroll away
+            // cleanly, and on iPad the corner pods sit just outside them —
+            // while leaving the badge room to hang over the board.
+            .scrollClipDisabled()
         }
         .frame(height: 54)
+        .clipShape(OpenTopRect(lift: Self.badgeRoom))
     }
 
     /// The width the strip should try to fill. Taken from the window rather
@@ -587,6 +605,39 @@ struct PlayerStrip: View {
             .padding(.vertical, 1.5)
             .padding(.horizontal, 5)
             .background(mine ? P.goldSoft : P.sunken, in: Capsule())
+    }
+}
+
+/// A clip that is open at the top: the strip keeps its own width and bottom
+/// edge, and the money badge is free to float above it.
+private struct OpenTopRect: Shape {
+    let lift: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY - lift,
+                    width: rect.width, height: rect.height + lift))
+    }
+}
+
+/// How many laps this seat has left before the deadlock rule moves the street
+/// they are missing. It states the number and nothing else — the rule already
+/// explained itself once, and the way out is a trade, not a warning.
+struct DeadlockLaps: View {
+    let left: Int
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        HStack(spacing: 3) {
+            Art.icon(.scales, size: 9, tint: P.gold)
+            Text("\(left) lap\(left == 1 ? "" : "s")")
+                .font(.system(size: 8.5, weight: .black, design: .rounded))
+                .fixedSize()
+                .foregroundStyle(P.gold)
+        }
+        .padding(.vertical, 1.5)
+        .padding(.horizontal, 5)
+        .background(P.goldSoft, in: Capsule())
     }
 }
 
@@ -729,8 +780,8 @@ struct CenterWell: View {
         // off the whole well rather than the dice layer, because an auction
         // replaces that layer and the clock must not blink out with it.
         .overlay(alignment: .top) {
-            if let endsAt = store.state?.turn?.endsAt, store.state?.isPlaying == true {
-                TurnClock(endsAt: endsAt)
+            if store.state?.isPlaying == true {
+                TurnClock(endsAt: store.state?.turn?.endsAt)
                     .padding(.top, 6)
             }
         }
@@ -828,7 +879,9 @@ struct MoneyDeltaBadge: View {
         let P = Palette.current(scheme)
         ZStack {
             if let d = store.moneyDeltas[playerId] {
-                Text("\(d.amount > 0 ? "+" : "−")$\(abs(d.amount))")
+                // Grouped like every other figure on screen: a rent bill reads
+                // "−$1,450", never "−$1450".
+                Text("\(d.amount > 0 ? "+" : "−")\(money(abs(d.amount)))")
                     .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(d.amount > 0 ? P.good : P.bad)
                     // The badge floats in an overlay that proposes the tiny
@@ -927,20 +980,21 @@ private struct PlayerPod: View {
                         .font(.system(size: 12.5, weight: .bold, design: .rounded))
                         .foregroundStyle(P.ink)
                         .lineLimit(1)
-                    Text(money(player.money))
-                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(P.good)
-                        .contentTransition(.numericText())
-                        .animation(.snappy(duration: 0.4), value: player.money)
+                    HStack(spacing: 5) {
+                        Text(money(player.money))
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(P.good)
+                            .contentTransition(.numericText())
+                            .animation(.snappy(duration: 0.4), value: player.money)
+                        if player.lapsBlocked > 0, !player.isBankrupt {
+                            DeadlockLaps(left: player.lapsToRelief)
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
-                if isTurn, let endsAt = store.state?.turn?.endsAt {
-                    TurnClock(endsAt: endsAt, compact: true)
+                if isTurn {
+                    TurnClock(endsAt: store.state?.turn?.endsAt, compact: true)
                 }
-            }
-            .overlay(alignment: .topTrailing) {
-                MoneyDeltaBadge(playerId: player.id)
-                    .offset(x: 6, y: -4)
             }
 
             HStack(spacing: 6) {
@@ -970,6 +1024,12 @@ private struct PlayerPod: View {
         )
         .shadow(color: isTurn ? color.opacity(0.35) : .black.opacity(0.2),
                 radius: isTurn ? 12 : 6, y: 4)
+        // The +/- floats on the pod's own top edge. Inside the card it used to
+        // land on the name and the turn clock as soon as the amount ran long.
+        .overlay(alignment: .topTrailing) {
+            MoneyDeltaBadge(playerId: player.id)
+                .offset(x: 4, y: -13)
+        }
         .rotationEffect(.degrees(flipped ? 180 : 0))
         .animation(.spring(duration: 0.35), value: isTurn)
     }
@@ -1003,42 +1063,49 @@ private struct PlayerPod: View {
 /// server's deadline. It leans on TimelineView rather than a Timer so every
 /// copy on screen — well, chip, corner pod — ticks off the same clock.
 struct TurnClock: View {
-    /// Epoch milliseconds the turn expires (turn.endsAt).
-    let endsAt: Double
+    /// Epoch milliseconds the turn expires (turn.endsAt). Nil when the table
+    /// has no clock at all — nobody is waiting on a game you are playing on
+    /// your own against bots you added — and then there is simply no clock to
+    /// show. Every caller hands the field straight over so that decision is
+    /// made in one place instead of five.
+    let endsAt: Double?
     /// Compact = the small countdown riding a player chip or pod.
     var compact = false
 
     @Environment(\.colorScheme) private var scheme
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         let P = Palette.current(scheme)
-        // Driven entirely on this device: the state push only ever hands over a
-        // new deadline, so a quiet turn still counts down second by second.
-        TimelineView(.periodic(from: .now, by: 0.2)) { context in
-            let left = Self.secondsLeft(endsAt, at: context.date)
-            let urgent = left <= 10
-            HStack(spacing: 4) {
-                if !compact {
-                    Image(systemName: "timer")
-                        .font(.system(size: 11, weight: .bold))
+        if let endsAt {
+            // Driven entirely on this device: the state push only ever hands
+            // over a new deadline, so a quiet turn still counts down second by
+            // second.
+            TimelineView(.periodic(from: .now, by: 0.2)) { context in
+                let left = Self.secondsLeft(endsAt, at: context.date)
+                let urgent = left <= 10
+                HStack(spacing: 4) {
+                    if !compact {
+                        Image(systemName: "timer")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    Text("\(left)s")
+                        .font(.system(size: compact ? 10.5 : 13, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
                 }
-                Text("\(left)s")
-                    .font(.system(size: compact ? 10.5 : 13, weight: .heavy, design: .rounded))
-                    .monospacedDigit()
+                .foregroundStyle(urgent ? P.bad : P.ink2)
+                .padding(.vertical, compact ? 2.5 : 5)
+                .padding(.horizontal, compact ? 6 : 11)
+                .background(urgent ? P.redSoft : P.sunken, in: Capsule())
+                .overlay(Capsule().stroke(urgent ? P.bad.opacity(0.55) : P.rule, lineWidth: 1))
+                // The last ten seconds get a heartbeat, once a second.
+                .scaleEffect(urgent && !left.isMultiple(of: 2) ? 1.07 : 1)
+                .animation(.snappy(duration: 0.18), value: left)
             }
-            .foregroundStyle(urgent ? P.bad : P.ink2)
-            .padding(.vertical, compact ? 2.5 : 5)
-            .padding(.horizontal, compact ? 6 : 11)
-            .background(urgent ? P.redSoft : P.sunken, in: Capsule())
-            .overlay(Capsule().stroke(urgent ? P.bad.opacity(0.55) : P.rule, lineWidth: 1))
-            // The last ten seconds get a heartbeat, once a second.
-            .scaleEffect(urgent && !left.isMultiple(of: 2) ? 1.07 : 1)
-            .animation(.snappy(duration: 0.18), value: left)
+            .fixedSize()
+            // A fresh deadline restarts the tick schedule, so the number can
+            // never be left frozen on the last turn's final second.
+            .id(endsAt)
         }
-        .fixedSize()
-        // A fresh deadline restarts the tick schedule, so the number can never
-        // be left frozen on the last turn's final second.
-        .id(endsAt)
     }
 
     static func secondsLeft(_ endsAt: Double, at now: Date) -> Int {

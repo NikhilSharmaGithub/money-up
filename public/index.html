@@ -42,7 +42,9 @@
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
 
     <div class="landing-card">
-      <button id="continueBtn" class="btn wide continue-btn hidden">▶️ Continue game</button>
+      <button id="continueBtn" class="btn wide continue-btn wrap hidden">Continue game</button>
+      <!-- Games this browser walked out of and never finished. app.js fills it. -->
+      <div id="resumeList" class="resume-list hidden"></div>
       <div id="authRow" class="auth-row hidden">
         <div id="googleSignIn"></div>
         <span id="authStatus" class="dim small"></span>
@@ -63,8 +65,10 @@
       </button>
       <p class="quick-note">One tap and you are at a table with whoever else is online.</p>
       <button id="createBtn" class="btn big">
-        <span class="btn-ico" data-ico="key"></span> Create a private game
+        <span class="btn-ico" data-ico="key"></span> Create a game
       </button>
+      <p class="quick-note">Private by default. Switch <b>Private room</b> off in the
+        game settings and your table joins the All rooms list below.</p>
       <div class="or"><span>or join with a code</span></div>
       <form id="joinForm" class="join-row">
         <input id="codeInput" maxlength="64" placeholder="code or link" autocomplete="off" />

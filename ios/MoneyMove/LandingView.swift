@@ -32,6 +32,13 @@ struct LandingView: View {
         var players: Int
         var maxPlayers: Int
         var map: String
+        /// "lobby" | "playing" — the list now carries tables already under way.
+        var status: String?
+        /// A lobby with a seat still free. Anything else you can only watch.
+        var joinable: Bool?
+
+        var canSit: Bool { joinable ?? (status != "playing" && players < maxPlayers) }
+        var isPlaying: Bool { status == "playing" }
     }
 
     private struct AddFriendReply: Decodable {
@@ -345,28 +352,99 @@ struct LandingView: View {
         friendsCard(P)
     }
 
+    /// Two different things share this tab: tables still waiting for this
+    /// device, and games already in the books. The unfinished ones come first
+    /// — they are the only rows you can still do something about.
     @ViewBuilder private func historyTab(_ P: Palette) -> some View {
-        // Games walked out of land here too, so "finished" would be a lie.
-        pageTitle("History", "Every game this device has played.", P)
+        pageTitle("History", "Games you can still finish, and the ones already played.", P)
+        unfinishedSection(P)
         if store.matchHistory.isEmpty {
-            MMCard(padding: 22) {
-                VStack(spacing: 8) {
-                    Art.icon(.dice, size: 38, tint: P.ink3)
-                    Text("No games yet")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(P.ink)
-                    Text("Play a match — your wins (and your bankruptcies) land here.")
-                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
-                        .foregroundStyle(P.ink3)
-                        .multilineTextAlignment(.center)
+            if store.unfinishedGames.isEmpty {
+                MMCard(padding: 22) {
+                    VStack(spacing: 8) {
+                        Art.icon(.dice, size: 38, tint: P.ink3)
+                        Text("No games yet")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                        Text("Play a match — your wins (and your bankruptcies) land here.")
+                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
             }
         } else {
+            sectionHeading(.trophy, "Played out", P)
             ForEach(store.matchHistory) { match in
                 matchRow(match, P)
             }
         }
+    }
+
+    /// Every table this device left with a game still running on it. The
+    /// server keeps the seat warm — a bot plays it — so each of these is a
+    /// game to walk back into rather than a result to read.
+    @ViewBuilder private func unfinishedSection(_ P: Palette) -> some View {
+        if !store.unfinishedGames.isEmpty {
+            sectionHeading(.door, "Still going without you", P)
+            ForEach(store.unfinishedGames) { game in
+                Button {
+                    store.resume(game)
+                } label: {
+                    unfinishedRow(game, P)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func unfinishedRow(_ game: GameStore.UnfinishedGame, _ P: Palette) -> some View {
+        MMCard(padding: 13) {
+            HStack(spacing: 12) {
+                Art.icon(mapGlyph(game.mapIcon), size: 26, tint: P.gold)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(game.mapName)
+                            .font(.system(size: 14.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        Text(game.roomId.uppercased())
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .kerning(0.8)
+                            .foregroundStyle(P.ink2)
+                            .padding(.vertical, 2.5)
+                            .padding(.horizontal, 6)
+                            .background(P.sunken, in: Capsule())
+                    }
+                    Text(game.players.joined(separator: ", "))
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                    Text("Left \(game.leftAt.formatted(.relative(presentation: .named)))"
+                         + (game.guests > 0 ? " · \(game.guests + 1) players on this device" : ""))
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text("Rejoin")
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.accentInk)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 11)
+                    .background(P.gold, in: Capsule())
+            }
+        }
+    }
+
+    private func sectionHeading(_ glyph: Glyph, _ text: String, _ P: Palette) -> some View {
+        HStack(spacing: 6) {
+            Art.icon(glyph, size: 13, tint: P.ink3)
+            PanelTitle(text)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 2)
     }
 
     @ViewBuilder private func settingsTab(_ P: Palette) -> some View {
@@ -762,9 +840,12 @@ struct LandingView: View {
     /// holding the seats (bots fill in while people are gone).
     @ViewBuilder
     private func continueCard(_ P: Palette) -> some View {
-        if !store.lastRoom.isEmpty {
+        // The shortcut is to the newest table still going — the same entry
+        // that heads History's "still going without you" list, so the two can
+        // never disagree about which game that is.
+        if let latest = store.unfinishedGames.first {
             Button {
-                store.continueGame()
+                store.resume(latest)
             } label: {
                 HStack(spacing: 12) {
                     // The way back into the room you stepped out of.
@@ -773,7 +854,7 @@ struct LandingView: View {
                         Text("Continue game")
                             .font(.system(size: 16, weight: .heavy, design: .rounded))
                             .foregroundStyle(P.ink)
-                        Text("Room \(store.lastRoom)\(store.lastGuests > 0 ? " · \(store.lastGuests + 1) players on this device" : "")")
+                        Text("Room \(latest.roomId) · \(latest.mapName)\(latest.guests > 0 ? " · \(latest.guests + 1) players on this device" : "")")
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(P.ink3)
                     }
@@ -821,12 +902,17 @@ struct LandingView: View {
                                     store.join(roomId: room.id)
                                 } label: {
                                     HStack(spacing: 10) {
-                                        Art.icon(.globe, size: 20, tint: P.ink2)
+                                        // The list carries games already under
+                                        // way now, and those are a different
+                                        // offer: a seat to sit in, or a table
+                                        // to watch. Say which before the tap.
+                                        Art.icon(room.canSit ? .globe : .eye, size: 20, tint: P.ink2)
                                         VStack(alignment: .leading, spacing: 1) {
                                             Text(room.map)
                                                 .font(.system(size: 14, weight: .bold, design: .rounded))
                                                 .foregroundStyle(P.ink)
-                                            Text("\(room.players) of \(room.maxPlayers) players · \(room.id)")
+                                            Text("\(room.players) of \(room.maxPlayers) players · \(room.id)"
+                                                 + (room.canSit ? "" : room.isPlaying ? " · in play, watch only" : " · full"))
                                                 .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                                                 .foregroundStyle(P.ink3)
                                         }
