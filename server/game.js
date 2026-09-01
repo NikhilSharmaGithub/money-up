@@ -33,7 +33,14 @@ export const DEFAULT_SETTINGS = {
   teams: 0, // 0 = free-for-all, otherwise how many teams share the board
   /** Seconds a human gets per turn before the table moves on. 0 turns it off. */
   turnSeconds: 90,
+  /** Head-to-head only: frees a player who can never build (see noteLap). */
+  deadlockRelief: true,
 };
+
+/** Laps a blocked player walks before the board hands them a way out. */
+const RELIEF_LAPS = 4;
+/** What that way out costs — well over the odds, because it is a forced sale. */
+const RELIEF_MULTIPLIER = 1.7;
 
 const AUCTION_SECONDS = 20;
 const JAIL_FINE = 50;
@@ -43,6 +50,8 @@ const START_BONUS = 300;
 const MAX_JAIL_TURNS = 3;
 /** How long a disconnected player keeps their seat before a bot steps in. */
 const RECONNECT_GRACE_MS = 30000;
+
+const moneyText = (n) => `$${Number(n).toLocaleString('en-US')}`;
 
 let tradeSeq = 1;
 
@@ -206,6 +215,11 @@ export class GameRoom {
   teamsPlayable() {
     if (!this.teamsOn) return true;
     return new Set(this.players.map((p) => p.team)).size >= 2;
+  }
+
+  /** Everyone at the table who is a person, not a seat the house is playing. */
+  get humans() {
+    return this.players.filter((p) => !p.isBot && !p.bankrupt);
   }
 
   /** True when the server should play this seat automatically. */
@@ -399,6 +413,107 @@ export class GameRoom {
     this.removeFromPlay(p, 'timeout');
   }
 
+  // ------------------------------------------------------ deadlock relief --
+  /**
+   * A head-to-head game can lock up: one player completes a colour and starts
+   * building, the other holds most of a colour but not the last street, so
+   * they can never build anything and simply lose in slow motion. Trading is
+   * the intended way out, but the player who is ahead has no reason to agree.
+   *
+   * So the board itself steps in. Walk four laps in that position and the
+   * street you are missing changes hands — at well over the odds, and only if
+   * you can pay on the spot.
+   */
+  noteLap(p) {
+    if (!this.settings.deadlockRelief || this.status !== 'playing') return;
+
+    const candidates = this.blockingTiles(p);
+    if (!candidates.length) { p.blockedLaps = 0; return; }
+
+    // Both players are told the rule the first time it could ever apply, so
+    // nobody is surprised by a street moving later.
+    if (!this.reliefExplained) {
+      this.reliefExplained = true;
+      this.reliefCard = {
+        title: 'Deadlock rule',
+        text: `${p.name} owns almost a full colour but not the last street, so they can never build. `
+          + `After ${RELIEF_LAPS} laps of that, the missing street changes hands for `
+          + `${RELIEF_MULTIPLIER}x its price. Trade it yourselves first and the rule never fires.`,
+        at: Date.now(),
+      };
+      this.say(`Deadlock rule is in play — ${p.name} is one street short of building`, 'system');
+    }
+
+    p.blockedLaps = (p.blockedLaps || 0) + 1;
+    const left = RELIEF_LAPS - p.blockedLaps;
+    if (left > 0) {
+      this.say(`${p.name} is still stuck — ${left} lap${left === 1 ? '' : 's'} to go`, 'info');
+      return;
+    }
+    this.runRelief(p, candidates);
+  }
+
+  /**
+   * Streets this player is one away from, held by the opponent — and only when
+   * they hold no colour of their own while the opponent is already building.
+   * Both halves matter: this is a rule for someone losing to a wall, not for
+   * someone merely behind.
+   */
+  blockingTiles(p) {
+    // Head-to-head only. With a third player at the table there is no single
+    // "the opponent", and someone else can always break the wall by trading.
+    if (this.active.length !== 2) return [];
+    const rival = this.active.find((x) => x.id !== p.id);
+    if (!rival) return [];
+    const groups = Object.entries(this.map.groups);
+    if (groups.some(([g]) => this.ownsFullGroup(p.id, g))) return [];
+    const rivalBuilt = groups.some(([g, idxs]) => (
+      this.ownsFullGroup(rival.id, g) && idxs.every((i) => (this.own(i)?.houses || 0) > 0)
+    ));
+    if (!rivalBuilt) return [];
+
+    const out = [];
+    for (const [, idxs] of groups) {
+      const mine = idxs.filter((i) => this.own(i)?.owner === p.id).length;
+      if (mine !== idxs.length - 1) continue;
+      const missing = idxs.find((i) => this.own(i)?.owner === rival.id);
+      // A mortgaged street would arrive unusable, so it is not a way out.
+      if (missing !== undefined && !this.own(missing).mortgaged) out.push(missing);
+    }
+    return out;
+  }
+
+  /** The board rolls for which street moves — nobody gets to pick a favourite. */
+  runRelief(p, candidates) {
+    const roll = 1 + Math.floor(Math.random() * 6);
+    const tileIndex = candidates[(roll - 1) % candidates.length];
+    const tile = this.tile(tileIndex);
+    const price = Math.ceil((tile.price || 0) * RELIEF_MULTIPLIER);
+    const seller = this.player(this.own(tileIndex).owner);
+
+    if (p.money < price) {
+      // No money, no street. The clock starts again rather than leaving an
+      // offer hanging over the table forever.
+      p.blockedLaps = 0;
+      this.say(`${p.name} could not raise ${moneyText(price)} for ${tile.name} — four more laps`, 'warn');
+      this.push();
+      return;
+    }
+
+    p.money -= price;
+    seller.money += price;
+    this.own(tileIndex).owner = p.id;
+    p.blockedLaps = 0;
+    this.say(`Deadlock rule: ${tile.name} moves from ${seller.name} to ${p.name} for ${moneyText(price)}`, 'trade');
+    this.lastCard = {
+      deck: 'treasure',
+      text: `The board rolled a ${roll}: ${tile.name} changes hands for ${moneyText(price)}.`,
+      at: Date.now(),
+    };
+    this.settleDebtIfPossible();
+    this.push();
+  }
+
   // ---------------------------------------------------------- quick match --
   /**
    * Turn this room into a drop-in table: public, bot-backed, and on a short
@@ -448,6 +563,11 @@ export class GameRoom {
       if (this.turn) this.turn.endsAt = null;
       return;
     }
+    // A shot clock exists so nobody is left waiting on an empty chair. Playing
+    // against bots you added yourself, there is nobody to keep waiting — and
+    // being hurried by your own bots would just be rude.
+    if (!this.quick && this.humans.length < 2) { this.turn.endsAt = null; return; }
+
     // Every turn carries a visible deadline, including the seats the house is
     // playing — a clock that blinks out on some turns reads as broken, and on
     // a quick-match table it would also give the house players away.
@@ -714,6 +834,7 @@ export class GameRoom {
     if (passedStart && collectSalary) {
       p.money += SALARY;
       this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
+      this.noteLap(p);
     }
     this.landOn(p, to);
   }
@@ -727,6 +848,7 @@ export class GameRoom {
     if (passedStart && collectSalary) {
       p.money += SALARY;
       this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
+      this.noteLap(p);
     }
     this.landOn(p, to);
   }
@@ -1800,6 +1922,7 @@ export class GameRoom {
         connected: p.connected,
         botControlled: this.quick ? false : !!p.botControlled,
         timedOut: !!p.timedOut, removedFor: p.removedFor || null,
+        blockedLaps: p.blockedLaps || 0,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),
       })),
       ownership: this.ownership,
@@ -1807,6 +1930,7 @@ export class GameRoom {
       auction: this.auction,
       trades: this.trades,
       quick: !!this.quick,
+      reliefCard: this.reliefCard || null,
       awaiting: Object.entries(this.awaiting || {}).map(([id, a]) => ({
         id, until: a.until, grants: a.grants,
         granted: a.granted, needAll: a.grants >= GameRoom.FREE_GRANTS,

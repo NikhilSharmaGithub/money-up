@@ -40,15 +40,24 @@ app.use('/api', (req, res, next) => {
 app.use(express.json({ limit: '8kb' }));
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
+/**
+ * Every public table, not just the ones still filling up. A game already in
+ * progress can't be joined, but seeing it is the difference between "nobody
+ * plays this" and "there's a game on right now".
+ */
 app.get('/api/rooms', (_req, res) => {
   res.json(
     [...rooms.values()]
-      .filter((r) => !r.settings.isPrivate && r.status === 'lobby')
+      .filter((r) => !r.settings.isPrivate && r.status !== 'ended')
+      .sort((a, b) => (a.status === b.status ? 0 : a.status === 'lobby' ? -1 : 1))
       .map((r) => ({
         id: r.id,
         players: r.players.length,
         maxPlayers: r.settings.maxPlayers,
         map: r.map.name,
+        status: r.status,
+        joinable: r.status === 'lobby' && r.players.length < r.settings.maxPlayers,
+        quick: !!r.quick,
       })),
   );
 });

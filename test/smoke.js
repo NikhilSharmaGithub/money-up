@@ -709,12 +709,12 @@ console.log('\n▶ targeted rules');
 }
 
 {
-  // Every turn shows a deadline — including the ones the house plays, so the
-  // clock never blinks out and never gives a bot away.
+  // With people waiting, every turn shows a deadline — including the ones the
+  // house plays, so the clock never blinks out and never gives a bot away.
   const room = new GameRoom('clk', () => {});
   room.map = MAPS.classic;
   room.addPlayer({ id: 'a', name: 'A' });
-  room.addBot();
+  room.addPlayer({ id: 'b', name: 'B' });
   room.addBot();
   room.hostId = 'a';
   room.settings.randomizeOrder = false;
@@ -723,7 +723,108 @@ console.log('\n▶ targeted rules');
     if (!room.turn.endsAt) { fail('a turn went by with no clock on it'); break; }
     room.nextTurn();
   }
-  ok('every turn carries a visible clock');
+  ok('every turn carries a clock while people are waiting');
+}
+
+{
+  // Alone against bots you added yourself, nobody is kept waiting — so no
+  // clock, and no chance of your own bots timing you out.
+  const room = new GameRoom('clk2', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addBot();
+  room.addBot();
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  for (let i = 0; i < 4; i++) {
+    if (room.turn.endsAt) { fail('a solo game against bots should have no clock'); break; }
+    room.nextTurn();
+  }
+  ok('no shot clock when the only person at the table is you');
+}
+
+{
+  // Head-to-head deadlock: one player builds, the other holds all but one of
+  // a colour and can never build. Four laps and the wall comes down.
+  const room = new GameRoom('dl', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  const b = room.player('b');
+
+  // Ava owns a colour outright and has built on all of it.
+  const [g1, g2] = Object.entries(room.map.groups);
+  for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
+  // Bo holds all of another colour but the last street, which Ava owns.
+  const blocked = g2[1];
+  blocked.forEach((i, n) => {
+    room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
+  });
+  const wall = blocked[0];
+  const price = Math.ceil(room.tile(wall).price * 1.7);
+  b.money = price + 50;
+  const avaBefore = a.money;
+
+  for (let lap = 1; lap <= 3; lap++) {
+    room.noteLap(b);
+    if (room.own(wall).owner !== 'a') { fail(`the street moved after only ${lap} lap(s)`); break; }
+  }
+  if (b.blockedLaps !== 3) fail(`expected 3 laps counted, got ${b.blockedLaps}`);
+  if (!room.reliefCard) fail('both players should have been told the rule');
+
+  room.noteLap(b);
+  if (room.own(wall).owner !== 'b') fail('the fourth lap should move the street');
+  if (b.money !== 50) fail(`buyer should have paid ${price}, left with ${b.money}`);
+  if (a.money !== avaBefore + price) fail('the seller was not paid');
+  if (b.blockedLaps !== 0) fail('the lap count should reset once it fires');
+  ok('deadlock relief moves the blocking street after four laps');
+}
+
+{
+  // Too poor to pay: the chance lapses and the laps start over.
+  const room = new GameRoom('dl2', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const [g1, g2] = Object.entries(room.map.groups);
+  for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
+  g2[1].forEach((i, n) => {
+    room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
+  });
+  const wall = g2[1][0];
+  room.player('b').money = 1;
+  for (let lap = 0; lap < 4; lap++) room.noteLap(room.player('b'));
+  if (room.own(wall).owner !== 'a') fail('a player who cannot pay must not get the street');
+  if (room.player('b').blockedLaps !== 0) fail('the lap count should restart after a failed claim');
+  ok('no money, no street — the laps start again');
+}
+
+{
+  // The rule is for two. A third player at the table switches it off, and so
+  // does owning a colour of your own.
+  const room = new GameRoom('dl3', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const [g1, g2] = Object.entries(room.map.groups);
+  for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
+  g2[1].forEach((i, n) => {
+    room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
+  });
+  for (let lap = 0; lap < 5; lap++) room.noteLap(room.player('b'));
+  if (room.own(g2[1][0]).owner !== 'a') fail('the rule should not fire in a three-player game');
+  if (room.blockingTiles(room.player('b')).length) fail('three players should report no deadlock');
+  ok('deadlock relief stays out of games with more than two players');
 }
 
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
