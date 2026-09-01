@@ -44,7 +44,10 @@ export async function createCheckout({ token, packId, origin }) {
   if (!token) return { error: 'Missing identity' };
 
   // Only send players back to a site we actually run.
-  const OK_ORIGINS = ['https://money-up-nine.vercel.app', 'https://moneymove-csk9.onrender.com'];
+  const OK_ORIGINS = [
+    'https://www.moneymove.live', 'https://moneymove.live',
+    'https://money-up-nine.vercel.app', 'https://moneymove-csk9.onrender.com',
+  ];
   const back = OK_ORIGINS.includes(origin) ? origin : OK_ORIGINS[0];
 
   const body = form({
