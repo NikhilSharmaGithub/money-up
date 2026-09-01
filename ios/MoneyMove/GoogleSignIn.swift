@@ -17,8 +17,28 @@ import UIKit
 struct AuthConfig: Decodable {
     var google: Bool?
     var googleClientId: String?
+    /// The native app's own OAuth client — a web client id refuses the
+    /// custom-scheme redirect an app needs, so the server hands out both.
+    var googleIosClientId: String?
 
-    var googleReady: Bool { google == true && !(googleClientId ?? "").isEmpty }
+    var googleReady: Bool { google == true && !(appClientId ?? "").isEmpty }
+    /// What THIS platform should hand to Google.
+    var appClientId: String? { googleIosClientId ?? googleClientId }
+}
+
+/// Who this device is (GET /api/me) — the profile card's whole content.
+struct MeInfo: Decodable, Equatable {
+    var code: String?
+    var name: String?
+    var flag: String?
+    var coins: Int?
+    var karma: Int?
+    /// "google" | "apple" | nil — nil means not signed in.
+    var provider: String?
+    var email: String?
+    var picture: String?
+
+    var signedIn: Bool { provider != nil }
 }
 
 @MainActor

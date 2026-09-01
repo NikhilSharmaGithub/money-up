@@ -188,9 +188,19 @@ app.post('/api/store/equip', (req, res) => {
 
 // ---- auth (config-gated: works once the operator supplies credentials) ----
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+// The native app signs in through its own OAuth client (a web client refuses
+// the custom-scheme redirect an app needs), so its ID is a second valid
+// audience. Client IDs are public — only the audience CHECK protects anything.
+const GOOGLE_IOS_CLIENT_ID = process.env.GOOGLE_IOS_CLIENT_ID
+  || '968669711294-1j5h53fjj9mu3lgji4fre12q41o9rr9o.apps.googleusercontent.com';
+const GOOGLE_AUDIENCES = new Set([GOOGLE_CLIENT_ID, GOOGLE_IOS_CLIENT_ID].filter(Boolean));
 
 app.get('/api/auth/config', (_req, res) => {
-  res.json({ google: !!GOOGLE_CLIENT_ID, googleClientId: GOOGLE_CLIENT_ID || null });
+  res.json({
+    google: !!GOOGLE_CLIENT_ID,
+    googleClientId: GOOGLE_CLIENT_ID || null,
+    googleIosClientId: GOOGLE_CLIENT_ID ? GOOGLE_IOS_CLIENT_ID : null,
+  });
 });
 
 app.post('/api/auth/google', async (req, res) => {
@@ -200,7 +210,7 @@ app.post('/api/auth/google', async (req, res) => {
   try {
     const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
       .then((r) => r.json());
-    if (info.aud !== GOOGLE_CLIENT_ID) return res.status(401).json({ error: 'Token was not issued for this app' });
+    if (!GOOGLE_AUDIENCES.has(info.aud)) return res.status(401).json({ error: 'Token was not issued for this app' });
     const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, info.name || info.email,
       { email: info.email, picture: info.picture });
     res.json({ ok: true, name: linked?.name || info.name || '', code: linked?.code, picture: linked?.picture || '' });

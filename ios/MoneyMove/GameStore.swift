@@ -99,6 +99,9 @@ final class GameStore: ObservableObject {
         var turns: Int
         /// "won" | "lost" | "left" — optional so older saved records decode.
         var outcome: String?
+        /// Full report card — standings, stats, titles — for games that ended
+        /// after the report card shipped. Optional so older records decode.
+        var results: [PlayerResult]?
     }
     @Published var matchHistory: [MatchRecord] = {
         guard let data = UserDefaults.standard.data(forKey: "mm.history"),
@@ -128,7 +131,8 @@ final class GameStore: ObservableObject {
             won: wonByLocalSeat,
             myWorth: me?.isBankrupt == true ? 0 : (me?.netWorth ?? 0),
             turns: state.turn != nil ? max(state.history?.last?.t ?? 0, 0) : 0,
-            outcome: outcome ?? (wonByLocalSeat ? "won" : "lost")
+            outcome: outcome ?? (wonByLocalSeat ? "won" : "lost"),
+            results: PlayerResult.snapshot(of: state)
         )
         matchHistory.insert(record, at: 0)
         matchHistory = Array(matchHistory.prefix(50))
@@ -915,9 +919,14 @@ final class GameStore: ObservableObject {
 
     // MARK: - friends (REST)
 
-    func fetchJSON<T: Decodable>(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> T {
+    func fetchJSON<T: Decodable>(_ path: String, method: String = "GET", body: [String: Any]? = nil,
+                                 raw: Bool = false) async throws -> T {
         guard let base = serverURL else { throw URLError(.badURL) }
-        var req = URLRequest(url: base.appending(path: path))
+        // appending(path:) percent-encodes "?", so a query-string path has to
+        // be glued on as a plain string instead.
+        let url = raw ? URL(string: base.absoluteString + path) : base.appending(path: path)
+        guard let url else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

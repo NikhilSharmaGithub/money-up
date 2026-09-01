@@ -670,3 +670,34 @@ extension Art {
         GroupFlag(mark: mark ?? "", colour: colour, size: size)
     }
 }
+
+
+// MARK: - Google G
+
+/// The four-colour Google "G", drawn in code — no asset, no borrowed image.
+/// Quarter arcs land each colour where the real mark puts it: blue on the
+/// right running into the crossbar, green along the bottom, yellow up the
+/// left, red across the top.
+struct GoogleG: View {
+    var size: CGFloat = 16
+
+    var body: some View {
+        ZStack {
+            seg(0.03, 0.25, Color(red: 0.26, green: 0.52, blue: 0.96))  // right: blue
+            seg(0.25, 0.50, Color(red: 0.20, green: 0.66, blue: 0.33))  // bottom: green
+            seg(0.50, 0.75, Color(red: 0.98, green: 0.74, blue: 0.02))  // left: yellow
+            seg(0.75, 0.97, Color(red: 0.92, green: 0.26, blue: 0.21))  // top: red
+            Rectangle()  // the crossbar that makes it a G, not an O
+                .fill(Color(red: 0.26, green: 0.52, blue: 0.96))
+                .frame(width: size * 0.42, height: size * 0.21)
+                .offset(x: size * 0.19, y: 0)
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func seg(_ from: CGFloat, _ to: CGFloat, _ colour: Color) -> some View {
+        Circle().trim(from: from, to: to)
+            .stroke(colour, style: StrokeStyle(lineWidth: size * 0.21, lineCap: .butt))
+            .padding(size * 0.105)
+    }
+}

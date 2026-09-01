@@ -14,6 +14,9 @@ struct LandingView: View {
     @State private var serverOpen = false
     @State private var selectedFlag = ""
     @State private var profile: ProfileInfo?
+    @State private var me: MeInfo?
+    @State private var authConfig: AuthConfig?
+    @State private var signingIn = false
     @State private var friends: [FriendEntry] = []
     @State private var publicRooms: [PublicRoom] = []
     @State private var storeItems: [StoreItem] = []
@@ -75,6 +78,10 @@ struct LandingView: View {
             selectedFlag = store.flag
             store.refreshWallet()
         }
+        .task {
+            await loadAuthConfig()
+            await refreshMe()
+        }
     }
 
     /// Shared page chrome: scrolling column of cards over the felt.
@@ -100,6 +107,7 @@ struct LandingView: View {
         let busy = store.connection == .connecting && !store.quickSearching
         header(P)
         continueCard(P)
+        accountCard(P)
         quickPlayCard(P)
         playCard(P, busy: busy)
         publicRoomsCard(P)
@@ -1150,6 +1158,162 @@ struct LandingView: View {
     }
 
     // MARK: - friends REST
+
+    // MARK: - signed-in identity
+
+    /// Above Play now: sign-in buttons until an account is linked, then the
+    /// account itself — photo, name and the numbers that follow it around.
+    /// Signing in used to change nothing visible, which read as broken.
+    @ViewBuilder private func accountCard(_ P: Palette) -> some View {
+        if let me, me.signedIn {
+            MMCard(padding: 12) {
+                HStack(spacing: 11) {
+                    profilePhoto(me, size: 44, P: P)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(me.name?.isEmpty == false ? me.name! : "Player")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                            .lineLimit(1)
+                        Text(me.email?.isEmpty == false ? me.email! : "Signed in with \(me.provider == "apple" ? "Apple" : "Google")")
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .lineLimit(1)
+                        HStack(spacing: 10) {
+                            HStack(spacing: 3) {
+                                Art.icon(.coin, size: 11)
+                                Text("\(me.coins ?? 0)")
+                            }
+                            HStack(spacing: 3) {
+                                Art.icon(.heart, size: 11)
+                                Text("\(me.karma ?? 0)")
+                            }
+                            Text(me.code ?? "")
+                        }
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                    }
+                    Spacer()
+                    Button("Sign out") { Task { await signOut() } }
+                        .buttonStyle(MMButtonStyle(kind: .ghost))
+                }
+            }
+        } else if authConfig?.googleReady == true {
+            MMCard(padding: 12) {
+                VStack(spacing: 8) {
+                    Text("Keep your name, coins and friends on every device")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        Task { await googleSignInTapped() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if signingIn { ProgressView().scaleEffect(0.8).tint(.black) }
+                            else { GoogleG(size: 17) }
+                            Text(signingIn ? "Signing in…" : "Sign in with Google")
+                                .font(.system(size: 15.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.black.opacity(0.84))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.black.opacity(0.12), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(signingIn)
+
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName]
+                    } onCompletion: { result in
+                        if case .success(let auth) = result,
+                           let cred = auth.credential as? ASAuthorizationAppleIDCredential {
+                            let name = [cred.fullName?.givenName, cred.fullName?.familyName]
+                                .compactMap { $0 }.joined(separator: " ")
+                            Task { await appleLinked(userId: cred.user, name: name) }
+                        }
+                    }
+                    .signInWithAppleButtonStyle(scheme == .light ? .black : .white)
+                    .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 46)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func profilePhoto(_ me: MeInfo, size: CGFloat, P: Palette) -> some View {
+        let initial = String((me.name ?? "?").trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+        ZStack {
+            Circle().fill(P.sunken)
+            if let pic = me.picture, let url = URL(string: pic) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Text(initial).font(.system(size: size * 0.42, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink)
+                }
+            } else {
+                Text(initial).font(.system(size: size * 0.42, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(P.gold, lineWidth: 2))
+    }
+
+    private func refreshMe() async {
+        me = try? await store.fetchJSON("/api/me?token=\(store.token)", raw: true)
+    }
+
+    private func loadAuthConfig() async {
+        authConfig = try? await store.fetchJSON("/api/auth/config", raw: true)
+    }
+
+    private func googleSignInTapped() async {
+        guard let clientId = authConfig?.appClientId else { return }
+        signingIn = true
+        defer { signingIn = false }
+        do {
+            let credential = try await GoogleSignInFlow.shared.signIn(clientId: clientId)
+            struct Reply: Decodable { var ok: Bool?; var name: String?; var code: String? }
+            let reply: Reply? = try? await store.fetchJSON(
+                "/api/auth/google", method: "POST",
+                body: ["token": store.token, "credential": credential])
+            if reply?.ok == true {
+                if let n = reply?.name, !n.isEmpty { store.nickname = n }
+                store.showToast("Signed in with Google")
+                await refreshMe()
+            } else {
+                store.showToast("The server could not verify the sign-in", isError: true)
+            }
+        } catch GoogleSignInFlow.Failure.cancelled {
+            // Closing the sheet is an answer, not an error.
+        } catch {
+            store.showToast("Google sign-in did not complete", isError: true)
+        }
+    }
+
+    private func appleLinked(userId: String, name: String) async {
+        struct Reply: Decodable { var ok: Bool?; var name: String? }
+        let reply: Reply? = try? await store.fetchJSON(
+            "/api/auth/apple", method: "POST",
+            body: ["token": store.token, "userId": userId, "name": name])
+        if reply?.ok == true {
+            if let n = reply?.name, !n.isEmpty { store.nickname = n }
+            store.showToast("Signed in with Apple")
+            await refreshMe()
+        }
+    }
+
+    private func signOut() async {
+        struct Reply: Decodable { var ok: Bool? }
+        let _: Reply? = try? await store.fetchJSON(
+            "/api/auth/logout", method: "POST", body: ["token": store.token])
+        store.showToast("Signed out — coins and friends stay with this device")
+        await refreshMe()
+    }
 
     private func loadProfile() async {
         let body: [String: Any] = ["token": store.token, "name": store.nickname, "flag": store.flag]
