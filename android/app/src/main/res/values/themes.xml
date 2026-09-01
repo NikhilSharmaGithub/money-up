@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MoneyMove" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/felt</item>
+        <item name="android:statusBarColor">@color/felt</item>
+        <item name="android:navigationBarColor">@color/felt</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!-- Shown while the WebView boots, so the app never flashes white. -->
+    <style name="Theme.MoneyMove.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/felt</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_die</item>
+        <item name="postSplashScreenTheme">@style/Theme.MoneyMove</item>
+    </style>
+</resources>

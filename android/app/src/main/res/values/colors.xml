@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The midnight-felt look the web client and the iOS app already use. -->
+    <color name="felt">#0C1310</color>
+    <color name="felt_deep">#080D0B</color>
+    <color name="ink">#EFEDE2</color>
+    <color name="ink_dim">#8A968C</color>
+    <color name="gold">#E3A93C</color>
+</resources>

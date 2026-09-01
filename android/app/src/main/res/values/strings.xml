@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MoneyMove</string>
+    <string name="offline_title">No connection</string>
+    <string name="offline_body">MoneyMove needs the internet to reach the table. Check your connection and try again.</string>
+    <string name="retry">Try again</string>
+    <string name="leave_title">Leave the game?</string>
+    <string name="leave_body">You can come back to the same table from the home screen.</string>
+    <string name="leave_confirm">Leave</string>
+    <string name="stay">Stay</string>
+</resources>
