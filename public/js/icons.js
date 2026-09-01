@@ -587,6 +587,18 @@ const FLAG_ART = {
   '\u{1F1F7}\u{1F1F4}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#002b7f"/>
     <rect x="11" y="6" width="10" height="20" fill="#fcd116"/>
     <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ce1126"/>`),
+  '\u{1F1EA}\u{1F1F8}': flag(`<rect x="1" y="6" width="30" height="5" rx="2.5" fill="#aa151b"/>
+    <rect x="1" y="11" width="30" height="10" fill="#f1bf00"/>
+    <rect x="1" y="21" width="30" height="5" rx="2.5" fill="#aa151b"/>
+    <rect x="7" y="13.4" width="4.6" height="5.2" rx="1" fill="#aa151b" opacity=".85"/>`),
+  '\u{1F1E6}\u{1F1FA}': flag(`<rect x="1" y="6" width="30" height="20" rx="2.5" fill="#012169"/>
+    <rect x="1" y="6" width="13" height="9.6" fill="#012169"/>
+    <path d="M1 6 14 15.6M14 6 1 15.6" stroke="#fff" stroke-width="2.2"/>
+    <path d="M7.5 6v9.6M1 10.8h13" stroke="#fff" stroke-width="3"/>
+    <path d="M7.5 6v9.6M1 10.8h13" stroke="#c8102e" stroke-width="1.6"/>
+    <g fill="#fff"><circle cx="7.5" cy="21" r="1.9"/><circle cx="22" cy="11" r=".9"/>
+      <circle cx="25.5" cy="14.5" r=".9"/><circle cx="22" cy="18.5" r=".9"/>
+      <circle cx="19" cy="15" r=".9"/><circle cx="25" cy="20.5" r=".7"/></g>`),
   '\u{1F1EE}\u{1F1EA}': flag(`<rect x="1" y="6" width="10" height="20" rx="2.5" fill="#169b62"/>
     <rect x="11" y="6" width="10" height="20" fill="#fff"/>
     <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ff883e"/>`),

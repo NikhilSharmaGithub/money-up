@@ -12,6 +12,7 @@ struct LobbyPanel: View {
     @State private var nameDraft = ""
     /// Single-nation boards for the Custom menu, loaded from /api/maps.
     @State var countryBoards: [MapSummary] = []
+    @State var flagImages: [String: Image] = [:]
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -309,14 +310,15 @@ struct QuickMatchPanel: View {
 // MARK: - lobby extras
 
 extension LobbyPanel {
-    /// One-tap boards in the lobby: Classic, Worldwide, Shuffle — and last,
-    /// Custom: a menu of single-nation boards, each with its own regions and
-    /// its own localized Treasure & Surprise deck.
+    /// One-tap boards in the lobby: Classic, Worldwide, Death Valley — and
+    /// last, Custom: a menu of the single-nation boards (each with its own
+    /// regions and localized Treasure & Surprise deck) plus Shuffle, which
+    /// deals a brand new board every game.
     @ViewBuilder func quickBoards(_ P: Palette) -> some View {
         let picks: [(String, Glyph, String)] = [
             ("classic", .globe, "Classic"),
             ("worldwide", .plane, "Worldwide"),
-            ("random", .dice, "Shuffle"),
+            ("deathvalley", .skull, "Death Valley"),
         ]
         HStack(spacing: 8) {
             ForEach(picks, id: \.0) { id, icon, name in
@@ -333,10 +335,11 @@ extension LobbyPanel {
         .task { await loadCountryBoards() }
     }
 
-    /// The current selection is a country board when its id starts "country-".
+    /// Everything that isn't a one-tap board: the single-nation boards, each
+    /// under its own flag, and Shuffle at the bottom.
     @ViewBuilder private func customBoardMenu(_ P: Palette) -> some View {
         let currentId = store.state?.mapId ?? store.state?.settings.mapId ?? ""
-        let selected = currentId.hasPrefix("country-")
+        let selected = currentId.hasPrefix("country-") || currentId == "random"
         let current = countryBoards.first { $0.id == currentId }
 
         Menu {
@@ -345,22 +348,46 @@ extension LobbyPanel {
                     SoundKit.shared.click()
                     store.updateSettings(["mapId": map.id])
                 } label: {
-                    // A menu row can only carry text and an SF Symbol, so the
-                    // board's own mark is left to the chip below the menu.
-                    if map.id == currentId {
-                        Label(map.name, systemImage: "checkmark")
-                    } else {
+                    // A menu row takes an Image but not an arbitrary view, so
+                    // each flag is rendered once and handed over as one.
+                    Label {
                         Text(map.name)
+                    } icon: {
+                        if map.id == currentId {
+                            Image(systemName: "checkmark")
+                        } else if let flag = flagImages[map.id] {
+                            flag
+                        }
                     }
                 }
             }
             if countryBoards.isEmpty {
                 Text("Loading countries…")
             }
+            Divider()
+            Button {
+                SoundKit.shared.click()
+                store.updateSettings(["mapId": "random"])
+            } label: {
+                Label("Shuffle — a new board every game",
+                      systemImage: currentId == "random" ? "checkmark" : "dice")
+            }
         } label: {
-            quickChip(icon: mapGlyph(current?.icon),
-                      name: selected ? (current?.name ?? "Custom") : "Custom",
+            quickChip(icon: currentId == "random" ? .dice : mapGlyph(current?.icon),
+                      name: selected ? (currentId == "random" ? "Shuffle" : (current?.name ?? "Custom")) : "Custom",
                       selected: selected, P: P)
+        }
+    }
+
+    /// The drawn flags, rasterised once so SwiftUI's menu can carry them.
+    @MainActor private func renderFlags() {
+        for map in countryBoards where flagImages[map.id] == nil {
+            let renderer = ImageRenderer(content:
+                GroupFlag(mark: map.icon ?? "", colour: .clear, size: 22))
+            renderer.scale = 3
+            if let ui = renderer.uiImage {
+                flagImages[map.id] = Image(uiImage: ui).renderingMode(.original)
+            }
         }
     }
 
@@ -386,5 +413,6 @@ extension LobbyPanel {
         guard countryBoards.isEmpty else { return }
         let maps: [MapSummary]? = try? await store.fetchJSON("/api/maps")
         countryBoards = (maps ?? []).filter { $0.country == true }
+        renderFlags()
     }
 }

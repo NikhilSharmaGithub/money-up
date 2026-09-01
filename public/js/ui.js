@@ -1656,9 +1656,10 @@ const MAP_ART = {
   classic: 'globe', worldwide: 'plane', deathvalley: 'skull',
   blitz: 'bolt', luckywheel: 'sparkle', random: 'dice',
 };
+// The house boards have a glyph of their own; a country board flies its flag.
 const mapArt = (m) => (MAP_ART[m.id]
   ? icon(MAP_ART[m.id], 17)
-  : groupBanner(m.preview?.colors?.[1], 17));
+  : groupFlag(m.icon, m.preview?.colors?.[1], 17));
 
 export function openMapModal(state, actions) {
   fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {

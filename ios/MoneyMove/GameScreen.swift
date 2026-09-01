@@ -212,7 +212,11 @@ struct GameScreen: View {
         HStack(spacing: 12) {
             Button {
                 // Mid-game, leaving deserves a second thought — and a way back.
-                if store.state?.isPlaying == true {
+                // Once you've been removed there is no game left to leave, and
+                // the dialog's two answers are both meaningless, so a player
+                // watching from the sidelines just goes home.
+                let removed = store.me?.wasRemoved == true || store.me == nil
+                if store.state?.isPlaying == true && !removed {
                     confirmLeave = true
                 } else {
                     store.leaveRoom()

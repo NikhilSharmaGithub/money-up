@@ -646,6 +646,21 @@ struct GroupFlag: View {
             ctx.fill(A.star(21, 16.2, 3.2, 1.4), with: .color(.white))
         },
         "\u{1F1F7}\u{1F1F4}": FlagArt(vertical: true, bands: [(hex(0x002B7F), 1, 10), (hex(0xFCD116), 11, 10), (hex(0xCE1126), 21, 10)]),
+        "\u{1F1EA}\u{1F1F8}": FlagArt(bands: [(hex(0xAA151B), 6, 5), (hex(0xF1BF00), 11, 10), (hex(0xAA151B), 21, 5)]) { ctx in
+            ctx.fill(A.rrect(7, 13.4, 4.6, 5.2, 1), with: .color(hex(0xAA151B).opacity(0.85)))
+        },
+        "\u{1F1E6}\u{1F1FA}": FlagArt(bands: [(hex(0x012169), 6, 20)]) { ctx in
+            ctx.stroke(A.line([(1, 6), (14, 15.6)]), with: .color(.white), lineWidth: 2.2)
+            ctx.stroke(A.line([(14, 6), (1, 15.6)]), with: .color(.white), lineWidth: 2.2)
+            ctx.stroke(A.line([(7.5, 6), (7.5, 15.6)]), with: .color(.white), lineWidth: 3)
+            ctx.stroke(A.line([(1, 10.8), (14, 10.8)]), with: .color(.white), lineWidth: 3)
+            ctx.stroke(A.line([(7.5, 6), (7.5, 15.6)]), with: .color(hex(0xC8102E)), lineWidth: 1.6)
+            ctx.stroke(A.line([(1, 10.8), (14, 10.8)]), with: .color(hex(0xC8102E)), lineWidth: 1.6)
+            ctx.fill(A.circle(7.5, 21, 1.9), with: .color(.white))
+            for (x, y, r) in [(22.0, 11.0, 0.9), (25.5, 14.5, 0.9), (22.0, 18.5, 0.9), (19.0, 15.0, 0.9), (25.0, 20.5, 0.7)] {
+                ctx.fill(A.circle(x, y, r), with: .color(.white))
+            }
+        },
         "\u{1F1EE}\u{1F1EA}": FlagArt(vertical: true, bands: [(hex(0x169B62), 1, 10), (.white, 11, 10), (hex(0xFF883E), 21, 10)]),
     ]
 }
