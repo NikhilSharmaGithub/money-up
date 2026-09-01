@@ -14,6 +14,7 @@ import {
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
+import { stripeEnabled, createCheckout, handleWebhook } from './stripe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -35,6 +36,14 @@ app.use('/api', (req, res, next) => {
   // browser never sends the real request.
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
+});
+
+// Stripe signs the exact bytes it sent; this route must read them before the
+// JSON parser gets a chance to rewrite the body.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const result = handleWebhook(req.body, req.headers['stripe-signature']);
+  if (result.error) return res.status(400).json(result);
+  res.json({ received: true });
 });
 
 app.use(express.json({ limit: '8kb' }));
@@ -102,7 +111,24 @@ app.get('/api/dm', (req, res) => {
 });
 
 // ---- store & wallet ------------------------------------------------------
-app.get('/api/store', (_req, res) => res.json({ items: STORE_ITEMS, packs: COIN_PACKS }));
+app.get('/api/store', (_req, res) => res.json({
+  items: STORE_ITEMS,
+  packs: COIN_PACKS,
+  // The web client only offers card checkout when this server can honour it.
+  stripe: stripeEnabled(),
+}));
+
+/** Start a card payment for one pack; the webhook does the crediting. */
+app.post('/api/store/checkout', async (req, res) => {
+  const { token, packId } = req.body || {};
+  const result = await createCheckout({
+    token: String(token || '').slice(0, 64),
+    packId: String(packId || ''),
+    origin: String(req.headers.origin || ''),
+  });
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
 
 /** A nickname for anyone who'd rather not think of one. */
 app.get('/api/name', (_req, res) => res.json({ name: randomName() }));

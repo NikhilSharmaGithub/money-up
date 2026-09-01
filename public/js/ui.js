@@ -1317,20 +1317,28 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
         }).join('')}
       </div>`;
 
-    // The web build has no payment processor behind it, so the packs are a
-    // shop window: they say what a top-up costs and point at the iOS app.
-    const packSection = packs.length ? `
-      <h3 class="map-section">${icon('coin')} Coin packs</h3>
-      <p class="sub">Coin packs are purchased in the iOS app.
-        <a class="pack-link" href="/app.html" target="_blank" rel="noopener">Get MoneyMove for iPhone →</a></p>
-      <div class="pack-grid">
-        ${packs.map((p) => `<a class="pack-card" href="/app.html" target="_blank" rel="noopener">
+    // With Stripe configured the packs are real buy buttons; without it they
+    // stay a shop window pointing at the iOS app, never a dead button.
+    const canPay = !!storeData.stripe;
+    const packCard = (p) => {
+      const inner = `
           <span class="pk-emoji">${icon(PACK_ART[p.emoji] || 'coin', 32, 'solo')}</span>
           ${p.bonus ? `<span class="pk-bonus">+${p.bonus}%</span>` : ''}
           <span class="pk-coins">${icon('coin', 15)} ${p.coins}</span>
           <span class="pk-name">${escapeHtml(p.name)}</span>
-          <span class="pk-price">$${escapeHtml(p.price)}</span>
-        </a>`).join('')}
+          <span class="pk-price">$${escapeHtml(p.price)}</span>`;
+      return canPay
+        ? `<button class="pack-card" data-pack="${p.id}">${inner}</button>`
+        : `<a class="pack-card" href="/app.html" target="_blank" rel="noopener">${inner}</a>`;
+    };
+    const packSection = packs.length ? `
+      <h3 class="map-section">${icon('coin')} Coin packs</h3>
+      <p class="sub">${canPay
+        ? 'Pay by card — coins land in your wallet as soon as the payment clears.'
+        : `Coin packs are purchased in the iOS app.
+        <a class="pack-link" href="/app.html" target="_blank" rel="noopener">Get MoneyMove for iPhone →</a>`}</p>
+      <div class="pack-grid">
+        ${packs.map(packCard).join('')}
       </div>` : '';
 
     openModal(`
@@ -1350,6 +1358,26 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
       $('#stClose', root).onclick = closeModal;
       // The shop is long enough that its only way out used to be a scroll away.
       $('#stX', root).onclick = closeModal;
+    root.querySelectorAll('[data-pack]').forEach((b) => {
+      b.onclick = async () => {
+        sfx.click();
+        b.disabled = true;
+        try {
+          const out = await fetch(api('/api/store/checkout'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, packId: b.dataset.pack }),
+          }).then((r) => r.json());
+          // Stripe hosts the payment page; the webhook credits the coins, so
+          // there is nothing to await here — just go.
+          if (out.url) { location.href = out.url; return; }
+          toast(out.error || 'Could not start the payment', 'error');
+        } catch {
+          toast('Could not start the payment', 'error');
+        }
+        b.disabled = false;
+      };
+    });
       root.querySelectorAll('[data-item]').forEach((card) => {
         card.onclick = async () => {
           sfx.click();

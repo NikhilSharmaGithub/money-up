@@ -36,6 +36,10 @@ struct GameState: Codable, Equatable {
     /// stamp — not its presence — that says whether it is news.
     var reliefCard: ReliefCard?
     var history: [WorthPoint]?              // net-worth series, sent once the game ends
+    /// Per-player match counters, revealed only on the ended state.
+    var stats: [String: PlayerStats]?
+    /// End-of-game badges: player id -> title with its one-line reason.
+    var titles: [String: TitleInfo]?
     var version: Int
 
     func player(_ id: String?) -> PlayerState? {
@@ -260,6 +264,105 @@ struct ChatMessage: Codable, Equatable, Identifiable {
 struct WorthPoint: Codable, Equatable {
     var t: Int
     var w: [String: Int]
+}
+
+/// A player's report card, mirroring statFor() in server/game.js. Every field
+/// defaults so a stat the server hasn't counted yet reads as zero, not a
+/// decode failure.
+struct PlayerStats: Codable, Equatable {
+    var doubles: Int? = nil
+    var jailed: Int? = nil
+    var streetsBought: Int? = nil
+    var auctionsWon: Int? = nil
+    var tradesCompleted: Int? = nil
+    var housesBuilt: Int? = nil
+    var rentCollected: Int? = nil
+    var rentPaid: Int? = nil
+    var biggestRent: Int? = nil
+    var biggestRentTile: String? = nil
+    var laps: Int? = nil
+    var leadShare: Int? = nil
+}
+
+/// One end-of-game badge: "Landlord — collected $4,320 in rent".
+struct TitleInfo: Codable, Equatable {
+    var title: String
+    var reason: String
+}
+
+/// One player's line of a finished game, frozen so History can reopen the
+/// result long after the room itself is gone.
+struct PlayerResult: Codable, Equatable, Identifiable {
+    var id: String
+    var name: String
+    var color: String
+    var flag: String?
+    var avatar: String?
+    var worth: Int
+    var bankrupt: Bool
+    var removedFor: String?
+    var isBot: Bool
+    var title: String?
+    var titleReason: String?
+    var stats: PlayerStats?
+
+    /// What the standings column says for this seat. A removed seat was never
+    /// actually bankrupted — don't say it was.
+    var outcomeLabel: String? {
+        guard bankrupt else { return nil }
+        switch removedFor {
+        case "quit": return "left the game"
+        case "timeout": return "timed out"
+        default: return "bankrupt"
+        }
+    }
+
+    /// Standings order — solvent seats by net worth, then the fallen — with
+    /// each seat's title and stats stapled on. This is both what the game-over
+    /// sheet renders and what History files away.
+    static func snapshot(of state: GameState?) -> [PlayerResult] {
+        guard let state else { return [] }
+        let ordered = state.players.filter { !$0.isBankrupt }
+            .sorted { ($0.netWorth ?? 0) > ($1.netWorth ?? 0) }
+            + state.players.filter { $0.isBankrupt }
+        return ordered.map { p in
+            PlayerResult(id: p.id, name: p.name, color: p.color, flag: p.flag,
+                         avatar: p.avatar,
+                         worth: p.isBankrupt ? 0 : (p.netWorth ?? 0),
+                         bankrupt: p.isBankrupt, removedFor: p.removedFor,
+                         // Quick tables mask isBot, but the house players still
+                         // carry the server's "bot:" id prefix.
+                         isBot: (p.isBot ?? false) || p.id.hasPrefix("bot:"),
+                         title: state.titles?[p.id]?.title,
+                         titleReason: state.titles?[p.id]?.reason,
+                         stats: state.stats?[p.id])
+        }
+    }
+}
+
+/// Mirrors codeFor() in server/social.js: a friend code is a pure hash of the
+/// player's token, so the code of anyone at the table can be computed from
+/// their player id and fed to the normal add-by-code flow. (The server keeps a
+/// collision salt for the vanishingly unlikely clash — if that ever fires the
+/// add simply fails with "no player with that code".)
+func friendCode(for token: String) -> String {
+    let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    var h1: UInt32 = 0x811c9dc5
+    var h2: UInt32 = 0x01000193
+    for (i, unit) in token.utf16.enumerated() {
+        let c = UInt32(unit)
+        h1 = (h1 ^ c) &* 16777619
+        h2 = (h2 &+ c &* UInt32(i + 7)) &* 2654435761
+    }
+    var out = ""
+    for i in 0..<6 {
+        let source = i < 3 ? h1 : h2
+        out.append(alphabet[Int((source >> UInt32((i % 3) * 5)) % 32)])
+        // The server rolls h1 after the third character; the value feeds
+        // nothing afterwards, but the roll is kept so the codes stay equal.
+        if i == 2 { h1 = h1 &* 2246822519 }
+    }
+    return out
 }
 
 struct WinnerInfo: Codable, Equatable {

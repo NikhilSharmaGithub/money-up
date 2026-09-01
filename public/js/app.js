@@ -423,6 +423,24 @@ $('#joinForm').addEventListener('submit', (e) => {
 // ───────────────────────────────────────────────────────────── invites ──
 // A share link arrives as /?room=CODE, which any host can serve; the older
 // /room/CODE links still work and are handled by boot() itself.
+// Back from Stripe. The webhook is what actually credits the coins, so the
+// wallet may land a beat after the redirect — poll it a few times rather than
+// showing a stale zero next to a thank-you.
+{
+  const outcome = new URLSearchParams(location.search).get('coins');
+  if (outcome) {
+    history.replaceState({}, '', location.pathname);
+    if (outcome === 'purchased') {
+      toast('Payment received — your coins are on the way in');
+      let tries = 0;
+      const tick = () => { refreshWallet({ celebrate: true }); if (++tries < 6) setTimeout(tick, 2500); };
+      setTimeout(tick, 1500);
+    } else if (outcome === 'cancelled') {
+      toast('Payment cancelled — nothing was charged');
+    }
+  }
+}
+
 const inviteCode = () => (new URLSearchParams(location.search).get('room') || '')
   .trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
