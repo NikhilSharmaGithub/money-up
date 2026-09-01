@@ -1,0 +1,1395 @@
+{
+ "facts": [
+  {
+   "city": "Salvador",
+   "text": "Salvador was Brazil's first capital, running the colony from 1549 until the seat of government moved to Rio in 1763."
+  },
+  {
+   "city": "Salvador",
+   "text": "Salvador's Elevador Lacerda, an art deco public lift from 1873, still carries thousands of people a day between the upper and lower city."
+  },
+  {
+   "city": "Rio",
+   "text": "Rio's Christ the Redeemer statue was voted one of the New Seven Wonders of the World in 2007."
+  },
+  {
+   "city": "Rio",
+   "text": "Rio's Maracana stadium drew an estimated 200,000 spectators for the 1950 World Cup final, still the largest crowd ever at a football match."
+  },
+  {
+   "city": "Rio de Janeiro",
+   "text": "In 2016 Rio de Janeiro became the first South American city ever to host the Olympic Games."
+  },
+  {
+   "city": "São Paulo",
+   "text": "São Paulo is home to the largest Japanese community outside Japan, centred on the Liberdade district."
+  },
+  {
+   "city": "Brasília",
+   "text": "Brasília was built from scratch in under four years and inaugurated as Brazil's capital in 1960, laid out in the shape of an airplane."
+  },
+  {
+   "city": "Recife",
+   "text": "Recife is nicknamed the Venice of Brazil for the rivers and dozens of bridges that stitch the city together."
+  },
+  {
+   "city": "Belo Horizonte",
+   "text": "Belo Horizonte's lakeside Pampulha district, designed by Oscar Niemeyer in the 1940s, is a UNESCO World Heritage Site."
+  },
+  {
+   "city": "Ouro Preto",
+   "text": "The gold-rush town of Ouro Preto was the first place in Brazil added to the UNESCO World Heritage list, back in 1980."
+  },
+  {
+   "city": "Uberlândia",
+   "text": "Uberlândia is the second-most-populous city in the state of Minas Gerais and a major crossroads of Brazil's inland freight routes."
+  },
+  {
+   "city": "Ilhéus",
+   "text": "Ilhéus, the old cocoa capital of Brazil, is the setting of Jorge Amado's novel Gabriela, Clove and Cinnamon."
+  },
+  {
+   "city": "Porto Seguro",
+   "text": "Porto Seguro is where Pedro Álvares Cabral's Portuguese fleet made landfall in 1500, the first recorded European arrival in Brazil."
+  },
+  {
+   "city": "Niterói",
+   "text": "Niterói's saucer-shaped Museum of Contemporary Art, perched above Guanabara Bay, was designed by Oscar Niemeyer."
+  },
+  {
+   "city": "Campinas",
+   "text": "Campinas hosts the University of Campinas, one of Latin America's leading research universities."
+  },
+  {
+   "city": "Santos",
+   "text": "Santos runs the busiest seaport in Latin America — and its football club is where Pelé played for nearly two decades."
+  },
+  {
+   "city": "Curitiba",
+   "text": "Curitiba pioneered bus rapid transit in the 1970s, a system later copied by cities all over the world."
+  },
+  {
+   "city": "Porto Alegre",
+   "text": "Porto Alegre hosted the first World Social Forum in 2001 and is the heart of Brazil's gaucho culture."
+  },
+  {
+   "city": "Florianópolis",
+   "text": "Florianópolis sits mostly on an island, joined to the mainland by the Hercílio Luz suspension bridge, a symbol of the city since 1926."
+  },
+  {
+   "city": "Fortaleza",
+   "text": "Fortaleza's fishermen still sail jangadas, the traditional wooden rafts that have worked the Ceará coast for centuries."
+  },
+  {
+   "city": "Natal",
+   "text": "Just outside Natal grows the Cashew of Pirangi, a single tree sprawling over roughly 8,500 square metres — about the size of a city block."
+  },
+  {
+   "city": "Belém",
+   "text": "Belém's Círio de Nazaré procession draws well over a million people every October, one of the largest religious gatherings in the world."
+  },
+  {
+   "city": "Manaus",
+   "text": "Manaus built a lavish opera house, the Teatro Amazonas, deep in the rainforest during the 1890s rubber boom."
+  },
+  {
+   "city": "Cuiabá",
+   "text": "A monument in Cuiabá marks a calculated geographic centre of South America."
+  },
+  {
+   "city": "Campo Grande",
+   "text": "Campo Grande is nicknamed Cidade Morena after the red-brown earth it is built on, and serves as a gateway to the Pantanal wetlands."
+  },
+  {
+   "city": "Tel Aviv",
+   "text": "Tel Aviv's White City holds over 4,000 Bauhaus-style buildings, the largest such collection in the world and a UNESCO site."
+  },
+  {
+   "city": "Tel Aviv",
+   "text": "Tel Aviv was founded in 1909 on sand dunes outside the ancient port of Jaffa, which it later absorbed."
+  },
+  {
+   "city": "Haifa",
+   "text": "Haifa's terraced Bahá'í Gardens climb Mount Carmel in 19 landscaped steps and are a UNESCO World Heritage Site."
+  },
+  {
+   "city": "Jerusalem",
+   "text": "Jerusalem's Old City walls standing today were built by the Ottoman sultan Suleiman the Magnificent in the 1500s."
+  },
+  {
+   "city": "Jerusalem",
+   "text": "Jerusalem's Old City packs sites sacred to Judaism, Christianity and Islam into less than one square kilometre."
+  },
+  {
+   "city": "Eilat",
+   "text": "Eilat, Israel's southernmost city, sits on the Red Sea beside coral reefs at the edge of the Negev desert."
+  },
+  {
+   "city": "Venice",
+   "text": "Venice is built across 118 small islands laced together by around 400 bridges, with boats doing the work of cars."
+  },
+  {
+   "city": "Venice",
+   "text": "The Venice Film Festival, founded in 1932, is the oldest film festival in the world."
+  },
+  {
+   "city": "Venezia",
+   "text": "Venetian gondolas are deliberately built lopsided, with a curved left side to balance a gondolier rowing on one side only."
+  },
+  {
+   "city": "Milan",
+   "text": "Milan's Duomo took nearly six centuries to finish, from 1386 to its final touches in the 1960s."
+  },
+  {
+   "city": "Milan",
+   "text": "Milan's Santa Maria delle Grazie holds Leonardo da Vinci's The Last Supper, painted on the refectory wall in the 1490s."
+  },
+  {
+   "city": "Milano",
+   "text": "Milano hosts the Salone del Mobile, the largest furniture and design fair in the world."
+  },
+  {
+   "city": "Rome",
+   "text": "Visitors throw roughly 1.5 million euros into Rome's Trevi Fountain each year, and the coins go to charity."
+  },
+  {
+   "city": "Rome",
+   "text": "Rome's Pantheon, nearly 1,900 years old, still has the largest unreinforced concrete dome ever built."
+  },
+  {
+   "city": "Roma",
+   "text": "Roma wraps entirely around Vatican City, the smallest sovereign state in the world."
+  },
+  {
+   "city": "Bologna",
+   "text": "Bologna's university, founded in 1088, is the oldest university in continuous operation anywhere."
+  },
+  {
+   "city": "Bologna",
+   "text": "Bologna's medieval porticoes run for some 60 kilometres and are listed by UNESCO."
+  },
+  {
+   "city": "Naples",
+   "text": "Naples gave the world the pizza margherita, by tradition created in 1889 and named for Italy's queen."
+  },
+  {
+   "city": "Napoli",
+   "text": "Napoli lives in the shadow of Vesuvius, the volcano whose eruption in 79 AD buried nearby Pompeii."
+  },
+  {
+   "city": "Turin",
+   "text": "Turin was united Italy's first capital in 1861, and its old Fiat Lingotto factory has a test track on the roof."
+  },
+  {
+   "city": "Bergamo",
+   "text": "Bergamo's hilltop upper town is ringed by Venetian defensive walls that now hold UNESCO World Heritage status."
+  },
+  {
+   "city": "Como",
+   "text": "Como has been a silk-making centre since the 1500s and still produces much of Europe's high-end silk."
+  },
+  {
+   "city": "Verona",
+   "text": "Verona's Roman arena, built in the first century, still stages open-air opera for thousands every summer."
+  },
+  {
+   "city": "Padova",
+   "text": "Padova's botanical garden, planted in 1545 for the university where Galileo taught, is the world's oldest still in its original location."
+  },
+  {
+   "city": "Modena",
+   "text": "Modena's traditional balsamic vinegar must age in wooden barrels for at least 12 years before it can carry the name."
+  },
+  {
+   "city": "Parma",
+   "text": "Parma gave its name to both Parmigiano Reggiano cheese and Parma ham, and was named a UNESCO Creative City of Gastronomy."
+  },
+  {
+   "city": "Siena",
+   "text": "Siena's bareback Palio horse race has been run around the shell-shaped Piazza del Campo since the Middle Ages, twice each summer."
+  },
+  {
+   "city": "Pisa",
+   "text": "Pisa's famous tower began leaning during construction in the 1170s because it was built on soft ground."
+  },
+  {
+   "city": "Firenze",
+   "text": "Firenze's cathedral is crowned by Brunelleschi's dome, still the largest masonry dome ever built."
+  },
+  {
+   "city": "Amalfi",
+   "text": "Tiny Amalfi was once a medieval maritime republic that rivalled Venice, Pisa and Genoa for Mediterranean trade."
+  },
+  {
+   "city": "Sorrento",
+   "text": "Sorrento's clifftop lemon groves supply the fruit behind limoncello, the region's signature liqueur."
+  },
+  {
+   "city": "Taormina",
+   "text": "Taormina's ancient Greek theatre frames a natural backdrop of Mount Etna and the sea."
+  },
+  {
+   "city": "Lecce",
+   "text": "Lecce is called the Florence of the South for the exuberant baroque carving of its soft local limestone."
+  },
+  {
+   "city": "Catania",
+   "text": "Catania was rebuilt in baroque style out of black volcanic stone after Mount Etna and an earthquake devastated it in the 1600s."
+  },
+  {
+   "city": "Bari",
+   "text": "Bari's basilica has held the relics of St Nicholas — the original Santa Claus — since sailors brought them there in 1087."
+  },
+  {
+   "city": "Palermo",
+   "text": "Palermo's Teatro Massimo is the largest opera house in Italy, with an auditorium famed for near-perfect acoustics."
+  },
+  {
+   "city": "Tivoli",
+   "text": "Tivoli holds two UNESCO sites within one small town: Hadrian's sprawling Roman villa and the fountain gardens of Villa d'Este."
+  },
+  {
+   "city": "Istanbul",
+   "text": "Istanbul is the only major city in the world that spans two continents, straddling Europe and Asia across the Bosphorus."
+  },
+  {
+   "city": "Istanbul",
+   "text": "Istanbul's Grand Bazaar, trading since the 1450s, covers over 60 streets and some 4,000 shops."
+  },
+  {
+   "city": "Ankara",
+   "text": "Ankara replaced Istanbul as Turkey's capital in 1923, and the soft-haired angora goat takes its name from the city."
+  },
+  {
+   "city": "Antalya",
+   "text": "Antalya regularly ranks among the world's most visited cities, and Roman emperor Hadrian's marble gate still marks the old town entrance."
+  },
+  {
+   "city": "Izmir",
+   "text": "Izmir, the ancient Greek city of Smyrna, is one of several places that claim to be the birthplace of Homer."
+  },
+  {
+   "city": "Bucharest",
+   "text": "Bucharest's Palace of the Parliament is listed by Guinness World Records as the heaviest building on Earth."
+  },
+  {
+   "city": "Brasov",
+   "text": "Brasov's Black Church is the largest Gothic church between Vienna and Istanbul, and Bran Castle of Dracula fame sits just outside town."
+  },
+  {
+   "city": "Cluj",
+   "text": "Cluj, the unofficial capital of Transylvania, hosts Untold, one of the biggest electronic music festivals in Europe."
+  },
+  {
+   "city": "Dublin",
+   "text": "Arthur Guinness signed a 9,000-year lease on Dublin's St James's Gate brewery in 1759, and the beer is still brewed there."
+  },
+  {
+   "city": "Dublin",
+   "text": "Dublin's Trinity College displays the Book of Kells, an illuminated gospel manuscript created around 800 AD."
+  },
+  {
+   "city": "Cork",
+   "text": "Cork's English Market has been feeding the city from the same spot since 1788."
+  },
+  {
+   "city": "Berlin",
+   "text": "Berlin has more bridges than Venice — around 1,700 of them cross its rivers and canals."
+  },
+  {
+   "city": "Berlin",
+   "text": "The Berlin Wall stood for 28 years and fell in November 1989; a double row of cobblestones now traces its path through the city."
+  },
+  {
+   "city": "Munich",
+   "text": "Munich's Oktoberfest began in 1810 as the public party for a Bavarian royal wedding and never really stopped."
+  },
+  {
+   "city": "Munich",
+   "text": "Munich's Englischer Garten is larger than New York's Central Park and has a standing river wave that is surfed year-round."
+  },
+  {
+   "city": "München",
+   "text": "München enforced the 1516 Reinheitsgebot beer purity law, which allowed only water, barley and hops in the brew."
+  },
+  {
+   "city": "Frankfurt",
+   "text": "Frankfurt is home to the European Central Bank and a skyline of towers that earned it the nickname Mainhattan."
+  },
+  {
+   "city": "Frankfurt",
+   "text": "The Frankfurt Book Fair, with roots in the 15th century, is the largest book fair in the world."
+  },
+  {
+   "city": "Hamburg",
+   "text": "Hamburg counts roughly 2,500 bridges, more than Venice and Amsterdam combined."
+  },
+  {
+   "city": "Cologne",
+   "text": "Cologne Cathedral took 632 years to complete, and on its completion in 1880 it was briefly the tallest building in the world."
+  },
+  {
+   "city": "Köln",
+   "text": "Köln's carnival season officially opens on the 11th of November at exactly 11:11 in the morning."
+  },
+  {
+   "city": "Stuttgart",
+   "text": "Stuttgart is the home of both Mercedes-Benz and Porsche, each with its own museum in the city."
+  },
+  {
+   "city": "Wolfsburg",
+   "text": "Wolfsburg was founded in 1938 to house Volkswagen workers, and its plant remains one of the largest car factories in the world."
+  },
+  {
+   "city": "Düsseldorf",
+   "text": "Düsseldorf hosts the largest Japanese community in Germany, complete with its own annual Japan Day festival."
+  },
+  {
+   "city": "Dortmund",
+   "text": "Dortmund's Yellow Wall, the south stand of its football stadium, holds nearly 25,000 fans — the biggest standing terrace in European football."
+  },
+  {
+   "city": "Bremen",
+   "text": "A bronze statue of the Town Musicians of Bremen — donkey, dog, cat and rooster from the Grimm tale — stands beside the city hall."
+  },
+  {
+   "city": "Lübeck",
+   "text": "Lübeck, medieval queen of the Hanseatic League, was among the first city ensembles in Germany to be listed by UNESCO, and is famous for marzipan."
+  },
+  {
+   "city": "Rostock",
+   "text": "Rostock's university, founded in 1419, is the oldest in the Baltic region."
+  },
+  {
+   "city": "Schwerin",
+   "text": "Schwerin's fairytale castle sits on its own island in a lake and houses the state parliament of Mecklenburg-Vorpommern."
+  },
+  {
+   "city": "Leipzig",
+   "text": "Johann Sebastian Bach led the St Thomas Choir in Leipzig for 27 years, and the city's Monday demonstrations helped bring down the Berlin Wall."
+  },
+  {
+   "city": "Dresden",
+   "text": "Dresden's Frauenkirche lay in ruins for half a century after 1945 and was rebuilt using thousands of its original stones, reopening in 2005."
+  },
+  {
+   "city": "Chemnitz",
+   "text": "Chemnitz is watched over by a seven-metre bronze head of Karl Marx and holds the title of European Capital of Culture 2025."
+  },
+  {
+   "city": "Potsdam",
+   "text": "Potsdam's Babelsberg studio, opened in 1912, is the oldest large-scale film studio in the world."
+  },
+  {
+   "city": "Kassel",
+   "text": "Kassel stages documenta, one of the world's most important contemporary art exhibitions, once every five years."
+  },
+  {
+   "city": "Wiesbaden",
+   "text": "Dostoevsky's losses at the Wiesbaden casino tables helped inspire his novel The Gambler."
+  },
+  {
+   "city": "Heidelberg",
+   "text": "Heidelberg's university, founded in 1386, is the oldest in Germany, and the old town survived the Second World War almost untouched."
+  },
+  {
+   "city": "Freiburg",
+   "text": "Freiburg's streets are lined with little water channels called Bächle — local legend says stepping in one means you will marry a Freiburger."
+  },
+  {
+   "city": "Augsburg",
+   "text": "Augsburg's Fuggerei, founded in 1521, is the world's oldest social housing complex still in use, with annual rent below one euro."
+  },
+  {
+   "city": "Nürnberg",
+   "text": "Germany's first railway ran from Nürnberg in 1835, and the city's Christkindlesmarkt is among the oldest Christmas markets anywhere."
+  },
+  {
+   "city": "London",
+   "text": "The London Underground, opened in 1863, is the oldest metro system in the world."
+  },
+  {
+   "city": "London",
+   "text": "Big Ben is the name of the bell, not the tower — the tower itself was renamed Elizabeth Tower in 2012."
+  },
+  {
+   "city": "London",
+   "text": "London's black-cab drivers must pass The Knowledge, memorising some 25,000 streets, which typically takes years."
+  },
+  {
+   "city": "Manchester",
+   "text": "The world's first inter-city passenger railway opened between Manchester and Liverpool in 1830."
+  },
+  {
+   "city": "Manchester",
+   "text": "The first stored-program computer, nicknamed the Baby, ran its first program at the University of Manchester in 1948."
+  },
+  {
+   "city": "Liverpool",
+   "text": "Liverpool's Hope Street links the city's two cathedrals — one Anglican, one Catholic — at either end."
+  },
+  {
+   "city": "Liverpool",
+   "text": "The Beatles played nearly 300 gigs at Liverpool's Cavern Club before conquering the world."
+  },
+  {
+   "city": "Birmingham",
+   "text": "Birmingham, England, has more canals by length than Venice, dug to move goods during the Industrial Revolution."
+  },
+  {
+   "city": "Birmingham",
+   "text": "The Cadbury family built the model village of Bournville around their chocolate factory on the edge of Birmingham."
+  },
+  {
+   "city": "Glasgow",
+   "text": "Glasgow's Clyde shipyards built some of the most famous liners afloat, including the Queen Mary and the QE2."
+  },
+  {
+   "city": "Cambridge",
+   "text": "Members and alumni of Cambridge's university have won well over a hundred Nobel Prizes — more than most countries."
+  },
+  {
+   "city": "Edinburgh",
+   "text": "Edinburgh Castle sits on the plug of an extinct volcano, and the city's Fringe is the largest arts festival in the world."
+  },
+  {
+   "city": "Cardiff",
+   "text": "A century ago Cardiff shipped more coal than any port on Earth; today its Principality Stadium has a fully retractable roof."
+  },
+  {
+   "city": "Swansea",
+   "text": "Swansea is the birthplace of the poet Dylan Thomas, and the nearby Gower Peninsula was the UK's first Area of Outstanding Natural Beauty."
+  },
+  {
+   "city": "Wrexham",
+   "text": "Wrexham's football club, founded in 1864, is among the oldest professional clubs in the world — and is now owned by two Hollywood actors."
+  },
+  {
+   "city": "Belfast",
+   "text": "The Titanic was built in Belfast's Harland and Wolff shipyard, whose giant yellow cranes still dominate the skyline."
+  },
+  {
+   "city": "Derry",
+   "text": "Derry is the only completely walled city in Ireland, and its 17th-century walls were never breached — hence the nickname Maiden City."
+  },
+  {
+   "city": "Dundee",
+   "text": "Dundee built the Antarctic research ship RRS Discovery and became the UK's first UNESCO City of Design."
+  },
+  {
+   "city": "Stoke-on-Trent",
+   "text": "Stoke-on-Trent is a federation of six towns whose kilns fired Wedgwood and Spode china, earning it the name The Potteries."
+  },
+  {
+   "city": "Sunderland",
+   "text": "Sunderland once launched more ships than any other town in the world, and today builds more cars than anywhere else in Britain."
+  },
+  {
+   "city": "Durham",
+   "text": "Durham's Norman cathedral, begun in 1093, forms a UNESCO World Heritage Site together with the castle beside it."
+  },
+  {
+   "city": "York",
+   "text": "The KitKat was invented at Rowntree's factory in York, a city still ringed by England's most complete medieval walls."
+  },
+  {
+   "city": "Sheffield",
+   "text": "Stainless steel was developed in Sheffield by Harry Brearley in 1913, sealing the city's reputation for cutlery."
+  },
+  {
+   "city": "Nottingham",
+   "text": "Nottingham's Ye Olde Trip to Jerusalem, carved into the castle rock, claims to have been serving ale since 1189."
+  },
+  {
+   "city": "Leeds",
+   "text": "The oldest surviving moving-picture footage was shot on Leeds Bridge by Louis Le Prince in 1888."
+  },
+  {
+   "city": "Newcastle",
+   "text": "Newcastle's Tyne Bridge was built by the same firm as the Sydney Harbour Bridge, and the two are near-identical in silhouette."
+  },
+  {
+   "city": "Brighton",
+   "text": "Brighton's seafront runs the world's oldest operating electric railway, opened by Magnus Volk in 1883."
+  },
+  {
+   "city": "Blackpool",
+   "text": "Blackpool Tower, opened in 1894, was directly inspired by the Eiffel Tower, and the town's Illuminations have shone since 1879."
+  },
+  {
+   "city": "Paris",
+   "text": "The Eiffel Tower was meant to stand for just 20 years after the 1889 World's Fair — its use as a radio mast saved it."
+  },
+  {
+   "city": "Paris",
+   "text": "The Louvre in Paris is the most visited museum in the world, welcoming millions more visitors than any rival."
+  },
+  {
+   "city": "Lyon",
+   "text": "The Lumière brothers shot some of the first films ever made in Lyon and premiered their cinematograph in 1895."
+  },
+  {
+   "city": "Lyon",
+   "text": "Lyon's old town hides traboules, covered passageways once used by silk workers to move cloth between streets."
+  },
+  {
+   "city": "Toulouse",
+   "text": "Toulouse is called the Pink City for its rose-coloured brick, and final assembly of Airbus airliners happens there."
+  },
+  {
+   "city": "Marseille",
+   "text": "Marseille is France's oldest city, founded by Greek sailors around 600 BC."
+  },
+  {
+   "city": "Nice",
+   "text": "Nice's Promenade des Anglais is named after the English visitors who paid for the seafront walkway in the 1820s."
+  },
+  {
+   "city": "Lille",
+   "text": "Lille's Braderie, held every September, is the largest flea market in Europe."
+  },
+  {
+   "city": "Amiens",
+   "text": "Amiens Cathedral is the largest Gothic cathedral in France by volume, and Jules Verne wrote many of his novels while living in the city."
+  },
+  {
+   "city": "Reims",
+   "text": "The kings of France were crowned in Reims Cathedral for over a thousand years, and millions of champagne bottles age in chalk cellars beneath the city."
+  },
+  {
+   "city": "Colmar",
+   "text": "Colmar, the Little Venice of Alsace, is the birthplace of Frédéric Auguste Bartholdi, sculptor of the Statue of Liberty."
+  },
+  {
+   "city": "Strasbourg",
+   "text": "Strasbourg Cathedral was the tallest building in the world for over two centuries, and the city hosts the European Parliament."
+  },
+  {
+   "city": "Grenoble",
+   "text": "Grenoble hosted the 1968 Winter Olympics and runs one of the world's oldest urban cable cars up to its Bastille fortress."
+  },
+  {
+   "city": "Annecy",
+   "text": "Annecy's alpine lake is fed by mountain springs and is often described as the cleanest lake in Europe."
+  },
+  {
+   "city": "Bordeaux",
+   "text": "Bordeaux's riverfront, the Port of the Moon, is one of the largest urban areas ever inscribed by UNESCO."
+  },
+  {
+   "city": "Biarritz",
+   "text": "Surfing arrived in Europe at Biarritz in the 1950s, in a resort made fashionable a century earlier by Napoleon III."
+  },
+  {
+   "city": "La Rochelle",
+   "text": "Two medieval towers still guard the harbour mouth of La Rochelle, once one of France's great Atlantic ports."
+  },
+  {
+   "city": "Brest",
+   "text": "Brest has been the home of the French Atlantic fleet since Cardinal Richelieu chose its sheltered harbour in the 1600s."
+  },
+  {
+   "city": "Quimper",
+   "text": "Quimper has produced its hand-painted faience pottery since 1690."
+  },
+  {
+   "city": "Rennes",
+   "text": "Rennes holds the Marché des Lices every Saturday, one of the biggest food markets in France, beneath half-timbered medieval houses."
+  },
+  {
+   "city": "Perpignan",
+   "text": "Salvador Dalí famously declared Perpignan's railway station the centre of the universe, and the city keeps a proudly Catalan identity."
+  },
+  {
+   "city": "Montpellier",
+   "text": "Montpellier's medical school has taught continuously since around 1220, longer than any other in the world."
+  },
+  {
+   "city": "Versailles",
+   "text": "The Palace of Versailles has about 2,300 rooms, and the treaty ending the First World War was signed in its Hall of Mirrors."
+  },
+  {
+   "city": "Cannes",
+   "text": "Cannes has hosted its film festival since 1946, turning a fishing village promenade into the world's most photographed red carpet."
+  },
+  {
+   "city": "Madrid",
+   "text": "Madrid's Restaurante Botín, open since 1725, holds the Guinness record as the oldest restaurant in the world."
+  },
+  {
+   "city": "Madrid",
+   "text": "All road distances in Spain are measured from Kilometre Zero, a plaque in Madrid's Puerta del Sol."
+  },
+  {
+   "city": "Barcelona",
+   "text": "Barcelona's Sagrada Família has been under construction since 1882 and is still not finished."
+  },
+  {
+   "city": "Barcelona",
+   "text": "Barcelona's Eixample district was laid out in the 1850s as a vast grid of chamfered octagonal blocks, decades ahead of its time."
+  },
+  {
+   "city": "Valencia",
+   "text": "Valencia is the birthplace of paella, and a 9-kilometre park now winds through the dry riverbed where the Turia once flowed."
+  },
+  {
+   "city": "Sevilla",
+   "text": "Sevilla's cathedral is the largest Gothic cathedral in the world, and Magellan's circumnavigation expedition set out from the city in 1519."
+  },
+  {
+   "city": "Granada",
+   "text": "Granada's Alhambra palace complex is Spain's most visited monument, and many of the city's bars still serve a free tapa with every drink."
+  },
+  {
+   "city": "Málaga",
+   "text": "Pablo Picasso was born in Málaga in 1881, in a city founded by the Phoenicians nearly 3,000 years ago."
+  },
+  {
+   "city": "Bilbao",
+   "text": "The Guggenheim museum, opened in 1997, so transformed Bilbao's fortunes that urban planners now speak of the Bilbao effect."
+  },
+  {
+   "city": "San Sebastián",
+   "text": "San Sebastián has one of the highest concentrations of Michelin stars per resident of any city in the world."
+  },
+  {
+   "city": "Vitoria",
+   "text": "Vitoria-Gasteiz, seat of the Basque government, was named European Green Capital in 2012 for the ring of parks encircling it."
+  },
+  {
+   "city": "A Coruña",
+   "text": "A Coruña's Tower of Hercules is the oldest Roman lighthouse still in use, guiding ships for nearly 2,000 years."
+  },
+  {
+   "city": "Vigo",
+   "text": "Vigo lands more fish for human consumption than any other port in Europe."
+  },
+  {
+   "city": "Santiago",
+   "text": "Santiago de Compostela is the endpoint of the Camino pilgrimage routes, and its cathedral swings a giant incense burner over the crowds."
+  },
+  {
+   "city": "Girona",
+   "text": "Girona's cathedral has the widest Gothic nave in the world, and its old streets stood in for King's Landing in Game of Thrones."
+  },
+  {
+   "city": "Tarragona",
+   "text": "Tarragona's Roman amphitheatre sits right on the seashore, part of the UNESCO-listed remains of ancient Tarraco."
+  },
+  {
+   "city": "Alicante",
+   "text": "Alicante is watched over by Santa Bárbara castle on Mount Benacantil, and its beaches blaze with bonfires every San Juan midsummer night."
+  },
+  {
+   "city": "Elche",
+   "text": "Elche is surrounded by more than 200,000 palm trees, Europe's largest palm grove and a UNESCO World Heritage Site."
+  },
+  {
+   "city": "Burgos",
+   "text": "Burgos Cathedral is a UNESCO site in its own right, and the medieval warlord El Cid is buried beneath its crossing."
+  },
+  {
+   "city": "León",
+   "text": "León's cathedral holds around 1,800 square metres of medieval stained glass, among the finest ensembles in Europe."
+  },
+  {
+   "city": "Salamanca",
+   "text": "Salamanca's university, founded in 1218, is the oldest in Spain — students still hunt for the lucky frog carved on its facade."
+  },
+  {
+   "city": "Cáceres",
+   "text": "Cáceres' walled old town blends Roman, Moorish and Gothic building so completely that UNESCO listed the whole ensemble."
+  },
+  {
+   "city": "Mérida",
+   "text": "Mérida's Roman theatre, built around 15 BC, still hosts a classical drama festival every summer."
+  },
+  {
+   "city": "Alcalá de Henares",
+   "text": "Alcalá de Henares is the birthplace of Cervantes, and its 1499 university gave UNESCO one of its first listed campus towns."
+  },
+  {
+   "city": "New York",
+   "text": "The New York subway has 472 stations, more than any other metro system in the world."
+  },
+  {
+   "city": "New York",
+   "text": "Around 800 languages are spoken in New York, making it the most linguistically diverse city on Earth."
+  },
+  {
+   "city": "New York",
+   "text": "New York's Central Park was the first major landscaped public park in the United States, opened in the 1850s."
+  },
+  {
+   "city": "New York City",
+   "text": "George Washington was sworn in as the first US president in New York City, the country's original capital."
+  },
+  {
+   "city": "Los Angeles",
+   "text": "The Hollywood sign originally read Hollywoodland when it went up in 1923 to advertise a housing development."
+  },
+  {
+   "city": "Los Angeles",
+   "text": "Los Angeles was founded in 1781 by 44 settlers, under a Spanish name so long it filled a whole line of the founding record."
+  },
+  {
+   "city": "San Francisco",
+   "text": "San Francisco's Golden Gate Bridge had the longest suspension span in the world from 1937 until 1964."
+  },
+  {
+   "city": "San Francisco",
+   "text": "San Francisco's cable cars are the only moving US National Historic Landmark."
+  },
+  {
+   "city": "Chicago",
+   "text": "Chicago built the world's first skyscraper, the ten-storey Home Insurance Building, in 1885."
+  },
+  {
+   "city": "Chicago",
+   "text": "Chicago reversed the flow of its river in 1900 to protect the city's drinking water in Lake Michigan."
+  },
+  {
+   "city": "Boston",
+   "text": "Boston Common, set aside in 1634, is the oldest public park in the United States, and the Boston Marathon is the world's oldest annual marathon."
+  },
+  {
+   "city": "Seattle",
+   "text": "The first Starbucks opened at Seattle's Pike Place Market in 1971 and still trades there."
+  },
+  {
+   "city": "Detroit",
+   "text": "Berry Gordy founded Motown in Detroit in 1959, and the first mile of concrete highway in America was laid on the city's Woodward Avenue."
+  },
+  {
+   "city": "Cleveland",
+   "text": "Cleveland installed the world's first electric traffic signal in 1914 and hosts the Rock and Roll Hall of Fame."
+  },
+  {
+   "city": "Denver",
+   "text": "Denver is nicknamed the Mile High City because one step of the State Capitol sits exactly 5,280 feet above sea level."
+  },
+  {
+   "city": "Las Vegas",
+   "text": "Las Vegas has more hotel rooms than any other city on Earth — roughly 150,000 of them."
+  },
+  {
+   "city": "Phoenix",
+   "text": "Phoenix records more hours of sunshine than almost any major city in the world."
+  },
+  {
+   "city": "Albuquerque",
+   "text": "Albuquerque's International Balloon Fiesta lifts hundreds of hot-air balloons at once, the largest ballooning event in the world."
+  },
+  {
+   "city": "Tucson",
+   "text": "Tucson was the first city in the United States to be named a UNESCO City of Gastronomy, honouring 4,000 years of desert agriculture."
+  },
+  {
+   "city": "San Antonio",
+   "text": "San Antonio's Alamo mission, besieged in 1836, is the most visited historic site in Texas."
+  },
+  {
+   "city": "Dallas",
+   "text": "The frozen margarita machine was invented in Dallas in 1971 — the prototype now belongs to the Smithsonian."
+  },
+  {
+   "city": "Austin",
+   "text": "Austin's official motto is the Live Music Capital of the World, and the bat colony under its Congress Avenue Bridge is North America's largest urban one."
+  },
+  {
+   "city": "Memphis",
+   "text": "Elvis Presley's Graceland in Memphis draws around 600,000 visitors a year, among the most visited private homes in America."
+  },
+  {
+   "city": "St. Louis",
+   "text": "The Gateway Arch in St. Louis stands 630 feet tall, the tallest man-made monument in the United States."
+  },
+  {
+   "city": "Kansas City",
+   "text": "Kansas City claims more fountains than any city in the world except Rome."
+  },
+  {
+   "city": "Omaha",
+   "text": "Omaha is home town and lifelong base of investor Warren Buffett, the Oracle of Omaha."
+  },
+  {
+   "city": "Salt Lake City",
+   "text": "Salt Lake City hosted the 2002 Winter Olympics and will host them again in 2034."
+  },
+  {
+   "city": "San Diego",
+   "text": "San Diego's Balboa Park is larger than Central Park and hosts a zoo that pioneered open-air, cageless enclosures."
+  },
+  {
+   "city": "Toronto",
+   "text": "Toronto's CN Tower was the tallest free-standing structure in the world for over three decades after opening in 1976."
+  },
+  {
+   "city": "Toronto",
+   "text": "Roughly half of Toronto's residents were born outside Canada, making it one of the most multicultural cities anywhere."
+  },
+  {
+   "city": "Montreal",
+   "text": "Montreal is the largest French-speaking city in the world after Paris."
+  },
+  {
+   "city": "Montréal",
+   "text": "Mount Royal, the hill that gave Montréal its name, was landscaped by Frederick Law Olmsted, co-designer of Central Park."
+  },
+  {
+   "city": "Vancouver",
+   "text": "Vancouver's Stanley Park is about ten percent bigger than New York's Central Park and is ringed by a nine-kilometre seawall."
+  },
+  {
+   "city": "Ottawa",
+   "text": "In winter Ottawa's Rideau Canal becomes the world's largest skating rink, nearly eight kilometres long."
+  },
+  {
+   "city": "Quebec City",
+   "text": "Quebec City is the only walled city north of Mexico whose fortifications still stand complete."
+  },
+  {
+   "city": "Québec City",
+   "text": "Québec City's Château Frontenac is often called the most photographed hotel in the world."
+  },
+  {
+   "city": "Calgary",
+   "text": "The Calgary Stampede, running since 1912, bills itself as the Greatest Outdoor Show on Earth."
+  },
+  {
+   "city": "Edmonton",
+   "text": "West Edmonton Mall is the largest shopping centre in North America, complete with an indoor water park and skating rink."
+  },
+  {
+   "city": "Winnipeg",
+   "text": "Winnie-the-Pooh is named after a bear called Winnie — herself named for Winnipeg by the Canadian soldier who bought her."
+  },
+  {
+   "city": "Regina",
+   "text": "Every Royal Canadian Mounted Police officer trains at the Depot academy in Regina, as they have since 1885."
+  },
+  {
+   "city": "Saskatoon",
+   "text": "Saskatoon is named after a local berry, and its riverbank skyline has earned it the nickname Paris of the Prairies."
+  },
+  {
+   "city": "Banff",
+   "text": "Banff was Canada's first national park, created in 1885 around hot springs discovered by railway workers."
+  },
+  {
+   "city": "Kelowna",
+   "text": "Kelowna anchors the Okanagan Valley wine country — and its lake comes with a resident monster legend, the Ogopogo."
+  },
+  {
+   "city": "Victoria",
+   "text": "Victoria's famous Butchart Gardens were planted in the early 1900s inside an exhausted limestone quarry."
+  },
+  {
+   "city": "Halifax",
+   "text": "The 1917 Halifax Harbour explosion was the largest man-made blast before the atomic bomb."
+  },
+  {
+   "city": "Charlottetown",
+   "text": "Charlottetown hosted the 1864 conference that led to Canadian Confederation, earning it the title Birthplace of Confederation."
+  },
+  {
+   "city": "Moncton",
+   "text": "Moncton sits near the Bay of Fundy, whose tides — the highest in the world — push a bore wave up the city's river twice a day."
+  },
+  {
+   "city": "St. John's",
+   "text": "On Signal Hill above St. John's, Marconi received the first transatlantic wireless signal in 1901."
+  },
+  {
+   "city": "Corner Brook",
+   "text": "Corner Brook grew around a paper mill opened in 1925, and Captain James Cook surveyed its Bay of Islands in the 1760s."
+  },
+  {
+   "city": "Trois-Rivières",
+   "text": "Trois-Rivières, founded in 1634, is the second-oldest city of New France after Quebec City."
+  },
+  {
+   "city": "Iqaluit",
+   "text": "Iqaluit became Canada's newest capital in 1999 and is the only one with no road or rail link to the rest of the country."
+  },
+  {
+   "city": "Yellowknife",
+   "text": "Yellowknife sits on Great Slave Lake, the deepest lake in North America, under some of the world's most reliable aurora skies."
+  },
+  {
+   "city": "Whitehorse",
+   "text": "Whitehorse is named for rapids on the Yukon River that reminded gold-rush stampeders of white horses' manes."
+  },
+  {
+   "city": "Beijing",
+   "text": "Beijing's Forbidden City is the largest palace complex in the world, with close to 9,000 rooms."
+  },
+  {
+   "city": "Beijing",
+   "text": "Beijing is the only city ever to host both the Summer and the Winter Olympic Games."
+  },
+  {
+   "city": "Shanghai",
+   "text": "Shanghai runs the world's first commercial maglev train, covering 30 kilometres to the airport in about seven minutes."
+  },
+  {
+   "city": "Shanghai",
+   "text": "The Port of Shanghai has been the busiest container port in the world every year since 2010."
+  },
+  {
+   "city": "Shenzhen",
+   "text": "Shenzhen grew from a town of about 30,000 people into a metropolis of over 12 million in four decades after becoming China's first special economic zone."
+  },
+  {
+   "city": "Shenzhen",
+   "text": "Shenzhen was the first major city in the world to electrify its entire bus fleet — more than 16,000 vehicles."
+  },
+  {
+   "city": "Guangzhou",
+   "text": "Guangzhou has hosted the Canton Fair, China's largest trade fair, twice a year since 1957."
+  },
+  {
+   "city": "Chengdu",
+   "text": "Chengdu is home to the famous giant panda research base and was Asia's first UNESCO City of Gastronomy."
+  },
+  {
+   "city": "Chongqing",
+   "text": "In Chongqing a metro line runs straight through the middle of a 19-storey residential building."
+  },
+  {
+   "city": "Wuhan",
+   "text": "Wuhan sits where the Han meets the Yangtze, and the first bridge ever to span the Yangtze opened there in 1957."
+  },
+  {
+   "city": "Changsha",
+   "text": "Tombs at Mawangdui in Changsha preserved a 2,000-year-old noblewoman so well that her skin was still soft when excavated."
+  },
+  {
+   "city": "Nanchang",
+   "text": "The 1927 Nanchang uprising is celebrated as the founding moment of the People's Liberation Army."
+  },
+  {
+   "city": "Zhengzhou",
+   "text": "Zhengzhou stands on the Yellow River where the Shang dynasty built a walled capital about 3,600 years ago."
+  },
+  {
+   "city": "Lanzhou",
+   "text": "Lanzhou is the home of hand-pulled beef noodle soup, and the first permanent bridge over the Yellow River opened there in 1909."
+  },
+  {
+   "city": "Xi'an",
+   "text": "Farmers digging a well near Xi'an in 1974 uncovered the Terracotta Army — some 8,000 clay soldiers guarding China's first emperor."
+  },
+  {
+   "city": "Kashgar",
+   "text": "Kashgar has been a Silk Road oasis for 2,000 years, and its Sunday bazaar remains one of Central Asia's largest markets."
+  },
+  {
+   "city": "Urumqi",
+   "text": "Urumqi is the most landlocked major city in the world, about 2,500 kilometres from the nearest coastline."
+  },
+  {
+   "city": "Kunming",
+   "text": "Kunming is called the Spring City for its mild year-round climate and hosts Asia's largest flower market."
+  },
+  {
+   "city": "Harbin",
+   "text": "Harbin's winter Ice and Snow Festival builds a full-scale illuminated city out of river ice every year."
+  },
+  {
+   "city": "Changchun",
+   "text": "Changchun built China's first automobile plant in the 1950s and is still called the cradle of the Chinese car industry."
+  },
+  {
+   "city": "Shenyang",
+   "text": "Shenyang's Mukden Palace is the only imperial palace complex in China outside Beijing, built by the early Qing emperors."
+  },
+  {
+   "city": "Nanjing",
+   "text": "Nanjing's Ming-era city wall is the longest surviving city wall in the world, once stretching 35 kilometres."
+  },
+  {
+   "city": "Hangzhou",
+   "text": "Marco Polo described Hangzhou as the finest and most splendid city in the world, and its West Lake is now a UNESCO site."
+  },
+  {
+   "city": "Suzhou",
+   "text": "Suzhou's classical gardens, refined over a thousand years, are collectively listed as a UNESCO World Heritage Site."
+  },
+  {
+   "city": "Zhuhai",
+   "text": "Zhuhai anchors one end of the 55-kilometre Hong Kong-Zhuhai-Macau bridge, the longest sea crossing ever built."
+  },
+  {
+   "city": "Tokyo",
+   "text": "Tokyo holds more Michelin stars than any other city in the world."
+  },
+  {
+   "city": "Tokyo",
+   "text": "Tokyo's Shinjuku is certified by Guinness as the busiest railway station on Earth, handling over three million passengers a day."
+  },
+  {
+   "city": "Yokohama",
+   "text": "Japan's first railway opened in 1872 between Tokyo and Yokohama, and the city hosts Japan's largest Chinatown."
+  },
+  {
+   "city": "Osaka",
+   "text": "Osaka is nicknamed the nation's kitchen and gave Japan both takoyaki and the word kuidaore — eating yourself broke."
+  },
+  {
+   "city": "Kyoto",
+   "text": "Kyoto served as Japan's capital for over a thousand years and still counts around 2,000 temples and shrines."
+  },
+  {
+   "city": "Kyoto",
+   "text": "Nintendo was founded in Kyoto in 1889 — as a maker of hand-painted playing cards."
+  },
+  {
+   "city": "Kobe",
+   "text": "Authentic Kobe beef must come from Tajima cattle born and raised in Hyogo prefecture, of which Kobe is the capital."
+  },
+  {
+   "city": "Nagoya",
+   "text": "Nagoya's castle is crowned by two golden shachihoko — tiger-headed fish — and Toyota's headquarters sit just outside the city."
+  },
+  {
+   "city": "Sapporo",
+   "text": "Sapporo hosted the 1972 Winter Games — the first in Asia — and its Snow Festival carves whole palaces from packed snow."
+  },
+  {
+   "city": "Hakodate",
+   "text": "Hakodate was among the first Japanese ports opened to foreign trade in the 1850s, and its mountain-top night view is nationally famous."
+  },
+  {
+   "city": "Otaru",
+   "text": "Otaru's gas-lit canal district, built for the herring trade, now houses glassblowing studios and music-box workshops."
+  },
+  {
+   "city": "Aomori",
+   "text": "Aomori grows more than half of Japan's apples and parades giant illuminated floats at its Nebuta festival every August."
+  },
+  {
+   "city": "Sendai",
+   "text": "Sendai was founded by the one-eyed samurai lord Date Masamune in 1601 and stages Japan's largest Tanabata star festival."
+  },
+  {
+   "city": "Morioka",
+   "text": "Morioka is famous for wanko soba, a contest-style meal where servers refill your bowl with bite-sized noodles until you beg them to stop."
+  },
+  {
+   "city": "Kanazawa",
+   "text": "Kanazawa produces about 99 percent of Japan's gold leaf and escaped wartime bombing, keeping its samurai and geisha districts intact."
+  },
+  {
+   "city": "Nagano",
+   "text": "Nagano hosted the 1998 Winter Olympics and grew around Zenko-ji, a temple founded in the 7th century."
+  },
+  {
+   "city": "Hiroshima",
+   "text": "Hiroshima's Genbaku Dome was left standing as a peace memorial, and the city is Japan's biggest oyster producer."
+  },
+  {
+   "city": "Okayama",
+   "text": "Okayama is the legendary home of Momotaro the Peach Boy, and its Koraku-en ranks among Japan's three great gardens."
+  },
+  {
+   "city": "Matsue",
+   "text": "Matsue's black castle is one of only a dozen in Japan with its original wooden keep, and writer Lafcadio Hearn made the city his home."
+  },
+  {
+   "city": "Matsuyama",
+   "text": "Matsuyama's Dogo Onsen has offered hot-spring bathing for around 3,000 years, making it one of Japan's oldest baths."
+  },
+  {
+   "city": "Takamatsu",
+   "text": "Takamatsu's Ritsurin Garden took feudal lords a century to complete and is the gateway to the sanuki udon heartland."
+  },
+  {
+   "city": "Fukuoka",
+   "text": "Fukuoka is the birthplace of tonkotsu ramen and keeps Japan's largest concentration of yatai street-food stalls."
+  },
+  {
+   "city": "Kagoshima",
+   "text": "Kagoshima faces Sakurajima, one of the world's most active volcanoes, which regularly dusts the city with ash."
+  },
+  {
+   "city": "Naha",
+   "text": "Naha was the capital of the independent Ryukyu Kingdom for centuries before Okinawa became part of Japan."
+  },
+  {
+   "city": "Mumbai",
+   "text": "Mumbai's dabbawalas deliver around 200,000 home-cooked lunches a day with an error rate so low it is studied by business schools."
+  },
+  {
+   "city": "Mumbai",
+   "text": "Mumbai's Chhatrapati Shivaji Terminus is a working railway station so ornate it is a UNESCO World Heritage Site."
+  },
+  {
+   "city": "New Delhi",
+   "text": "New Delhi was designed by Edwin Lutyens and inaugurated in 1931 after the capital moved from Calcutta."
+  },
+  {
+   "city": "New Delhi",
+   "text": "New Delhi's India Gate bears the names of over 13,000 soldiers of the Indian Army who fell in the First World War."
+  },
+  {
+   "city": "Bengaluru",
+   "text": "Bengaluru is called the Silicon Valley of India, and its Lalbagh garden grew from a royal Mughal-style garden of the 1760s."
+  },
+  {
+   "city": "Chennai",
+   "text": "Chennai's Marina Beach stretches about 13 kilometres, one of the longest urban beaches in the world."
+  },
+  {
+   "city": "Kolkata",
+   "text": "Kolkata has run trams since 1902, the oldest operating tram network in Asia."
+  },
+  {
+   "city": "Jaipur",
+   "text": "Jaipur was painted pink in 1876 to welcome the Prince of Wales, and the colour is still protected by law in the old city."
+  },
+  {
+   "city": "Jodhpur",
+   "text": "Jodhpur's indigo-washed old town spreads below Mehrangarh Fort — and the city gave its name to jodhpur riding trousers."
+  },
+  {
+   "city": "Udaipur",
+   "text": "Udaipur is the City of Lakes, where the Lake Palace appears to float on the waters of Lake Pichola."
+  },
+  {
+   "city": "Agra",
+   "text": "Some 20,000 workers spent about 22 years building the Taj Mahal in Agra, finishing around 1653."
+  },
+  {
+   "city": "Varanasi",
+   "text": "Varanasi is among the oldest continuously inhabited cities on Earth, its riverfront stepped with nearly 90 ghats."
+  },
+  {
+   "city": "Lucknow",
+   "text": "Lucknow's Bara Imambara contains one of the largest arched halls in the world, built without a single supporting beam."
+  },
+  {
+   "city": "Patna",
+   "text": "Patna stands on the site of ancient Pataliputra, capital of the Maurya empire under Ashoka the Great."
+  },
+  {
+   "city": "Shillong",
+   "text": "Shillong is nicknamed the Scotland of the East for its rolling hills, and is celebrated as India's rock music capital."
+  },
+  {
+   "city": "Guwahati",
+   "text": "Guwahati sits on the Brahmaputra, a river that swells to around 10 kilometres wide near the city in monsoon flood."
+  },
+  {
+   "city": "Bhubaneswar",
+   "text": "Bhubaneswar is called the Temple City — medieval chronicles counted hundreds of stone temples, and dozens still stand."
+  },
+  {
+   "city": "Visakhapatnam",
+   "text": "Visakhapatnam turned a real submarine, INS Kursura, into South Asia's first submarine museum on its beach."
+  },
+  {
+   "city": "Surat",
+   "text": "Roughly 90 percent of the world's diamonds are cut and polished in Surat."
+  },
+  {
+   "city": "Vadodara",
+   "text": "Vadodara's Laxmi Vilas Palace is about four times the floor area of Buckingham Palace and is still a royal residence."
+  },
+  {
+   "city": "Ahmedabad",
+   "text": "Ahmedabad became India's first UNESCO World Heritage City in 2017, and Gandhi ran his Sabarmati Ashram there for 13 years."
+  },
+  {
+   "city": "Mysuru",
+   "text": "During Dasara, Mysuru Palace is lit by nearly 100,000 bulbs, a tradition of the city's 400-year-old royal festival."
+  },
+  {
+   "city": "Mangaluru",
+   "text": "Mangaluru's clay roof tiles were such a successful export in the 1800s that Mangalore tiles still roof buildings across Asia."
+  },
+  {
+   "city": "Coimbatore",
+   "text": "Coimbatore is called the Manchester of South India for its textile mills, and the 34-metre Adiyogi statue nearby is the world's largest bust."
+  },
+  {
+   "city": "Madurai",
+   "text": "Madurai's Meenakshi Temple raises 14 towered gateways covered in thousands of painted sculptures, and its jasmine holds protected GI status."
+  },
+  {
+   "city": "Hyderabad",
+   "text": "Hyderabad's Golconda mines produced legendary diamonds including the Koh-i-Noor, centuries before the city became a tech hub."
+  },
+  {
+   "city": "Pune",
+   "text": "Pune is called the Oxford of the East for its universities, and the Aga Khan Palace there held Gandhi prisoner in the 1940s."
+  },
+  {
+   "city": "Nagpur",
+   "text": "Nagpur's Zero Mile marker was the point from which British India measured its distances, and the city is famous for its oranges."
+  },
+  {
+   "city": "Gurugram",
+   "text": "Gurugram grew from farmland into one of India's biggest corporate hubs in barely three decades."
+  },
+  {
+   "city": "Noida",
+   "text": "Noida, planned in 1976, hosts one of India's largest film studio complexes and had a Formula 1 circuit on its doorstep."
+  },
+  {
+   "city": "Sydney",
+   "text": "The roof of the Sydney Opera House is covered in more than a million self-cleaning ceramic tiles."
+  },
+  {
+   "city": "Sydney",
+   "text": "Sydney Harbour Bridge is nicknamed the Coathanger, and climbers have been walking over its arch since 1998."
+  },
+  {
+   "city": "Melbourne",
+   "text": "Melbourne runs the largest tram network in the world, about 250 kilometres of track."
+  },
+  {
+   "city": "Brisbane",
+   "text": "Brisbane will host the 2032 Olympic Games, the third time Australia has won the Games."
+  },
+  {
+   "city": "Gold Coast",
+   "text": "The Gold Coast unrolls about 57 kilometres of surf beaches, including the break that named Surfers Paradise."
+  },
+  {
+   "city": "Cairns",
+   "text": "Cairns is the gateway to the Great Barrier Reef, the largest living structure on Earth."
+  },
+  {
+   "city": "Perth",
+   "text": "Perth is often called the most isolated major city in the world — its nearest big neighbour is over 2,000 kilometres away."
+  },
+  {
+   "city": "Fremantle",
+   "text": "Fremantle hosted the 1987 America's Cup defence, and its convict-built prison is a UNESCO World Heritage Site."
+  },
+  {
+   "city": "Kalgoorlie",
+   "text": "Kalgoorlie's Super Pit gold mine grew so large it could be seen from space — roughly 3.5 kilometres long and 600 metres deep."
+  },
+  {
+   "city": "Adelaide",
+   "text": "Adelaide was planned in 1836 as a grid wrapped entirely in parkland, and its Fringe is the largest arts festival in the Southern Hemisphere."
+  },
+  {
+   "city": "Alice Springs",
+   "text": "Alice Springs pioneered the School of the Air in 1951, teaching outback children by radio across an area bigger than many countries."
+  },
+  {
+   "city": "Coober Pedy",
+   "text": "In the opal town of Coober Pedy, many residents live underground in dugouts to escape the desert heat."
+  },
+  {
+   "city": "Mount Gambier",
+   "text": "Mount Gambier's Blue Lake, filling a volcanic crater, turns a vivid cobalt blue every summer and back to grey in winter."
+  },
+  {
+   "city": "Darwin",
+   "text": "Darwin sits closer to Jakarta than to Sydney, and was rebuilt twice — after wartime bombing in 1942 and Cyclone Tracy in 1974."
+  },
+  {
+   "city": "Hobart",
+   "text": "Hobart, founded in 1804, is Australia's second-oldest capital and the finish line of the Sydney to Hobart yacht race."
+  },
+  {
+   "city": "Launceston",
+   "text": "Launceston's Cataract Gorge puts a wilderness reserve, chairlift included, ten minutes' walk from the city centre."
+  },
+  {
+   "city": "Devonport",
+   "text": "Devonport is the home port of the Spirit of Tasmania ferries that link the island to the Australian mainland."
+  },
+  {
+   "city": "Canberra",
+   "text": "Canberra was designed from scratch by Chicago architects Walter and Marion Griffin, winners of a 1912 competition."
+  },
+  {
+   "city": "Belconnen",
+   "text": "Belconnen was laid out in the 1960s as one of Canberra's planned satellite town centres, wrapped around Lake Ginninderra."
+  },
+  {
+   "city": "Gungahlin",
+   "text": "Gungahlin is Canberra's youngest district, connected to the city by light rail in 2019."
+  },
+  {
+   "city": "Byron Bay",
+   "text": "The lighthouse at Byron Bay stands on Cape Byron, the easternmost point of the Australian mainland."
+  },
+  {
+   "city": "Geelong",
+   "text": "Geelong grew rich on the wool trade and is home to the Cats, one of the oldest football clubs in the world, founded in 1859."
+  },
+  {
+   "city": "Ballarat",
+   "text": "Ballarat's Eureka Stockade rebellion of 1854 became a defining moment in Australian democracy during the gold rush."
+  },
+  {
+   "city": "Birmingham",
+   "text": "Birmingham, Alabama, is watched over by Vulcan — the largest cast-iron statue in the world."
+  }
+ ],
+ "tips": [
+  "Passing on a street does not kill it — it goes straight to auction, where you can sometimes win it back below the sticker price.",
+  "Auctions are the only place streets sell below list price, so a table full of cautious players is a table full of bargains.",
+  "Auction bids rise in steps of at least $10, and every new bid resets the countdown, so a late bid keeps maximum pressure on.",
+  "Your leading auction bid leaves your cash immediately and is refunded only if you are outbid — do not count on spending that money twice.",
+  "Bidding a rival up at auction is sweet until they pass — the escrow means you must be able to pay whatever number you shouted.",
+  "If nobody bids at all, the street stays with the bank, so a cheap opening bid can steal a tile the table ignored.",
+  "When someone goes bankrupt to the bank, their streets return to the open market — a second chance at the colour you missed.",
+  "Bankrupting to a player hands them everything you own, so if the end is coming, mind who your last debt is owed to.",
+  "Mortgaging pays half the printed price and costs that half plus 10 percent to lift — cheap credit when it finishes a set.",
+  "A mortgaged street collects nothing, so mortgage your loose single streets and never the set that is doing the earning.",
+  "You cannot mortgage a street while its colour has houses anywhere — the buildings have to be sold off first.",
+  "Selling a house refunds only half of what it cost, so build with money you will not need back in a hurry.",
+  "Keep a cash cushion: a rent you cannot cover drops you into the debt phase, where everything you sell goes at the worst prices.",
+  "When you are in debt, you choose what gets mortgaged or sold — sacrifice the loose ends and protect the earning set.",
+  "The Earnings Tax takes 10 percent of your cash on hand, so a huge unspent pile is itself a liability; the Premium Tax is a flat $75 however rich you are.",
+  "Early in the game, pay the $50 prison fine at once — every turn in a cell is a turn your rivals spend buying streets.",
+  "Late in the game a prison cell is a rent-free hotel: you still collect from your streets while locked up, unless the no-prison-rent rule is on.",
+  "With the no-prison-rent rule on, your own jail time switches your whole empire off — pay the fine and get out fast.",
+  "You cannot camp in prison forever: after three failed rolls the $50 fine is charged automatically and your roll plays out.",
+  "A double breaks you out of prison for free, but the escape roll does not earn the usual extra turn.",
+  "Rolling a double earns another roll — but a third double in one turn is a straight trip to prison, with no salary on the way.",
+  "Get-out-of-prison cards can be traded like anything else, and they are worth most to whoever keeps landing behind bars.",
+  "With even-build on, houses must stay level across the colour, so budget for the whole row rather than one favourite street.",
+  "The rent curve bends hardest at the third house — that is usually the point where a street starts repaying its buildings.",
+  "The dearest street in every colour uses a richer rent table than its neighbours, so when a set sits uneven, give it the extra house.",
+  "A hotel is simply the fifth build on a street, and there is no housing shortage here — the race is about cash, not pieces.",
+  "A street with any building on it cannot be traded at all, so sell down to bare ground before shopping a set around.",
+  "Airports pay 25, 50, 100 and then 200 as you collect the set — four of them make a tidy empire that never needs a house.",
+  "Utility rent is the victim's dice roll times four, or times ten with both — the second utility is worth far more than the first.",
+  "With the double-rent rule on, a completed colour earns twice the rent before you build anything, so sets matter even when you are broke.",
+  "A street that completes somebody's colour is worth far more than the number printed on it — price it like the weapon it is.",
+  "Owning one street of a rival's colour is a veto: they cannot build until you sell, so never let it go cheap.",
+  "Some opponents will pay close to double for the last street of their set — if you must sell a completer, hold out for the premium.",
+  "The trades most likely to be accepted swap streets from different colours so both sides walk away with a finished set.",
+  "An offer can bundle cash, streets and get-out-of-prison cards all at once — sweeten a lopsided swap with money.",
+  "You cannot promise money you do not have: trade cash is capped at what is actually in your hand.",
+  "If the board changes between offer and accept — an auction, a bankruptcy, another trade — the deal is re-checked and dies rather than executing stale.",
+  "Some players remember being refused and will not chase the same street again for a while — a firm no buys you quiet laps.",
+  "You can see who is currently reading your trade offer — if they are staring and not accepting, it may be time to sweeten it.",
+  "Head-to-head, if you can never build while your rival already has, four laps past START force one blocking street to you at 1.7 times its price — but only once every street on the board is owned.",
+  "The deadlock purchase happens only if you can pay on the spot, so bank cash while you walk those laps.",
+  "The deadlock rule never moves a mortgaged street — a mortgaged wall stays a wall, whichever side of it you are on.",
+  "Paying 1.7 times list through the deadlock rule is the expensive way out — offering your rival a fair trade first is almost always cheaper.",
+  "With three or more players the deadlock rule stays off entirely — trading is the only way through a wall.",
+  "The turn clock removes players who stall, and their streets go back to the bank, not to whoever was owed money.",
+  "Every deliberate action resets your turn clock, so a long think is fine as long as you keep doing something.",
+  "When someone disconnects, anyone can grant them extra time twice — after that it takes the whole table to keep waiting.",
+  "Landing exactly on START pays $300 instead of the usual $200 for passing it.",
+  "Vacation costs you your next turn — and with the vacation-cash rule on, whoever lands there sweeps every tax paid since the last visitor.",
+  "On a short board like Blitz the salary comes around fast, so cheap colours pay themselves off much quicker.",
+  "On Lucky Wheel half the board is cards, so swings are violent — carry a bigger cash reserve than feels natural.",
+  "The stretch just past the prison corner catches every released prisoner's next roll, which makes those streets land on far more often than the far side of the board.",
+  "Buy early and buy broadly — every street you hold is one your rivals cannot complete a colour without.",
+  "In a team game nobody pays rent to a teammate, and the team lives while any one member is solvent — keep the poorest of you afloat.",
+  "A mortgaged street can change hands in a trade, but its new owner inherits the lift cost — discount it accordingly.",
+  "With auctions switched off, a passed street simply waits for the next player to land on it — passing is a gift to whoever is right behind you.",
+  "Watch what your opponents are one street short of — the moment before someone completes a colour is your last cheap chance to stop them."
+ ]
+}

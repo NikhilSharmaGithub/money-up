@@ -55,6 +55,29 @@ const moneyText = (n) => `$${Number(n).toLocaleString('en-US')}`;
 
 let tradeSeq = 1;
 
+/**
+ * End-of-game badges, in hand-out order. Each one goes to the outright
+ * leader of a stat and says the number out loud; the later entries exist so
+ * even a rough game earns you something to laugh about. A title is never
+ * handed down the ranking — the leader wears it or nobody does.
+ */
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const times = (n) => (n === 1 ? 'once' : `${n} times`);
+const TITLE_BOOK = [
+  { key: 'biggestRent', name: 'Heavy Hitter',
+    reason: (v, s) => `took ${moneyText(v)} in a single rent${s.biggestRentTile ? ` on ${s.biggestRentTile}` : ''}` },
+  { key: 'tradesCompleted', name: 'Dealmaker', reason: (v) => `closed ${plural(v, 'trade')}` },
+  { key: 'housesBuilt', name: 'Master Builder', reason: (v) => `built ${plural(v, 'house')}` },
+  { key: 'leadShare', name: 'Front Runner', reason: (v) => `sat in first place for ${v}% of the game` },
+  { key: 'rentCollected', name: 'Landlord', reason: (v) => `collected ${moneyText(v)} in rent` },
+  { key: 'auctionsWon', name: 'Auction Hawk', reason: (v) => `won ${plural(v, 'auction')}` },
+  { key: 'streetsBought', name: 'Land Grabber', reason: (v) => `bought ${plural(v, 'street')}` },
+  { key: 'doubles', name: 'Hot Dice', reason: (v) => `rolled ${plural(v, 'double')}` },
+  { key: 'laps', name: 'Globetrotter', reason: (v) => `lapped the board ${times(v)}` },
+  { key: 'jailed', name: 'Jailbird', reason: (v) => `got locked up ${times(v)}` },
+  { key: 'rentPaid', name: 'Star Tenant', reason: (v) => `paid out ${moneyText(v)} in rent to the competition` },
+];
+
 export class GameRoom {
   constructor(id, onUpdate) {
     this.id = id;
@@ -75,6 +98,8 @@ export class GameRoom {
     this.winningTeam = null;
     this.decks = this.freshDecks();
     this.history = []; // per-turn net-worth snapshots, revealed at game end
+    this.stats = {};   // per-player match counters, revealed at game end
+    this.titles = null; // end-of-game badges derived from the stats
     this.turnCount = 0;
     this.lastCard = null;
     this.lastMove = null;
@@ -327,6 +352,8 @@ export class GameRoom {
     this.ownership = {};
     this.vacationPot = 0;
     this.history = [];
+    this.stats = {};
+    this.titles = null;
     this.turnCount = 0;
     this.turn = {
       playerId: this.players[0].id,
@@ -705,6 +732,67 @@ export class GameRoom {
     if (this.history.length > 480) this.history = this.history.filter((_, i) => i % 2 === 0 || i === this.history.length - 1);
   }
 
+  // ------------------------------------------------------------- match stats --
+  /** Lazily created per-player counters for the end-of-game report card. */
+  statFor(p) {
+    const id = typeof p === 'string' ? p : p.id;
+    return (this.stats[id] ??= {
+      doubles: 0, jailed: 0, streetsBought: 0, auctionsWon: 0,
+      tradesCompleted: 0, housesBuilt: 0, rentCollected: 0, rentPaid: 0,
+      biggestRent: 0, biggestRentTile: null, laps: 0, leadShare: 0,
+    });
+  }
+
+  /** One rent payment actually landing — straight away or via a settled debt. */
+  noteRent(payer, owner, amount, tileName) {
+    if (!(amount > 0) || !payer || !owner) return;
+    this.statFor(payer).rentPaid += amount;
+    const s = this.statFor(owner);
+    s.rentCollected += amount;
+    if (amount > s.biggestRent) {
+      s.biggestRent = amount;
+      s.biggestRentTile = tileName || null;
+    }
+  }
+
+  /** How much of the game each player spent in front, from the worth history. */
+  settleLeadShare() {
+    if (!this.history.length) return;
+    const led = {};
+    for (const snap of this.history) {
+      let top = null, topW = -1, tie = false;
+      for (const [id, w] of Object.entries(snap.w)) {
+        if (w > topW) { top = id; topW = w; tie = false; }
+        else if (w === topW) tie = true;
+      }
+      if (top && !tie && topW > 0) led[top] = (led[top] || 0) + 1;
+    }
+    for (const p of this.players) {
+      this.statFor(p).leadShare = Math.round((100 * (led[p.id] || 0)) / this.history.length);
+    }
+  }
+
+  /**
+   * One badge per player, straight from the numbers. Walking the book in
+   * order, each title goes to the outright leader of its stat; a player keeps
+   * only the first title they earn, and a title whose leader is already
+   * decorated is dropped rather than handed to the runner-up. A stat nobody
+   * scored on awards nothing at all.
+   */
+  computeTitles() {
+    const titles = {};
+    for (const t of TITLE_BOOK) {
+      let best = null, bestV = 0;
+      for (const p of this.players) {
+        const v = this.stats[p.id]?.[t.key] || 0;
+        if (v > bestV) { best = p; bestV = v; }
+      }
+      if (!best || titles[best.id]) continue;
+      titles[best.id] = { title: t.name, reason: t.reason(bestV, this.stats[best.id]) };
+    }
+    return titles;
+  }
+
   // ------------------------------------------------------------------- money --
   credit(p, amount, reason = '') {
     p.money += amount;
@@ -769,6 +857,7 @@ export class GameRoom {
     this.turn.dice = [d1, d2];
     this.turn.rolledThisTurn = true;
     const isDouble = d1 === d2;
+    if (isDouble) this.statFor(p).doubles++;
 
     if (p.jail) {
       if (isDouble) {
@@ -839,6 +928,7 @@ export class GameRoom {
     const passedStart = steps > 0 && to < from && !landsOnStart;
     p.pos = to;
     this.lastMove = animate ? { playerId: p.id, from, to, steps, at: Date.now() } : null;
+    if (steps > 0 && to < from && collectSalary) this.statFor(p).laps++;
     if (passedStart && collectSalary) {
       p.money += SALARY;
       this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
@@ -855,7 +945,8 @@ export class GameRoom {
     this.lastMove = { playerId: p.id, from, to, steps: 0, at: Date.now() };
     if (passedStart && collectSalary) {
       p.money += SALARY;
-      this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
+      this.statFor(p).laps++;
+      this.say(`${p.name} passed START and collected ${SALARY}`, 'money');
       this.noteLap(p);
     }
     this.landOn(p, to);
@@ -935,7 +1026,7 @@ export class GameRoom {
             this.botSay(owner, 'bigRentTaken');
             this.botSay(p, 'bigRentPaid');
           }
-          this.charge(p, rent, owner, `for ${t.name}`);
+          if (this.charge(p, rent, owner, `for ${t.name}`)) this.noteRent(p, owner, rent, t.name);
         }
         break;
       }
@@ -971,6 +1062,7 @@ export class GameRoom {
 
   sendToJail(p) {
     this.botSay(p, 'jail');
+    this.statFor(p).jailed++;
     p.pos = this.cornerIndex('prison');
     p.jail = true;
     p.jailTurns = 0;
@@ -1035,7 +1127,7 @@ export class GameRoom {
           if (this.tile(idx).type === act.target) {
             const passedStart = idx < p.pos;
             p.pos = idx;
-            if (passedStart) { p.money += SALARY; this.say(`${p.name} passed START (+$${SALARY})`, 'money'); }
+            if (passedStart) { p.money += SALARY; this.statFor(p).laps++; this.say(`${p.name} passed START (+${SALARY})`, 'money'); }
             this.lastMove = { playerId: p.id, from: p.pos, to: idx, steps: step, at: Date.now() };
             this.landOn(p, idx, { payMultiplier: act.payMultiplier });
             break;
@@ -1117,7 +1209,8 @@ export class GameRoom {
     if (p.money < t.price) return { error: 'Not enough money' };
     p.money -= t.price;
     this.ownership[pend.tile] = { owner: p.id, houses: 0, mortgaged: false };
-    this.say(`${p.name} bought ${t.name} for $${t.price}`, 'buy');
+    if (t.type === 'property') this.statFor(p).streetsBought++;
+    this.say(`${p.name} bought ${t.name} for ${t.price}`, 'buy');
     this.turn.pending = null;
     this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
     this.push();
@@ -1214,7 +1307,8 @@ export class GameRoom {
       // The bid is already escrowed by bid(); just hand over the deed.
       const winner = this.player(a.leader);
       this.ownership[a.tile] = { owner: winner.id, houses: 0, mortgaged: false };
-      this.say(`${winner.name} won ${t.name} at auction for $${a.bid}`, 'auction');
+      this.statFor(winner).auctionsWon++;
+      this.say(`${winner.name} won ${t.name} at auction for ${a.bid}`, 'auction');
     } else {
       this.say(`Nobody bid on ${t.name} — it stays with the bank`, 'auction');
     }
@@ -1281,6 +1375,7 @@ export class GameRoom {
     p.money -= t.houseCost;
     const o = this.own(index);
     o.houses = (o.houses || 0) + 1;
+    this.statFor(p).housesBuilt++;
     this.say(`${p.name} built ${o.houses === 5 ? 'a hotel' : 'a house'} on ${t.name}`, 'build');
     this.push();
     return { ok: true };
@@ -1358,6 +1453,9 @@ export class GameRoom {
     const creditor = d.creditor ? this.player(d.creditor) : null;
     if (creditor) {
       creditor.money += d.amount;
+      // Rent is the only charge that stalls the turn with a named creditor,
+      // so a settled debt with one is a rent payment finally landing.
+      this.noteRent(p, creditor, d.amount, d.reason?.startsWith('for ') ? d.reason.slice(4) : null);
     } else if (d.each) {
       // "pay every player" card settled late: the money goes to the players,
       // never to the vacation pot.
@@ -1428,6 +1526,8 @@ export class GameRoom {
       this.say(`🏆 ${this.winner ? this.winner.name : "Nobody"} wins the game!`, "system");
       this.botFarewell(alive);
     }
+    this.settleLeadShare();
+    this.titles = this.computeTitles();
     this.push();
     return true;
   }
@@ -1540,6 +1640,8 @@ export class GameRoom {
     from.getOutCards += trade.get.cards;
     for (const i of trade.give.tiles) if (this.own(i)) this.own(i).owner = to.id;
     for (const i of trade.get.tiles) if (this.own(i)) this.own(i).owner = from.id;
+    this.statFor(from).tradesCompleted++;
+    this.statFor(to).tradesCompleted++;
     this.say(`${from.name} and ${to.name} completed a trade`, 'trade');
     this.settleDebtIfPossible();
     this.push();
@@ -2011,6 +2113,8 @@ export class GameRoom {
       // The chart is an end-of-game reveal; streaming it every push would bloat
       // the state for nothing.
       history: this.status === 'ended' ? this.history : [],
+      stats: this.status === 'ended' ? this.stats : null,
+      titles: this.status === 'ended' ? this.titles : null,
       lastCard: this.lastCard,
       lastMove: this.lastMove,
       version: this.version,

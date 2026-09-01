@@ -802,6 +802,10 @@ console.log('\n▶ targeted rules');
   room.settings.randomizeOrder = false;
   room.start('a');
   const [g1, g2] = Object.entries(room.map.groups);
+  // The rule waits for a sold-out board, so give Ava everything first.
+  room.map.tiles.forEach((t, i) => {
+    if (t.type === 'property') room.ownership[i] = { owner: 'a', houses: 0, mortgaged: false };
+  });
   for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
   g2[1].forEach((i, n) => {
     room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
@@ -824,6 +828,10 @@ console.log('\n▶ targeted rules');
   room.settings.randomizeOrder = false;
   room.start('a');
   const [g1, g2] = Object.entries(room.map.groups);
+  // Sold out board, so only the third player keeps the rule quiet here.
+  room.map.tiles.forEach((t, i) => {
+    if (t.type === 'property') room.ownership[i] = { owner: 'c', houses: 0, mortgaged: false };
+  });
   for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
   g2[1].forEach((i, n) => {
     room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
@@ -832,6 +840,109 @@ console.log('\n▶ targeted rules');
   if (room.own(g2[1][0]).owner !== 'a') fail('the rule should not fire in a three-player game');
   if (room.blockingTiles(room.player('b')).length) fail('three players should report no deadlock');
   ok('deadlock relief stays out of games with more than two players');
+}
+
+{
+  // While any street is still unsold the wall might yet come down by luck —
+  // the blocked player could land on the open street and start a colour of
+  // their own — so the deadlock rule must stay silent until every property
+  // tile has an owner.
+  const room = new GameRoom('dl4', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const b = room.player('b');
+  const [g1, g2] = Object.entries(room.map.groups);
+  const streets = room.map.tiles.filter((t) => t.type === 'property').map((t) => t.index);
+  const open = streets.find((i) => !g1[1].includes(i) && !g2[1].includes(i));
+  for (const i of streets) {
+    if (i !== open) room.ownership[i] = { owner: 'a', houses: 0, mortgaged: false };
+  }
+  for (const i of g1[1]) room.ownership[i] = { owner: 'a', houses: 1, mortgaged: false };
+  g2[1].forEach((i, n) => {
+    room.ownership[i] = { owner: n === 0 ? 'a' : 'b', houses: 0, mortgaged: false };
+  });
+
+  for (let lap = 0; lap < 5; lap++) room.noteLap(b);
+  if (room.blockingTiles(b).length) fail('an unsold street should keep the deadlock rule quiet');
+  if (b.blockedLaps) fail('laps must not count while a street is unsold');
+  if (room.reliefCard) fail('the rule must not announce itself while a street is unsold');
+  if (room.own(g2[1][0]).owner !== 'a') fail('the wall must not move while a street is unsold');
+
+  // The last street selling is what wakes the rule up.
+  room.ownership[open] = { owner: 'a', houses: 0, mortgaged: false };
+  room.noteLap(b);
+  if (b.blockedLaps !== 1) fail('the rule should wake once the board is sold out');
+  if (!room.reliefCard) fail('the rule should introduce itself once the board is sold out');
+  ok('deadlock relief waits until every street has an owner');
+}
+
+{
+  // Match stats land where the events happen, and the ended state hands out
+  // honest, unique titles.
+  const room = new GameRoom('stat', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+
+  room.roll('a', [2, 2]);                       // one double (lands on a tax tile)
+  room.turn.pending = null;
+  if (room.stats.a?.doubles !== 1) fail(`doubles counter: ${room.stats.a?.doubles}`);
+  room.sendToJail(a);
+  if (room.stats.a.jailed !== 1) fail(`jailed counter: ${room.stats.a.jailed}`);
+  a.jail = false;
+  a.jailTurns = 0;
+
+  // Rent paid on the spot…
+  const s = room.map.groups.IL[0];
+  room.ownership[s] = { owner: 'b', houses: 0, mortgaged: false };
+  const rent = room.rentFor(s);
+  room.turn = { playerId: 'a', phase: 'roll', dice: [1, 2], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.landOn(a, s);
+  if (room.stats.a.rentPaid !== rent) fail(`rentPaid ${room.stats.a.rentPaid}, expected ${rent}`);
+  if (room.stats.b.rentCollected !== rent) fail(`rentCollected ${room.stats.b.rentCollected}, expected ${rent}`);
+  if (room.stats.b.biggestRent !== rent || room.stats.b.biggestRentTile !== room.tile(s).name) {
+    fail('biggest rent should remember the amount and the street');
+  }
+
+  // …and rent settled late through the debt phase both count.
+  a.money = 0;
+  room.landOn(a, s);
+  if (room.turn.phase !== 'debt') fail('broke tenant should open a debt');
+  a.money = 500;
+  room.payDebt('a');
+  if (room.stats.a.rentPaid !== rent * 2) fail('debt-settled rent should still count as rent paid');
+  if (room.stats.b.rentCollected !== rent * 2) fail('debt-settled rent should still count as rent collected');
+
+  // A lap past START and a street bought at asking price.
+  a.money = 500;
+  a.pos = room.map.size - 2;
+  room.movePlayer(a, 3);                        // wraps START, lands on an unsold street
+  if (room.stats.a.laps !== 1) fail(`laps counter: ${room.stats.a.laps}`);
+  if (room.turn.pending?.type !== 'buy') fail('test setup: expected a buy offer');
+  room.buy('a');
+  if (room.stats.a.streetsBought !== 1) fail(`streetsBought counter: ${room.stats.a.streetsBought}`);
+
+  // Stats and titles are an end-of-game reveal.
+  if (room.serialize().stats !== null) fail('stats must stay hidden while the game runs');
+  room.bankrupt(room.player('b'), a);
+  const state = room.serialize();
+  if (!state.stats?.a || !state.stats?.b) fail('ended state should carry both stat lines');
+  if (!state.titles || !Object.keys(state.titles).length) fail('ended game should award titles');
+  const names = Object.values(state.titles).map((t) => t.title);
+  if (new Set(names).size !== names.length) fail('no title may be held by two players');
+  if (names.includes('Auction Hawk')) fail('nobody won an auction — the title must not be awarded');
+  if (names.includes('Dealmaker')) fail('nobody traded — the title must not be awarded');
+  if (state.titles.b?.title !== 'Heavy Hitter') fail(`B collected the only rent, got ${JSON.stringify(state.titles.b)}`);
+  if (!state.titles.b?.reason.includes(`${rent}`)) fail('the title reason should cite the number');
+  ok('match stats and end-of-game titles');
 }
 
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
