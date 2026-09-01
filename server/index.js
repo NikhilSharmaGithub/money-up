@@ -246,7 +246,7 @@ app.post('/api/auth/apple', (req, res) => {
 // GET /admin?key=... — a live dashboard of rooms, games and profiles.
 // Set ADMIN_KEY in the environment; the default is for local tinkering only.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'moneymove-admin';
-const STATS_FILE = path.join(__dirname, '..', 'data', 'stats.json');
+const STATS_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'stats.json');
 const stats = { gamesStarted: 0, gamesEnded: 0, recent: [] };
 try {
   Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')));

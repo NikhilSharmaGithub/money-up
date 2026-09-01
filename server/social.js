@@ -10,8 +10,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STORE = path.join(__dirname, '..', 'data', 'social.json');
-const LEDGER_STORE = path.join(__dirname, '..', 'data', 'ledger.json');
+// Render's filesystem is wiped on every deploy — point DATA_DIR at a
+// persistent disk mount (e.g. /var/data) so wallets survive a release.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const STORE = path.join(DATA_DIR, 'social.json');
+const LEDGER_STORE = path.join(DATA_DIR, 'ledger.json');
 const LEDGER_MAX = 5000;
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1
