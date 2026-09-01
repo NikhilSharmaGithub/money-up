@@ -1144,13 +1144,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   text-align: center; box-shadow: var(--shadow); border: 2px solid;
   background: var(--card); animation: cardIn .4s var(--pop);
 }
-.card-popup.treasure { border-color: var(--gold); background: var(--gold-soft); }
-/* The Surprise card is pinned pink paper in both themes, so its ink has to be
-   pinned too: on the dark palettes var(--ink) is near-white and the card's own
-   text disappeared into the background. */
-.card-popup.surprise { border-color: #d63384; background: #fdeaf3; }
-.card-popup.surprise .cp-text { color: #2c0f1d; }
-.card-popup.surprise .cp-kind { color: #93325f; }
+/* Both cards paint themselves out of the same tokens the matching tiles use, so
+   they follow the theme instead of fighting it. The Surprise card used to pin a
+   light pink background while its text stayed var(--ink) — near-white on the
+   dark palettes — which is how it ended up a blank white box. */
+.card-popup.treasure {
+  border-color: var(--ink-treasure); background: var(--tile-treasure);
+}
+.card-popup.treasure .cp-kind { color: var(--ink-treasure); }
+.card-popup.surprise {
+  border-color: var(--ink-surprise); background: var(--tile-surprise);
+}
+.card-popup.surprise .cp-kind { color: var(--ink-surprise); }
 .cp-ico { font-size: 40px; }
 .cp-kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-3); margin: 7px 0 9px; font-weight: 750; }
 .cp-text { font-size: 15.5px; line-height: 1.5; font-weight: 650; color: var(--ink); }
