@@ -902,7 +902,8 @@ export function renderCenter(state, meId, actions) {
     const searching = !!(state.quick && state.quickStartAt);
     actionEl.innerHTML = searching
       ? `<div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
-         <div class="quick-count">Starting in <b id="quickCount">…</b></div>`
+         <div class="quick-count">Starting in <b id="quickCount">…</b></div>
+         ${tableTalkHTML()}`
       : state.hostId === meId
         ? `<button class="btn primary big" id="cStart">${icon('dice')} Start Game</button>`
         : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
@@ -1054,6 +1055,63 @@ function phaseHint(state, p) {
   if (t.phase === 'action') return 'deciding on a property…';
   if (t.phase === 'roll') return p.jail ? 'locked up' : 'about to roll…';
   return 'wrapping up…';
+}
+
+// ─────────────────────────────────────────────────────────── table talk ──
+// Two waits leave everyone staring at one spot: the quick-play search, and
+// the result sheet while the host decides. That spot gets a line worth
+// reading — a gameplay tip or a fact about one of the board's cities —
+// turned over every eight seconds. Renders repaint whatever line is current;
+// only the ticker advances it, and the ticker puts itself away once nothing
+// on screen carries the line.
+let talkPool = null;
+let talkFetch = null; // one fetch a page load, shared by every wait
+let talkAt = 0;
+let talkTimer = null;
+
+const shuffled = (list) => {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+function loadTalk() {
+  if (talkFetch) return;
+  // Whichever host served the page also serves this file.
+  talkFetch = fetch('/data/tips.json').then((r) => r.json()).then((d) => {
+    const tips = shuffled((d.tips || []).map((t) => escapeHtml(t)));
+    const facts = shuffled((d.facts || [])
+      .map((f) => `<b>${escapeHtml(f.city)}</b> — ${escapeHtml(f.text)}`));
+    // Strict alternation, each deck looping on its own — there are six facts
+    // to every tip, and a plain concat would bury the tips at the front.
+    talkPool = [];
+    for (let i = 0; i < Math.max(tips.length, facts.length) * 2; i++) {
+      const deck = i % 2 ? facts : tips;
+      if (deck.length) talkPool.push(deck[(i >> 1) % deck.length]);
+    }
+    // The first paint went out before the file arrived — fill it in.
+    const el = document.getElementById('tableTalk');
+    if (el) el.innerHTML = talkSpan('talk-in');
+  }).catch(() => { talkFetch = null; /* offline — a later wait tries again */ });
+}
+
+const talkSpan = (cls) => (talkPool?.length
+  ? `<span class="${cls}">${talkPool[talkAt % talkPool.length]}</span>` : '');
+
+function tableTalkHTML() {
+  loadTalk();
+  if (!talkTimer) {
+    talkTimer = setInterval(() => {
+      const el = document.getElementById('tableTalk');
+      if (!el) { clearInterval(talkTimer); talkTimer = null; return; }
+      talkAt += 1;
+      el.innerHTML = talkSpan('talk-in');
+    }, 8000);
+  }
+  return `<div class="table-talk" id="tableTalk">${talkSpan('')}</div>`;
 }
 
 // ──────────────────────────────────────────────── quick play countdown ──
@@ -2002,6 +2060,95 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
   }, 'wide');
 }
 
+// ─────────────────────────────────────────────────────────── report card ──
+// Which drawing each title wears. The words come from the server; a title
+// this table has never heard of still gets a sparkle rather than a blank.
+const TITLE_ART = {
+  'Heavy Hitter': 'bolt',
+  'Dealmaker': 'trade',
+  'Master Builder': 'crane',
+  'Front Runner': 'crown',
+  'Landlord': 'house',
+  'Auction Hawk': 'gavel',
+  'Land Grabber': 'map',
+  'Hot Dice': 'dice',
+  'Globetrotter': 'globe',
+  'Jailbird': 'police',
+  'Star Tenant': 'payment',
+};
+
+// One column per counter; a cell shows whatever the book recorded, or a
+// quiet zero — the server omits stats a player never touched.
+const STAT_COLS = [
+  ['Laps', (s) => s.laps || 0],
+  ['Doubles', (s) => s.doubles || 0],
+  ['Streets', (s) => s.streetsBought || 0],
+  ['Houses', (s) => s.housesBuilt || 0],
+  ['Auctions', (s) => s.auctionsWon || 0],
+  ['Trades', (s) => s.tradesCompleted || 0],
+  ['Rent in', (s) => money(s.rentCollected)],
+  ['Rent out', (s) => money(s.rentPaid)],
+  ['Biggest rent', (s) => (s.biggestRent
+    ? `${money(s.biggestRent)}${s.biggestRentTile ? `<i>${escapeHtml(s.biggestRentTile)}</i>` : ''}`
+    : '—')],
+  ['Jailed', (s) => s.jailed || 0],
+  ['Lead %', (s) => `${s.leadShare || 0}%`],
+];
+
+function statsTableHTML(state, rank) {
+  if (!state.stats) return ''; // an older server kept no diary
+  const rows = rank.map((p) => {
+    const s = state.stats[p.id] || {};
+    return `<tr${p.bankrupt ? ' class="out"' : ''}>
+      <th scope="row"><i class="dotc" style="background:${p.color}"></i>${escapeHtml(p.name)}</th>
+      ${STAT_COLS.map(([, cell]) => `<td>${cell(s)}</td>`).join('')}
+    </tr>`;
+  }).join('');
+  return `<p class="sub">The numbers</p>
+    <div class="stats-scroll"><table class="stats-table">
+      <thead><tr><th></th>${STAT_COLS.map(([label]) => `<th>${label}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+/**
+ * Standings, titles and the numbers, as one block of markup. The live result
+ * sheet and a record replayed off the landing shelf both draw this — which is
+ * why it reads everything defensively: a saved game is only as complete as
+ * the server that ended it.
+ */
+export function reportCardHTML(state, meId) {
+  const rank = [...(state.players || [])].sort((a, b) =>
+    Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
+  const medals = ['medalGold', 'medalSilver', 'medalBronze'];
+  const rows = rank.map((p, k) => {
+    const t = state.titles?.[p.id];
+    return `<div class="rank-row ${p.id === meId ? 'me' : ''}">
+      <span class="rank-pos">${medals[k] ? icon(medals[k]) : k + 1}</span>
+      <span class="avatar sm" style="background:${p.color}">${escapeHtml((p.name[0] || '?').toUpperCase())}</span>
+      <span class="rank-main">
+        <span class="rank-name">${escapeHtml(p.name)}</span>
+        ${t ? `<span class="rank-title">${icon(TITLE_ART[t.title] || 'sparkle', 14)}<b>${escapeHtml(t.title)}</b><i>${escapeHtml(t.reason || '')}</i></span>` : ''}
+      </span>
+      <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.netWorth)}</span>
+    </div>`;
+  }).join('');
+  return `<p class="sub">Final standings</p>${rows}${statsTableHTML(state, rank)}`;
+}
+
+/** A finished game pulled back off the landing shelf — same card, later date. */
+export function openReportCard(record) {
+  const s = record?.state || {};
+  const when = new Date(record?.at || Date.now())
+    .toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  openModal(`
+    <h2>${escapeHtml(record?.map || s.map?.name || 'A finished game')}</h2>
+    <p class="sub">${escapeHtml(when)}${record?.winner ? ` · ${escapeHtml(record.winner)} won` : ''}</p>
+    ${reportCardHTML(s, null)}
+    <div class="modal-actions"><button class="btn ghost" id="rcClose">Close</button></div>`,
+  (root) => { $('#rcClose', root).onclick = closeModal; });
+}
+
 /** richup-style stepped net-worth chart, drawn straight into SVG. */
 function worthChartSVG(state) {
   const history = state.history || [];
@@ -2062,20 +2209,11 @@ function worthChartSVG(state) {
 }
 
 export function showGameOver(state, meId, actions) {
-  const rank = [...state.players].sort((a, b) =>
-    Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
-  const medals = ['medalGold', 'medalSilver', 'medalBronze'];
   openModal(`
     <div class="go-crown">${icon('trophy')}</div>
     <h2 class="go-title" style="color:${state.winner?.color || '#fff'}">${escapeHtml(state.winner?.name || 'Nobody')} wins!</h2>
     ${worthChartSVG(state)}
-    <p class="sub">Final standings</p>
-    ${rank.map((p, k) => `<div class="rank-row ${p.id === meId ? 'me' : ''}">
-      <span class="rank-pos">${medals[k] ? icon(medals[k]) : k + 1}</span>
-      <span class="avatar sm" style="background:${p.color}">${escapeHtml((p.name[0] || '?').toUpperCase())}</span>
-      <span class="rank-name">${escapeHtml(p.name)}</span>
-      <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.netWorth)}</span>
-    </div>`).join('')}
+    ${reportCardHTML(state, meId)}
     <div class="modal-actions go-actions">
       ${state.hostId === meId
         ? `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>`
@@ -2084,7 +2222,8 @@ export function showGameOver(state, meId, actions) {
         <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>
         <button class="btn ghost" id="gClose">Stay on this board</button>
       </div>
-    </div>`, (root) => {
+    </div>
+    ${tableTalkHTML()}`, (root) => {
     $('#gClose', root).onclick = closeModal;
     $('#gHome', root).onclick = () => { sfx.click(); closeModal(); actions.goHome?.(); };
     const again = $('#gAgain', root);

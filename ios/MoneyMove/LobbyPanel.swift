@@ -243,10 +243,7 @@ struct QuickMatchPanel: View {
                 .font(.system(size: 12.5, weight: .bold, design: .rounded))
                 .foregroundStyle(P.ink2)
 
-            Text("The table deals itself in when the clock runs out — every seat gets filled either way.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(P.ink3)
-                .multilineTextAlignment(.center)
+            TableTalkTicker()
 
             Spacer(minLength: 0)
         }
@@ -304,6 +301,78 @@ struct QuickMatchPanel: View {
             }
         }
         .animation(.spring(duration: 0.35), value: players.count)
+    }
+}
+
+/// The waiting room's small talk: gameplay tips and city facts dealt
+/// alternately while the clock runs. One fetch serves the whole app run —
+/// every lobby appearance shares it — and a table that can't reach the
+/// server keeps the old static sentence.
+private struct TableTalkTicker: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+    @State private var tips: [String] = []
+    @State private var facts: [String] = []
+    @State private var index = 0
+
+    private static let fallback =
+        "The table deals itself in when the clock runs out — every seat gets filled either way."
+
+    private struct TipsFile: Decodable {
+        struct Fact: Decodable { var city: String; var text: String }
+        var facts: [Fact]
+        var tips: [String]
+    }
+
+    /// Concurrent appearances await the same fetch instead of racing it.
+    @MainActor private static var fetch: Task<TipsFile?, Never>?
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        // The task hangs on the stack, not the text — the .id swap that
+        // drives the fade tears the text down each beat, and would take the
+        // timer (and the shuffle) with it. The stack also keeps the outgoing
+        // line layered under the incoming one instead of beside it.
+        ZStack {
+            Text(line)
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+                .multilineTextAlignment(.center)
+                .id(index)
+                .transition(.opacity)
+        }
+        .task { await deal() }
+    }
+
+    /// Even beats deal a tip, odd beats a fact; either pile alone still cycles.
+    private var line: String {
+        if tips.isEmpty && facts.isEmpty { return Self.fallback }
+        if facts.isEmpty || (index.isMultiple(of: 2) && !tips.isEmpty) {
+            return tips[(index / 2) % tips.count]
+        }
+        return facts[(index / 2) % facts.count]
+    }
+
+    @MainActor private func deal() async {
+        if Self.fetch == nil {
+            let store = store
+            Self.fetch = Task { try? await store.fetchJSON("/data/tips.json") }
+        }
+        if let file = await Self.fetch?.value {
+            tips = file.tips.shuffled()
+            facts = file.facts.shuffled().map { "\($0.city) — \($0.text)" }
+        } else {
+            // A miss stays the fallback for this sitting, but shouldn't be
+            // cached as the answer for the whole app run.
+            Self.fetch = nil
+        }
+        // Nothing arrived — the fallback line needs no rotation.
+        guard !tips.isEmpty || !facts.isEmpty else { return }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { break }
+            withAnimation(.easeInOut(duration: 0.45)) { index += 1 }
+        }
     }
 }
 

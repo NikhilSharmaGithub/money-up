@@ -9,7 +9,7 @@ import {
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
-  renderAwaiting,
+  renderAwaiting, openReportCard,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -126,8 +126,10 @@ function showLanding() {
   // and its placeholder, never a name someone else chose for you.
   $('#nickInput').value = nickname || '';
 
-  // Tables stepped away from mid-game get a way back in.
+  // Tables stepped away from mid-game get a way back in; finished ones
+  // keep their report cards.
   renderResumeList();
+  renderRecentGames();
 
   refreshWallet();
   refreshProfileChip();
@@ -690,8 +692,10 @@ function render() {
 
   // game over
   if (state.status === 'ended') {
-    // Nothing left to come back to, so the shelf must stop offering it.
+    // Nothing left to come back to, so the shelf must stop offering it —
+    // though the ending itself is worth keeping.
     forgetGame(roomId);
+    recordMatch(state);
   }
   if (state.status === 'ended' && !winnerShown) {
     winnerShown = true;
@@ -701,7 +705,7 @@ function render() {
     // did the win pay out? the wallet knows
     setTimeout(() => refreshWallet({ celebrate: true }), 1200);
   }
-  if (state.status !== 'ended') winnerShown = false;
+  if (state.status !== 'ended') { winnerShown = false; matchSavedFor = null; }
 }
 
 /** Long enough for the piece to finish walking to whatever caused the card. */
@@ -956,6 +960,82 @@ function renderResumeList() {
   });
   list.querySelectorAll('[data-forget]').forEach((b) => {
     b.onclick = () => { sfx.click(); forgetGame(b.dataset.forget); };
+  });
+}
+
+// ─────────────────────────────────────────────────── finished games ──
+// The shelf above holds games to walk back into; this one holds the endings.
+// A record is the report card and nothing else — enough to redraw the sheet
+// months later without a server that has long since forgotten the room.
+const MATCH_KEY = 'moneymove:matches';
+const MAX_MATCHES = 20;
+let matchSavedFor = null; // the room whose ending this session already wrote
+
+function readMatches() {
+  let list = [];
+  try { list = JSON.parse(safeGet(localStorage, MATCH_KEY) || '[]'); } catch { /* someone else's key */ }
+  return Array.isArray(list) ? list.filter((m) => m && m.state) : [];
+}
+
+/** Called on the ended state — once per game, not once per push of it. */
+function recordMatch(s) {
+  if (!roomId || matchSavedFor === roomId) return;
+  if (!s.players?.some((p) => p.id === meId)) return; // watching, not playing
+  matchSavedFor = roomId;
+  const players = (s.players || []).map((p) => ({
+    id: p.id, name: p.name, color: p.color, netWorth: p.netWorth, bankrupt: p.bankrupt,
+  }));
+  const list = readMatches();
+  // A refresh on a finished board replays the ending. The same room showing
+  // the same final books is the same game — a rematch reuses the room, but
+  // never lands on identical numbers.
+  if (list.some((m) => m.room === roomId
+    && JSON.stringify(m.state.players) === JSON.stringify(players))) return;
+  list.unshift({
+    at: Date.now(),
+    room: roomId,
+    map: s.map?.name || '',
+    players: (s.players || []).map((p) => p.name),
+    winner: s.winner?.name || '',
+    meWon: !!s.winner && s.winner.id === meId,
+    // The slice of state the report card actually reads. History is the one
+    // heavy field, and the card never charts it.
+    state: {
+      players,
+      winner: s.winner ? { id: s.winner.id, name: s.winner.name, color: s.winner.color } : null,
+      titles: s.titles || null,
+      stats: s.stats || null,
+      map: { name: s.map?.name || '' },
+      history: [],
+    },
+  });
+  safeSet(localStorage, MATCH_KEY, JSON.stringify(list.slice(0, MAX_MATCHES)));
+}
+
+const matchDay = (at) => {
+  const d = new Date(at || 0);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return 'today';
+  if (d.toDateString() === new Date(now - 86400000).toDateString()) return 'yesterday';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
+/** Up to five finished games on the landing, each a tap from its report card. */
+function renderRecentGames() {
+  const el = $('#recentGames');
+  if (!el) return;
+  const list = readMatches().slice(0, 5);
+  if (!list.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="pr-title">Recent games</div>' + list.map((m, i) => {
+    const result = m.meWon ? 'You won' : m.winner ? `${escapeHtml(m.winner)} won` : 'Nobody won';
+    return `<button class="recent-game" data-match="${i}" type="button" title="Open the report card">
+      <span class="rg-main">${escapeHtml(m.map || `Room ${m.room || '?'}`)}
+        <i class="rg-tag ${m.meWon ? 'won' : ''}">${result}</i></span>
+      <span class="rg-sub">${matchDay(m.at)}${m.players?.length ? ` · ${whoText(m.players)}` : ''}</span>
+    </button>`;
+  }).join('');
+  el.querySelectorAll('[data-match]').forEach((b) => {
+    b.onclick = () => { sfx.click(); openReportCard(list[Number(b.dataset.match)]); };
   });
 }
 

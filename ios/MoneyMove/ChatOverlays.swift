@@ -476,7 +476,12 @@ struct GameOverSheet: View {
 
                     worthChartCard(P)
 
-                    standingsCard(P)
+                    // The same report card History shows later — standings,
+                    // titles, stats — so nobody's result changes in the retelling.
+                    let results = PlayerResult.snapshot(of: store.state)
+                    ResultStandingsCard(results: results)
+                    ResultTitlesCard(results: results)
+                    ResultStatsCard(results: results)
 
                     Button("Leave room") {
                         store.leaveRoom()   // RootView switches screens on roomId = nil
@@ -640,49 +645,4 @@ struct GameOverSheet: View {
         return flip == history.first?.t ? nil : flip
     }
 
-    private func standingsCard(_ P: Palette) -> some View {
-        let players = store.state?.players ?? []
-        let solvent = players.filter { !$0.isBankrupt }
-            .sorted { ($0.netWorth ?? 0) > ($1.netWorth ?? 0) }
-        let standings = solvent + players.filter { $0.isBankrupt }
-
-        return MMCard {
-            VStack(alignment: .leading, spacing: 10) {
-                PanelTitle("Final standings")
-                ForEach(Array(standings.enumerated()), id: \.element.id) { rank, p in
-                    HStack(spacing: 10) {
-                        medal(rank, P)
-                            .frame(width: 26)
-                        AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30, emoji: p.avatar ?? "")
-                        Text(p.name)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(P.ink)
-                            .lineLimit(1)
-                        Spacer()
-                        // A seat the clock took, or one that walked out, was
-                        // never actually bankrupted — don't say it was.
-                        Text(p.isBankrupt
-                             ? (p.wasRemoved ? (p.removedFor == "quit" ? "left the game" : "timed out") : "bankrupt")
-                             : money(p.netWorth ?? 0))
-                            .font(.system(size: 13.5, weight: .heavy, design: .rounded))
-                            .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
-                    }
-                    .opacity(p.isBankrupt ? 0.6 : 1)
-                }
-            }
-        }
-    }
-
-    /// Podium finishes get their metal; everyone else gets their number.
-    @ViewBuilder private func medal(_ rank: Int, _ P: Palette) -> some View {
-        switch rank {
-        case 0: Art.icon(.medalGold, size: 22)
-        case 1: Art.icon(.medalSilver, size: 22)
-        case 2: Art.icon(.medalBronze, size: 22)
-        default:
-            Text("\(rank + 1)")
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(P.ink3)
-        }
-    }
 }
