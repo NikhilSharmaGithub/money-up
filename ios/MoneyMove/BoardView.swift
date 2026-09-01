@@ -142,6 +142,16 @@ struct TileView: View {
                       height: geom.size.height / 2 - frame.midY)
     }
 
+    /// A matchmade table waiting for players keeps every tile in the deck —
+    /// the board doesn't exist until kick-off deals it out (an idle DeckIntro
+    /// sits in the well meanwhile). Private lobbies keep their preview: the
+    /// host picked that map to look at it. Anything already playing — a
+    /// reconnect, a join mid-game — is never held back here.
+    private var heldInDeck: Bool {
+        guard let state = store.state else { return false }
+        return state.isLobby && state.quick == true
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
         let group = store.groupInfo(for: tile)
@@ -183,10 +193,16 @@ struct TileView: View {
                 .stroke(isActive ? P.gold : P.rule, lineWidth: isActive ? 2 : 0.7)
         }
         .shadow(color: isActive ? P.gold.opacity(0.5) : .clear, radius: 6)
-        .scaleEffect(dealt ? 1 : 0.22)
-        .rotationEffect(.degrees(dealt ? 0 : -24))
-        .offset(dealt ? .zero : dealOffset)
-        .opacity(dealt ? 1 : 0)
+        // On the table only once dealt AND out of the quick-match deck — the
+        // undealt pose is exactly the one the deal animation flies out of.
+        .scaleEffect(dealt && !heldInDeck ? 1 : 0.22)
+        .rotationEffect(.degrees(dealt && !heldInDeck ? 0 : -24))
+        .offset(dealt && !heldInDeck ? .zero : dealOffset)
+        .opacity(dealt && !heldInDeck ? 1 : 0)
+        // An invisible tile must not answer taps: opacity 0 doesn't stop hit
+        // testing, and the held pose piles every tile's touch area onto the
+        // middle of the table — right under the waiting deck.
+        .allowsHitTesting(!heldInDeck)
         .onAppear { runDealIfFresh() }
         .onChange(of: store.boardIntroAt) { runDealIfFresh() }
         .onChange(of: isFullSet) { was, now in

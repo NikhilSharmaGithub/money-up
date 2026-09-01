@@ -369,7 +369,11 @@ struct ActivityFeed: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: embedded ? 4 : 5) {
-                    ForEach(store.state?.log.suffix(30) ?? []) { line in
+                    // Only what the table has said since kick-off (logFloor):
+                    // the feed starts the game silent and fills as it goes,
+                    // instead of dumping the lobby's backlog all at once. The
+                    // History sheet is where the whole record lives.
+                    ForEach((store.state?.log ?? []).filter { $0.at > store.logFloor }.suffix(12)) { line in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             let style = Self.icons[line.kind] ?? ("circle.fill", P.ink3)
                             Image(systemName: style.0)
@@ -669,6 +673,15 @@ struct CenterWell: View {
                         .padding(.top, state.turn?.endsAt == nil ? 0 : 26)
                 } else if state.isLobby {
                     VStack(spacing: 8) {
+                        // A matchmade table waits undealt (TileView keeps every
+                        // card in the deck), so the deck itself sits here on
+                        // the table, idly riffling until kick-off deals it out.
+                        if state.quick == true {
+                            DeckIntro(at: nil, idle: true)
+                                .scaleEffect(0.72)
+                                .frame(height: 92)
+                                .padding(.bottom, 4)
+                        }
                         Art.icon(mapGlyph(state.map.icon), size: 28)
                         Text(state.map.name)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -815,8 +828,14 @@ struct CenterWell: View {
 /// The opening flourish: a deck of face-down cards sits in the middle of the
 /// table, riffle-shuffles in two halves, then sinks away as the board deals
 /// itself out of it (each tile flies from the centre — see TileView).
+///
+/// In `idle` mode it is the quick-match waiting deck instead: it sits on the
+/// table holding the undealt board, riffling gently every few seconds and
+/// never sinking away — kick-off is what finally deals it out.
 struct DeckIntro: View {
     let at: Date?
+    /// Loop the riffle forever instead of playing once and vanishing.
+    var idle = false
 
     @Environment(\.colorScheme) private var scheme
     @State private var split = false      // halves apart
@@ -825,28 +844,50 @@ struct DeckIntro: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        if let at, Date().timeIntervalSince(at) < 3, !gone {
-            ZStack {
-                ForEach(0..<10, id: \.self) { i in
-                    let half: CGFloat = i.isMultiple(of: 2) ? -1 : 1
-                    cardBack(P)
-                        .offset(x: split ? half * 46 : 0,
-                                y: CGFloat(i) * -2.4 + (merged ? 0 : (split ? CGFloat(i % 3) * 5 : 0)))
-                        .rotationEffect(.degrees(split ? Double(half) * 9 : Double(i) * 1.4 - 6))
+        if idle {
+            deck(P)
+                .task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(4.5))
+                        guard !Task.isCancelled else { return }
+                        await riffle()
+                        // The resting pose reads the same either way, so this
+                        // reset never shows — it just re-arms the next pass.
+                        merged = false
+                    }
                 }
-            }
-            .scaleEffect(gone ? 0.4 : 1)
-            .opacity(gone ? 0 : 1)
-            .allowsHitTesting(false)
-            .task {
-                // Matches SoundKit.shuffleDeal: riffle ~0.55s, then the deal.
-                withAnimation(.spring(duration: 0.28, bounce: 0.4)) { split = true }
-                try? await Task.sleep(for: .milliseconds(330))
-                withAnimation(.spring(duration: 0.3, bounce: 0.5)) { split = false; merged = true }
-                try? await Task.sleep(for: .milliseconds(520))
-                withAnimation(.easeIn(duration: 0.45)) { gone = true }
+        } else if let at, Date().timeIntervalSince(at) < 3, !gone {
+            deck(P)
+                .scaleEffect(gone ? 0.4 : 1)
+                .opacity(gone ? 0 : 1)
+                .task {
+                    // Matches SoundKit.shuffleDeal: riffle ~0.55s, then the deal.
+                    await riffle()
+                    withAnimation(.easeIn(duration: 0.45)) { gone = true }
+                }
+        }
+    }
+
+    /// The card stack itself, mid-riffle or at rest — shared by both modes.
+    private func deck(_ P: Palette) -> some View {
+        ZStack {
+            ForEach(0..<10, id: \.self) { i in
+                let half: CGFloat = i.isMultiple(of: 2) ? -1 : 1
+                cardBack(P)
+                    .offset(x: split ? half * 46 : 0,
+                            y: CGFloat(i) * -2.4 + (merged ? 0 : (split ? CGFloat(i % 3) * 5 : 0)))
+                    .rotationEffect(.degrees(split ? Double(half) * 9 : Double(i) * 1.4 - 6))
             }
         }
+        .allowsHitTesting(false)
+    }
+
+    /// One split-and-merge pass, ~0.85s all told.
+    private func riffle() async {
+        withAnimation(.spring(duration: 0.28, bounce: 0.4)) { split = true }
+        try? await Task.sleep(for: .milliseconds(330))
+        withAnimation(.spring(duration: 0.3, bounce: 0.5)) { split = false; merged = true }
+        try? await Task.sleep(for: .milliseconds(520))
     }
 
     private func cardBack(_ P: Palette) -> some View {

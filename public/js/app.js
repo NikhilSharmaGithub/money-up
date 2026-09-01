@@ -2,7 +2,7 @@
 
 import {
   renderBoard, patchBoard, resetBoard, highlightTiles,
-  syncTokens, repositionTokens, deedMarkup,
+  syncTokens, repositionTokens, deedMarkup, syncUndealt, dealBoardIn,
 } from './board.js';
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
@@ -68,6 +68,11 @@ let lastLogAt = 0;
 let lastTurnId = null;
 let winnerShown = false;
 let removedShown = false;
+// The status of the last state rendered. The deal-in flourish belongs to a
+// kick-off actually watched — a lobby turning into a game across two pushes —
+// never to a reconnect or a mid-game join, whose first state is already
+// 'playing' and must show the board instantly.
+let lastStatus = null;
 // Set while walking back into a table left mid-game. The server opens a room
 // for any code asked of it, so an abandoned table comes back as an empty lobby
 // wearing the old code — read once, on the first state, to say so out loud.
@@ -558,6 +563,7 @@ function boot() {
     if (socket) { socket.close(); socket = null; }
     state = null;
     roomId = null;
+    lastStatus = null;
     resetBoard();
     return showLanding();
   }
@@ -571,6 +577,7 @@ function boot() {
   $('#shareLink').value = `${location.origin}/?room=${roomId}`;
   resetBoard();
   lastTurnId = null;
+  lastStatus = null;
   winnerShown = false;
   removedShown = false;
 
@@ -637,6 +644,17 @@ function render() {
     onArrive: () => highlightTiles(state),
   }));
   if (rebuilt) requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
+
+  // A quick match keeps its tiles in the deck while it looks for players, and
+  // a kick-off seen live — any lobby turning into a game — deals the board
+  // out of the deck. After syncTokens on purpose: the deal transforms every
+  // tile, and a token placed against a transformed tile lands mid-air.
+  const sawLobby = lastStatus === 'lobby';
+  lastStatus = state.status;
+  safe('deal', () => {
+    syncUndealt(state);
+    if (sawLobby && state.status === 'playing' && dealBoardIn(state)) sfx.shuffle();
+  });
 
   safe('awaiting', () => renderAwaiting(state, meId, $('#awaitingWell'), actions));
   safe('players', () => renderPlayers(state, meId, $('#playerList'), actions));

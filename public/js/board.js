@@ -217,7 +217,16 @@ export function highlightTiles(state) {
 }
 
 export function tileElement(i) { return tileEls[i]; }
-export function resetBoard() { builtMapId = null; tileEls = []; tokens.clear(); resetSetTracking(); }
+export function resetBoard() {
+  builtMapId = null; tileEls = []; tokens.clear(); resetSetTracking();
+  // Leaving mid-deal must not strand the flying deck on the next table,
+  // nor leave its clean-up timer to go off over the next room's board.
+  dealtRoom = null;
+  clearTimeout(dealTimer); dealTimer = null;
+  const wrap = boardWrap();
+  wrap?.classList.remove('undealt', 'dealing');
+  wrap?.querySelector('.deal-deck.deal-out')?.remove();
+}
 
 // ═══════════════════════════════════════════════════════════ token layer ══
 const tokens = new Map();   // playerId -> { el, pos }
@@ -334,6 +343,103 @@ export function repositionTokens(state) {
   for (const [id, rec] of tokens) {
     if (rec.pos != null) place(state, id, rec.pos, 0);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════ deal-in ══
+// Web twin of the iOS deck intro: a quick-match table keeps its tiles in the
+// deck while it looks for players, and every fresh game opens with the deck
+// dealing the board out — each tile flying from the middle of the table.
+
+// Room whose current game has already been dealt — state is pushed dozens of
+// times a game, and only the first render after kick-off gets the flourish.
+// Passing back through a lobby re-arms it: the next start is a fresh game.
+let dealtRoom = null;
+// The deal's clean-up timer, held so leaving mid-deal can cancel it — left
+// running it would fire into whatever board is on screen two seconds later.
+let dealTimer = null;
+
+const boardWrap = () => document.getElementById('board')?.parentElement;
+
+/** The drawn deck: stacked card backs in the game's red, "MM" on each. */
+export function deckMarkup(extra = '') {
+  const cards = Array.from({ length: 7 }, (_, i) =>
+    `<i class="deal-card" style="--i:${i};--h:${i % 2 ? 1 : -1}"></i>`).join('');
+  return `<div class="deal-deck${extra ? ` ${extra}` : ''}" aria-hidden="true">${cards}</div>`;
+}
+
+/**
+ * An undealt table: while a quick match is still finding players the tiles
+ * stay in the deck, so kick-off has a moment to make. A private lobby keeps
+ * the full preview — the host picked that map to look at it.
+ */
+export function syncUndealt(state) {
+  const wrap = boardWrap();
+  if (!wrap) return;
+  wrap.classList.toggle('undealt',
+    state.status === 'lobby' && !!state.quick && !!state.quickStartAt);
+  if (state.status === 'lobby') dealtRoom = null;
+}
+
+/**
+ * The deal at kick-off: a deck at the board centre riffles once and sinks
+ * away while every tile flies out to its place, one after another. The
+ * caller fires this on the lobby → playing edge it watched happen, so a
+ * reconnect or a mid-game join shows the board instantly instead.
+ */
+export function dealBoardIn(state) {
+  const wrap = boardWrap();
+  const root = document.getElementById('board');
+  if (!wrap || !root || dealtRoom === state.id) return false;
+  dealtRoom = state.id;
+
+  // Measure before any transform lands — a transformed tile reports the rect
+  // of wherever it is mid-flight, not of its seat in the grid.
+  const b = root.getBoundingClientRect();
+  const cx = b.left + b.width / 2;
+  const cy = b.top + b.height / 2;
+
+  const RIFFLE = 620;   // the deck's one riffle before the first card leaves
+  const STAGGER = 25;   // per-tile delay, matching the iOS deal
+  const FLIGHT = 520;
+  let last = 0;
+
+  tileEls.forEach((el, i) => {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const dx = cx - (r.left + r.width / 2);
+    const dy = cy - (r.top + r.height / 2);
+    el.style.transition = 'none';
+    el.style.transform = `translate(${dx}px, ${dy}px) rotate(-24deg) scale(.22)`;
+    el.style.opacity = '0';
+    last = i;
+  });
+  void root.offsetWidth; // commit the stacked state before releasing it
+
+  wrap.classList.add('dealing'); // tokens stay hidden until the cards land
+  wrap.insertAdjacentHTML('beforeend', deckMarkup('deal-out'));
+
+  tileEls.forEach((el, i) => {
+    if (!el) return;
+    el.style.transition = `transform ${FLIGHT}ms cubic-bezier(.22, 1.35, .36, 1), opacity 300ms ease-out`;
+    el.style.transitionDelay = `${RIFFLE + i * STAGGER}ms`;
+    el.style.transform = '';
+    el.style.opacity = '';
+  });
+
+  clearTimeout(dealTimer);
+  dealTimer = setTimeout(() => {
+    dealTimer = null;
+    tileEls.forEach((el) => {
+      if (!el) return;
+      el.style.transition = '';
+      el.style.transitionDelay = '';
+    });
+    wrap.classList.remove('dealing');
+    wrap.querySelector('.deal-deck.deal-out')?.remove();
+    // Tokens placed while their tile was mid-flight measured a moving target.
+    repositionTokens(state);
+  }, RIFFLE + last * STAGGER + FLIGHT + 80);
+  return true;
 }
 
 // ══════════════════════════════════════════════════════════ deed rendering ══

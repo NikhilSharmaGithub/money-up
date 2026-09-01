@@ -59,6 +59,10 @@ final class GameStore: ObservableObject {
     @Published var timedOut = false
     /// Set when a game begins — drives the board's deal-in animation.
     @Published var boardIntroAt: Date?
+    /// Log lines at or before this stamp stay out of the ghosted centre-well
+    /// feed. Set at kick-off, so the game opens on a quiet table instead of a
+    /// wall of lobby chatter — the full History sheet still keeps everything.
+    @Published var logFloor: Double = 0
     /// The server's one-line headline for the table — "India holds the
     /// priciest streets this game!" — shown as it arrives.
     @Published var reveal: String?
@@ -442,6 +446,12 @@ final class GameStore: ObservableObject {
         // A fresh game: deal the board in and announce this game's top country.
         if new.isPlaying && old?.isPlaying != true {
             boardIntroAt = Date()
+            // Everything said before this moment is history, not news: lobby
+            // joins when we watched the table fill, or a whole backlog of bot
+            // turns when this device walks in on a game already going (no old
+            // state then — the incoming push carries the backlog itself). A
+            // rematch runs back through lobby → playing, so it re-floors here.
+            logFloor = (old ?? new).log.last?.at ?? 0
             timedOut = false
             SoundKit.shared.shuffleDeal()
             if let top = new.map.tiles.filter({ $0.type == "property" }).max(by: { ($0.price ?? 0) < ($1.price ?? 0) }),
@@ -656,6 +666,7 @@ final class GameStore: ObservableObject {
         timedOut = false
         lastTurnPlayer = nil
         lastCardAt = 0
+        logFloor = 0
         lastRoom = ""
         lastGuests = 0
         resumeCheck = nil

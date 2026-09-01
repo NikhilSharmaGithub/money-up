@@ -840,7 +840,9 @@ select { cursor: pointer; }
 @keyframes popIn { from { transform: scale(0); } }
 
 /* tokens ride on their own layer so they can animate between tiles */
-.token-layer { position: absolute; inset: 0; pointer-events: none; z-index: 8; }
+/* The layer fades rather than cuts: tokens appear only after the deal-in
+   has put the tiles down for them to stand on. */
+.token-layer { position: absolute; inset: 0; pointer-events: none; z-index: 8; transition: opacity .45s ease; }
 .token {
   position: absolute; top: 0; left: 0;
   width: clamp(13px, 1.7vw, 24px); height: clamp(13px, 1.7vw, 24px);
@@ -1677,6 +1679,87 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .table-talk .talk-in { display: block; animation: talkIn .7s ease; }
 @keyframes talkIn { from { opacity: 0; } }
 .modal .table-talk { margin-top: 16px; }
+
+/* ── the undealt table, and the deal at kick-off ── */
+/* While a quick match hunts for players the tiles wait in the deck: bare
+   felt, a riffling deck, the lobby info alongside. A private lobby keeps the
+   full preview — the host picked that map to look at it. */
+.board-wrap.undealt .tile { opacity: 0; pointer-events: none; transition: none; }
+.board-wrap.undealt .token-layer,
+.board-wrap.dealing .token-layer { opacity: 0; }
+
+/* The drawn deck: stacked card backs in the game's red wearing the MM
+   monogram — the same back the iOS deck deals from. */
+.deal-deck {
+  position: relative; margin: 0 auto 12px;
+  width: clamp(48px, 5.2vw, 64px); height: clamp(70px, 7.4vw, 92px);
+  pointer-events: none;
+}
+.deal-card {
+  position: absolute; left: 50%; top: 50%;
+  width: 100%; height: 100%;
+  display: grid; place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(150deg, var(--red), var(--red-deep));
+  box-shadow: 0 4px 10px rgba(0, 0, 0, .3);
+  transform: translate(-50%, -50%) translateY(calc(var(--i) * -2.4px))
+             rotate(calc(var(--i) * 1.4deg - 4deg));
+}
+.deal-card::before {
+  content: ''; position: absolute; inset: 5px;
+  border: 1.5px solid rgba(255, 255, 255, .38); border-radius: 6px;
+}
+.deal-card::after {
+  content: 'MM';
+  font-size: clamp(11px, 1.3vw, 16px); font-weight: 900; letter-spacing: .5px;
+  color: rgba(255, 255, 255, .82);
+}
+
+/* The idle riffle: the halves ease apart, hang a beat, and merge again —
+   once every four-and-a-half seconds while the table waits. */
+.deal-deck.idle .deal-card { animation: deckRiffle 4.6s ease-in-out infinite; }
+@keyframes deckRiffle {
+  0%, 74%, 96%, 100% {
+    transform: translate(-50%, -50%) translateY(calc(var(--i) * -2.4px))
+               rotate(calc(var(--i) * 1.4deg - 4deg));
+  }
+  80%, 85% {
+    transform: translate(-50%, -50%)
+               translate(calc(var(--h) * 42%), calc(var(--i) * -2.4px + var(--h) * 2px))
+               rotate(calc(var(--h) * 9deg));
+  }
+  90% {
+    transform: translate(-50%, -50%) translateY(calc(var(--i) * -1.2px))
+               rotate(calc(var(--h) * -2deg));
+  }
+}
+
+/* The deal: pinned to the middle of the table for one sharp riffle, then the
+   deck sinks away as the tiles fly out of it (board.js flies them). */
+.deal-deck.deal-out {
+  position: absolute; left: 50%; top: 50%; z-index: 9; margin: 0;
+  transform: translate(-50%, -50%);
+  animation: deckSink .5s ease-in .55s forwards;
+}
+.deal-deck.deal-out .deal-card { animation: deckRiffleOnce .58s ease-in-out; }
+@keyframes deckRiffleOnce {
+  0%, 100% {
+    transform: translate(-50%, -50%) translateY(calc(var(--i) * -2.4px))
+               rotate(calc(var(--i) * 1.4deg - 4deg));
+  }
+  38% {
+    transform: translate(-50%, -50%)
+               translate(calc(var(--h) * 42%), calc(var(--i) * -2.4px + var(--h) * 2px))
+               rotate(calc(var(--h) * 9deg));
+  }
+  72% {
+    transform: translate(-50%, -50%) translateY(calc(var(--i) * -1.2px))
+               rotate(calc(var(--h) * -2deg));
+  }
+}
+@keyframes deckSink {
+  to { transform: translate(-50%, -50%) scale(.35); opacity: 0; }
+}
 
 /* ── right panel: who has turned up at a Quick Play table ── */
 .quick-blurb { font-size: 12px; color: var(--ink-3); line-height: 1.45; margin-bottom: 10px; }

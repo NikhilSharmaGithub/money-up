@@ -1,7 +1,7 @@
 // Everything that isn't the board: player cards, settings, action bar, modals,
 // chat, toasts and the celebratory bits.
 
-import { escapeHtml, deedMarkup } from './board.js';
+import { escapeHtml, deedMarkup, deckMarkup } from './board.js';
 import { icon, groupBanner, groupFlag } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
@@ -887,6 +887,11 @@ export function renderCenter(state, meId, actions) {
   const myTurn = state.turn?.playerId === meId;
   cardEl.innerHTML = '';
   syncQuickCountdown(state.status === 'lobby' && state.quick ? state.quickStartAt : null);
+  // Which long-lived scene the action well is showing. The quick-play wait
+  // carries a looping deck animation, so that scene is written once and left
+  // alone; every other branch repaints and drops the mark.
+  const wasMode = actionEl.dataset.mode || '';
+  actionEl.dataset.mode = '';
 
   const on = (id, fn, sound) => {
     const b = $(id);
@@ -898,15 +903,26 @@ export function renderCenter(state, meId, actions) {
     const seated = state.players.length;
     const seats = state.settings.maxPlayers;
     // A Quick Play table deals itself in on its own clock, so it shows the
-    // wait instead of controls nobody at this table owns.
+    // wait instead of controls nobody at this table owns — with the still-
+    // undealt deck riffling above the search line. The deck loops, so this
+    // scene is painted once; the countdown and table talk tick themselves.
     const searching = !!(state.quick && state.quickStartAt);
-    actionEl.innerHTML = searching
-      ? `<div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
-         <div class="quick-count">Starting in <b id="quickCount">…</b></div>
-         ${tableTalkHTML()}`
-      : state.hostId === meId
+    // The mark carries the room id: a well left over from an earlier table's
+    // wait gets repainted for this one, not trusted.
+    const waitMode = `quick-wait:${state.id}`;
+    if (searching) {
+      actionEl.dataset.mode = waitMode;
+      if (wasMode !== waitMode) {
+        actionEl.innerHTML = `${deckMarkup('idle')}
+          <div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
+          <div class="quick-count">Starting in <b id="quickCount">…</b></div>
+          ${tableTalkHTML()}`;
+      }
+    } else {
+      actionEl.innerHTML = state.hostId === meId
         ? `<button class="btn primary big" id="cStart">${icon('dice')} Start Game</button>`
         : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
+    }
     statusEl.innerHTML = `
       <div class="lobby-head">
         <div class="room-code">${searching ? `${icon('bolt')} Quick Play` : `Room <b>${escapeHtml(state.id)}</b>`}</div>
