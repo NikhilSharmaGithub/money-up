@@ -135,8 +135,7 @@ struct SettingsSheet: View {
             store.updateSettings(["mapId": map.id])
         } label: {
             VStack(spacing: 4) {
-                Text(map.icon ?? "🌐")
-                    .font(.system(size: 26))
+                Art.icon(mapGlyph(map.icon), size: 28, tint: selected ? P.red : P.ink2)
                 Text(map.name)
                     .font(.system(size: 12.5, weight: .bold, design: .rounded))
                     .foregroundStyle(P.ink)

@@ -11,11 +11,20 @@ import {
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting,
 } from './ui.js';
+import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
 import { initSocial, stopSocial } from './social.js';
 
 const $ = (s) => document.querySelector(s);
+
+// index.html names its glyphs with data-ico instead of typing an emoji, so the
+// markup stays free of another vendor's artwork and every drawing comes from
+// icons.js. Prepending rather than replacing lets a chip keep its own label.
+document.querySelectorAll('[data-ico]').forEach((el) => {
+  const solo = !el.textContent.trim();   // nothing but the glyph — centre it
+  el.insertAdjacentHTML('afterbegin', icon(el.dataset.ico, null, solo ? 'solo' : ''));
+});
 
 // ─────────────────────────────────────────────────────────────── identity ──
 // Normally your seat lives in localStorage, so a refresh drops you back into the
@@ -123,7 +132,7 @@ function showLanding() {
   const cont = $('#continueBtn');
   cont.classList.toggle('hidden', !lastRoom);
   if (lastRoom) {
-    cont.textContent = `▶️ Continue game — room ${lastRoom}`;
+    cont.innerHTML = `${icon('replay')} Continue game — room ${escapeHtml(lastRoom)}`;
     cont.onclick = () => { sfx.click(); resuming = true; go(lastRoom); };
   }
 
@@ -145,17 +154,17 @@ async function refreshWallet({ celebrate = false } = {}) {
     const w = await fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json());
     if (typeof w.coins !== 'number') return;
     const chip = $('#coinChip');
-    if (chip) chip.textContent = `🪙 ${w.coins}`;
+    if (chip) chip.innerHTML = `${icon('coin')} ${w.coins}`;
     // Karma only ever goes down by walking out, so it sits beside the coins as
     // a reminder rather than a score to chase.
     const karma = $('#karmaChip');
     if (karma && typeof w.karma === 'number') {
-      karma.textContent = `💚 ${w.karma} karma`;
+      karma.innerHTML = `${icon('heart')} ${w.karma} karma`;
       karma.classList.toggle('low', w.karma < 60);
       karma.classList.remove('hidden');
     }
     if (celebrate && knownCoins != null && w.coins > knownCoins) {
-      toast(`🪙 +${w.coins - knownCoins} coin${w.coins - knownCoins > 1 ? 's' : ''} earned — spend them in the Store!`);
+      toast(`+${w.coins - knownCoins} coin${w.coins - knownCoins > 1 ? 's' : ''} earned — spend them in the Store!`);
     }
     knownCoins = w.coins;
   } catch { /* server nap — the chip just stays put */ }
@@ -167,7 +176,7 @@ $('#storeBtn').addEventListener('click', () => {
   openStoreModal(token, (coins) => {
     knownCoins = coins;
     const chip = $('#coinChip');
-    if (chip) chip.textContent = `🪙 ${coins}`;
+    if (chip) chip.innerHTML = `${icon('coin')} ${coins}`;
   });
 });
 
@@ -320,13 +329,13 @@ function askForRoom(btn, busyLabel, event) {
 $('#quickBtn').addEventListener('click', () => {
   unlock(); sfx.click();
   takeNickname();
-  askForRoom($('#quickBtn'), '<span class="btn-ico">⏳</span> Finding a table…', 'quickplay');
+  askForRoom($('#quickBtn'), `<span class="btn-ico">${icon('replay', null, 'spin')}</span> Finding a table…`, 'quickplay');
 });
 
 $('#createBtn').addEventListener('click', () => {
   unlock(); sfx.click();
   takeNickname();
-  askForRoom($('#createBtn'), '<span class="btn-ico">⏳</span> Creating…', 'createRoom');
+  askForRoom($('#createBtn'), `<span class="btn-ico">${icon('replay', null, 'spin')}</span> Creating…`, 'createRoom');
 });
 
 /**
@@ -345,7 +354,7 @@ function serverUnreachable(why) {
        MoneyMove needs a long-running Node process for WebSockets.`;
 
   el.innerHTML = `<div class="server-down">
-      <b>⚠️ Can't reach the game server</b>
+      <b>${icon('warning')} Can't reach the game server</b>
       <span>${detail}</span>
       <form class="server-form" id="serverForm">
         <input id="serverInput" placeholder="https://your-server.onrender.com"
@@ -486,7 +495,7 @@ function boot() {
   // No seat left (started, or full). You are still shown the table, so say that
   // out loud — a bare red "Game already started" reads as a failed navigation.
   socket.on('joinFailed', (d) => toast(
-    d.spectate ? `${d.message} — you're watching this table 👀` : d.message,
+    d.spectate ? `${d.message} — you're watching this table` : d.message,
     d.spectate ? 'info' : 'error',
   ));
   socket.on('disconnect', () => toast('Connection lost — reconnecting…', 'error'));
@@ -562,7 +571,7 @@ function render() {
         try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* private mode */ }
         goHome();
       },
-      onWatch: () => toast('Staying on as a spectator 👀'),
+      onWatch: () => toast('Staying on as a spectator'),
     });
   }
   if (!meNow?.timedOut) removedShown = false;
@@ -779,8 +788,9 @@ const readTheme = () => document.documentElement.dataset.theme === 'dark' ? 'dar
 function paintThemeButtons() {
   const dark = readTheme() === 'dark';
   document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => {
-    b.textContent = dark ? '☀️' : '🌙';
+    b.innerHTML = icon(dark ? 'sun' : 'moon', null, 'solo');
     b.title = dark ? 'Switch to light' : 'Switch to dark';
+    b.setAttribute('aria-label', b.title);
   });
 }
 
@@ -855,10 +865,15 @@ window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change',
 });
 
 const soundBtn = $('#soundBtn');
-soundBtn.textContent = isEnabled() ? '🔊' : '🔇';
+const paintSoundBtn = () => {
+  soundBtn.innerHTML = icon(isEnabled() ? 'soundOn' : 'soundOff', null, 'solo');
+  soundBtn.title = isEnabled() ? 'Turn sound off' : 'Turn sound on';
+  soundBtn.setAttribute('aria-label', soundBtn.title);
+};
+paintSoundBtn();
 soundBtn.addEventListener('click', () => {
   setEnabled(!isEnabled());
-  soundBtn.textContent = isEnabled() ? '🔊' : '🔇';
+  paintSoundBtn();
   if (isEnabled()) sfx.click();
 });
 document.addEventListener('pointerdown', unlock, { once: true });

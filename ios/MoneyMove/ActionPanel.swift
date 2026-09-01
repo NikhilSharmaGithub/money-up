@@ -27,8 +27,8 @@ struct ActionPanel: View {
             } else if store.state?.isEnded == true {
                 VStack(spacing: 8) {
                     if store.isHost {
-                        Button("🔁  Play again with the same players") { store.rematch() }
-                            .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                        MMIconButton(.replay, "Play again with the same players",
+                                     kind: .primary, big: true) { store.rematch() }
                     } else {
                         Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
@@ -37,11 +37,10 @@ struct ActionPanel: View {
                             .frame(maxWidth: .infinity)
                     }
                     if let openResults {
-                        Button("🏆  Final standings") {
+                        MMIconButton(.trophy, "Final standings", kind: .ghost, big: true) {
                             openResults()
                             Haptics.tap()
                         }
-                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                     }
                 }
             }
@@ -107,10 +106,14 @@ struct ActionPanel: View {
                     Button("Buy \(tile.name) — \(money(price))") { store.buy() }
                         .buttonStyle(MMButtonStyle(kind: .good, big: true))
                         .disabled(!canAfford)
-                    Button(store.state?.settings.auction ?? true ? "🔨  Send to auction" : "Skip") {
-                        store.skipBuy()
+                    if store.state?.settings.auction ?? true {
+                        MMIconButton(.gavel, "Send to auction", kind: .ghost, big: true) {
+                            store.skipBuy()
+                        }
+                    } else {
+                        Button("Skip") { store.skipBuy() }
+                            .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                     }
-                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                     if !canAfford {
                         hint("Not enough cash for this one.", P)
                     }
@@ -120,22 +123,19 @@ struct ActionPanel: View {
         case "roll":
             if store.me?.inJail == true {
                 VStack(spacing: 8) {
-                    Button("🎲  Roll for a double") { store.roll() }
-                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                    MMIconButton(.dice, "Roll for a double", kind: .primary, big: true) { store.roll() }
                     HStack(spacing: 8) {
                         Button("Pay $50") { store.jailPay() }
                             .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                             .disabled((store.me?.money ?? 0) < 50)
                         if (store.me?.getOutCards ?? 0) > 0 {
-                            Button("Use 🎟️ card") { store.jailCard() }
-                                .buttonStyle(MMButtonStyle(kind: .gold, big: true))
+                            MMIconButton(.ticket, "Use card", kind: .gold, big: true) { store.jailCard() }
                         }
                     }
                     hint("In prison · attempt \((store.me?.jailTurns ?? 0) + 1) of 3", P)
                 }
             } else {
-                Button("🎲  Roll dice") { store.roll() }
-                    .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                MMIconButton(.dice, "Roll dice", kind: .primary, big: true) { store.roll() }
                 if (turn.doubles ?? 0) > 0 {
                     hint("Double! Free roll (\(turn.doubles ?? 0) of 2)", P)
                 }
@@ -207,10 +207,10 @@ struct ActionPanel: View {
         // "…is playing" forever with no hint that your seat is done.
         if let me = store.state?.player(store.meId), me.isBankrupt {
             HStack(spacing: 8) {
-                Text(me.wasRemoved
-                     ? (me.removedFor == "quit" ? "🚪" : "⏳")
-                     : "💸")
-                    .font(.system(size: 15))
+                // Walked out, dozed off past the clock, or spent everything —
+                // three different endings, so three different marks.
+                Art.icon(me.wasRemoved ? (me.removedFor == "quit" ? .door : .snooze) : .payment,
+                         size: 17, tint: P.ink3)
                 Text(me.wasRemoved
                      ? "You're out of this game — watching how it ends."
                      : "You went bankrupt — watching how it ends.")
@@ -247,7 +247,7 @@ struct ActionPanel: View {
     }
 
     /// Only the topmost live incoming offer takes over the dock; offers set
-    /// aside with 💤 collapse into a one-line chip until picked back up.
+    /// aside for later collapse into a one-line chip until picked back up.
     /// Pass & play: offers to ANY seat on this device show up here.
     @ViewBuilder private var firstIncomingTrade: some View {
         let P = Palette.current(scheme)
@@ -261,7 +261,8 @@ struct ActionPanel: View {
             let forGuest = trade.to != store.meId ? store.state?.player(trade.to) : nil
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    PanelTitle("🤝 Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")")
+                    Art.icon(.trade, size: 13, tint: P.ink3)
+                    PanelTitle("Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")")
                     Spacer()
                     if active.count > 1 {
                         Text("+\(active.count - 1) more")
@@ -272,7 +273,7 @@ struct ActionPanel: View {
                 tradeLine(label: "You get", side: trade.give, color: P.good)
                 tradeLine(label: "You give", side: trade.get, color: P.bad)
                 if let watching = viewerNames(trade) {
-                    ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
+                    ViewingLine(text: "\(watching) is viewing…", color: P.gold)
                 }
                 // Accepting a deal you can't fund just bounces off the server
                 // with a toast; say so before the tap instead.
@@ -297,9 +298,12 @@ struct ActionPanel: View {
                         store.ignoreTrade(trade.id)
                         Haptics.tap()
                     } label: {
-                        Text("💤 Later")
-                            .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                            .fixedSize()
+                        HStack(spacing: 5) {
+                            Art.icon(.snooze, size: 13, tint: P.ink)
+                            Text("Later")
+                                .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                        }
+                        .fixedSize()
                     }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
                     .fixedSize()
@@ -319,7 +323,8 @@ struct ActionPanel: View {
                 Haptics.tap()
             } label: {
                 HStack(spacing: 6) {
-                    Text("💤 \(parked.count == 1 ? "1 offer" : "\(parked.count) offers") set aside")
+                    Art.icon(.snooze, size: 14, tint: P.ink3)
+                    Text("\(parked.count == 1 ? "1 offer" : "\(parked.count) offers") set aside")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
                     Spacer()
@@ -344,11 +349,14 @@ struct ActionPanel: View {
                         .foregroundStyle(P.ink3)
                         .lineLimit(2)
                     if let watching = viewerNames(trade) {
-                        ViewingLine(text: "👀 \(watching) is viewing…", color: P.gold)
+                        ViewingLine(text: "\(watching) is viewing…", color: P.gold)
                     } else if trade.ignored == true {
-                        Text("💤 Set aside for later")
-                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(P.ink3)
+                        HStack(spacing: 5) {
+                            Art.icon(.snooze, size: 13, tint: P.ink3)
+                            Text("Set aside for later")
+                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                        }
                     }
                 }
                 Spacer()
@@ -394,21 +402,24 @@ struct ActionPanel: View {
     }
 }
 
-/// The gently pulsing "👀 … is viewing" presence line.
+/// The gently pulsing "… is viewing" presence line, under a drawn eye.
 struct ViewingLine: View {
     let text: String
     let color: Color
     @State private var dim = false
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-            .foregroundStyle(color)
-            .opacity(dim ? 0.4 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                    dim = true
-                }
+        HStack(spacing: 5) {
+            Art.icon(.eye, size: 13, tint: color)
+            Text(text)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(color)
+        }
+        .opacity(dim ? 0.4 : 1)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                dim = true
             }
+        }
     }
 }

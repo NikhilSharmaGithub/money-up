@@ -338,3 +338,51 @@ struct DMessage: Codable, Identifiable {
 
     var id: String { "\(at):\(from)" }
 }
+
+// MARK: - server marks → drawn glyphs
+
+/// The server labels utilities, maps and coin packs with an emoji. Emoji are
+/// another vendor's artwork — they change shape per platform and country flags
+/// don't draw at all on Windows — so nothing here is ever shown as typed. The
+/// mark is treated as an identifier and answered with one of our own drawings.
+
+/// Strips the variation selector so "☠️" and "☠" are the same key.
+private func plainMark(_ mark: String?) -> String {
+    String(String.UnicodeScalarView((mark ?? "").unicodeScalars.filter { $0.value != 0xFE0F }))
+}
+
+/// A utility tile's power source. Mirrors `utilityName()` in public/js/icons.js
+/// so a board reads the same on the web, on Android and here.
+func utilityGlyph(_ mark: String?) -> Glyph {
+    switch plainMark(mark) {
+    case "🚰", "💧": .droplet
+    case "🛢": .flame
+    case "☀": .sun
+    case "🌬": .turbine
+    default: .bolt
+    }
+}
+
+/// A board's badge in pickers and history. Country boards carry their nation's
+/// flag, which is exactly the mark that can't be drawn everywhere — they all
+/// fall through to the folded map instead.
+func mapGlyph(_ mark: String?) -> Glyph {
+    switch plainMark(mark) {
+    case "🌐": .globe
+    case "🌍": .plane      // "Mr. Worldwide" — the board that travels
+    case "☠": .skull
+    case "⚡": .bolt
+    case "🍀": .sparkle
+    case "🎲": .dice
+    default: .map
+    }
+}
+
+/// A coin pack's shelf mark, biggest purse for the biggest pack.
+func packGlyph(_ mark: String?) -> Glyph {
+    switch plainMark(mark) {
+    case "💰": .bag
+    case "🏦": .toolbox    // the "Tycoon chest" pack — a chest, not a bank
+    default: .coin
+    }
+}

@@ -482,9 +482,10 @@ struct PlayerStrip: View {
                                         .animation(.snappy(duration: 0.4), value: p.money)
                                     let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
                                     if owned > 0, !p.isBankrupt {
-                                        Text("·  \(owned) 🏠")
+                                        Text("·  \(owned)")
                                             .font(.system(size: 9.5, weight: .bold, design: .rounded))
                                             .foregroundStyle(P.ink3)
+                                        Art.icon(.houses, size: 10, tint: P.ink3)
                                     }
                                     if isTurn, let endsAt = store.state?.turn?.endsAt {
                                         TurnClock(endsAt: endsAt, compact: true)
@@ -554,17 +555,20 @@ struct PlayerStrip: View {
         }
     }
 
-    /// Live position by net worth, crown on whoever is actually ahead.
-    /// Crown and number are one text run: as two views the emoji reported a
-    /// narrower width than it drew, and squeezed the "#1" out to "…".
+    /// Live position by net worth, crown on whoever is actually ahead. The
+    /// crown is a drawn glyph in a fixed frame, so unlike the emoji it can't
+    /// measure narrower than it paints and squeeze the "#1" out to "…".
     private func rankBadge(_ rank: Int, _ P: Palette) -> some View {
-        Text(rank == 1 ? "👑 #1" : "#\(rank)")
-            .font(.system(size: 8.5, weight: .black, design: .rounded))
-            .fixedSize()
-            .foregroundStyle(rank == 1 ? P.gold : P.ink3)
-            .padding(.vertical, 1.5)
-            .padding(.horizontal, 5)
-            .background(rank == 1 ? P.goldSoft : P.sunken, in: Capsule())
+        HStack(spacing: 3) {
+            if rank == 1 { Art.icon(.crown, size: 10) }
+            Text("#\(rank)")
+                .font(.system(size: 8.5, weight: .black, design: .rounded))
+                .fixedSize()
+                .foregroundStyle(rank == 1 ? P.gold : P.ink3)
+        }
+        .padding(.vertical, 1.5)
+        .padding(.horizontal, 5)
+        .background(rank == 1 ? P.goldSoft : P.sunken, in: Capsule())
     }
 
     /// Enough warning to look up before the turn lands — no more than that.
@@ -610,7 +614,7 @@ struct CenterWell: View {
                         .padding(.top, state.turn?.endsAt == nil ? 0 : 26)
                 } else if state.isLobby {
                     VStack(spacing: 8) {
-                        Text(state.map.icon ?? "🌐").font(.system(size: 26))
+                        Art.icon(mapGlyph(state.map.icon), size: 28)
                         Text(state.map.name)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink)
@@ -632,18 +636,17 @@ struct CenterWell: View {
                     }
                 } else if state.isEnded {
                     VStack(spacing: 6) {
-                        Text("🏆").font(.system(size: 34))
+                        Art.icon(.trophy, size: 36)
                         Text("\(store.state?.winner?.name ?? "Nobody") wins!")
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
                             .foregroundStyle(P.ink)
                         // The result sheet is dismissable, so the well keeps a
                         // way back to it — otherwise the standings are gone.
                         if let openResults {
-                            Button("🏆  Final standings") {
+                            MMIconButton(.trophy, "Final standings", kind: .ghost) {
                                 openResults()
                                 Haptics.tap()
                             }
-                            .buttonStyle(MMButtonStyle(kind: .ghost))
                             .padding(.top, 2)
                         }
                     }
@@ -683,7 +686,7 @@ struct CenterWell: View {
                                     }
                                     if state.settings.vacationCash == true, let pot = state.vacationPot, pot > 0 {
                                         HStack(spacing: 4) {
-                                            Text("🏝️").font(.system(size: 11))
+                                            Art.icon(.island, size: 13)
                                             Text(money(pot))
                                                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                                                 .foregroundStyle(P.gold)
@@ -940,7 +943,7 @@ private struct PlayerPod: View {
                 if isTurn, let phase = store.state?.turn?.phase {
                     switch phase {
                     case "roll":
-                        podButton("🎲 Roll", prominent: true) { store.roll() }
+                        podButton("Roll", glyph: .dice, prominent: true) { store.roll() }
                     case "end":
                         podButton("End ➜", prominent: true) { store.endTurn() }
                     default:
@@ -967,15 +970,21 @@ private struct PlayerPod: View {
         .animation(.spring(duration: 0.35), value: isTurn)
     }
 
-    private func podButton(_ label: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+    private func podButton(_ label: String, glyph: Glyph? = nil,
+                           prominent: Bool, action: @escaping () -> Void) -> some View {
         let P = Palette.current(scheme)
         return Button {
             action()
             Haptics.tap()
         } label: {
-            Text(label)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(prominent ? P.accentInk : P.ink)
+            HStack(spacing: 5) {
+                if let glyph {
+                    Art.icon(glyph, size: 14, tint: prominent ? P.accentInk : P.ink)
+                }
+                Text(label)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(prominent ? P.accentInk : P.ink)
+            }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(prominent ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken),
@@ -1094,9 +1103,15 @@ struct AwaitingSeatsCard: View {
             Button {
                 store.grantTime(seat.id)
             } label: {
-                Text(buttonLabel(seat, agreed: agreed, count: count, voters: voters))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                HStack(spacing: 8) {
+                    if let glyph = buttonGlyph(seat, agreed: agreed) {
+                        Art.icon(glyph, size: 18,
+                                 tint: (agreed ? MMButtonStyle.Kind.ghost : .gold).ink(P))
+                    }
+                    Text(buttonLabel(seat, agreed: agreed, count: count, voters: voters))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
             }
             .buttonStyle(MMButtonStyle(kind: agreed ? .ghost : .gold, big: true))
             .disabled(agreed)
@@ -1114,12 +1129,19 @@ struct AwaitingSeatsCard: View {
     /// a vote, so it says so and carries the tally with it.
     private func buttonLabel(_ seat: AwaitingSeat, agreed: Bool, count: Int, voters: Int) -> String {
         guard seat.isVote else {
-            return agreed ? "✓  Minute granted" : "⏳  Grant a minute"
+            return agreed ? "✓  Minute granted" : "Grant a minute"
         }
         let tally = "\(count) of \(voters) agreed"
         return agreed
             ? "✓  You agreed — waiting on the rest (\(tally))"
-            : "🗳  Everyone must agree — \(tally)"
+            : "Everyone must agree — \(tally)"
+    }
+
+    /// Only the two live states carry a mark: one player can hold the chair,
+    /// or the whole table has to. Once you've clicked, the ✓ in the label says
+    /// so and a second symbol would only crowd the line.
+    private func buttonGlyph(_ seat: AwaitingSeat, agreed: Bool) -> Glyph? {
+        agreed ? nil : (seat.isVote ? .people : .shield)
     }
 
     /// One pip per player who still has to click, filled as they do.

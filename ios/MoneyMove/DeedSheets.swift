@@ -107,6 +107,23 @@ struct DeedSheet: View {
 
     // MARK: header strip
 
+    /// What the deed flies above its name. The header is already painted in
+    /// the group's colour, so the banner flies in the header's ink instead —
+    /// a same-coloured pennant on a same-coloured card is no pennant at all.
+    @ViewBuilder
+    private func headerBadge(_ tile: TileData, group: GroupInfo?, ink: Color) -> some View {
+        switch tile.type {
+        case "property":
+            if group != nil { Art.groupBanner(ink, size: 24) }
+        case "airport":
+            Art.icon(.plane, size: 22, tint: ink)
+        case "utility":
+            Art.icon(utilityGlyph(tile.icon), size: 22)
+        default:
+            EmptyView()
+        }
+    }
+
     private func header(_ tile: TileData, _ P: Palette) -> some View {
         let group = store.groupInfo(for: tile)
         let fill: Color
@@ -121,12 +138,11 @@ struct DeedSheet: View {
         default:
             fill = P.sunken; colored = false
         }
-        let badge = group?.flag ?? tile.icon ?? ""
         let ink: Color = colored ? .white : P.ink
 
         return VStack(spacing: 6) {
             HStack(spacing: 8) {
-                if !badge.isEmpty { Text(badge).font(.system(size: 22)) }
+                headerBadge(tile, group: group, ink: ink)
                 Text(tile.name)
                     .font(.system(size: 20, weight: .heavy, design: .rounded))
                     .foregroundStyle(ink)
@@ -334,8 +350,17 @@ struct DeedSheet: View {
             : "next \(houses == 4 ? "hotel" : "house") \(money(houseCost))"
 
         return HStack(spacing: 7) {
-            Text(houses == 5 ? "🏨" : houses > 0 ? String(repeating: "🏠", count: houses) : "🏗")
-                .font(.system(size: 12))
+            if houses == 5 {
+                Art.icon(.hotel, size: 14)
+            } else if houses > 0 {
+                HStack(spacing: 2) {
+                    ForEach(0..<houses, id: \.self) { _ in Art.icon(.house, size: 13) }
+                }
+            } else {
+                // Nothing standing yet — the crane says building is what this
+                // row is for, without pretending a house is already there.
+                Art.icon(.crane, size: 14, tint: P.ink3)
+            }
             Text(standing)
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(P.ink2)
@@ -545,7 +570,7 @@ struct PropertiesSheet: View {
 
         if mine.isEmpty {
             VStack(spacing: 8) {
-                Text("🏝️").font(.system(size: 34))
+                Art.icon(.island, size: 36)
                 Text("Nothing owned yet — land on a street and buy it.")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
@@ -572,13 +597,15 @@ struct PropertiesSheet: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(grouped, id: \.key) { entry in
-                    section(title: sectionTitle(for: entry.key), tiles: entry.tiles, P: P, groupKey: entry.key)
+                    section(title: sectionTitle(for: entry.key),
+                            mark: sectionMark(for: entry.key),
+                            tiles: entry.tiles, P: P, groupKey: entry.key)
                 }
                 if !airports.isEmpty {
-                    section(title: "✈️ Airports", tiles: airports, P: P)
+                    section(title: "Airports", mark: .glyph(.plane), tiles: airports, P: P)
                 }
                 if !utilities.isEmpty {
-                    section(title: "💡 Utilities", tiles: utilities, P: P)
+                    section(title: "Utilities", mark: .glyph(.bolt), tiles: utilities, P: P)
                 }
                 bankruptRow(P)
             }
@@ -586,18 +613,23 @@ struct PropertiesSheet: View {
     }
 
     private func sectionTitle(for groupKey: String) -> String {
-        if let info = store.state?.groups[groupKey] {
-            return "\(info.flag) \(info.name)"
-        }
-        return groupKey
+        store.state?.groups[groupKey]?.name ?? groupKey
+    }
+
+    /// A country section flies that country's banner; a family without a group
+    /// colour (airports, utilities) gets a glyph instead.
+    private func sectionMark(for groupKey: String) -> SectionMark {
+        guard let info = store.state?.groups[groupKey] else { return .none }
+        return .banner(Color(css: info.color))
     }
 
     /// The web's always-there escape hatch, mirrored: give up on your own turn.
     @ViewBuilder
     private func bankruptRow(_ P: Palette) -> some View {
         if store.isMyTurn {
-            Button("🏳️  Declare bankruptcy") { confirmBankrupt = true }
-                .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+            MMIconButton(.skull, "Declare bankruptcy", kind: .ghost, big: true) {
+                confirmBankrupt = true
+            }
                 .padding(.top, 6)
                 .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
                     Button("Go bankrupt", role: .destructive) {
@@ -617,12 +649,26 @@ struct PropertiesSheet: View {
         return (owned, idxs.count)
     }
 
-    private func section(title: String, tiles: [TileData], P: Palette, groupKey: String? = nil) -> some View {
+    /// What a section flies beside its name.
+    private enum SectionMark { case banner(Color), glyph(Glyph), none }
+
+    @ViewBuilder
+    private func sectionMarkView(_ mark: SectionMark, _ P: Palette) -> some View {
+        switch mark {
+        case .banner(let colour): Art.groupBanner(colour, size: 15)
+        case .glyph(let g): Art.icon(g, size: 14, tint: P.ink3)
+        case .none: EmptyView()
+        }
+    }
+
+    private func section(title: String, mark: SectionMark = .none, tiles: [TileData],
+                         P: Palette, groupKey: String? = nil) -> some View {
         let progress = groupKey.flatMap { setProgress(for: $0) }
         let fullSet = progress.map { $0.owned == $0.total } ?? false
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                sectionMarkView(mark, P)
                 PanelTitle(title)
                 Spacer()
                 if let progress {
@@ -656,7 +702,8 @@ struct PropertiesSheet: View {
             let holder = store.state?.owner(of: missing)?.owner
             let holderName = holder.flatMap { store.state?.player($0)?.name }
             HStack(spacing: 8) {
-                Text("🎯").font(.system(size: 13))
+                // The one street that unlocks the set — the key to it.
+                Art.icon(.key, size: 15, tint: P.ink2)
                 Text(holderName.map { "1 away — \(tile.name) is with \($0)" }
                      ?? "1 away — \(tile.name) is still with the bank")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -721,7 +768,7 @@ struct PropertiesSheet: View {
                     .foregroundStyle(P.ink)
                     .lineLimit(1)
                 if houses == 5 {
-                    Text("🏨").font(.system(size: 13))
+                    Art.icon(.hotel, size: 15)
                 } else if houses > 0 {
                     Text(String(repeating: "▪︎", count: houses))
                         .font(.system(size: 13, weight: .black))
@@ -754,8 +801,12 @@ struct PropertiesSheet: View {
             if !buttons.isEmpty || canOfferInTrade {
                 HStack(spacing: 6) {
                     ForEach(Array(buttons.enumerated()), id: \.offset) { _, b in
-                        Button(b.label, action: b.action)
-                            .buttonStyle(MMButtonStyle(kind: b.kind))
+                        if let glyph = b.glyph {
+                            MMIconButton(glyph, b.label, kind: b.kind, action: b.action)
+                        } else {
+                            Button(b.label, action: b.action)
+                                .buttonStyle(MMButtonStyle(kind: b.kind))
+                        }
                     }
                     Spacer(minLength: 0)
                     if canOfferInTrade {
@@ -783,6 +834,7 @@ struct PropertiesSheet: View {
     private struct RowButton {
         let label: String
         let kind: MMButtonStyle.Kind
+        var glyph: Glyph? = nil
         let action: () -> Void
     }
 
@@ -790,7 +842,7 @@ struct PropertiesSheet: View {
         let i = tile.index
         var buttons: [RowButton] = []
         if store.canBuild(i), let hc = tile.houseCost {
-            buttons.append(RowButton(label: "🏗 \(money(hc))", kind: .good) { store.build(i) })
+            buttons.append(RowButton(label: money(hc), kind: .good, glyph: .crane) { store.build(i) })
         }
         if store.canSellHouse(i), let hc = tile.houseCost {
             buttons.append(RowButton(label: "Sell +\(money(hc / 2))", kind: .ghost) { store.sellHouse(i) })

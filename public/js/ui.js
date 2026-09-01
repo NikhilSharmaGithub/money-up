@@ -2,6 +2,7 @@
 // chat, toasts and the celebratory bits.
 
 import { escapeHtml, deedMarkup } from './board.js';
+import { icon, groupBanner } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
 
@@ -36,7 +37,7 @@ export function toast(message, type = 'info') {
   el.className = `toast ${type}`;
   el.dataset.msg = message;
   el.dataset.n = '1';
-  el.innerHTML = `<span>${type === 'error' ? '⚠️' : 'ℹ️'}</span>
+  el.innerHTML = `<span>${icon(type === 'error' ? 'warning' : 'bulb', null, 'solo')}</span>
     <span>${escapeHtml(message)}</span><b class="toast-n"></b>`;
   root.appendChild(el);
   while (root.children.length > MAX_TOASTS) dismissToast(root.firstElementChild);
@@ -92,11 +93,15 @@ export function canMortgage(state, meId, i) {
 }
 
 // ────────────────────────────────────────────────────────────── log/chat ──
+// One drawn mark per kind of thing that happened. Most of these paint with
+// currentColor, so each mark takes the colour its own line is already printed
+// in — a rent line's house is as red as the words beside it.
 const LOG_ICON = {
-  dice: '🎲', money: '💵', rent: '🏠', buy: '🛒', turn: '▶', jail: '🚔',
-  bankrupt: '💀', auction: '🔨', trade: '🤝', treasure: '🧰', surprise: '❓',
-  system: '✨', build: '🏗️', mortgage: '🏦', join: '👋', leave: '🚪',
-  warn: '⚠️', info: '·',
+  dice: 'dice', money: 'cash', rent: 'houses', buy: 'bag', jail: 'police',
+  bankrupt: 'skull', auction: 'gavel', trade: 'trade', treasure: 'toolbox', surprise: 'question',
+  system: 'sparkle', build: 'crane', mortgage: 'bank', join: 'people', leave: 'door',
+  // A turn is the play coming round the table again.
+  warn: 'warning', turn: 'replay',
 };
 
 export function renderLog(state, el) {
@@ -105,7 +110,7 @@ export function renderLog(state, el) {
   const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60 || !el.dataset.sig;
   el.dataset.sig = sig;
   el.innerHTML = state.log.map((l) => `<div class="log-line ${l.kind}">
-      <span class="log-ico">${LOG_ICON[l.kind] || '·'}</span><span>${escapeHtml(l.text)}</span>
+      <span class="log-ico">${icon(LOG_ICON[l.kind]) || '·'}</span><span>${escapeHtml(l.text)}</span>
     </div>`).join('');
   if (wasAtBottom) el.scrollTop = el.scrollHeight;
 }
@@ -125,8 +130,8 @@ export function renderChat(state, el, channel = 'all') {
   el.dataset.sig = sig;
   if (!msgs.length) {
     el.innerHTML = channel === 'team'
-      ? '<div class="empty">Only your team reads this. Plan away 🛡️</div>'
-      : '<div class="empty">Say hi 👋</div>';
+      ? `<div class="empty">Only your team reads this. Plan away ${icon('shield')}</div>`
+      : `<div class="empty">Say hi ${icon('people')}</div>`;
     return;
   }
   el.innerHTML = msgs.map((m) => {
@@ -248,7 +253,7 @@ export function renderPlayers(state, meId, el, actions) {
     // live position — the leader wears the crown, everyone else their number
     const rankEl = card.querySelector('.prank');
     const pos = state.status === 'playing' ? rank.get(p.id) : null;
-    const rankHtml = !pos ? '' : pos === 1 ? '<b>👑</b><span>#1</span>' : `<span>#${pos}</span>`;
+    const rankHtml = !pos ? '' : pos === 1 ? `<b>${icon('crown')}</b><span>#1</span>` : `<span>#${pos}</span>`;
     if (rankEl.dataset.v !== rankHtml) {
       rankEl.dataset.v = rankHtml;
       rankEl.innerHTML = rankHtml;
@@ -285,7 +290,7 @@ export function renderPlayers(state, meId, el, actions) {
     else if (!p.connected && !p.isBot) tags.push('<i class="tag off">AWAY</i>');
     if (p.jail) tags.push('<i class="tag jail">JAIL</i>');
     if (p.skipTurns > 0) tags.push('<i class="tag vac">VACATION</i>');
-    if (p.getOutCards > 0) tags.push(`<i class="tag card">🎟️${p.getOutCards > 1 ? p.getOutCards : ''}</i>`);
+    if (p.getOutCards > 0) tags.push(`<i class="tag card">${icon('ticket')}${p.getOutCards > 1 ? p.getOutCards : ''}</i>`);
     const tagEl = card.querySelector('.tags');
     const tagHtml = tags.join('');
     if (tagEl.dataset.v !== tagHtml) { tagEl.dataset.v = tagHtml; tagEl.innerHTML = tagHtml; }
@@ -328,8 +333,8 @@ export function renderPlayers(state, meId, el, actions) {
         return `<i class="chip ${n === total ? 'full' : ''}" style="--c:${state.groups[g].color}"
                   title="${escapeHtml(state.groups[g].name)} ${n}/${total}">${n}<small>/${total}</small></i>`;
       }).join('')
-        + (rails ? `<i class="chip plain" title="Airports">✈️${rails}</i>` : '')
-        + (utils ? `<i class="chip plain" title="Utilities">💡${utils}</i>` : '');
+        + (rails ? `<i class="chip plain" title="Airports">${icon('plane')}${rails}</i>` : '')
+        + (utils ? `<i class="chip plain" title="Utilities">${icon('bulb')}${utils}</i>` : '');
       const final = html || `<span class="dim">${isOut(p) ? 'nothing left' : 'no property yet'}</span>`;
       if (chips.dataset.v !== final) { chips.dataset.v = final; chips.innerHTML = final; }
     } else if (chips.dataset.v !== 'lobby') {
@@ -383,13 +388,13 @@ function spawnDelta(card, amount) {
 
 // ──────────────────────────────────────────────────────────── right panel ──
 const RULES = [
-  { key: 'x2rent', icon: '💰', name: 'x2 rent on full sets', desc: 'Owning a whole country doubles its base rent' },
-  { key: 'vacationCash', icon: '🏝️', name: 'Vacation cash', desc: 'Taxes and fines pile up and go to whoever lands on Vacation' },
-  { key: 'auction', icon: '🔨', name: 'Auction', desc: 'Skipped properties are sold to the highest bidder' },
-  { key: 'noRentInPrison', icon: '🚔', name: 'No rent while jailed', desc: 'Owners in prison collect nothing' },
-  { key: 'mortgage', icon: '🏦', name: 'Mortgage', desc: 'Raise 50% of a property’s cost, but collect no rent on it' },
-  { key: 'evenBuild', icon: '🏘️', name: 'Even build', desc: 'Houses must go up and down evenly across a set' },
-  { key: 'randomizeOrder', icon: '🔀', name: 'Randomize order', desc: 'Shuffle the turn order when the game starts' },
+  { key: 'x2rent', icon: 'coin', name: 'x2 rent on full sets', desc: 'Owning a whole country doubles its base rent' },
+  { key: 'vacationCash', icon: 'island', name: 'Vacation cash', desc: 'Taxes and fines pile up and go to whoever lands on Vacation' },
+  { key: 'auction', icon: 'gavel', name: 'Auction', desc: 'Skipped properties are sold to the highest bidder' },
+  { key: 'noRentInPrison', icon: 'police', name: 'No rent while jailed', desc: 'Owners in prison collect nothing' },
+  { key: 'mortgage', icon: 'bank', name: 'Mortgage', desc: 'Raise 50% of a property’s cost, but collect no rent on it' },
+  { key: 'evenBuild', icon: 'houses', name: 'Even build', desc: 'Houses must go up and down evenly across a set' },
+  { key: 'randomizeOrder', icon: 'shuffle', name: 'Randomize order', desc: 'Shuffle the turn order when the game starts' },
 ];
 
 /**
@@ -471,7 +476,7 @@ function renderQuickLobby(state, meId, el, actions) {
   const open = Math.max(0, seats - state.players.length);
   el.innerHTML = `
     <div class="panel">
-      <div class="panel-title">⚡ Quick Play</div>
+      <div class="panel-title">${icon('bolt')} Quick Play</div>
       <div class="quick-blurb">A public table with whoever is online. It deals
         itself in as soon as the seats fill${state.quickStartAt ? ', or when the countdown runs out' : ''}.</div>
       <div class="quick-seats">
@@ -496,7 +501,7 @@ function renderSettings(state, meId, el, actions) {
   const dis = isHost ? '' : 'disabled';
 
   const toggle = (d) => `<div class="setting">
-      <span class="s-icon">${d.icon}</span>
+      <span class="s-icon">${icon(d.icon)}</span>
       <div class="s-body"><div class="s-name">${d.name}</div><div class="s-desc">${d.desc}</div></div>
       <label class="switch">
         <input type="checkbox" data-set="${d.key}" ${state.settings[d.key] ? 'checked' : ''} ${dis} />
@@ -510,26 +515,26 @@ function renderSettings(state, meId, el, actions) {
     <div class="panel">
       <div class="panel-title">Game settings</div>
       <div class="setting">
-        <span class="s-icon">👥</span>
+        <span class="s-icon">${icon('people')}</span>
         <div class="s-body"><div class="s-name">Maximum players</div><div class="s-desc">Seats available in this room</div></div>
         <select data-set="maxPlayers" ${dis}>
           ${[2, 3, 4, 5, 6, 7, 8].map((n) => `<option value="${n}" ${state.settings.maxPlayers === n ? 'selected' : ''}>${n}</option>`).join('')}
         </select>
       </div>
       <div class="setting">
-        <span class="s-icon">🔑</span>
+        <span class="s-icon">${icon('key')}</span>
         <div class="s-body"><div class="s-name">Private room</div><div class="s-desc">Only people with the link can join</div></div>
         <label class="switch"><input type="checkbox" data-set="isPrivate" ${state.settings.isPrivate ? 'checked' : ''} ${dis} />
           <span class="track"></span><span class="thumb"></span></label>
       </div>
       <div class="setting">
-        <span class="s-icon">🤖</span>
+        <span class="s-icon">${icon('robot')}</span>
         <div class="s-body"><div class="s-name">Allow bots</div><div class="s-desc">Bots fill the empty seats on start</div></div>
         <label class="switch"><input type="checkbox" data-set="allowBots" ${state.settings.allowBots ? 'checked' : ''} ${dis} />
           <span class="track"></span><span class="thumb"></span></label>
       </div>
       <div class="setting">
-        <span class="s-icon">🤝</span>
+        <span class="s-icon">${icon('shield')}</span>
         <div class="s-body"><div class="s-name">Teams</div>
           <div class="s-desc">Teammates never charge each other rent and win together</div></div>
         <select data-set="teams" ${dis}>
@@ -538,12 +543,12 @@ function renderSettings(state, meId, el, actions) {
       </div>
       ${state.settings.teams > 0 && isHost ? '<button class="btn small wide" id="balanceBtn">⇄ Balance teams</button>' : ''}
       <div class="setting">
-        <span class="s-icon">🗺️</span>
+        <span class="s-icon">${icon('map')}</span>
         <div class="s-body"><div class="s-name">Board map</div><div class="s-desc">${escapeHtml(state.map.name)} · ${state.map.size} tiles</div></div>
         <button class="btn small" id="mapBtn" ${dis}>Change ›</button>
       </div>
       <div class="setting">
-        <span class="s-icon">💵</span>
+        <span class="s-icon">${icon('cash')}</span>
         <div class="s-body"><div class="s-name">Starting cash</div><div class="s-desc">Lower cash means faster, meaner games</div></div>
         <select data-set="startingCash" ${dis}>
           ${[500, 1000, 1500, 2000, 2500, 3000, 5000].map((n) => `<option value="${n}" ${state.settings.startingCash === n ? 'selected' : ''}>$${n}</option>`).join('')}
@@ -558,7 +563,7 @@ function renderSettings(state, meId, el, actions) {
 
     ${isHost ? `
       <div class="stack">
-        <button class="btn primary big" id="startBtn">▶ Start Game</button>
+        <button class="btn primary big" id="startBtn">${icon('dice')} Start Game</button>
         <button class="btn wide ghost" id="botBtn">＋ Add a bot</button>
       </div>`
       : '<div class="panel waiting"><span class="pulse-dot"></span> Waiting for the host to start…</div>'}
@@ -626,10 +631,10 @@ function raiseCashPanel(state, meId) {
     const i = Number(key);
     const t = state.map.tiles[i];
     if (canSellOn(state, meId, i)) {
-      moves.push({ attr: 'sell', i, value: Math.floor((t.houseCost || 0) / 2), icon: '🏠', what: `Sell a building on ${t.name}` });
+      moves.push({ attr: 'sell', i, value: Math.floor((t.houseCost || 0) / 2), icon: 'houses', what: `Sell a building on ${t.name}` });
     }
     if (canMortgage(state, meId, i)) {
-      moves.push({ attr: 'mort', i, value: Math.floor((t.price || 0) / 2), icon: '🏦', what: `Mortgage ${t.name}` });
+      moves.push({ attr: 'mort', i, value: Math.floor((t.price || 0) / 2), icon: 'bank', what: `Mortgage ${t.name}` });
     }
   });
   moves.sort((a, b) => b.value - a.value);
@@ -642,7 +647,7 @@ function raiseCashPanel(state, meId) {
 
   const list = moves.length
     ? moves.slice(0, 8).map((m) => `<div class="raise-row">
-        <span class="raise-what">${m.icon} ${escapeHtml(m.what)}</span>
+        <span class="raise-what">${icon(m.icon)} ${escapeHtml(m.what)}</span>
         <button class="btn tiny gold" data-${m.attr}="${m.i}">+${money(m.value)}</button>
       </div>`).join('')
     : '<div class="empty small">Nothing left to sell or mortgage — a trade is the only way out.</div>';
@@ -654,7 +659,7 @@ function raiseCashPanel(state, meId) {
     : '';
 
   return `<div class="panel raise-panel">
-      <div class="panel-title">💸 You owe ${money(d.amount)}</div>
+      <div class="panel-title">${icon('payment')} You owe ${money(d.amount)}</div>
       ${head}
       ${short > 0 ? list : ''}
       ${short > 0 ? foot : ''}
@@ -679,12 +684,14 @@ function renderMyStuff(state, meId, el, actions) {
 
   const sections = Object.entries(byGroup).map(([key, list]) => {
     const g = state.groups[key];
-    const title = g ? `${g.flag} ${g.name}` : (key === '__air' ? '✈️ Airports' : '💡 Utilities');
+    const title = g ? `${groupBanner(g.color)} ${escapeHtml(g.name)}`
+      : key === '__air' ? `${icon('plane')} Airports`
+      : `${icon('bulb')} Utilities`;
     const complete = g && list.length === state.map.groups[key].length;
     const rows = list.sort((a, b) => a.i - b.i).map((m) => {
       const t = state.map.tiles[m.i];
       const color = g?.color || '#7c6bb0';
-      const buildings = m.houses === 5 ? '<span class="hotel">🏨</span>' : '🏠'.repeat(m.houses || 0);
+      const buildings = m.houses === 5 ? icon('hotel') : icon('house').repeat(m.houses || 0);
       return `<div class="prop-row ${m.mortgaged ? 'mortgaged' : ''}" data-open="${m.i}">
         <span class="prop-swatch" style="background:${color}"></span>
         <span class="prop-name">${escapeHtml(t.name)}</span>
@@ -694,7 +701,7 @@ function renderMyStuff(state, meId, el, actions) {
           ${live && canSellOn(state, meId, m.i) ? `<button class="btn tiny" data-sell="${m.i}" title="Sell a building for $${Math.floor(t.houseCost / 2)}">−</button>` : ''}
           ${m.mortgaged
             ? (live && state.settings.mortgage ? `<button class="btn tiny gold" data-unmort="${m.i}" title="Buy back for $${Math.ceil((t.price / 2) * 1.1)}">↺</button>` : '')
-            : (live && canMortgage(state, meId, m.i) ? `<button class="btn tiny" data-mort="${m.i}" title="Mortgage for $${Math.floor(t.price / 2)}">🏦</button>` : '')}
+            : (live && canMortgage(state, meId, m.i) ? `<button class="btn tiny" data-mort="${m.i}" title="Mortgage for $${Math.floor(t.price / 2)}">${icon('bank', null, 'solo')}</button>` : '')}
         </span>
       </div>`;
     }).join('');
@@ -710,7 +717,7 @@ function renderMyStuff(state, meId, el, actions) {
     ${outgoing.map((t) => `<div class="panel">
       <div class="panel-title">Offer sent</div>
       <div class="dim small">${t.ignored
-        ? `💤 ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')} set it aside for later`
+        ? `${icon('snooze')} ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')} set it aside for later`
         : `Waiting for ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')}…`}</div>
       ${tradeViewerLine(state, t, meId)}
       <button class="btn small wide" style="margin-top:8px" data-cancel="${t.id}">Cancel offer</button>
@@ -719,7 +726,7 @@ function renderMyStuff(state, meId, el, actions) {
     <div class="panel">
       <div class="panel-title">Your properties</div>
       ${mine.length ? sections : `<div class="empty">${
-        isOut(me || {}) ? 'Your deeds went back to the bank. You are watching from the rail now 👀'
+        isOut(me || {}) ? `Your deeds went back to the bank. You are watching from the rail now ${icon('eye')}`
           : state.status === 'ended' ? 'You finished with nothing on the board.'
           : 'Nothing owned yet — land on a street and buy it.'}</div>`}
     </div>
@@ -730,7 +737,7 @@ function renderMyStuff(state, meId, el, actions) {
     </div>` : ''}
 
     ${state.status === 'ended' && state.hostId === meId
-      ? '<button class="btn primary wide wrap" id="rematchBtn">🔁 Play again with the same players</button>'
+      ? `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again with the same players</button>`
       : ''}
   `;
 
@@ -776,13 +783,13 @@ function renderMyStuff(state, meId, el, actions) {
   if (rb) rb.onclick = () => actions.rematch();
 }
 
-/** "👀 Ravi is viewing…" — everyone on the offer except yourself. */
+/** "Ravi is viewing…" — everyone on the offer except yourself. */
 function tradeViewerLine(state, t, meId) {
   const names = (t.viewers || []).filter((v) => v !== meId)
     .map((v) => state.players.find((p) => p.id === v)?.name)
     .filter(Boolean);
   if (!names.length) return '';
-  return `<div class="trade-viewing">👀 ${names.map(escapeHtml).join(', ')} ${names.length > 1 ? 'are' : 'is'} viewing…</div>`;
+  return `<div class="trade-viewing">${icon('eye')} ${names.map(escapeHtml).join(', ')} ${names.length > 1 ? 'are' : 'is'} viewing…</div>`;
 }
 
 function tradeCard(state, t, meId) {
@@ -798,13 +805,13 @@ function tradeCard(state, t, meId) {
   // Set aside: stays in the list as a quiet one-liner until you pick it back up.
   if (t.ignored) {
     return `<div class="panel trade-offer ignored">
-      <div class="trade-line"><span>🤝 From ${escapeHtml(from?.name || '')}</span><b class="dim">💤 set aside</b></div>
+      <div class="trade-line"><span>${icon('trade')} From ${escapeHtml(from?.name || '')}</span><b class="dim">${icon('snooze')} set aside</b></div>
       <button class="btn small wide" data-unignore="${t.id}">Review offer</button>
     </div>`;
   }
 
   return `<div class="panel trade-offer">
-    <div class="panel-title">🤝 Offer from ${escapeHtml(from?.name || '')}</div>
+    <div class="panel-title">${icon('trade')} Offer from ${escapeHtml(from?.name || '')}</div>
     <div class="trade-line good"><span>You get</span><b>${describe(t.give)}</b></div>
     <div class="trade-line bad"><span>You give</span><b>${describe(t.get)}</b></div>
     ${tradeViewerLine(state, t, meId)}
@@ -813,8 +820,8 @@ function tradeCard(state, t, meId) {
       <button class="btn bad small" data-decline="${t.id}">Decline</button>
     </div>
     <div class="row-2" style="margin-top:6px">
-      <button class="btn small" data-negotiate="${t.id}">🤝 Negotiate</button>
-      <button class="btn ghost small" data-ignore="${t.id}" title="Keep it in the list, decide later">💤 Later</button>
+      <button class="btn small" data-negotiate="${t.id}">${icon('trade')} Negotiate</button>
+      <button class="btn ghost small" data-ignore="${t.id}" title="Keep it in the list, decide later">${icon('snooze')} Later</button>
     </div>
   </div>`;
 }
@@ -846,12 +853,12 @@ export function renderCenter(state, meId, actions) {
       ? `<div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
          <div class="quick-count">Starting in <b id="quickCount">…</b></div>`
       : state.hostId === meId
-        ? '<button class="btn primary big" id="cStart">▶ Start Game</button>'
+        ? `<button class="btn primary big" id="cStart">${icon('dice')} Start Game</button>`
         : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
     statusEl.innerHTML = `
       <div class="lobby-head">
-        <div class="room-code">${searching ? '⚡ Quick Play' : `Room <b>${escapeHtml(state.id)}</b>`}</div>
-        <div class="lobby-map">${state.map.icon} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
+        <div class="room-code">${searching ? `${icon('bolt')} Quick Play` : `Room <b>${escapeHtml(state.id)}</b>`}</div>
+        <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
       </div>
       <div class="seat-row">${Array.from({ length: seats }, (_, i) => {
         const p = state.players[i];
@@ -875,12 +882,12 @@ export function renderCenter(state, meId, actions) {
   // the well keeps the two moves that are left: read it again, or go home.
   if (state.status === 'ended') {
     actionEl.innerHTML = `<div class="row-2">
-        <button class="btn" id="cStandings">📊 Final standings</button>
-        <button class="btn ghost" id="cHome">🏠 Back to home</button>
+        <button class="btn" id="cStandings">${icon('chart')} Final standings</button>
+        <button class="btn ghost" id="cHome">${icon('door')} Back to home</button>
       </div>
-      ${state.hostId === meId ? '<button class="btn primary wide wrap" id="cAgain">🔁 Play again with the same players</button>' : ''}`;
+      ${state.hostId === meId ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again with the same players</button>` : ''}`;
     statusEl.innerHTML = state.winner
-      ? `<div class="win-line" style="color:${state.winner.color}">🏆 ${escapeHtml(state.winner.name)} wins!</div>`
+      ? `<div class="win-line" style="color:${state.winner.color}">${icon('trophy')} ${escapeHtml(state.winner.name)} wins!</div>`
       : '<div class="win-line">Game over</div>';
     on('#cStandings', () => showGameOver(state, meId, actions));
     on('#cHome', () => actions.goHome?.());
@@ -903,7 +910,7 @@ export function renderCenter(state, meId, actions) {
     cardEl.innerHTML = deedMarkup(state, a.tile, { compact: true }) || '';
     actionEl.innerHTML = `
       <div class="auction-box">
-        <div class="auction-label">🔨 Auction</div>
+        <div class="auction-label">${icon('gavel')} Auction</div>
         <div class="auction-bid">${money(a.bid)}</div>
         <div class="dim small">${leader
           ? `leading: <b style="color:${leader.color}">${escapeHtml(leader.name)}${a.leader === meId ? ' (you)' : ''}</b>`
@@ -956,18 +963,18 @@ export function renderCenter(state, meId, actions) {
     const tile = state.map.tiles[t.pending.tile];
     cardEl.innerHTML = deedMarkup(state, t.pending.tile, { compact: true }) || '';
     html = `<button class="btn good big" id="cBuy" ${me.money < tile.price ? 'disabled' : ''}>Buy for ${money(tile.price)}</button>
-            <button class="btn wide ghost" id="cSkip">${state.settings.auction ? '🔨 Send to auction' : 'Skip'}</button>`;
+            <button class="btn wide ghost" id="cSkip">${state.settings.auction ? `${icon('gavel')} Send to auction` : 'Skip'}</button>`;
     status = me.money < tile.price ? '<div class="dim small">Not enough cash for this one.</div>' : '';
   } else if (t.phase === 'roll') {
     if (me.jail) {
-      html = `<button class="btn primary big" id="cRoll">🎲 Roll for a double</button>
+      html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll for a double</button>
               <div class="row-2">
                 <button class="btn ghost" id="cJailPay" ${me.money < 50 ? 'disabled' : ''}>Pay $50</button>
-                ${me.getOutCards > 0 ? '<button class="btn gold" id="cJailCard">Use 🎟️ card</button>' : ''}
+                ${me.getOutCards > 0 ? `<button class="btn gold" id="cJailCard">Use ${icon('ticket')} card</button>` : ''}
               </div>`;
       status = `<div class="dim small">In prison · attempt ${me.jailTurns + 1} of 3</div>`;
     } else {
-      html = '<button class="btn primary big" id="cRoll">🎲 Roll dice</button>';
+      html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll dice</button>`;
       status = t.doubles > 0 ? `<div class="dim small">Double! Free roll (${t.doubles} of 2)</div>` : '';
     }
   } else if (t.phase === 'end') {
@@ -1064,7 +1071,7 @@ function paintTurnClock() {
     const on = secs !== null && card.dataset.pid === clock.playerId;
     el.classList.toggle('hidden', !on);
     if (!on) return;
-    el.textContent = `⏱ ${clockText(secs)}`;
+    el.textContent = clockText(secs);
     el.classList.toggle('urgent', urgent);
   });
 
@@ -1072,7 +1079,7 @@ function paintTurnClock() {
   if (!well) return;
   well.classList.toggle('hidden', secs === null);
   if (secs === null) return;
-  well.textContent = clock.mine ? `⏱ ${clockText(secs)} left on your turn` : `⏱ ${clockText(secs)}`;
+  well.textContent = clock.mine ? `${clockText(secs)} left on your turn` : clockText(secs);
   well.classList.toggle('urgent', urgent);
 }
 
@@ -1119,9 +1126,9 @@ function awaitCard(a, meId) {
   // card drops the ballot language rather than counting you as a missing voter.
   const alone = need <= 1;
 
-  const label = !a.needAll || alone ? '⏳ Grant a minute'
+  const label = !a.needAll || alone ? `${icon('trade')} Grant a minute`
     : voted ? `✓ You agreed · ${agreed} of ${need}`
-    : `🤝 Vote to wait · ${agreed} of ${need} agreed`;
+    : `${icon('trade')} Vote to wait · ${agreed} of ${need} agreed`;
   const note = !a.needAll
     ? 'Any one player can do this alone for now.'
     : alone ? 'You are the only one left to ask — keep the seat open as long as you like.'
@@ -1221,6 +1228,10 @@ export function showTurnBanner(player, isMe) {
  * `scrollTo` restores the scroll position when the sheet redraws itself after a
  * purchase — equipping an avatar used to throw you back to the top of the shop.
  */
+// A pack's own emoji says what size of top-up it is; these are the drawings
+// that say the same thing — a coin, a note, a bank — in the app's own hand.
+const PACK_ART = { '🪙': 'coin', '💰': 'cash', '🏦': 'bank' };
+
 export function openStoreModal(token, onWallet, scrollTo = 0) {
   Promise.all([
     fetch(api('/api/store')).then((r) => r.json()),
@@ -1242,7 +1253,7 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
                     title="${locked ? `${i.price - coins} more coins needed` : escapeHtml(i.name)}">
             <span class="sc-emoji">${i.emoji}</span>
             <span class="sc-name">${escapeHtml(i.name)}</span>
-            <span class="sc-price">${equipped ? '✓ Equipped' : owned ? 'Tap to equip' : `🪙 ${i.price}`}</span>
+            <span class="sc-price">${equipped ? '✓ Equipped' : owned ? 'Tap to equip' : `${icon('coin', 13)} ${i.price}`}</span>
           </button>`;
         }).join('')}
       </div>`;
@@ -1250,14 +1261,14 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
     // The web build has no payment processor behind it, so the packs are a
     // shop window: they say what a top-up costs and point at the iOS app.
     const packSection = packs.length ? `
-      <h3 class="map-section">🪙 Coin packs</h3>
+      <h3 class="map-section">${icon('coin')} Coin packs</h3>
       <p class="sub">Coin packs are purchased in the iOS app.
         <a class="pack-link" href="/app.html" target="_blank" rel="noopener">Get MoneyMove for iPhone →</a></p>
       <div class="pack-grid">
         ${packs.map((p) => `<a class="pack-card" href="/app.html" target="_blank" rel="noopener">
-          <span class="pk-emoji">${p.emoji}</span>
+          <span class="pk-emoji">${icon(PACK_ART[p.emoji] || 'coin', 32, 'solo')}</span>
           ${p.bonus ? `<span class="pk-bonus">+${p.bonus}%</span>` : ''}
-          <span class="pk-coins">🪙 ${p.coins}</span>
+          <span class="pk-coins">${icon('coin', 15)} ${p.coins}</span>
           <span class="pk-name">${escapeHtml(p.name)}</span>
           <span class="pk-price">$${escapeHtml(p.price)}</span>
         </a>`).join('')}
@@ -1266,13 +1277,13 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
     openModal(`
       <div class="store-head">
         <h2>Store</h2>
-        <span class="coin-chip">🪙 ${coins}</span>
+        <span class="coin-chip">${icon('coin')} ${coins}</span>
         <button class="icon-btn sheet-x" id="stX" title="Close the store" aria-label="Close the store">✕</button>
       </div>
       <p class="sub">Win games to earn coins — 50 for a quick match, 100 when it goes long. Everything here is pure style.</p>
       ${packSection}
-      ${section('token', '🎲 Token skins', 'Your piece on the board.')}
-      ${section('avatar', '🙂 Avatars', 'Your face in the player chip.')}
+      ${section('token', `${icon('dice')} Token skins`, 'Your piece on the board.')}
+      ${section('avatar', `${icon('people')} Avatars`, 'Your face in the player chip.')}
       <div class="modal-actions"><button class="btn ghost" id="stClose">Close</button></div>`, (root) => {
       const sheet = $('.modal', root);
       sheet.scrollTop = scrollTo;
@@ -1317,8 +1328,8 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
 
 export function openDmModal(token, code, name) {
   openModal(`
-    <h2>💬 ${escapeHtml(name)}</h2>
-    <div id="dmList" class="dm-list"><div class="empty">Say hi 👋</div></div>
+    <h2>${icon('chat')} ${escapeHtml(name)}</h2>
+    <div id="dmList" class="dm-list"><div class="empty">${icon('chat')} Say hi</div></div>
     <form id="dmForm" class="chat-form">
       <input id="dmInput" maxlength="300" placeholder="Message ${escapeHtml(name)}…" autocomplete="off" />
       <button class="icon-btn send" type="submit">➤</button>
@@ -1334,7 +1345,7 @@ export function openDmModal(token, code, name) {
       lastSig = sig;
       list.innerHTML = messages.length
         ? messages.map((m) => `<div class="dm-msg ${m.from === me ? 'mine' : ''}">${escapeHtml(m.text)}</div>`).join('')
-        : '<div class="empty">Say hi 👋</div>';
+        : `<div class="empty">${icon('chat')} Say hi</div>`;
       list.scrollTop = list.scrollHeight;
     };
 
@@ -1453,7 +1464,8 @@ export function openJoinNameModal(roomId, onJoin) {
     <p class="sub">You have been invited to room <b>${escapeHtml(roomId)}</b>. Pick a name and take a seat.</p>
     <div class="name-row">
       <input id="jnName" maxlength="16" placeholder="Nickname" autocomplete="off" />
-      <button class="btn dice-btn" id="jnDice" type="button" title="Give me a name">🎲</button>
+      <button class="btn dice-btn" id="jnDice" type="button"
+        title="Give me a name" aria-label="Give me a name">${icon('dice', null, 'solo')}</button>
     </div>
     <div class="modal-actions"><button class="btn primary wide" id="jnGo">Join the game</button></div>`, (root) => {
     const input = $('#jnName', root);
@@ -1478,11 +1490,11 @@ export function openLeaveModal({ onKeepSeat, onQuit }) {
     <p class="sub">The game is still running — pick how you go.</p>
     <div class="leave-choices">
       <button class="leave-choice" id="lBack">
-        <b>↩️ I'll come back</b>
+        <b>${icon('replay')} I'll come back</b>
         <span>A bot holds your seat and your properties. Continue from the home screen any time.</span>
       </button>
       <button class="leave-choice bad" id="lQuit">
-        <b>🚪 Leave for good</b>
+        <b>${icon('door')} Leave for good</b>
         <span>Your deeds go back to the bank and the table plays on without you.</span>
       </button>
     </div>
@@ -1497,7 +1509,7 @@ export function openLeaveModal({ onKeepSeat, onQuit }) {
 /** The clock ran out on this seat — say so plainly and offer both exits. */
 export function showRemovedOverlay({ onHome, onWatch }) {
   openModal(`
-    <div class="removed-mark">⏳</div>
+    <div class="removed-mark">${icon('door')}</div>
     <h2 class="removed-title">Your time ran out</h2>
     <p class="sub">You were removed to keep the game moving. You can head back or stay and watch how it ends.</p>
     <p class="karma-note">Leaving or timing out costs 1 karma.</p>
@@ -1537,9 +1549,9 @@ function quickBuildBar(state, meId, i) {
   const mortgageable = canMortgage(state, meId, i);
   const canLift = own.mortgaged && state.settings.mortgage;
 
-  const level = own.mortgaged ? '🏦 Mortgaged'
-    : houses === 5 ? '🏨 Hotel'
-    : houses ? '🏠'.repeat(houses)
+  const level = own.mortgaged ? `${icon('bank')} Mortgaged`
+    : houses === 5 ? `${icon('hotel')} Hotel`
+    : houses ? icon('house').repeat(houses)
     : 'No buildings yet';
 
   // Why the ＋ is greyed out matters more than that it is: "even build" is the
@@ -1571,7 +1583,7 @@ function quickBuildBar(state, meId, i) {
     <div class="qb-row">
       ${street ? `
         <button class="qb-btn" data-qb-sell title="Sell a building for $${sellBack}" ${sellable ? '' : 'disabled'}>−</button>
-        <span class="qb-count">${houses === 5 ? '🏨' : houses}<small>${houses === 5 ? '' : '/5'}</small></span>
+        <span class="qb-count">${houses === 5 ? icon('hotel') : houses}<small>${houses === 5 ? '' : '/5'}</small></span>
         <button class="qb-btn" data-qb-build title="Build for $${houseCost}" ${buildable && canAfford ? '' : 'disabled'}>＋</button>` : ''}
       ${own.mortgaged
         ? `<button class="qb-btn mort gold" data-qb-unmort title="${escapeHtml(!state.settings.mortgage ? 'Mortgages are switched off on this table'
@@ -1579,7 +1591,7 @@ function quickBuildBar(state, meId, i) {
             ${canLift && cash >= liftCost ? '' : 'disabled'}>↺ Buy back $${liftCost}</button>`
         : `<button class="qb-btn mort" data-qb-mort title="${escapeHtml(!state.settings.mortgage ? 'Mortgages are switched off on this table'
             : group.some((g) => (state.ownership[g]?.houses || 0) > 0) ? 'Sell the buildings on this set first'
-            : 'Mortgage this deed')}" ${mortgageable ? '' : 'disabled'}>🏦 Mortgage $${mortValue}</button>`}
+            : 'Mortgage this deed')}" ${mortgageable ? '' : 'disabled'}>${icon('bank')} Mortgage $${mortValue}</button>`}
     </div>
   </div>`;
 }
@@ -1636,11 +1648,23 @@ function miniBoard(preview) {
     grid-template-rows:repeat(${rows},1fr)">${cells.join('')}</span>`;
 }
 
+// The house boards each get a drawing of what they are. Every other board is a
+// country, and a country used to fly its flag emoji here — the one glyph Windows
+// refuses to draw at all. They fly the board's own pennant instead, tinted with
+// the colour of their first street so no two nations look alike.
+const MAP_ART = {
+  classic: 'globe', worldwide: 'plane', deathvalley: 'skull',
+  blitz: 'bolt', luckywheel: 'sparkle', random: 'dice',
+};
+const mapArt = (m) => (MAP_ART[m.id]
+  ? icon(MAP_ART[m.id], 17)
+  : groupBanner(m.preview?.colors?.[1], 17));
+
 export function openMapModal(state, actions) {
   fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {
     const card = (m) => `<button class="map-card ${m.id === state.mapId ? 'sel' : ''}" data-map="${m.id}">
           ${miniBoard(m.preview)}
-          <span class="mn">${m.icon} ${escapeHtml(m.name)}</span>
+          <span class="mn">${mapArt(m)} ${escapeHtml(m.name)}</span>
           <span class="md">${escapeHtml(m.description)}</span>
           <span class="mstats">
             <b>${m.size}</b> tiles · <b>${m.streets}</b> streets · <b>${m.countries}</b> sets
@@ -1653,7 +1677,7 @@ export function openMapModal(state, actions) {
       <h2>Pick a board</h2>
       <p class="sub">Every map has its own cities, prices and layout.</p>
       <div class="map-grid">${house.map(card).join('')}</div>
-      <h3 class="map-section">🗺️ Custom — pick your country</h3>
+      <h3 class="map-section">${icon('map')} Custom — pick your country</h3>
       <p class="sub">One nation per board, with its own regions and its own Treasure &amp; Surprise deck.</p>
       <div class="map-grid">${custom.map(card).join('')}</div>
       <div class="modal-actions"><button class="btn ghost" id="mClose">Close</button></div>`, (root) => {
@@ -1666,14 +1690,14 @@ export function openMapModal(state, actions) {
 }
 
 const RULES_HELP = [
-  ['🎲', 'Rolling', 'Roll two dice and move. A double lets you roll again — but three doubles in a row sends you straight to prison.'],
-  ['🏠', 'Buying', 'Land on an unowned street, airport or utility and you may buy it. Turn it down and it goes to auction, where everyone can bid.'],
-  ['🏗️', 'Building', 'Own every street of one country and you can build houses, then a hotel. Rent climbs steeply with each one.'],
-  ['💸', 'Rent', 'Land on someone else’s property and you pay their rent. Airports scale 25 / 50 / 100 / 200; utilities charge 4× or 10× your roll.'],
-  ['🏦', 'Mortgage', 'Short of cash? Mortgage a property for half its price. Mortgaged streets collect no rent until you buy them back at 10% interest.'],
-  ['🤝', 'Trading', 'Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded.'],
-  ['🚔', 'Prison', 'Roll a double to walk out, pay the $50 fine, or use a card. After three failed attempts you pay anyway.'],
-  ['💀', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins.'],
+  ['dice', 'Rolling', 'Roll two dice and move. A double lets you roll again — but three doubles in a row sends you straight to prison.'],
+  ['key', 'Buying', 'Land on an unowned street, airport or utility and you may buy it. Turn it down and it goes to auction, where everyone can bid.'],
+  ['crane', 'Building', 'Own every street of one country and you can build houses, then a hotel. Rent climbs steeply with each one.'],
+  ['payment', 'Rent', 'Land on someone else’s property and you pay their rent. Airports scale 25 / 50 / 100 / 200; utilities charge 4× or 10× your roll.'],
+  ['bank', 'Mortgage', 'Short of cash? Mortgage a property for half its price. Mortgaged streets collect no rent until you buy them back at 10% interest.'],
+  ['trade', 'Trading', 'Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded.'],
+  ['police', 'Prison', 'Roll a double to walk out, pay the $50 fine, or use a card. After three failed attempts you pay anyway.'],
+  ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins.'],
 ];
 
 export function openHelpModal() {
@@ -1681,8 +1705,8 @@ export function openHelpModal() {
     <h2>How to play</h2>
     <p class="sub">The classic property-trading rules, in one screen.</p>
     <div class="help-list">
-      ${RULES_HELP.map(([icon, title, body]) => `<div class="help-row">
-        <span class="help-ico">${icon}</span>
+      ${RULES_HELP.map(([glyph, title, body]) => `<div class="help-row">
+        <span class="help-ico">${icon(glyph, 22, 'solo')}</span>
         <div><b>${title}</b><span>${body}</span></div>
       </div>`).join('')}
     </div>
@@ -1715,7 +1739,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
           return `<label class="check-row ${blocked ? 'blocked' : ''}" title="${blocked ? 'Sell the buildings first' : ''}">
             <input type="checkbox" data-side="${prefix}" value="${m.i}" ${blocked ? 'disabled' : ''} />
             <span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>
-            <span class="cr-name">${escapeHtml(t.name)}${m.mortgaged ? ' <i>mortgaged</i>' : ''}${blocked ? ' 🏠' : ''}</span>
+            <span class="cr-name">${escapeHtml(t.name)}${m.mortgaged ? ' <i>mortgaged</i>' : ''}${blocked ? ` ${icon('house', 12)}` : ''}</span>
             <span class="dim">$${t.price}</span>
           </label>`;
         }).join('') : '<div class="empty small">No properties</div>'}
@@ -1750,7 +1774,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       <span>You get <b id="getTotal">$0</b></span>
     </div>
     <div class="trade-tools">
-      <button class="btn small" type="button" id="tBalance">⚖️ Balance it</button>
+      <button class="btn small" type="button" id="tBalance">${icon('scales')} Balance it</button>
       <span class="dim small">Tops up the lighter side with cash, as far as that wallet goes.</span>
     </div>
     <div class="modal-actions">
@@ -1838,7 +1862,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
 
     // While the composer is open on their offer, they can see you're reading
     // it. Hung on closeModal() so every exit takes it back — Escape and the
-    // backdrop used to leave the other side reading "👀 is viewing…" for good.
+    // backdrop used to leave the other side reading "is viewing…" for good.
     // By then the offer may be gone (answered, or replaced by this counter),
     // and telling the server about a trade it has dropped only earns a
     // "Trade not found" — so the live roster decides whether to bother.
@@ -1935,12 +1959,12 @@ function worthChartSVG(state) {
     }
     if (flip !== null && flip !== history[0].t) {
       flipMark = `<line x1="${x(flip)}" y1="${padT}" x2="${x(flip)}" y2="${padT + innerH}" class="gc-flip"/>
-        <text x="${Math.min(x(flip) + 4, W - 90)}" y="${padT + 9}" class="gc-flip-label">👑 game turned</text>`;
+        <text x="${Math.min(x(flip) + 4, W - 90)}" y="${padT + 9}" class="gc-flip-label">game turned</text>`;
     }
   }
 
   const legend = state.players.map((p) => `<span class="gc-key">
-      <i style="background:${p.color}"></i>${escapeHtml(p.name)}${p.id === state.winner?.id ? ' 👑' : ''}</span>`).join('');
+      <i style="background:${p.color}"></i>${escapeHtml(p.name)}${p.id === state.winner?.id ? icon('crown', 12) : ''}</span>`).join('');
 
   return `<div class="go-chart">
       <p class="sub">Net worth over time</p>
@@ -1952,24 +1976,24 @@ function worthChartSVG(state) {
 export function showGameOver(state, meId, actions) {
   const rank = [...state.players].sort((a, b) =>
     Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
-  const medals = ['🥇', '🥈', '🥉'];
+  const medals = ['medalGold', 'medalSilver', 'medalBronze'];
   openModal(`
-    <div class="go-crown">🏆</div>
+    <div class="go-crown">${icon('trophy')}</div>
     <h2 class="go-title" style="color:${state.winner?.color || '#fff'}">${escapeHtml(state.winner?.name || 'Nobody')} wins!</h2>
     ${worthChartSVG(state)}
     <p class="sub">Final standings</p>
     ${rank.map((p, k) => `<div class="rank-row ${p.id === meId ? 'me' : ''}">
-      <span class="rank-pos">${medals[k] || k + 1}</span>
+      <span class="rank-pos">${medals[k] ? icon(medals[k]) : k + 1}</span>
       <span class="avatar sm" style="background:${p.color}">${escapeHtml((p.name[0] || '?').toUpperCase())}</span>
       <span class="rank-name">${escapeHtml(p.name)}</span>
       <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.netWorth)}</span>
     </div>`).join('')}
     <div class="modal-actions go-actions">
       ${state.hostId === meId
-        ? '<button class="btn primary big wrap" id="gAgain">🔁 Play again with the same players</button>'
+        ? `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>`
         : '<div class="dim small go-wait">Sit tight — the host can deal the same table again.</div>'}
       <div class="row-2">
-        <button class="btn ghost" id="gHome">🏠 Back to home</button>
+        <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>
         <button class="btn ghost" id="gClose">Stay on this board</button>
       </div>
     </div>`, (root) => {
@@ -1986,7 +2010,7 @@ export function showCard(card) {
   const el = $('#cardPopup');
   el.className = `card-popup ${card.deck}`;
   el.innerHTML = `
-    <div class="cp-ico">${card.deck === 'treasure' ? '🧰' : '❓'}</div>
+    <div class="cp-ico">${icon(card.deck === 'treasure' ? 'toolbox' : 'question')}</div>
     <div class="cp-kind">${card.deck === 'treasure' ? 'Treasure' : 'Surprise'}</div>
     <div class="cp-text">${escapeHtml(card.text)}</div>
     <div class="cp-hint">tap to dismiss</div>`;

@@ -240,8 +240,7 @@ struct TradeSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 6)
                 if room > 0 {
-                    Button("⚖️  Balance it") { balance() }
-                        .buttonStyle(MMButtonStyle(kind: .gold))
+                    MMIconButton(.scales, "Balance it", kind: .gold) { balance() }
                 }
             }
             .padding(.horizontal, 2)
@@ -324,7 +323,7 @@ struct TradeSheet: View {
                         .foregroundStyle(P.ink3)
                 }
                 if hasHouses {
-                    Text("🏠").font(.system(size: 11))
+                    Art.icon(.house, size: 13)
                 }
                 Spacer(minLength: 6)
                 if let price = tile?.price {
@@ -386,7 +385,8 @@ struct TradeSheet: View {
 
     private func cardsRow(value: Binding<Int>, limit: Int, P: Palette) -> some View {
         HStack(spacing: 8) {
-            Text("Prison cards 🎟️")
+            Art.icon(.ticket, size: 15, tint: P.ink)
+            Text("Prison cards")
                 .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(P.ink)
             Spacer()
@@ -403,7 +403,7 @@ struct TradeSheet: View {
 
     private func missingTarget(_ P: Palette) -> some View {
         VStack(spacing: 12) {
-            Text("🫥").font(.system(size: 40))
+            Art.icon(.door, size: 42, tint: P.ink3)
             Text("This player is no longer in the game.")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(P.ink2)
@@ -570,7 +570,9 @@ struct TradePickerSheet: View {
                             Text("BOT").font(.system(size: 8, weight: .black)).foregroundStyle(P.ink3)
                         }
                         if let team {
-                            Text(team.icon).font(.system(size: 10))
+                            // The team's colour is the team's identity; the
+                            // server's coloured-circle emoji only redrew it.
+                            Circle().fill(Color(css: team.color)).frame(width: 9, height: 9)
                         }
                     }
                     Text("\(money(p.money))  ·  \(owned) propert\(owned == 1 ? "y" : "ies")")

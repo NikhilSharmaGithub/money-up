@@ -72,7 +72,13 @@ struct RootView: View {
         let P = Palette.current(scheme)
         if let toast = store.toast {
             HStack(spacing: 8) {
-                Image(systemName: toast.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                // A toast with a subject of its own draws it; the rest keep
+                // the plain info/warning mark.
+                if let glyph = toast.glyph {
+                    Art.icon(glyph, size: 17, tint: .white)
+                } else {
+                    Image(systemName: toast.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                }
                 Text(toast.text).lineLimit(2)
             }
             .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -94,7 +100,7 @@ struct RootView: View {
         if let card = store.cardPopup {
             let isTreasure = card.deck == "treasure"
             VStack(spacing: 10) {
-                Text(isTreasure ? "🧰" : "❓").font(.system(size: 44))
+                Art.icon(isTreasure ? .toolbox : .question, size: 46, tint: P.red)
                 Text(isTreasure ? "TREASURE" : "SURPRISE")
                     .font(.system(size: 11, weight: .bold)).kerning(2)
                     .foregroundStyle(P.ink3)

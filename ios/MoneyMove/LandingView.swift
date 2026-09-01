@@ -102,9 +102,12 @@ struct LandingView: View {
         HStack(alignment: .top) {
             pageTitle("Store", "Win games, earn coins, dress your piece.", P)
             Spacer()
-            Text("🪙 \(store.wallet?.coins ?? 0)")
-                .font(.system(size: 17, weight: .heavy, design: .rounded))
-                .foregroundStyle(P.gold)
+            HStack(spacing: 5) {
+                Art.icon(.coin, size: 17)
+                Text("\(store.wallet?.coins ?? 0)")
+                    .font(.system(size: 17, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.gold)
+            }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 13)
                 .background(P.goldSoft, in: Capsule())
@@ -123,8 +126,8 @@ struct LandingView: View {
         if storeItems.isEmpty {
             shopPlaceholder(P)
         } else {
-            storeSection("🎲 Token skins", "Your piece on the board.", kind: "token", P: P)
-            storeSection("🙂 Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+            storeSection(.dice, "Token skins", "Your piece on the board.", kind: "token", P: P)
+            storeSection(.people, "Avatars", "Your face in the player chip.", kind: "avatar", P: P)
         }
     }
 
@@ -160,7 +163,10 @@ struct LandingView: View {
     @ViewBuilder private func coinPacksSection(_ P: Palette) -> some View {
         if !shop.packs.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                PanelTitle("🪙 Get coins")
+                HStack(spacing: 6) {
+                    Art.icon(.coin, size: 13)
+                    PanelTitle("Get coins")
+                }
                 // Until the App Store answers the rows are dead, so promising a
                 // top-up would be a lie — say what is actually happening.
                 Text(!shop.checked ? "Checking the App Store…"
@@ -187,7 +193,7 @@ struct LandingView: View {
             Task { await shop.buy(pack, with: store) }
         } label: {
             HStack(spacing: 12) {
-                Text(pack.emoji).font(.system(size: 30))
+                Art.icon(packGlyph(pack.emoji), size: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(pack.name)
@@ -204,9 +210,12 @@ struct LandingView: View {
                                 .background(P.gold, in: Capsule())
                         }
                     }
-                    Text("🪙 \(pack.coins) coins")
-                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
+                    HStack(spacing: 4) {
+                        Art.icon(.coin, size: 13)
+                        Text("\(pack.coins) coins")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
                 }
                 Spacer(minLength: 6)
                 if busy {
@@ -230,11 +239,15 @@ struct LandingView: View {
         .opacity(live ? 1 : 0.55)
     }
 
-    @ViewBuilder private func storeSection(_ title: String, _ sub: String, kind: String, P: Palette) -> some View {
+    @ViewBuilder private func storeSection(_ glyph: Glyph, _ title: String, _ sub: String,
+                                           kind: String, P: Palette) -> some View {
         let items = storeItems.filter { $0.kind == kind }
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                PanelTitle(title)
+                HStack(spacing: 6) {
+                    Art.icon(glyph, size: 13, tint: P.ink3)
+                    PanelTitle(title)
+                }
                 Text(sub)
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
@@ -265,9 +278,12 @@ struct LandingView: View {
                     .font(.system(size: 12.5, weight: .bold, design: .rounded))
                     .foregroundStyle(P.ink)
                     .lineLimit(1)
-                Text(equipped ? "✓ Equipped" : owned ? "Tap to equip" : "🪙 \(item.price)")
-                    .font(.system(size: 10.5, weight: .heavy, design: .rounded))
-                    .foregroundStyle(equipped ? P.good : owned ? P.ink3 : affordable ? P.gold : P.ink3)
+                HStack(spacing: 4) {
+                    if !owned { Art.icon(.coin, size: 12) }
+                    Text(equipped ? "✓ Equipped" : owned ? "Tap to equip" : "\(item.price)")
+                        .font(.system(size: 10.5, weight: .heavy, design: .rounded))
+                        .foregroundStyle(equipped ? P.good : owned ? P.ink3 : affordable ? P.gold : P.ink3)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
@@ -335,7 +351,7 @@ struct LandingView: View {
         if store.matchHistory.isEmpty {
             MMCard(padding: 22) {
                 VStack(spacing: 8) {
-                    Text("🎲").font(.system(size: 36))
+                    Art.icon(.dice, size: 38, tint: P.ink3)
                     Text("No games yet")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(P.ink)
@@ -386,12 +402,12 @@ struct LandingView: View {
         // printing "Nobody · 0 turns" invents a result that never happened.
         let line = unfinished
             ? "Left before the end · \(match.players.count) players"
-            : "🏆 \(match.winner) · \(match.players.count) players"
+            : "\(match.winner) · \(match.players.count) players"
                 + (match.turns > 0 ? " · \(match.turns) turns" : "")
 
         return MMCard(padding: 13) {
             HStack(spacing: 12) {
-                Text(match.mapIcon).font(.system(size: 26))
+                Art.icon(mapGlyph(match.mapIcon), size: 26, tint: P.ink2)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(match.mapName)
@@ -406,10 +422,13 @@ struct LandingView: View {
                             .padding(.horizontal, 6)
                             .background(match.won ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
                     }
-                    Text(line)
-                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink2)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        if !unfinished { Art.icon(.trophy, size: 12) }
+                        Text(line)
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink2)
+                            .lineLimit(1)
+                    }
                     Text(match.date.formatted(.relative(presentation: .named)))
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
@@ -471,9 +490,12 @@ struct LandingView: View {
         let karma = store.wallet?.karma ?? 100
         let tint: Color = karma >= 80 ? P.good : karma >= 50 ? P.gold : P.bad
         return VStack(alignment: .trailing, spacing: 3) {
-            Text("🤝 \(karma) karma")
-                .font(.system(size: 12, weight: .heavy, design: .rounded))
-                .foregroundStyle(tint)
+            HStack(spacing: 5) {
+                Art.icon(.heart, size: 12)
+                Text("\(karma) karma")
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .foregroundStyle(tint)
+            }
                 .padding(.vertical, 5)
                 .padding(.horizontal, 10)
                 .background(P.sunken, in: Capsule())
@@ -574,8 +596,13 @@ struct LandingView: View {
                     HStack(spacing: 9) {
                         if searching {
                             ProgressView().tint(P.accentInk)
+                        } else {
+                            // "whoever else is playing right now" — and an ink
+                            // glyph, because a yellow bolt on the gold button
+                            // was the same colour as the button.
+                            Art.icon(.people, size: 19, tint: P.accentInk)
                         }
-                        Text(searching ? "Finding a table…" : "⚡️  Play now")
+                        Text(searching ? "Finding a table…" : "Play now")
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -624,8 +651,9 @@ struct LandingView: View {
                     }
                 }
 
-                Button("🎲  Create a private game") { store.createRoom() }
-                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                MMIconButton(.dice, "Create a private game", kind: .ghost, big: true) {
+                    store.createRoom()
+                }
                     .disabled(busy)
 
                 orDivider(P)
@@ -739,7 +767,8 @@ struct LandingView: View {
                 store.continueGame()
             } label: {
                 HStack(spacing: 12) {
-                    Text("▶️").font(.system(size: 22))
+                    // The way back into the room you stepped out of.
+                    Art.icon(.door, size: 24, tint: P.gold)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Continue game")
                             .font(.system(size: 16, weight: .heavy, design: .rounded))
@@ -792,7 +821,7 @@ struct LandingView: View {
                                     store.join(roomId: room.id)
                                 } label: {
                                     HStack(spacing: 10) {
-                                        Text("🌐").font(.system(size: 18))
+                                        Art.icon(.globe, size: 20, tint: P.ink2)
                                         VStack(alignment: .leading, spacing: 1) {
                                             Text(room.map)
                                                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -975,14 +1004,18 @@ struct LandingView: View {
         }
         // Their equipped face if they have one, their flag otherwise — the
         // same fallback chain the web friend list uses.
-        let face = [entry.avatar ?? "", entry.flag ?? ""].first { !$0.isEmpty } ?? "🙂"
+        let face = [entry.avatar ?? "", entry.flag ?? ""].first { !$0.isEmpty } ?? ""
         // Their game is already under way, so the seats are shut: promising a
         // seat and delivering a spectator's view reads as a broken button.
         let started = entry.status != "lobby"
 
         return HStack(spacing: 10) {
-            Text(face)
-                .font(.system(size: 20))
+            // Their own face or flag if they picked one; a drawn stand-in if not.
+            if face.isEmpty {
+                Art.icon(.people, size: 20, tint: P.ink3)
+            } else {
+                Text(face).font(.system(size: 20))
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name)
@@ -1117,10 +1150,13 @@ struct DMSheet: View {
                     ScrollView {
                         LazyVStack(spacing: 6) {
                             if messages.isEmpty {
-                                Text("Say hi 👋")
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                                    .foregroundStyle(P.ink3)
-                                    .padding(.top, 30)
+                                VStack(spacing: 6) {
+                                    Art.icon(.chat, size: 26, tint: P.ink3)
+                                    Text("Say hi")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(P.ink3)
+                                }
+                                .padding(.top, 30)
                             }
                             ForEach(messages) { msg in
                                 bubble(msg, P)

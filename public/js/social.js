@@ -3,6 +3,7 @@
 
 import { api } from './net.js';
 import { escapeHtml } from './board.js';
+import { icon } from './icons.js';
 import { openDmModal, confirmModal } from './ui.js';
 
 let myToken = '';
@@ -103,10 +104,13 @@ async function refreshFriends(token, onJoin) {
     // rather than a seat — "Join" only to end up watching reads as a failure.
     const started = f.status !== 'lobby';
     return `<div class="friend">
-      <span class="friend-flag">${escapeHtml(f.avatar || f.flag || '🙂')}</span>
+      <span class="friend-flag">${f.avatar || f.flag
+        ? escapeHtml(f.avatar || f.flag)
+        : icon('people', 16, 'solo')}</span>
       <span class="friend-name">${escapeHtml(f.name)}</span>
       <span class="friend-status ${s.cls}">${s.label}</span>
-      <button class="icon-btn" data-chat="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}" title="Chat">💬</button>
+      <button class="icon-btn" data-chat="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}"
+        title="Chat with ${escapeHtml(f.name)}" aria-label="Chat with ${escapeHtml(f.name)}">${icon('chat', null, 'solo')}</button>
       ${f.roomId ? `<button class="btn tiny ${started ? '' : 'primary'}" data-join="${escapeHtml(f.roomId)}"
           title="${started ? 'Their game has started — you can watch it' : 'Take a seat at their table'}"
         >${started ? 'Watch' : 'Join'}</button>` : ''}

@@ -2,9 +2,11 @@
 // length — Blitz is 6 a side, Worldwide 11), tokens animating between tiles,
 // and a centre well the game screen drops its dice/actions into.
 //
-// Tiles read like richup's: flag, tiny street name, price — and once a tile is
-// bought its colour band turns into the owner's colour, so a glance at the
-// ring tells you who holds what. A full country gets a thicker band.
+// Tiles read like richup's: the group's banner, tiny street name, price — and
+// once a tile is bought its colour band turns into the owner's colour, so a
+// glance at the ring tells you who holds what. A full country gets a thicker
+// band. Every mark on a tile is drawn (see Art.swift): emoji were another
+// vendor's artwork and made the same board look different on every device.
 
 import SwiftUI
 
@@ -171,7 +173,8 @@ struct TileView: View {
             }
 
             if ownership?.isMortgaged == true {
-                Text("🏦").font(.system(size: 11))
+                // White on the dim wash: the tile underneath can be any colour.
+                Art.icon(.bank, size: 13, tint: .white)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.black.opacity(0.25))
             }
@@ -260,42 +263,49 @@ struct TileView: View {
         VStack(spacing: 1) {
             switch tile.type {
             case "property":
-                Text(group?.flag ?? "🏳️").font(.system(size: 12))
+                // The country's pennant, in the group's own colour — a drawn
+                // banner says the same thing a flag emoji did on every device.
+                Art.groupBanner(group.map { Color(css: $0.color) } ?? P.ink3, size: 13)
                 nameText(P)
-                if houses > 0 {
-                    Text(houses == 5 ? "🏨" : String(repeating: "▪︎", count: houses))
+                if houses == 5 {
+                    Art.icon(.hotel, size: 11)
+                } else if houses > 0 {
+                    Text(String(repeating: "▪︎", count: houses))
                         .font(.system(size: 8.5, weight: .black))
                         .foregroundStyle(P.good)
                 } else if let price = tile.price {
                     priceText(price, P)
                 }
             case "airport":
-                Text("✈️").font(.system(size: 11))
+                // Airline blue, the colour the web tile paints the same plane.
+                Art.icon(.plane, size: 12, tint: Color(hex: 0x3F6FAE))
                 nameText(P)
                 if let price = tile.price { priceText(price, P) }
             case "utility":
-                Text(tile.icon ?? "💡").font(.system(size: 11))
+                Art.icon(utilityGlyph(tile.icon), size: 12)
                 nameText(P)
                 if let price = tile.price { priceText(price, P) }
-            case "treasure": Text("🧰").font(.system(size: 17))
-            case "surprise": Text("❓").font(.system(size: 17))
+            case "treasure": Art.icon(.toolbox, size: 18)
+            case "surprise": Art.icon(.question, size: 18, tint: P.red)
             case "tax":
-                Text("💸").font(.system(size: 13))
+                Art.icon(.payment, size: 15)
                 Text(tile.amount.map { "$\($0)" } ?? "\(tile.percent ?? 10)%")
                     .font(.system(size: 7, weight: .bold)).foregroundStyle(P.ink2)
             case "refund":
-                Text("💵").font(.system(size: 13))
+                Art.icon(.cash, size: 15)
                 if let amount = tile.amount { priceText(amount, P) }
             case "start":
                 Text("▶▶").font(.system(size: 16, weight: .black)).foregroundStyle(P.good)
                 Text("START").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(P.good)
             case "prison":
-                Text("🚔").font(.system(size: 20))
+                Art.icon(.police, size: 21)
                 Text("PRISON").font(.system(size: 8.5, weight: .heavy)).foregroundStyle(P.ink3)
             case "vacation":
-                Text("🏝️").font(.system(size: 20))
+                Art.icon(.island, size: 21)
             case "gotoprison":
-                Text("🚨").font(.system(size: 20))
+                // The sentence, not the cell — the cell is the prison corner,
+                // and two police caps on one board would read as the same tile.
+                Art.icon(.gavel, size: 20, tint: P.bad)
             default:
                 EmptyView()
             }

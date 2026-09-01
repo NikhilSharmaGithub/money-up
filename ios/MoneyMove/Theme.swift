@@ -331,6 +331,50 @@ struct MMButtonStyle: ButtonStyle {
     }
 }
 
+extension MMButtonStyle.Kind {
+    /// The colour a label on this button is drawn in. Drawn glyphs paint
+    /// themselves rather than inheriting the style's foregroundStyle, so they
+    /// have to be handed the same ink the text gets.
+    func ink(_ P: Palette) -> Color {
+        switch self {
+        case .ghost: P.ink
+        case .primary, .gold: P.accentInk
+        case .good, .bad: .white
+        }
+    }
+}
+
+/// A button that leads with a drawn glyph — the shape emoji used to make.
+/// Wrapping it keeps the glyph's ink and the button's kind from drifting apart.
+struct MMIconButton: View {
+    @Environment(\.colorScheme) private var scheme
+    let glyph: Glyph
+    let title: String
+    var kind: MMButtonStyle.Kind = .primary
+    var big = false
+    let action: () -> Void
+
+    init(_ glyph: Glyph, _ title: String, kind: MMButtonStyle.Kind = .primary,
+         big: Bool = false, action: @escaping () -> Void) {
+        self.glyph = glyph
+        self.title = title
+        self.kind = kind
+        self.big = big
+        self.action = action
+    }
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Art.icon(glyph, size: big ? 19 : 15, tint: kind.ink(P))
+                Text(title)
+            }
+        }
+        .buttonStyle(MMButtonStyle(kind: kind, big: big))
+    }
+}
+
 /// Player avatar disc with initial, colour and country flag badge.
 struct AvatarView: View {
     let name: String

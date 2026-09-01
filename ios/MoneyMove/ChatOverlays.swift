@@ -109,23 +109,29 @@ struct ChatLogSheet: View {
     private func channelSwitch(_ P: Palette) -> some View {
         let teamColor = myTeam.map { Color(css: $0.color) } ?? P.gold
         return HStack(spacing: 6) {
-            channelChip("🌍 Everyone", value: "all", tint: P.ink2, P: P)
-            channelChip("\(myTeam?.icon ?? "🛡️") Team only", value: "team", tint: teamColor, P: P)
+            channelChip(.globe, "Everyone", value: "all", tint: P.ink2, P: P)
+            // The team's own colour carries which side you're on; the server's
+            // coloured-circle emoji did the same job in someone else's artwork.
+            channelChip(.shield, "Team only", value: "team", tint: teamColor, P: P)
             Spacer()
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
     }
 
-    private func channelChip(_ label: String, value: String, tint: Color, P: Palette) -> some View {
+    private func channelChip(_ glyph: Glyph, _ label: String, value: String,
+                             tint: Color, P: Palette) -> some View {
         let on = channel == value
         return Button {
             withAnimation(.snappy(duration: 0.2)) { channel = value }
             Haptics.tap()
         } label: {
-            Text(label)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(on ? tint : P.ink3)
+            HStack(spacing: 5) {
+                Art.icon(glyph, size: 13, tint: on ? tint : P.ink3)
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(on ? tint : P.ink3)
+            }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 11)
                 .background(on ? tint.opacity(0.16) : P.sunken, in: Capsule())
@@ -319,10 +325,13 @@ struct AuctionBox: View {
     var body: some View {
         let P = Palette.current(scheme)
         VStack(spacing: 5) {
-            Text("🔨 AUCTION")
-                .font(.system(size: 10, weight: .black, design: .rounded))
-                .kerning(1.5)
-                .foregroundStyle(P.gold)
+            HStack(spacing: 5) {
+                Art.icon(.gavel, size: 12, tint: P.gold)
+                Text("AUCTION")
+                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .kerning(1.5)
+                    .foregroundStyle(P.gold)
+            }
 
             Text(store.tile(auction.tile)?.name ?? "Property")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -453,8 +462,7 @@ struct GameOverSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
-                    Text("🏆")
-                        .font(.system(size: 44))
+                    Art.icon(.trophy, size: 46)
                         .padding(.top, 8)
 
                     winnerHeadline(P)
@@ -485,12 +493,11 @@ struct GameOverSheet: View {
     @ViewBuilder
     private func rematchAction(_ P: Palette) -> some View {
         if store.isHost {
-            Button("🔁  Play again with the same players") {
+            MMIconButton(.replay, "Play again with the same players", kind: .primary, big: true) {
                 store.rematch()
                 Haptics.tap()
                 dismiss()
             }
-            .buttonStyle(MMButtonStyle(kind: .primary, big: true))
         } else {
             Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
@@ -552,9 +559,12 @@ struct GameOverSheet: View {
                                 .foregroundStyle(P.gold.opacity(0.7))
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                                 .annotation(position: .top, alignment: .leading) {
-                                    Text("👑 game turned here")
-                                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                                        .foregroundStyle(P.gold)
+                                    HStack(spacing: 3) {
+                                        Art.icon(.crown, size: 10)
+                                        Text("game turned here")
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .foregroundStyle(P.gold)
+                                    }
                                 }
                         }
                     }
@@ -595,7 +605,7 @@ struct GameOverSheet: View {
                                     .foregroundStyle(P.ink2)
                                     .lineLimit(1)
                                 if p.id == winnerId {
-                                    Text("👑").font(.system(size: 9))
+                                    Art.icon(.crown, size: 10)
                                 }
                             }
                         }
@@ -636,9 +646,7 @@ struct GameOverSheet: View {
                 PanelTitle("Final standings")
                 ForEach(Array(standings.enumerated()), id: \.element.id) { rank, p in
                     HStack(spacing: 10) {
-                        Text(medal(rank))
-                            .font(.system(size: rank < 3 ? 18 : 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(P.ink3)
+                        medal(rank, P)
                             .frame(width: 26)
                         AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 30, emoji: p.avatar ?? "")
                         Text(p.name)
@@ -660,12 +668,16 @@ struct GameOverSheet: View {
         }
     }
 
-    private func medal(_ rank: Int) -> String {
+    /// Podium finishes get their metal; everyone else gets their number.
+    @ViewBuilder private func medal(_ rank: Int, _ P: Palette) -> some View {
         switch rank {
-        case 0: "🥇"
-        case 1: "🥈"
-        case 2: "🥉"
-        default: "\(rank + 1)"
+        case 0: Art.icon(.medalGold, size: 22)
+        case 1: Art.icon(.medalSilver, size: 22)
+        case 2: Art.icon(.medalBronze, size: 22)
+        default:
+            Text("\(rank + 1)")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(P.ink3)
         }
     }
 }

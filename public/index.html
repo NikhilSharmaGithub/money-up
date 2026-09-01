@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230c1310'/><rect x='7' y='7' width='18' height='18' rx='4' fill='%23f4f1e4'/><g fill='%231c6b45'><circle cx='12' cy='12' r='2'/><circle cx='20' cy='12' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='20' r='2'/><circle cx='20' cy='20' r='2'/></g></svg>" />
 <link rel="stylesheet" href="/css/style.css" />
 <script>
   // Runs before paint so a dark-mode player never gets a white flash.
@@ -28,12 +28,16 @@
 </head>
 <body>
 
+<!-- data-ico names a drawing in js/icons.js rather than carrying an emoji, and
+     app.js paints it in at boot. Static chrome and rendered markup then share one
+     set of glyphs, so a button looks the same on Windows as it does on a Mac. -->
+
 <!-- ───────────────────────────── landing ───────────────────────────── -->
 <section id="landing" class="landing">
   <div class="landing-bg"><span></span><span></span><span></span></div>
   <div class="landing-inner">
     <button id="themeBtnLanding" class="icon-btn theme-float" title="Switch between light and dark"></button>
-    <button id="paletteBtnLanding" class="icon-btn palette-float" title="Table style">🎨</button>
+    <button id="paletteBtnLanding" class="icon-btn palette-float" title="Table style" aria-label="Table style" data-ico="palette"></button>
     <h1 class="logo xl">MONEY<span>MOVE</span></h1>
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
 
@@ -44,22 +48,22 @@
         <span id="authStatus" class="dim small"></span>
       </div>
       <div class="wallet-row">
-        <button id="storeBtn" class="btn store-btn">🛍️ Store <span id="coinChip" class="coin-chip">🪙 0</span></button>
-        <span id="karmaChip" class="karma-chip hidden" title="Karma — leaving a live game costs 1">💚 100 karma</span>
+        <button id="storeBtn" class="btn store-btn" data-ico="bag">Store <span id="coinChip" class="coin-chip" data-ico="coin">0</span></button>
+        <span id="karmaChip" class="karma-chip hidden" title="Karma — leaving a live game costs 1" data-ico="heart">100 karma</span>
       </div>
       <label class="field">
         <span>Your nickname</span>
         <span class="name-row">
           <input id="nickInput" maxlength="16" placeholder="Type a nickname" autocomplete="off" />
-          <button id="nameDiceBtn" class="btn dice-btn" type="button" title="Give me a name">🎲</button>
+          <button id="nameDiceBtn" class="btn dice-btn" type="button" title="Give me a name" aria-label="Give me a name" data-ico="dice"></button>
         </span>
       </label>
       <button id="quickBtn" class="btn primary big">
-        <span class="btn-ico">⚡</span> Play now
+        <span class="btn-ico" data-ico="dice"></span> Play now
       </button>
       <p class="quick-note">One tap and you are at a table with whoever else is online.</p>
       <button id="createBtn" class="btn big">
-        <span class="btn-ico">🎲</span> Create a private game
+        <span class="btn-ico" data-ico="key"></span> Create a private game
       </button>
       <div class="or"><span>or join with a code</span></div>
       <form id="joinForm" class="join-row">
@@ -101,11 +105,11 @@
       <div class="brand-actions">
         <button id="focusBtn" class="icon-btn" title="Hide the side panel and enlarge the board">⛶</button>
         <button id="themeBtn" class="icon-btn" title="Switch between light and dark"></button>
-        <button id="paletteBtn" class="icon-btn" title="Table style">🎨</button>
-        <button id="helpBtn" class="icon-btn" title="How to play">?</button>
-        <button id="addLocalBtn" class="icon-btn" title="Add another player on this device">👥</button>
-        <button id="soundBtn" class="icon-btn" title="Toggle sound">🔊</button>
-        <button id="leaveBtn" class="icon-btn" title="Leave game">⏏</button>
+        <button id="paletteBtn" class="icon-btn" title="Table style" aria-label="Table style" data-ico="palette"></button>
+        <button id="helpBtn" class="icon-btn" title="How to play" aria-label="How to play" data-ico="question"></button>
+        <button id="addLocalBtn" class="icon-btn" title="Add another player on this device" aria-label="Add another player on this device" data-ico="people"></button>
+        <button id="soundBtn" class="icon-btn" title="Toggle sound" aria-label="Toggle sound"></button>
+        <button id="leaveBtn" class="icon-btn" title="Leave game" aria-label="Leave game" data-ico="door"></button>
       </div>
     </div>
 
@@ -125,10 +129,10 @@
     <div class="panel chat-panel">
       <div class="panel-title">Chat</div>
       <div id="chatChannels" class="chat-channels hidden">
-        <button type="button" data-ch="all" class="on">🌍 Everyone</button>
-        <button type="button" data-ch="team">🛡️ Team only</button>
+        <button type="button" data-ch="all" class="on"><span data-ico="globe"></span> Everyone</button>
+        <button type="button" data-ch="team"><span data-ico="shield"></span> Team only</button>
       </div>
-      <div id="chatList" class="chat-list"><div class="empty">Say hi 👋</div></div>
+      <div id="chatList" class="chat-list"><div class="empty" data-ico="chat">Say hi</div></div>
       <div class="emote-row" id="emoteRow"></div>
       <form id="chatForm" class="chat-form">
         <input id="chatInput" maxlength="200" placeholder="Say something…" autocomplete="off" />

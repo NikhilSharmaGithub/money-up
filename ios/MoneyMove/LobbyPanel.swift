@@ -33,12 +33,12 @@ struct LobbyPanel: View {
                 if store.isHost { quickBoards(P) }
 
                 if store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
-                    Button("👥  Add player on this device") { store.addLocalPlayer() }
-                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                    MMIconButton(.people, "Add player on this device", kind: .ghost, big: true) {
+                        store.addLocalPlayer()
+                    }
                 }
 
-                Button("⚙️  Game settings") { openSettings() }
-                    .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                MMIconButton(.toolbox, "Game settings", kind: .ghost, big: true) { openSettings() }
 
                 seatList(P)
 
@@ -313,10 +313,10 @@ extension LobbyPanel {
     /// Custom: a menu of single-nation boards, each with its own regions and
     /// its own localized Treasure & Surprise deck.
     @ViewBuilder func quickBoards(_ P: Palette) -> some View {
-        let picks: [(String, String, String)] = [
-            ("classic", "🌐", "Classic"),
-            ("worldwide", "🌍", "Worldwide"),
-            ("random", "🎲", "Shuffle"),
+        let picks: [(String, Glyph, String)] = [
+            ("classic", .globe, "Classic"),
+            ("worldwide", .plane, "Worldwide"),
+            ("random", .dice, "Shuffle"),
         ]
         HStack(spacing: 8) {
             ForEach(picks, id: \.0) { id, icon, name in
@@ -345,10 +345,12 @@ extension LobbyPanel {
                     SoundKit.shared.click()
                     store.updateSettings(["mapId": map.id])
                 } label: {
+                    // A menu row can only carry text and an SF Symbol, so the
+                    // board's own mark is left to the chip below the menu.
                     if map.id == currentId {
-                        Label("\(map.icon ?? "🗺️") \(map.name)", systemImage: "checkmark")
+                        Label(map.name, systemImage: "checkmark")
                     } else {
-                        Text("\(map.icon ?? "🗺️") \(map.name)")
+                        Text(map.name)
                     }
                 }
             }
@@ -356,15 +358,15 @@ extension LobbyPanel {
                 Text("Loading countries…")
             }
         } label: {
-            quickChip(icon: current?.icon ?? "🗺️",
+            quickChip(icon: mapGlyph(current?.icon),
                       name: selected ? (current?.name ?? "Custom") : "Custom",
                       selected: selected, P: P)
         }
     }
 
-    private func quickChip(icon: String, name: String, selected: Bool, P: Palette) -> some View {
+    private func quickChip(icon: Glyph, name: String, selected: Bool, P: Palette) -> some View {
         VStack(spacing: 3) {
-            Text(icon).font(.system(size: 20))
+            Art.icon(icon, size: 22, tint: selected ? P.red : P.ink2)
             Text(name)
                 .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(selected ? P.red : P.ink2)

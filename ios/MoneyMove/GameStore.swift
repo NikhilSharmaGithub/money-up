@@ -54,7 +54,8 @@ final class GameStore: ObservableObject {
     @Published var timedOut = false
     /// Set when a game begins — drives the board's deal-in animation.
     @Published var boardIntroAt: Date?
-    /// "🇮🇳 India holds the priciest streets this game!"
+    /// The server's one-line headline for the table — "India holds the
+    /// priciest streets this game!" — shown as it arrives.
     @Published var reveal: String?
     private var revealTask: Task<Void, Never>?
     @Published var joinError: String?
@@ -67,6 +68,9 @@ final class GameStore: ObservableObject {
         let id = UUID()
         let text: String
         let isError: Bool
+        /// Replaces the default info/warning mark when a toast has a subject
+        /// of its own — coins landing, a table you're only watching.
+        let glyph: Glyph?
     }
 
     /// One player's cash just moved — drives the floating "+$200 / −$150"
@@ -112,7 +116,8 @@ final class GameStore: ObservableObject {
         let record = MatchRecord(
             date: Date(),
             mapName: state.map.name,
-            mapIcon: state.map.icon ?? "🌐",
+            // Stored as the server's own mark; mapGlyph() draws it at render.
+            mapIcon: state.map.icon ?? "",
             players: state.players.map(\.name),
             winner: winnerName,
             won: wonByLocalSeat,
@@ -143,7 +148,8 @@ final class GameStore: ObservableObject {
                   let fresh = try? JSONDecoder().decode(Wallet.self, from: data) else { return }
             if celebrate, let old = wallet?.coins, fresh.coins > old {
                 let earned = fresh.coins - old
-                showToast("🪙 +\(earned) coin\(earned > 1 ? "s" : "") earned — spend them in the Store!")
+                showToast("+\(earned) coin\(earned > 1 ? "s" : "") earned — spend them in the Store!",
+                          glyph: .coin)
             }
             wallet = fresh
         }
@@ -219,8 +225,8 @@ final class GameStore: ObservableObject {
                 // out loud that they are watching — the same line the web
                 // shows — instead of leaving them to work it out.
                 let spectating = dict["spectate"] as? Bool ?? false
-                showToast(spectating ? "\(msg) — you're watching this table 👀" : msg,
-                          isError: !spectating)
+                showToast(spectating ? "\(msg) — you're watching this table" : msg,
+                          isError: !spectating, glyph: spectating ? .eye : nil)
                 joinError = spectating ? nil : msg
             }
         default:
@@ -404,9 +410,9 @@ final class GameStore: ObservableObject {
         return Double(distance) * pace + 0.35
     }
 
-    func showToast(_ text: String, isError: Bool = false) {
+    func showToast(_ text: String, isError: Bool = false, glyph: Glyph? = nil) {
         toastTask?.cancel()
-        toast = ToastMessage(text: text, isError: isError)
+        toast = ToastMessage(text: text, isError: isError, glyph: glyph)
         toastTask = Task {
             try? await Task.sleep(for: .seconds(2.6))
             if !Task.isCancelled { toast = nil }
@@ -623,7 +629,7 @@ final class GameStore: ObservableObject {
         let target = state?.trades.first { $0.id == id }?.to ?? meId
         emitAs(localIds.contains(target) ? target : meId, "trade:ignore", [["id": id, "ignored": ignored]])
     }
-    /// Live "👀 is viewing" presence on an offer. Guarded so a sheet closing
+    /// Live "is viewing" presence on an offer. Guarded so a sheet closing
     /// after the trade already resolved never emits against a dead offer.
     func setTradeViewing(_ id: Int, _ viewing: Bool, as seat: String? = nil) {
         guard state?.trades.contains(where: { $0.id == id }) == true else { return }

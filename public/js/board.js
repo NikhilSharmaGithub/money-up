@@ -2,7 +2,7 @@
 // buildings on every update, and animates player tokens on a floating layer so
 // they can hop tile-by-tile instead of teleporting.
 
-import { ART, utilityArt } from './icons.js';
+import { ART, utilityArt, icon, groupBanner } from './icons.js';
 import { sfx } from './sound.js';
 
 let builtMapId = null;
@@ -61,18 +61,22 @@ export function renderBoard(state, root) {
   return true;
 }
 
-// Each tile carries the group colour as a wash from the inner edge, a round flag
+// Each tile carries the group colour as a wash from the inner edge, a round
 // medallion for identity, and the price on its own chip at the outer edge.
 function tileMarkup(tile, groups) {
   const g = tile.group ? groups[tile.group] : null;
   const price = tile.price ? `<span class="tile-price">${tile.price}$</span>` : '';
-  const flag = (mark) => `<span class="medal"><span>${mark}</span></span>`;
+  // A country used to fly an emoji — missing outright on Windows, and a
+  // different vendor's drawing on every other platform. The medallion now
+  // carries a pennant in the group's own colour, which is the identity the
+  // rest of the tile is already painted with.
+  const banner = (colour) => `<span class="medal">${groupBanner(colour)}</span>`;
   const art = (drawing, cls = '') => `<span class="tile-art ${cls}">${drawing}</span>`;
 
   let body;
   switch (tile.type) {
     case 'property':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${flag(g?.flag || '🏳️')}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${banner(g?.color)}`;
       break;
     case 'airport':
       body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.airport)}`;
@@ -113,9 +117,14 @@ function tileMarkup(tile, groups) {
       body = `<span class="tile-name">${escapeHtml(tile.name || '')}</span>`;
   }
 
+  // The mortgage stamp is its own layer rather than a CSS `content:` mark, so
+  // it can be the drawn bank instead of an emoji the stylesheet has to spell.
+  const stamp = isOwnable(tile) ? `<div class="tile-stamp">${icon('bank')}</div>` : '';
+
   return `<div class="tile-wash"></div>
     <div class="tile-body">${body}</div>
     <div class="tile-houses"></div>
+    ${stamp}
     <div class="tile-owner"></div>`;
 }
 
@@ -368,10 +377,11 @@ export function deedMarkup(state, i, { compact = false, actions = '' } = {}) {
 
   return `<div class="deed${compact ? ' compact' : ''}">
     <div class="deed-head" style="background:${headColor}">
-      <span class="deed-flag">${g?.flag
-        || (tile.type === 'airport' ? ART.airport
+      <span class="deed-flag">${g
+        ? groupBanner('currentColor')
+        : tile.type === 'airport' ? ART.airport
           : tile.type === 'utility' ? utilityArt(tile.icon)
-          : ART.tax)}</span>
+          : ART.tax}</span>
       <span class="deed-title">${escapeHtml(tile.name)}</span>
     </div>
     ${tile.price ? `<div class="deed-price">$${tile.price}</div>` : ''}

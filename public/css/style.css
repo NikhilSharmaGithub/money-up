@@ -321,6 +321,19 @@ button, input, select, textarea { font-family: inherit; color: inherit; font-siz
 ::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
+/* ─────────────────────────────────────────────────────── drawn glyphs ── */
+/* js/icons.js returns inline SVG on a 32×32 grid. Most glyphs paint with
+   currentColor, so a button, chip or badge lends them its own ink and every
+   palette follows for free; the ones with an inherent colour (coin, medals,
+   flame) ignore it on purpose. Sizing to 1.15em keeps a glyph the optical
+   weight of the capital beside it, and the baseline nudge stops it making the
+   line taller — pass a size to icon() to override both. */
+.ico { display: inline-block; flex: none; width: 1.15em; height: 1.15em; vertical-align: -.19em; }
+.ico.solo { vertical-align: middle; }   /* the only thing inside a button or badge */
+/* Chips and tags set their own type size and print the glyph hard against the
+   number beside it — the emoji carried that gap inside its own box. */
+.chip .ico, .tag .ico { margin-right: 2px; }
+
 /* ───────────────────────────────────────────────────────────── buttons ── */
 .btn {
   position: relative;
@@ -692,7 +705,10 @@ select { cursor: pointer; }
   background: var(--card);
   box-shadow: 0 0 0 1.5px var(--rule-2), 0 2px 5px rgba(0, 0, 0, .25);
 }
-.medal > span { font-size: clamp(12px, 1.7vw, 26px); line-height: 1; transform: scale(1.32); }
+/* A country flies its own pennant here, tinted with the group's colour — the
+   one mark on the board that has to survive Windows, where flag emoji simply
+   do not draw. It fills the disc the way the emoji did. */
+.medal svg { width: 78%; height: 78%; display: block; }
 
 .tile-art {
   writing-mode: horizontal-tb; flex: none; display: block;
@@ -729,10 +745,15 @@ select { cursor: pointer; }
 .tile.full-set { box-shadow: 0 0 0 1.5px var(--own-color) inset; }
 .tile.full-set.owned::after { opacity: .3; }
 .tile.mortgaged .tile-body { opacity: .34; }
-.tile.mortgaged::before {
-  content: '🏦'; position: absolute; inset: 0; z-index: 3;
-  display: grid; place-items: center; font-size: clamp(11px, 1.3vw, 19px);
+/* The mortgage stamp is drawn art now, so it comes from the markup rather than
+   a `content:` string the stylesheet would have to spell in emoji. It rides
+   above the dimmed body on its own layer, at full strength. */
+.tile-stamp { display: none; }
+.tile.mortgaged .tile-stamp {
+  position: absolute; inset: 0; z-index: 3;
+  display: grid; place-items: center; color: var(--ink);
 }
+.tile-stamp svg { width: clamp(11px, 1.3vw, 19px); height: clamp(11px, 1.3vw, 19px); }
 
 .tile-owner { position: absolute; top: 3px; left: 3px; z-index: 6; }
 .t-bottom .tile-owner { top: auto; bottom: 3px; }
@@ -1577,3 +1598,31 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .btn.wrap { white-space: normal; line-height: 1.3; }
 .go-actions { flex-direction: column; align-items: stretch; }
 .go-wait { text-align: center; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Drawn glyphs in the chrome around the table
+   The icons themselves come from js/icons.js; these rules only give them a
+   place to stand next to the words they belong to.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Waiting on the server. The replay arrow doubles as the spinner, so a busy
+   button still shows a drawing of ours rather than a borrowed hourglass. */
+.ico.spin { animation: ico-spin 1.1s linear infinite; transform-origin: 50% 50%; }
+@keyframes ico-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ico.spin { animation: none; } }
+
+/* Chips read as one badge, not a picture with a number beside it. */
+.coin-chip, .karma-chip, .sc-price, .pk-coins {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+}
+.friend-flag { display: flex; align-items: center; }
+.chat-channels button { display: inline-flex; align-items: center; gap: 5px; }
+.map-card .mn { display: flex; align-items: center; justify-content: center; gap: 6px; }
+
+/* How to play: the list never had a layout of its own — an emoji simply sat in
+   the text flow. A drawn glyph wants a column of its own to line up in. */
+.help-list { display: flex; flex-direction: column; gap: 13px; }
+.help-row { display: flex; align-items: flex-start; gap: 12px; }
+.help-ico { flex: none; margin-top: 1px; color: var(--red-ink); }
+.help-row > div b { display: block; font-size: 13.5px; font-weight: 850; margin-bottom: 2px; }
+.help-row > div span { font-size: 12px; color: var(--ink-2); line-height: 1.5; }

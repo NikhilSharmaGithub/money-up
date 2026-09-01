@@ -110,6 +110,6 @@ final class CoinShop: ObservableObject {
         await transaction.finish()
         SoundKit.shared.buy()
         store.refreshWallet()
-        store.showToast("🪙 Coins added — go spend them.")
+        store.showToast("Coins added — go spend them.", glyph: .coin)
     }
 }
