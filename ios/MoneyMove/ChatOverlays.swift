@@ -315,11 +315,30 @@ struct AuctionBox: View {
     /// two-thirds after a bid and read as "nearly out of time".
     private var windowSeconds: Double { auction.leader == nil ? 20 : 12 }
 
-    /// The seat this device bids with: whichever of its players is still in
-    /// the race. Pass & play used to speak only for the primary seat, so a
-    /// guest in the running had no way to bid or pass at all.
+    /// Whoever picked up a paddle by hand. Cleared (or ignored) the moment
+    /// that seat leaves the race, so it can never bid for a ghost.
+    @State private var chosenSeat: String?
+
+    /// Every seat on this device still in the race, in auction order. Two or
+    /// more means a pass & play table is bidding from a single phone.
+    private var localRacers: [String] {
+        auction.inRace.filter { store.isLocal($0) && store.state?.player($0)?.isBankrupt != true }
+    }
+
+    /// The seat the paddle acts for: an explicit pick while it still races,
+    /// otherwise the richest local seat that isn't already leading — the
+    /// leader's bid is the one on the table, so the phone offers the paddle
+    /// to whoever might still want to answer it. Pass & play used to speak
+    /// only for the FIRST local seat, so the second human at the same phone
+    /// had no way to bid or pass at all.
     private var biddingSeat: String? {
-        auction.inRace.first { store.isLocal($0) && store.state?.player($0)?.isBankrupt != true }
+        let racers = localRacers
+        if let chosen = chosenSeat, racers.contains(chosen) { return chosen }
+        let trailing = racers.filter { $0 != auction.leader }
+        let pool = trailing.isEmpty ? racers : trailing
+        return pool.max {
+            (store.state?.player($0)?.money ?? 0) < (store.state?.player($1)?.money ?? 0)
+        }
     }
 
     var body: some View {
@@ -355,9 +374,61 @@ struct AuctionBox: View {
 
             countdownBar(P)
 
+            seatSwitcher(P)
+
             bidControls(P)
         }
         .padding(.horizontal, 6)
+        // A pick outlives its seat otherwise: drop it when the race changes
+        // so the paddle falls back to a seat that is actually still bidding.
+        .onChange(of: auction.inRace) { _, race in
+            if let chosen = chosenSeat, !race.contains(chosen) { chosenSeat = nil }
+        }
+    }
+
+    /// One chip per local seat still racing, shown only when the phone holds
+    /// more than one. Tap a chip and the bid buttons below speak for that
+    /// player. Compact on purpose — the whole row shares a 240pt well.
+    @ViewBuilder
+    private func seatSwitcher(_ P: Palette) -> some View {
+        let racers = localRacers
+        if racers.count > 1 {
+            HStack(spacing: 4) {
+                ForEach(racers, id: \.self) { seat in
+                    if let p = store.state?.player(seat) {
+                        seatChip(p, selected: seat == biddingSeat, P)
+                    }
+                }
+            }
+        }
+    }
+
+    private func seatChip(_ p: PlayerState, selected: Bool, _ P: Palette) -> some View {
+        Button {
+            chosenSeat = p.id
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 3) {
+                ZStack {
+                    Circle().fill(Color(css: p.color))
+                    Text(String(p.name.prefix(1)).uppercased())
+                        .font(.system(size: 8, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 13, height: 13)
+                Text(p.name)
+                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(selected ? P.ink : P.ink3)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .background(selected ? P.sunken : .clear, in: Capsule())
+            .overlay(
+                Capsule().stroke(selected ? Color(css: p.color) : P.rule, lineWidth: selected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     /// No deadline, no countdown: an auction at a table with nobody to wait
@@ -396,12 +467,17 @@ struct AuctionBox: View {
     private func bidControls(_ P: Palette) -> some View {
         if let seat = biddingSeat {
             let next = auction.bid == 0 ? 10 : auction.bid + 10
-            let purse = store.state?.player(seat)?.money ?? 0
+            // Mirrors the server's escrow rule: the leading bid already left
+            // the leader's wallet, so their real ceiling is cash in hand plus
+            // the money sitting on the table.
+            let cash = store.state?.player(seat)?.money ?? 0
+            let purse = cash + (auction.leader == seat ? auction.bid : 0)
             let amounts = [next, next + 40, next + 90].filter { $0 <= purse }
 
             VStack(spacing: 5) {
-                // Say whose paddle this is when the device holds more than one.
-                if seat != store.meId, let p = store.state?.player(seat) {
+                // Say whose paddle this is when it isn't the primary seat's.
+                // With two racers the chips above already name the bidder.
+                if localRacers.count < 2, seat != store.meId, let p = store.state?.player(seat) {
                     Text("bidding as \(p.name)")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(Color(css: p.color))

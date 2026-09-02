@@ -4,6 +4,7 @@
 import { getMap, GROUPS } from './maps.js';
 import { buildDecks, shuffled } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
+import { quickIdentity } from './names.js';
 
 export const COLORS = [
   '#4ade80', '#60a5fa', '#f472b6', '#fbbf24',
@@ -139,14 +140,25 @@ export class GameRoom {
     return COLORS.find((c) => !used.has(c)) || COLORS[this.players.length % COLORS.length];
   }
 
-  addPlayer({ id, name, isBot = false, flag = '' }) {
-    if (this.players.length >= this.settings.maxPlayers) return { error: 'Room is full' };
+  addPlayer({ id, name, isBot = false, flag = '', color = '' }) {
+    if (this.players.length >= this.settings.maxPlayers) {
+      // A quick table never turns a person away over a house player's chair:
+      // the most recent house arrival gives the seat back and slips out.
+      const seat = !isBot && this.quick && this.status === 'lobby'
+        ? [...this.players].reverse().find((p) => p.isBot) : null;
+      if (!seat) return { error: 'Room is full' };
+      this.players = this.players.filter((p) => p !== seat);
+      if (this.hostId === seat.id) this.hostId = this.players[0]?.id || null;
+      this.say(`${seat.name} left the room`, 'leave');
+    }
     if (this.status !== 'lobby') return { error: 'Game already started' };
     const clean = cleanText((name || 'Player').slice(0, 16));
+    const wantsColor = color && COLORS.includes(color)
+      && !this.players.some((p) => p.color === color);
     const player = {
       id,
       name: isAllMasked(clean) ? 'Player' : clean,
-      color: this.freeColor(),
+      color: wantsColor ? color : this.freeColor(),
       flag: flag || '',
       team: null,
       isBot,
@@ -164,6 +176,12 @@ export class GameRoom {
     this.players.push(player);
     if (!this.hostId) this.hostId = id;
     this.say(`${player.name} joined the game`, 'join');
+    if (this.quick && !isBot && this.status === 'lobby') {
+      // A person sat down: relight a burnt-out fuse if need be, and replan
+      // the house arrivals around the seats that are actually left.
+      if (!this.quickStartAt) this.armQuickStart(20);
+      else this.planQuickFill();
+    }
     this.push();
     return { player };
   }
@@ -175,6 +193,18 @@ export class GameRoom {
       this.players = this.players.filter((x) => x.id !== id);
       if (this.hostId === id) this.hostId = this.players[0]?.id || null;
       this.say(`${p.name} left the room`, 'leave');
+      if (this.quick) {
+        if (!this.players.some((x) => !x.isBot)) {
+          // The last person walked out — the house players don't hang around
+          // performing for an empty room.
+          for (const b of this.players) this.say(`${b.name} left the room`, 'leave');
+          this.players = [];
+          this.hostId = null;
+        }
+        // Either clears the joins still on the clock, or refills the freed
+        // chair on the same human rhythm.
+        this.planQuickFill();
+      }
     } else {
       // Keep the seat warm: a refresh or a flaky network shouldn't instantly
       // hand your turn to a bot. Only after the grace period does one step in.
@@ -302,6 +332,23 @@ export class GameRoom {
   }
 
   addBot() {
+    if (this.quick) {
+      // A quick-table house player borrows everything a real joiner would
+      // have: a name drawn from the wider world (never the same crew twice in
+      // a row), an id shaped like any web guest's — clients sniff the "bot:"
+      // prefix — a colour picked at random the way people pick, and sometimes
+      // the flag its identity came with.
+      const identity = quickIdentity(this.players.map((p) => p.name));
+      const free = COLORS.filter((c) => !this.players.some((p) => p.color === c));
+      return this.addPlayer({
+        id: `u_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
+        name: identity.name,
+        flag: identity.flag || '',
+        color: free[Math.floor(Math.random() * free.length)] || '',
+        isBot: true,
+      });
+    }
+    // Bots you invited yourself carry no disguise — short, friendly, familiar.
     const names = ['Ravi', 'Zoe', 'Kabir', 'Nina', 'Otto', 'Maya', 'Leo', 'Ira'];
     const used = new Set(this.players.map((p) => p.name));
     const name = names.find((n) => !used.has(n)) || `Bot${this.players.length}`;
@@ -573,14 +620,50 @@ export class GameRoom {
     this.quickStartAt = Date.now() + seconds * 1000;
     this.timers.quick = setTimeout(() => this.startQuickMatch(), seconds * 1000);
     this.timers.quick.unref?.();
+    this.planQuickFill();
     this.push();
+  }
+
+  /**
+   * Seat the house players one at a time, the way a real lobby fills: each
+   * arrival lands 1.5–7 seconds after the last, squeezed tighter when the
+   * fuse is nearly burnt, and always ahead of kick-off. Called whenever the
+   * picture changes — fuse armed, person in, person out — and reschedules
+   * every pending arrival from scratch.
+   */
+  planQuickFill() {
+    for (const k of Object.keys(this.timers)) {
+      if (!k.startsWith('quickSeat:')) continue;
+      clearTimeout(this.timers[k]);
+      delete this.timers[k];
+    }
+    if (!this.quick || this.status !== 'lobby' || !this.quickStartAt) return;
+    // An empty room needs no performance.
+    if (!this.players.some((p) => !p.isBot)) return;
+    const seats = this.settings.maxPlayers - this.players.length;
+    if (seats <= 0) return;
+    // The table is guaranteed full by kick-off regardless — start() tops up
+    // any seat still empty — the margin just keeps the joins visibly ahead.
+    const window = Math.max(0, this.quickStartAt - Date.now() - 1200);
+    let at = 0;
+    for (let i = 0; i < seats; i++) {
+      const cap = Math.min(7000, Math.max(1500, (window - at) / (seats - i)));
+      at = Math.min(at + 1500 + Math.random() * Math.max(0, cap - 1500), window);
+      const key = `quickSeat:${i}`;
+      this.timers[key] = setTimeout(() => {
+        delete this.timers[key];
+        this.addBot();
+      }, at);
+      this.timers[key].unref?.();
+    }
   }
 
   /** The fuse burnt down (or the table filled) — deal everyone in. */
   startQuickMatch() {
     clearTimeout(this.timers.quick);
     this.quickStartAt = null;
-    if (this.status !== 'lobby' || !this.players.length) return;
+    // No people means no game — the house doesn't play itself.
+    if (this.status !== 'lobby' || !this.players.some((p) => !p.isBot)) return;
     this.hostId = this.players[0].id;
     this.start(this.hostId);
   }

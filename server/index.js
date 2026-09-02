@@ -661,13 +661,17 @@ function getRoom(id) {
  * otherwise a fresh one on a 20-second fuse.
  */
 function quickMatchRoom() {
+  // Seats are counted in people: the house players filling a quick lobby give
+  // their chair back the moment someone real wants it, so a table only reads
+  // as full once it is full of humans.
+  const humansIn = (r) => r.players.filter((p) => !p.isBot).length;
   const waiting = [...rooms.values()]
-    .filter((r) => r.quick && r.status === 'lobby' && r.players.length < r.settings.maxPlayers)
-    .sort((a, b) => b.players.length - a.players.length);
+    .filter((r) => r.quick && r.status === 'lobby' && humansIn(r) < r.settings.maxPlayers)
+    .sort((a, b) => humansIn(b) - humansIn(a));
   if (waiting.length) {
     // Someone new arriving is worth a moment's grace for others to land too.
     const room = waiting[0];
-    if (room.players.length === room.settings.maxPlayers - 1) room.armQuickStart(6);
+    if (humansIn(room) === room.settings.maxPlayers - 1) room.armQuickStart(6);
     return room;
   }
   const room = getRoom(newRoomId());
@@ -799,8 +803,11 @@ io.on('connection', (socket) => {
         avatar: emojiFor(wallet.equipped.avatar),
       });
     }
+    // "Filled" is measured in people here too — house players pad the seat
+    // count long before kick-off, and starting the moment they do would cut
+    // the fuse short and strand the next human queueing on a fresh table.
     if (room.quick && room.status === 'lobby'
-        && room.players.length >= room.settings.maxPlayers) {
+        && room.players.filter((p) => !p.isBot).length >= room.settings.maxPlayers) {
       room.startQuickMatch();
     }
     socket.emit('you', { playerId, roomId });
