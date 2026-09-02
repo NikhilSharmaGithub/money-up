@@ -34,6 +34,13 @@ struct GameScreen: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var sheet: ActiveSheet?
     @State private var confirmLeave = false
+    @State private var confirmConcede = false
+
+    /// Seats on this device still in the game. More than one means "give up"
+    /// is ambiguous — a pass & play phone has to say WHICH player is done.
+    private var aliveLocalSeats: [PlayerState] {
+        (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
+    }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -272,8 +279,18 @@ struct GameScreen: View {
                 }
                 Button("Give up — declare bankruptcy", role: .destructive) {
                     // Conceding hands the streets to the bank and keeps the
-                    // seat as a spectator — the table plays on.
-                    store.concede()
+                    // seat as a spectator — the table plays on. On a pass &
+                    // play phone the flag belongs to ONE of its players, so
+                    // ask which — SwiftUI won't swap one dialog for another
+                    // in the same frame, hence the beat in between.
+                    if aliveLocalSeats.count > 1 {
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(350))
+                            confirmConcede = true
+                        }
+                    } else {
+                        store.concede()
+                    }
                 }
                 Button("Leave for good", role: .destructive) {
                     // The quit has to reach the server before the socket goes
@@ -286,6 +303,17 @@ struct GameScreen: View {
                 }
             } message: {
                 Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good returns your streets to the bank and costs 1 karma.")
+            }
+            .confirmationDialog("Who gives up?", isPresented: $confirmConcede, titleVisibility: .visible) {
+                // Named per seat: several people share this phone, and the
+                // white flag must land on the right one.
+                ForEach(aliveLocalSeats) { p in
+                    Button("\(p.name) gives up", role: .destructive) {
+                        store.concede(as: p.id)
+                    }
+                }
+            } message: {
+                Text("That player declares bankruptcy and stays as a spectator. Everyone else on this phone plays on.")
             }
 
             HStack(spacing: 6) {

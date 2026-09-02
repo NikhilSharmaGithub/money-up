@@ -223,8 +223,12 @@ struct ActionPanel: View {
     @ViewBuilder
     private func waitingRow(_ P: Palette) -> some View {
         // Out of the running: the dock would otherwise sit there saying
-        // "…is playing" forever with no hint that your seat is done.
-        if let me = store.state?.player(store.meId), me.isBankrupt {
+        // "…is playing" forever with no hint that your seat is done. On a
+        // pass & play phone "you" means every seat this device holds — while
+        // any of them still plays, the dock is theirs, not a spectator's.
+        let locals = (store.state?.players ?? []).filter { store.isLocal($0.id) }
+        if !locals.isEmpty, locals.allSatisfy(\.isBankrupt),
+           let me = locals.first(where: { $0.id == store.meId }) ?? locals.first {
             HStack(spacing: 8) {
                 // Walked out, dozed off past the clock, or spent everything —
                 // three different endings, so three different marks.

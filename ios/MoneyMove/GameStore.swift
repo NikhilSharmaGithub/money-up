@@ -257,6 +257,10 @@ final class GameStore: ObservableObject {
         var id: String { token }
     }
     @Published var guests: [LocalGuest] = []
+    /// Team-channel lines only a guest seat's socket ever received. The server
+    /// strips other teams' chat per viewer, so a guest on another team gets
+    /// their channel on THEIR socket — the main push never carries it.
+    @Published private var guestTeamChat: [ChatMessage] = []
     private var lastCardAt: Double = 0
     private var lastTurnPlayer: String?
     private var lastLogAt: Double = 0
@@ -450,7 +454,9 @@ final class GameStore: ObservableObject {
                     if !Task.isCancelled { turnBanner = nil }
                 }
             }
-            if turnId == meId { Haptics.turn(); SoundKit.shared.turn() }
+            // ANY seat on this phone: pass & play hands the buzz to whoever
+            // is being passed the phone, not just the primary player.
+            if localIds.contains(turnId) { Haptics.turn(); SoundKit.shared.turn() }
         }
 
         // A fresh game: deal the board in and announce this game's top country.
@@ -617,6 +623,7 @@ final class GameStore: ObservableObject {
         // reads the old count before calling in, so it keeps its guests.
         lastGuests = 0
         state = nil
+        guestTeamChat = []
         lastTurnPlayer = nil
         if connection == .connected {
             onSocketStatus(.connected) // emit join now
@@ -640,21 +647,62 @@ final class GameStore: ObservableObject {
         for number in 2...(max(2, guestsToRestore + 1)) where guestsToRestore > 0 {
             let guestToken = "\(token)_p\(number)"
             guard !guests.contains(where: { $0.token == guestToken }) else { continue }
-            let s = SocketIOClient()
-            s.onStatus = { status in
-                Task { @MainActor in
-                    guard status == .connected else { return }
-                    s.emit("join", [[
-                        "roomId": roomId,
-                        "token": guestToken,
-                        "name": "Player \(number)",
-                        "flag": "",
-                    ]])
-                }
-            }
+            let s = makeGuestSocket(token: guestToken, number: number, roomId: roomId)
             s.connect(to: url)
             guests.append(LocalGuest(token: guestToken, number: number, socket: s))
         }
+    }
+
+    /// The socket a pass & play guest rides on. It reclaims the seat on every
+    /// (re)connect, and it listens to its own state pushes: the server strips
+    /// other teams' chat per viewer, so a guest's team channel only ever
+    /// arrives here — the main socket cannot hear it for them.
+    private func makeGuestSocket(token guestToken: String, number: Int, roomId: String) -> SocketIOClient {
+        let s = SocketIOClient()
+        s.onStatus = { status in
+            Task { @MainActor in
+                guard status == .connected else { return }
+                s.emit("join", [[
+                    "roomId": roomId,
+                    "token": guestToken,
+                    "name": "Player \(number)",
+                    "flag": "",
+                ]])
+            }
+        }
+        s.onEvent = { [weak self] name, args in
+            Task { @MainActor in self?.onGuestSocketEvent(name, args) }
+        }
+        return s
+    }
+
+    /// Only the chat is worth reading off a guest's push — the main socket
+    /// already applies the full state — and only the team channel of it: the
+    /// public channel arrives on the main connection for everyone.
+    private func onGuestSocketEvent(_ name: String, _ args: [Any]) {
+        guard name == "state", let dict = args.first as? [String: Any],
+              let rawChat = dict["chat"] as? [[String: Any]],
+              let data = try? JSONSerialization.data(withJSONObject: rawChat),
+              let chat = try? JSONDecoder().decode([ChatMessage].self, from: data) else { return }
+        let fresh = chat.filter { msg in
+            msg.isTeam && !guestTeamChat.contains(where: { $0.id == msg.id })
+        }
+        guard !fresh.isEmpty else { return }
+        guestTeamChat.append(contentsOf: fresh)
+        // The server itself keeps 100 lines; there is nothing older to show.
+        guestTeamChat = Array(guestTeamChat.suffix(100))
+    }
+
+    /// Every chat line this device is entitled to read: the main push plus the
+    /// team channels only guest seats' sockets receive. Deduped by the server's
+    /// message id — a guest on the primary's own team hears those lines twice.
+    var chatFeed: [ChatMessage] {
+        let base = state?.chat ?? []
+        guard !guestTeamChat.isEmpty else { return base }
+        let known = Set(base.map(\.id))
+        let extras = guestTeamChat.filter { !known.contains($0.id) }
+        guard !extras.isEmpty else { return base }
+        return (base + extras).sorted { $0.at < $1.at }
     }
 
     func leaveRoom() {
@@ -667,6 +715,7 @@ final class GameStore: ObservableObject {
         }
         guests.forEach { $0.socket.close() }
         guests = []
+        guestTeamChat = []
         socket.close()
         quickTask?.cancel()
         quickSearching = false
@@ -718,22 +767,35 @@ final class GameStore: ObservableObject {
     func passBid(as playerId: String? = nil) { emitAs(playerId ?? activeId, "passBid") }
     func jailPay() { emitAsActive("jailPay") }
     func jailCard() { emitAsActive("jailCard") }
-    func build(_ tile: Int) { emitAsActive("build", [tile]) }
-    func sellHouse(_ tile: Int) { emitAsActive("sellHouse", [tile]) }
-    func mortgage(_ tile: Int) { emitAsActive("mortgage", [tile]) }
-    func unmortgage(_ tile: Int) { emitAsActive("unmortgage", [tile]) }
+    /// Deeds answer to the seat that owns them, whoever holds the turn — the
+    /// server allows off-turn management and trusts the socket's own seat, so
+    /// a locally owned street always speaks from its owner's connection.
+    private func deedSeat(for tile: Int) -> String {
+        let owner = state?.owner(of: tile)?.owner
+        return owner.flatMap { localIds.contains($0) ? $0 : nil } ?? activeId
+    }
+    func build(_ tile: Int) { emitAs(deedSeat(for: tile), "build", [tile]) }
+    func sellHouse(_ tile: Int) { emitAs(deedSeat(for: tile), "sellHouse", [tile]) }
+    func mortgage(_ tile: Int) { emitAs(deedSeat(for: tile), "mortgage", [tile]) }
+    func unmortgage(_ tile: Int) { emitAs(deedSeat(for: tile), "unmortgage", [tile]) }
     func payDebt() { emitAsActive("payDebt") }
     func declareBankrupt() { emitAsActive("bankrupt") }
-    /// The white flag, thrown by THIS device's own seat — off-turn is fine,
-    /// conceding is a right, not a turn action.
-    func concede() { emitAs(meId, "bankrupt") }
+    /// The white flag, thrown by one of THIS device's own seats — off-turn is
+    /// fine, conceding is a right, not a turn action. `seat` says which local
+    /// player is giving up; the main seat when nobody says otherwise.
+    func concede(as seat: String? = nil) {
+        emitAs(seat.flatMap { localIds.contains($0) ? $0 : nil } ?? meId, "bankrupt")
+    }
     /// Walk out of a live game for good: the deeds go back to the bank, the
     /// seat stays as a spectator, and it costs a point of karma.
     func quitGame() {
         // Leaving for good: there is nothing here to come back to, so the
         // table drops off History's "still open" list with it.
         if let roomId { dropUnfinished(roomId) }
-        emit("quit")
+        // Every seat this device holds walks out together — the guests are
+        // people at this table, not chairs to leave behind for bots to play
+        // until the clock times each one out.
+        for seat in localIds { emitAs(seat, "quit") }
     }
 
     /// Hand a dropped player another minute. The server counts one vote per
@@ -746,11 +808,18 @@ final class GameStore: ObservableObject {
         Haptics.tap()
     }
 
-    func sendChat(_ text: String, channel: String = "all") { emit("chat", [text, channel]) }
+    /// `as` picks which local seat is talking — the server stamps the message
+    /// with the socket's own seat, so on a pass & play phone Player 2's words
+    /// must not ride the main connection wearing Player 1's name.
+    func sendChat(_ text: String, channel: String = "all", as seat: String? = nil) {
+        emitAs(seat.flatMap { localIds.contains($0) ? $0 : nil } ?? meId, "chat", [text, channel])
+    }
 
-    /// Team chat exists when teams are on and this player is actually on one.
-    var hasTeamChat: Bool {
-        (state?.settings.teams ?? 0) > 0 && state?.player(meId)?.team != nil
+    /// Team chat exists when teams are on and that seat is actually on one.
+    /// Asked per seat because a pass & play guest can sit on a team the
+    /// primary player is not.
+    func hasTeamChat(for seat: String) -> Bool {
+        (state?.settings.teams ?? 0) > 0 && state?.player(seat)?.team != nil
     }
     func rematch() { emit("rematch") }
     func refreshAdsConfig() {
@@ -873,18 +942,7 @@ final class GameStore: ObservableObject {
         guard let url = serverURL, let roomId else { return }
         let number = guests.count + 2
         let guestToken = "\(token)_p\(number)"
-        let s = SocketIOClient()
-        s.onStatus = { [weak self] status in
-            Task { @MainActor in
-                guard status == .connected else { return }
-                s.emit("join", [[
-                    "roomId": roomId,
-                    "token": guestToken,
-                    "name": "Player \(number)",
-                    "flag": "",
-                ]])
-            }
-        }
+        let s = makeGuestSocket(token: guestToken, number: number, roomId: roomId)
         s.connect(to: url)
         guests.append(LocalGuest(token: guestToken, number: number, socket: s))
         lastGuests = guests.count
@@ -913,11 +971,15 @@ final class GameStore: ObservableObject {
         return idxs.allSatisfy { state.owner(of: $0)?.owner == playerId }
     }
 
+    // The three rule mirrors below key on "a seat of OURS owns it", not on
+    // whose turn it is: the server allows off-turn management, and on a pass &
+    // play phone a guest's deeds must not go dumb whenever the dice move on.
+
     func canBuild(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              own.owner == activeId, t.type == "property", !own.isMortgaged,
+              localIds.contains(own.owner), t.type == "property", !own.isMortgaged,
               let group = t.group, let idxs = state.map.groups?[group] else { return false }
-        guard ownsFullGroup(activeId, group: group) else { return false }
+        guard ownsFullGroup(own.owner, group: group) else { return false }
         guard !idxs.contains(where: { state.owner(of: $0)?.isMortgaged == true }) else { return false }
         guard own.houseCount < 5 else { return false }
         if state.settings.evenBuild ?? true {
@@ -929,7 +991,7 @@ final class GameStore: ObservableObject {
 
     func canSellHouse(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              own.owner == activeId, own.houseCount > 0 else { return false }
+              localIds.contains(own.owner), own.houseCount > 0 else { return false }
         if state.settings.evenBuild ?? true, let group = t.group, let idxs = state.map.groups?[group] {
             let maxHouses = idxs.map { state.owner(of: $0)?.houseCount ?? 0 }.max() ?? 0
             if own.houseCount < maxHouses { return false }
@@ -940,7 +1002,7 @@ final class GameStore: ObservableObject {
     func canMortgage(_ i: Int) -> Bool {
         guard let state, state.settings.mortgage ?? true,
               let t = tile(i), let own = state.owner(of: i),
-              own.owner == activeId, !own.isMortgaged else { return false }
+              localIds.contains(own.owner), !own.isMortgaged else { return false }
         if t.type == "property", let group = t.group, let idxs = state.map.groups?[group] {
             if idxs.contains(where: { (state.owner(of: $0)?.houseCount ?? 0) > 0 }) { return false }
         }

@@ -260,7 +260,11 @@ struct DeedSheet: View {
     /// move the rules refuse greys out instead of disappearing under a thumb.
     @ViewBuilder
     private func actionButtons(_ tile: TileData, _ P: Palette) -> some View {
-        if let own = store.state?.owner(of: tileIndex), own.owner == store.activeId {
+        // Keyed to "a seat of OURS owns it", not to the turn: the server lets
+        // deeds be managed off-turn, and on a pass & play phone a guest's
+        // streets used to go dumb whenever the dice moved on. GameStore emits
+        // each action from the owning seat's own socket.
+        if let own = store.state?.owner(of: tileIndex), store.isLocal(own.owner) {
             let houses = own.houseCount
             let houseCost = tile.houseCost ?? 0
             let price = tile.price ?? 0
@@ -322,9 +326,11 @@ struct DeedSheet: View {
         if own.isMortgaged { return "Unmortgage this street before you can build." }
         if own.houseCount >= 5 { return "A hotel is as far as this street goes." }
         guard let group = tile.group, let idxs = store.state?.map.groups?[group] else { return nil }
-        if !store.ownsFullGroup(store.activeId, group: group) {
+        // Counted for the deed's own seat — on a pass & play phone that can be
+        // a guest, and the tally has to be THEIR holdings, not the turn's.
+        if !store.ownsFullGroup(own.owner, group: group) {
             let name = store.groupInfo(for: tile).map { "\($0.flag) \($0.name)" } ?? "this set"
-            let held = idxs.filter { store.state?.owner(of: $0)?.owner == store.activeId }.count
+            let held = idxs.filter { store.state?.owner(of: $0)?.owner == own.owner }.count
             return "Own all of \(name) to build — you hold \(held) of \(idxs.count)."
         }
         if idxs.contains(where: { store.state?.owner(of: $0)?.isMortgaged == true }) {

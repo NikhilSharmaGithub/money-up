@@ -15,20 +15,48 @@ struct ChatLogSheet: View {
     @State private var tab: Int
     @State private var draft = ""
     @State private var channel = "all"      // "all" | "team"
+    /// Whoever picked up the composer by hand. Ignored the moment that seat
+    /// leaves the game, so a message can never go out wearing a ghost's name.
+    @State private var chosenSeat: String?
 
     init(initialTab: Int = 0) {
         self.initialTab = initialTab
         _tab = State(initialValue: initialTab)
     }
 
+    /// Every seat on this device still at the table, in seat order. Two or
+    /// more means a pass & play phone is talking, and the composer has to say
+    /// who — a guest's message used to go out wearing Player 1's name.
+    private var localSpeakers: [PlayerState] {
+        (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
+    }
+
+    /// The seat the composer speaks for: an explicit pick while that player is
+    /// still at the table, otherwise the device's own primary seat — unless
+    /// that seat is out and a guest still plays, in which case the player left
+    /// standing does the talking rather than a knocked-out name.
+    private var speakingSeat: String {
+        if let chosen = chosenSeat, localSpeakers.contains(where: { $0.id == chosen }) { return chosen }
+        if localSpeakers.isEmpty || localSpeakers.contains(where: { $0.id == store.meId }) {
+            return store.meId
+        }
+        return localSpeakers[0].id
+    }
+
     private var visibleChat: [ChatMessage] {
-        let all = store.state?.chat ?? []
-        guard store.hasTeamChat else { return all }
-        return channel == "team" ? all.filter(\.isTeam) : all.filter { !$0.isTeam }
+        // chatFeed folds in team lines only guest seats' sockets received, so
+        // the channels have to be cut per speaker here rather than trusting
+        // the server's per-viewer filter the way a one-seat phone can.
+        let all = store.chatFeed
+        guard store.hasTeamChat(for: speakingSeat), channel == "team" else {
+            return all.filter { !$0.isTeam }
+        }
+        let team = store.state?.player(speakingSeat)?.team
+        return all.filter { $0.isTeam && $0.team == team }
     }
 
     private var myTeam: TeamInfo? {
-        store.state?.player(store.meId)?.team.flatMap { store.state?.teamInfo?[safe: $0] }
+        store.state?.player(speakingSeat)?.team.flatMap { store.state?.teamInfo?[safe: $0] }
     }
 
     var body: some View {
@@ -62,7 +90,7 @@ struct ChatLogSheet: View {
 
     private func chatTab(_ P: Palette) -> some View {
         VStack(spacing: 0) {
-            if store.hasTeamChat {
+            if store.hasTeamChat(for: speakingSeat) {
                 channelSwitch(P)
             }
 
@@ -101,7 +129,29 @@ struct ChatLogSheet: View {
             }
 
             emoteRow(P)
+            seatSwitcher(P)
             inputBar(P)
+        }
+        // A pick can't outlive its team channel: handing the composer to a
+        // seat with no team while "Team only" is up would show an empty room.
+        .onChange(of: speakingSeat) { _, seat in
+            if channel == "team", !store.hasTeamChat(for: seat) { channel = "all" }
+        }
+    }
+
+    /// One chip per local seat, shown only when the phone holds more than
+    /// one — tap a chip and everything below it (reactions, text, send) speaks
+    /// as that player. The same row the auction paddle wears.
+    @ViewBuilder
+    private func seatSwitcher(_ P: Palette) -> some View {
+        let speakers = localSpeakers
+        if speakers.count > 1 {
+            HStack(spacing: 4) {
+                SeatChipRow(seats: speakers, selected: speakingSeat) { chosenSeat = $0 }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
         }
     }
 
@@ -200,7 +250,7 @@ struct ChatLogSheet: View {
 
     private func emoteButton(_ emote: String, size: CGFloat, tint: Color) -> some View {
         Button {
-            store.sendChat(emote, channel: channel)
+            store.sendChat(emote, channel: channel, as: speakingSeat)
             Haptics.tap()
         } label: {
             Text(emote)
@@ -237,7 +287,7 @@ struct ChatLogSheet: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.sendChat(text, channel: channel)
+        store.sendChat(text, channel: channel, as: speakingSeat)
         draft = ""
     }
 
@@ -393,42 +443,9 @@ struct AuctionBox: View {
     private func seatSwitcher(_ P: Palette) -> some View {
         let racers = localRacers
         if racers.count > 1 {
-            HStack(spacing: 4) {
-                ForEach(racers, id: \.self) { seat in
-                    if let p = store.state?.player(seat) {
-                        seatChip(p, selected: seat == biddingSeat, P)
-                    }
-                }
-            }
+            SeatChipRow(seats: racers.compactMap { store.state?.player($0) },
+                        selected: biddingSeat) { chosenSeat = $0 }
         }
-    }
-
-    private func seatChip(_ p: PlayerState, selected: Bool, _ P: Palette) -> some View {
-        Button {
-            chosenSeat = p.id
-            Haptics.tap()
-        } label: {
-            HStack(spacing: 3) {
-                ZStack {
-                    Circle().fill(Color(css: p.color))
-                    Text(String(p.name.prefix(1)).uppercased())
-                        .font(.system(size: 8, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 13, height: 13)
-                Text(p.name)
-                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(selected ? P.ink : P.ink3)
-                    .lineLimit(1)
-            }
-            .padding(.vertical, 3)
-            .padding(.horizontal, 6)
-            .background(selected ? P.sunken : .clear, in: Capsule())
-            .overlay(
-                Capsule().stroke(selected ? Color(css: p.color) : P.rule, lineWidth: selected ? 1.5 : 1)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     /// No deadline, no countdown: an auction at a table with nobody to wait
@@ -507,6 +524,57 @@ struct AuctionBox: View {
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(P.ink3)
         }
+    }
+}
+
+// MARK: - pass & play seat chips
+
+/// One compact chip per local seat. The auction paddle and the chat composer
+/// wear this exact row, so picking who a pass & play phone speaks for reads
+/// the same everywhere it comes up.
+private struct SeatChipRow: View {
+    let seats: [PlayerState]
+    /// The seat currently being spoken for — its chip draws filled.
+    let selected: String?
+    let choose: (String) -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        HStack(spacing: 4) {
+            ForEach(seats) { p in
+                chip(p, selected: p.id == selected, P)
+            }
+        }
+    }
+
+    private func chip(_ p: PlayerState, selected: Bool, _ P: Palette) -> some View {
+        Button {
+            choose(p.id)
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 3) {
+                ZStack {
+                    Circle().fill(Color(css: p.color))
+                    Text(String(p.name.prefix(1)).uppercased())
+                        .font(.system(size: 8, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 13, height: 13)
+                Text(p.name)
+                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(selected ? P.ink : P.ink3)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .background(selected ? P.sunken : .clear, in: Capsule())
+            .overlay(
+                Capsule().stroke(selected ? Color(css: p.color) : P.rule, lineWidth: selected ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
