@@ -723,7 +723,8 @@ function broadcast(room) {
   }
 }
 
-// Reap idle rooms every 10 minutes.
+// Reap idle rooms every couple of minutes — bots playing to an empty
+// theatre burn a timer a second for nobody.
 setInterval(() => {
   for (const [id, room] of rooms) {
     const live = socketsOf.get(id)?.size || 0;
@@ -743,7 +744,7 @@ setInterval(() => {
       seatsOf.delete(id);
     }
   }
-}, 10 * 60 * 1000);
+}, 2 * 60 * 1000);
 
 io.on('connection', (socket) => {
   let room = null;
