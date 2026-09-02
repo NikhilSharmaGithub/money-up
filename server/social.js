@@ -186,8 +186,13 @@ const publicView = (p) => ({
 
 // ------------------------------------------------------------ store wallet --
 export function walletOf(token) {
-  const p = profileFor(token);
-  if (!p) return null;
+  // Reading a wallet must not mint one: every page load asks, and so does
+  // every crawler that executes our JS. The profile is born the first time
+  // the visitor actually DOES something — joins a table, sets a name, buys.
+  if (!token) return null;
+  const p = profiles.get(token);
+  if (!p) return { coins: 0, owned: [], equipped: {}, karma: KARMA_MAX };
+  profileFor(token);   // it exists — freshen seen/migrations as before
   return { coins: p.coins, owned: p.owned, equipped: p.equipped, karma: p.karma };
 }
 
@@ -498,8 +503,12 @@ export function detachLogin(token) {
 
 /** Who this device is, for the profile chip: sign-in state included. */
 export function meView(token) {
+  // Same read-only rule as walletOf — the profile chip asks on every visit.
+  if (!token) return null;
+  if (!profiles.get(token)) {
+    return { code: '', name: '', flag: '', coins: 0, karma: KARMA_MAX, provider: null, email: '', picture: '' };
+  }
   const p = profileFor(token);
-  if (!p) return null;
   const stored = profiles.get(token);
   return {
     code: stored.code,

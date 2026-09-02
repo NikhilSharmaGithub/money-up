@@ -350,6 +350,9 @@ function recordTransitions(room) {
       map: room.map.name,
       players: room.players.map((p) => p.name),
       winner: room.winner?.name || null,
+      // The lobby illusion stops at this desk: the owner sees which winners
+      // were house players.
+      winnerIsBot: !!room.winner?.isBot,
       winningTeam: room.winningTeam ?? null,
       turns: room.turnCount || 0,
       at: Date.now(),

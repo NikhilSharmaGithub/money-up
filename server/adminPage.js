@@ -857,7 +857,7 @@ export const adminPageHTML = `<!doctype html>
     (state.data.recentGames || []).forEach(function (g) {
       if (!g.at) return;
       var txt = g.winner
-        ? '<b>' + esc(g.winner) + '</b> won on ' + esc(g.map) + ' <span class="dim">· ' + esc(g.roomId) + ' · ' + fmtNum(g.turns) + ' turns</span>'
+        ? '<b>' + esc(g.winner) + '</b>' + (g.winnerIsBot ? ' <span class="dim">(house)</span>' : '') + ' won on ' + esc(g.map) + ' <span class="dim">· ' + esc(g.roomId) + ' · ' + fmtNum(g.turns) + ' turns</span>'
         : 'Game ended on ' + esc(g.map) + ' <span class="dim">· ' + esc(g.roomId) + '</span>';
       evts.push({ at: g.at, kind: 'game', html: txt });
     });
@@ -1115,7 +1115,7 @@ export const adminPageHTML = `<!doctype html>
     var html = '<tr><th>when</th><th>room</th><th>map</th><th>winner</th><th>players</th><th>turns</th></tr>';
     games.slice(0, 100).forEach(function (g) {
       html += '<tr><td>' + fmtWhen(g.at) + '</td><td class="mono">' + esc(g.roomId) + '</td>' +
-        '<td>' + esc(g.map) + '</td><td class="ok">' + esc(g.winner || '—') + '</td>' +
+        '<td>' + esc(g.map) + '</td><td class="ok">' + esc(g.winner || '—') + (g.winnerIsBot ? ' <span class="dim">(house)</span>' : '') + '</td>' +
         '<td>' + esc((g.players || []).join(', ')) + '</td><td>' + fmtNum(g.turns) + '</td></tr>';
     });
     if (!games.length) html += '<tr><td colspan="6" class="dim">No finished games yet</td></tr>';
