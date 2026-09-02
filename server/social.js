@@ -138,7 +138,7 @@ export function profileFor(token, { name, flag } = {}) {
     // Vanishingly unlikely, but never hand two people the same code.
     let salt = 0;
     while (byCode.has(code) && byCode.get(code) !== token) code = codeFor(token + ':' + ++salt);
-    p = { token, code, name: '', flag: '', friends: [], seen: Date.now() };
+    p = { token, code, name: '', flag: '', friends: [], seen: Date.now(), created: Date.now() };
     profiles.set(token, p);
     byCode.set(code, token);
   }
@@ -154,6 +154,9 @@ export function profileFor(token, { name, flag } = {}) {
   // Karma is a politeness score: everyone starts full, walking out on a live
   // game or letting the clock run out costs a point.
   p.karma ??= KARMA_MAX;
+  // Profiles older than this field get their last sighting as a birthdate —
+  // wrong, but wrong in the least misleading direction available.
+  p.created ??= p.seen || Date.now();
   // The coin economy was rescaled 50x when paid packs arrived; old wallets
   // are converted once so nobody's balance silently shrinks in value.
   if (p.econ !== ECON_VERSION) {
@@ -227,6 +230,28 @@ export function awardCoins(token, amount) {
 }
 
 /**
+ * The same payout, written down. awardCoins predates the ledger and leaves no
+ * trace; wins routed through here get a zero-dollar entry, so the economy
+ * panel can say where every coin came from instead of guessing.
+ */
+export function awardWin(token, amount, note) {
+  const coins = Math.floor(Number(amount) || 0);
+  const balance = awardCoins(token, coins);
+  if (balance == null) return null;
+  appendLedger({
+    at: Date.now(),
+    provider: 'win',
+    packId: null,
+    usd: 0,
+    coins,
+    token,
+    txn: `win:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    note: String(note || '').slice(0, 140),
+  });
+  return balance;
+}
+
+/**
  * An operator grant from the admin dashboard: resolve the public friend code
  * back to a wallet, pay it through awardCoins, and record the grant in the
  * same ledger real purchases use — provider 'admin', zero dollars, reason
@@ -253,6 +278,25 @@ export function adminCredit(rawCode, amount, reason) {
   return { ok: true, code, name: p?.name || '', coins: balance };
 }
 
+/** The operator's thumb on the politeness scale — set outright, 0 to 100. */
+export function setKarma(rawCode, value) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  const token = byCode.get(code);
+  if (!token) return { error: 'No player with that code' };
+  const v = Math.round(Number(value));
+  if (!Number.isFinite(v) || v < 0 || v > KARMA_MAX) return { error: `Karma is 0-${KARMA_MAX}` };
+  const p = profiles.get(token);
+  p.karma = v;
+  save();
+  return { ok: true, code, name: p.name || '', karma: v };
+}
+
+/** Resolve a public code back to its device token — never sent to a browser. */
+export const tokenForCode = (rawCode) => byCode.get(String(rawCode || '').trim().toUpperCase()) || null;
+
+/** And the other direction, for stamping server objects with a public name. */
+export const codeForToken = (token) => profiles.get(token)?.code || null;
+
 export function buyItem(token, item) {
   const p = profileFor(token);
   if (!p) return { error: 'Unknown player' };
@@ -273,6 +317,63 @@ export function equipItem(token, slot, itemId) {
   else delete p.equipped[slot];
   save();
   return { ok: true, equipped: p.equipped };
+}
+
+// -------------------------------------------------------------------- bans --
+// A ban sticks to the device token, not the name on it — renaming doesn't
+// help. Clearing the browser does; this is a lock on the door, not a fortress.
+const BANS_STORE = path.join(DATA_DIR, 'bans.json');
+/** @type {Map<string, {token:string, code:string, name:string, reason:string, at:number}>} */
+const bans = new Map();
+
+function loadBans() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BANS_STORE, 'utf8'));
+    for (const b of raw || []) bans.set(b.token, b);
+    if (bans.size) console.log(`  bans: restored ${bans.size}`);
+  } catch {
+    // nobody banned yet
+  }
+}
+
+function saveBans() {
+  try {
+    fs.mkdirSync(path.dirname(BANS_STORE), { recursive: true });
+    fs.writeFileSync(BANS_STORE, JSON.stringify([...bans.values()]));
+  } catch (err) {
+    console.warn('bans: could not persist —', err.message);
+  }
+}
+
+export const isBanned = (token) => bans.has(token);
+
+export function banByCode(rawCode, reason) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  const token = byCode.get(code);
+  if (!token) return { error: 'No player with that code' };
+  if (bans.has(token)) return { error: 'Already banned' };
+  const p = profiles.get(token);
+  bans.set(token, { token, code, name: p?.name || '', reason: String(reason || '').slice(0, 140), at: Date.now() });
+  saveBans();
+  return { ok: true, code, name: p?.name || '' };
+}
+
+export function unbanByCode(rawCode) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  for (const [token, b] of bans) {
+    if (b.code !== code) continue;
+    bans.delete(token);
+    saveBans();
+    return { ok: true, code };
+  }
+  return { error: 'Not on the banned list' };
+}
+
+/** The list as the dashboard sees it — tokens withheld, newest first. */
+export function bansView() {
+  return [...bans.values()]
+    .map(({ token, ...b }) => b)
+    .sort((a, b) => b.at - a.at);
 }
 
 // ------------------------------------------------------------ friend chat --
@@ -363,6 +464,8 @@ export function allProfiles() {
       coins: p.coins ?? 0, karma: p.karma ?? KARMA_MAX,
       roomId: at?.roomId || null, status: at?.status || 'offline',
       login: p.login || null, email: p.email || null,
+      seen: p.seen || null, created: p.created || null,
+      banned: bans.has(p.token),
     };
   });
 }
@@ -420,5 +523,26 @@ export function setPresence(token, roomId, status = 'lobby') {
 
 export const clearPresence = (token) => presence.delete(token);
 
+/** How many of each store item are owned across every wallet — the burn side. */
+export function ownedTally() {
+  const tally = {};
+  for (const p of profiles.values()) {
+    for (const id of p.owned || []) tally[id] = (tally[id] || 0) + 1;
+  }
+  return tally;
+}
+
+/** What this module keeps on disk, and when it last got there. */
+export function dataFiles() {
+  const stat = (file) => {
+    try {
+      const s = fs.statSync(file);
+      return { size: s.size, savedAt: s.mtimeMs };
+    } catch { return null; }
+  };
+  return { dir: DATA_DIR, social: stat(STORE), ledger: stat(LEDGER_STORE), bans: stat(BANS_STORE) };
+}
+
 load();
 loadLedger();
+loadBans();

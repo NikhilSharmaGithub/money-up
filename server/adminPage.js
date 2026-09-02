@@ -1,21 +1,29 @@
 // The master admin dashboard — one self-contained page, no external assets.
 //
 // Served by GET /admin (key-guarded) from index.js. Everything it shows comes
-// from /api/admin/data, polled every five seconds; the two actions POST to
-// /api/admin/credit and /api/admin/close-room with the key in the body.
+// from /api/admin/data, polled every five seconds; every action POSTs to an
+// /api/admin/* route with the key in the body, and every one of those POSTs
+// lands in the audit log the Moderation section shows.
+//
+// The page is an operations desk laid out as eight sections behind a fixed
+// sidebar — Overview, Revenue, Players, Tables, Games, Economy, Moderation,
+// System — each deep-linkable via location.hash, so /admin?key=K#players goes
+// straight to the player table.
 //
 // House rules the page follows:
-//   - every user-controlled string (names, flags, emails, chat-adjacent text)
-//     goes through esc() before touching innerHTML;
-//   - re-renders replace table bodies only, never the inputs, so the search
-//     box, sort choice, expanded room and scroll positions all survive the
-//     five-second refresh;
-//   - charts are hand-drawn SVG, no libraries;
+//   - every user-controlled string (names, flags, emails, reasons, broadcast
+//     text) goes through esc() before touching innerHTML;
+//   - re-renders replace table bodies only, never the standing inputs, and
+//     the inputs that DO live inside a re-rendered drawer are snapshotted and
+//     restored around the swap — search, sort, scroll, the open drawer, the
+//     active section and half-typed text all survive the five-second refresh;
+//   - charts are hand-drawn SVG or plain divs, no libraries;
 //   - no emoji in the chrome — bots are marked "(bot)" in plain text.
 //
 // NOTE for editors: this whole file is one template literal. Keep backticks,
 // backslashes and the ${ sequence out of the page source — client-side JS
-// here uses string concatenation only, on purpose.
+// here uses string concatenation only, on purpose (String.fromCharCode(10)
+// stands in for the newline escape in the CSV code).
 
 export const adminPageHTML = `<!doctype html>
 <html lang="en">
@@ -29,24 +37,51 @@ export const adminPageHTML = `<!doctype html>
   * { box-sizing: border-box; }
   html { color-scheme: dark; }
   body {
-    margin: 0; padding: 22px clamp(14px, 3vw, 36px) 60px;
+    margin: 0; padding: 22px clamp(14px, 3vw, 36px) 60px; padding-left: 232px;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     color: #efeadd; background-color: #0b120e; min-height: 100vh;
     background-image:
       radial-gradient(1100px 520px at 15% -8%, rgba(38, 84, 58, .55), transparent 60%),
       radial-gradient(900px 420px at 95% 0%, rgba(227, 169, 60, .08), transparent 55%);
   }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-  h1 { font-size: 21px; margin: 0; letter-spacing: .2px; }
-  h1 span { color: #e3a93c; font-weight: 600; }
-  .status { font-size: 12px; color: #93a396; }
-  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #4fd98b; margin-right: 6px; vertical-align: 1px; }
-  .status.err .dot { background: #e06c5f; }
   h2 { font-size: 12px; margin: 0 0 12px; color: #a9b4a6; text-transform: uppercase; letter-spacing: 1.4px; font-weight: 600; }
   h2 .count { color: #e3a93c; margin-left: 6px; letter-spacing: normal; text-transform: none; }
   h3 { font-size: 13px; margin: 0 0 10px; color: #cfd8cb; font-weight: 600; }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  /* ------------------------------------------------------------ sidebar -- */
+  aside {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 208px; z-index: 5;
+    padding: 20px 14px 16px; display: flex; flex-direction: column; gap: 3px;
+    background: linear-gradient(180deg, #101a13, #0b120e);
+    border-right: 1px solid #1f2f26; overflow-y: auto;
+  }
+  aside .brand { font-size: 16px; font-weight: 700; margin: 0 8px 16px; letter-spacing: .2px; }
+  aside .brand span { display: block; color: #e3a93c; font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; margin-top: 2px; }
+  aside a { color: #a9b4a6; text-decoration: none; font-size: 13px; padding: 8px 11px; border-radius: 9px; border: 1px solid transparent; }
+  aside a:hover { color: #efeadd; background: rgba(227, 169, 60, .06); }
+  aside a.active { color: #e3a93c; background: rgba(227, 169, 60, .1); border-color: rgba(227, 169, 60, .25); font-weight: 600; }
+  aside .spacer { flex: 1; }
+  .status { font-size: 11px; color: #93a396; padding: 0 8px; line-height: 1.5; }
+  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #4fd98b; margin-right: 6px; vertical-align: 1px; }
+  .status.err .dot { background: #e06c5f; }
+  @media (max-width: 820px) {
+    body { padding-left: clamp(14px, 3vw, 36px); padding-top: 96px; }
+    aside { position: fixed; top: 0; left: 0; right: 0; bottom: auto; width: auto; flex-direction: row; align-items: center; overflow-x: auto; padding: 10px 12px; border-right: none; border-bottom: 1px solid #1f2f26; }
+    aside .brand { display: none; }
+    aside a { white-space: nowrap; }
+    aside .status { display: none; }
+  }
+
+  /* ------------------------------------------------------------- panels -- */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .alert { border-radius: 12px; padding: 11px 14px; margin-bottom: 10px; font-size: 13px; border: 1px solid; line-height: 1.45; }
+  .alert.red { background: rgba(224, 108, 95, .1); border-color: #6b3a31; color: #f0b9ae; }
+  .alert.amber { background: rgba(227, 169, 60, .09); border-color: #6b5426; color: #e9c67f; }
+  .alert b { font-weight: 700; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .tile { background: linear-gradient(180deg, #16221b, #121b15); border: 1px solid #263a2e; border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 3px; }
   .tile b { font-size: 24px; color: #e3a93c; font-weight: 700; letter-spacing: .3px; }
   .tile span { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; }
@@ -64,13 +99,19 @@ export const adminPageHTML = `<!doctype html>
   .scroll { overflow: auto; border: 1px solid #1f2f26; border-radius: 10px; }
   tr.row:hover td { background: rgba(227, 169, 60, .05); cursor: pointer; }
   tr.open td { background: rgba(227, 169, 60, .07); }
-  .detail-box { background: #0e1712; border: 1px solid #24382c; border-radius: 10px; padding: 12px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+  .detail-box { background: #0e1712; border: 1px solid #24382c; border-radius: 10px; padding: 14px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
   .detail-box table th { position: static; }
+  .detail-box .inner-scroll { max-height: 200px; overflow: auto; border: 1px solid #1f2f26; border-radius: 8px; width: 100%; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 18px; width: 100%; }
+  .facts b { display: block; font-size: 13px; color: #efeadd; font-weight: 600; word-break: break-word; }
+  .facts span { display: block; font-size: 10px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
 
   .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
   .pill.ok { background: rgba(79, 217, 139, .12); color: #4fd98b; }
   .pill.warn { background: rgba(227, 169, 60, .14); color: #e3a93c; }
   .pill.dim { background: rgba(150, 160, 150, .12); color: #93a396; }
+  .pill.bad { background: rgba(224, 108, 95, .14); color: #e88a7d; }
   .bot { color: #93a396; font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .dim { color: #93a396; }
@@ -78,9 +119,9 @@ export const adminPageHTML = `<!doctype html>
   .ok { color: #4fd98b; }
   .hint { font-size: 12px; color: #93a396; margin: -6px 0 10px; }
   .caption { font-size: 12px; color: #93a396; margin-top: 8px; }
-  .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: #b8c4b4; }
+  .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: #b8c4b4; flex-wrap: wrap; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
-  .idsplit { display: flex; gap: 26px; margin-top: 14px; }
+  .idsplit { display: flex; gap: 26px; margin-top: 14px; flex-wrap: wrap; }
   .idsplit b { display: block; font-size: 20px; color: #efeadd; }
   .idsplit span { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; }
 
@@ -88,99 +129,230 @@ export const adminPageHTML = `<!doctype html>
   .axis { fill: #7d8b7f; font-size: 10px; }
   .empty { fill: #7d8b7f; font-size: 13px; }
 
-  input { background: #0d1511; border: 1px solid #2a4033; color: #efeadd; border-radius: 10px; padding: 9px 12px; font: inherit; width: 100%; }
-  input:focus { outline: none; border-color: #e3a93c; }
-  #search { max-width: 420px; margin-bottom: 12px; }
+  .hbar { display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 12px; }
+  .hbar .lbl { width: 130px; color: #b8c4b4; text-align: right; flex: none; }
+  .hbar .track { flex: 1; background: #0d1511; border: 1px solid #1f2f26; border-radius: 6px; height: 16px; overflow: hidden; }
+  .hbar .fill { height: 100%; border-radius: 5px; min-width: 2px; }
+  .hbar .val { width: 170px; color: #cfd8cb; flex: none; }
+
+  .stack { display: flex; height: 26px; border-radius: 8px; overflow: hidden; border: 1px solid #1f2f26; background: #0d1511; }
+  .stack i { display: block; height: 100%; }
+
+  input, textarea { background: #0d1511; border: 1px solid #2a4033; color: #efeadd; border-radius: 10px; padding: 9px 12px; font: inherit; width: 100%; }
+  input:focus, textarea:focus { outline: none; border-color: #e3a93c; }
+  #search { max-width: 420px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
   .field { margin-bottom: 10px; }
   .field label { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 4px; }
   .btn { background: #e3a93c; color: #171207; border: none; border-radius: 10px; padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer; }
   .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: #e3a93c; border: 1px solid rgba(227, 169, 60, .4); font-weight: 600; }
+  .btn.ghost:hover { background: rgba(227, 169, 60, .08); filter: none; }
   .danger { background: #3a1f1b; color: #f0b9ae; border: 1px solid #6b3a31; border-radius: 10px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .danger:hover { background: #4a2620; }
+  .btn.sm, .danger.sm { padding: 5px 11px; font-size: 12px; }
   .msg { font-size: 12px; margin-top: 10px; min-height: 16px; }
   .msg.ok { color: #4fd98b; }
   .msg.err { color: #e06c5f; }
   .divider { border: none; border-top: 1px solid #1f2f26; margin: 16px 0; }
+  .mini-forms { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; width: 100%; }
+  .mini { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .mini .field { margin-bottom: 0; }
+  .mini input { width: 120px; }
+  .mini input.wide { width: 190px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>MoneyMove <span>Master Admin</span></h1>
+<aside id="nav">
+  <div class="brand">MoneyMove<span>Master Admin</span></div>
+  <a href="#overview">Overview</a>
+  <a href="#revenue">Revenue</a>
+  <a href="#players">Players</a>
+  <a href="#tables">Tables</a>
+  <a href="#games">Games</a>
+  <a href="#economy">Economy</a>
+  <a href="#moderation">Moderation</a>
+  <a href="#system">System</a>
+  <div class="spacer"></div>
   <div id="status" class="status"></div>
-</header>
+</aside>
 <main>
-  <section class="tiles" id="tiles"></section>
 
-  <section class="card">
-    <h2>Revenue — last 30 days</h2>
-    <div id="revchart" class="chart"></div>
-    <div class="legend">
-      <span><i style="background:#7ba0f2"></i>Stripe</span>
-      <span><i style="background:#b9c7bd"></i>Apple</span>
-      <span><i style="background:#e3a93c"></i>Other</span>
-    </div>
-    <div id="revcaption" class="caption"></div>
-    <hr class="divider">
-    <h3>Purchases</h3>
-    <div class="scroll" style="max-height:340px"><table><tbody id="purchases"></tbody></table></div>
-  </section>
-
-  <section class="card">
-    <h2>Live rooms <span class="count" id="roomcount"></span></h2>
-    <p class="hint">Click a room to inspect its players or close it. Playing tables sort first.</p>
-    <div class="scroll" style="max-height:440px"><table><tbody id="roomsT"></tbody></table></div>
-  </section>
-
-  <section class="cards">
-    <div class="card" style="flex:1 1 260px;max-width:420px">
-      <h2>Games per day</h2>
-      <div id="sparkline" class="chart"></div>
-      <div id="sparkcaption" class="caption"></div>
-    </div>
-    <div class="card" style="flex:2 1 420px">
-      <h2>Recent games</h2>
-      <div class="scroll" style="max-height:320px"><table><tbody id="games"></tbody></table></div>
+  <section class="panel" id="sec-overview">
+    <div id="alerts"></div>
+    <section class="tiles" id="tiles"></section>
+    <div class="cards">
+      <div class="card" style="flex:1 1 300px">
+        <h2>Games per day</h2>
+        <div id="spark-games" class="chart"></div>
+        <div id="spark-games-cap" class="caption"></div>
+      </div>
+      <div class="card" style="flex:1 1 300px">
+        <h2>New players per day</h2>
+        <div id="spark-newp" class="chart"></div>
+        <div id="spark-newp-cap" class="caption"></div>
+      </div>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Players <span class="count" id="playercount"></span></h2>
-    <input id="search" type="search" placeholder="Filter by code, name, email or provider" autocomplete="off" spellcheck="false">
-    <div class="scroll" style="max-height:480px"><table><tbody id="playersT"></tbody></table></div>
+  <section class="panel" id="sec-revenue">
+    <section class="card">
+      <h2>Revenue — last 30 days</h2>
+      <div id="revchart" class="chart"></div>
+      <div class="legend">
+        <span><i style="background:#7ba0f2"></i>Stripe</span>
+        <span><i style="background:#b9c7bd"></i>Apple</span>
+        <span><i style="background:#e3a93c"></i>Other</span>
+      </div>
+      <div id="revcaption" class="caption"></div>
+    </section>
+    <div class="cards">
+      <div class="card">
+        <h2>Revenue by pack</h2>
+        <div id="bypack"></div>
+      </div>
+      <div class="card">
+        <h2>Paying players</h2>
+        <div class="idsplit" id="revstats"></div>
+        <div class="caption">ARPU is total ledger revenue over distinct buyers — everyone who ever paid, not just this month.</div>
+      </div>
+    </div>
+    <section class="card">
+      <h2>Purchases</h2>
+      <div class="toolbar"><button class="btn ghost sm" id="csv-ledger" type="button">Export ledger CSV</button></div>
+      <div class="scroll" style="max-height:380px"><table><tbody id="purchases"></tbody></table></div>
+    </section>
   </section>
 
-  <section class="cards">
-    <div class="card">
-      <h2>Top wallets</h2>
-      <div class="scroll" style="max-height:380px"><table><tbody id="wallets"></tbody></table></div>
-    </div>
-    <div class="card">
-      <h2>Karma distribution</h2>
-      <div id="karma" class="chart"></div>
-      <div class="idsplit" id="identity"></div>
-    </div>
-    <div class="card">
-      <h2>Actions</h2>
-      <h3>Credit coins</h3>
+  <section class="panel" id="sec-players">
+    <section class="card">
+      <h2>Players <span class="count" id="playercount"></span></h2>
+      <p class="hint">Click a player to open their record — wallet, purchases, and the actions that apply to them.</p>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Filter by code, name, email or provider" autocomplete="off" spellcheck="false">
+        <button class="btn ghost sm" id="csv-players" type="button">Export players CSV</button>
+      </div>
+      <div class="scroll" style="max-height:520px"><table><tbody id="playersT"></tbody></table></div>
+    </section>
+    <section class="card" style="max-width:460px">
+      <h2>Credit coins</h2>
       <div class="field"><label for="c-code">Friend code</label><input id="c-code" autocomplete="off" spellcheck="false" placeholder="e.g. QK7M2X"></div>
       <div class="field"><label for="c-coins">Coins</label><input id="c-coins" type="number" min="1" step="1" placeholder="500"></div>
       <div class="field"><label for="c-reason">Reason</label><input id="c-reason" autocomplete="off" placeholder="Refund, prize, goodwill..."></div>
       <button class="btn" id="c-go">Credit coins</button>
       <div class="msg" id="actionmsg"></div>
-      <hr class="divider">
-      <h3>Close a room</h3>
+    </section>
+  </section>
+
+  <section class="panel" id="sec-tables">
+    <div class="cards">
+      <div class="card">
+        <h2>Seats right now</h2>
+        <div id="occupancy"></div>
+      </div>
+      <div class="card">
+        <h2>Quick-match queue</h2>
+        <p class="hint">Open quick lobbies and their fuse — the countdown to bots filling the empty chairs.</p>
+        <div class="scroll" style="max-height:220px"><table><tbody id="quickT"></tbody></table></div>
+      </div>
+    </div>
+    <section class="card">
+      <h2>Live rooms <span class="count" id="roomcount"></span></h2>
+      <p class="hint">Click a room to inspect its players, kick a seat or close it. Playing tables sort first.</p>
+      <div class="scroll" style="max-height:440px"><table><tbody id="roomsT"></tbody></table></div>
+    </section>
+    <section class="card" style="max-width:460px">
+      <h2>Close a room</h2>
       <div class="field"><label for="k-room">Room id</label><input id="k-room" autocomplete="off" spellcheck="false" placeholder="e.g. x7km2"></div>
       <button class="danger" id="k-go">Close room</button>
       <div class="msg" id="closemsg"></div>
+    </section>
+  </section>
+
+  <section class="panel" id="sec-games">
+    <section class="card">
+      <h2>Games per day — last 30</h2>
+      <div id="gameschart" class="chart"></div>
+      <div id="gamescaption" class="caption"></div>
+    </section>
+    <section class="card">
+      <h2>Recent games</h2>
+      <div class="scroll" style="max-height:420px"><table><tbody id="games"></tbody></table></div>
+    </section>
+  </section>
+
+  <section class="panel" id="sec-economy">
+    <section class="card">
+      <h2>Coin flows</h2>
+      <div id="flows"></div>
+      <div class="caption">Mints are read off the ledger — win payouts only started writing entries when this panel shipped, so older payouts are invisible here. Burn is the list price of every cosmetic currently sitting in a wallet.</div>
+    </section>
+    <div class="cards">
+      <div class="card">
+        <h2>Top wallets</h2>
+        <div class="scroll" style="max-height:380px"><table><tbody id="wallets"></tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>Karma distribution</h2>
+        <div id="karma" class="chart"></div>
+        <div class="idsplit" id="identity"></div>
+      </div>
     </div>
   </section>
+
+  <section class="panel" id="sec-moderation">
+    <div class="cards">
+      <div class="card">
+        <h2>Broadcast</h2>
+        <p class="hint">One line to every connected client, in and out of games, as the toast their UI already renders.</p>
+        <div class="field"><label for="b-msg">Message</label><input id="b-msg" autocomplete="off" maxlength="200" placeholder="Maintenance in 10 minutes — finish your turns"></div>
+        <button class="btn" id="b-go">Send to everyone</button>
+        <div class="msg" id="bmsg"></div>
+      </div>
+      <div class="card">
+        <h2>Ban a device</h2>
+        <p class="hint">Bans stick to the device token behind a friend code — renaming does not shake one off.</p>
+        <div class="field"><label for="m-code">Friend code</label><input id="m-code" autocomplete="off" spellcheck="false" placeholder="e.g. QK7M2X"></div>
+        <div class="field"><label for="m-reason">Reason</label><input id="m-reason" autocomplete="off" placeholder="Abuse, spam, chargeback..."></div>
+        <button class="danger" id="m-go">Ban this device</button>
+        <div class="msg" id="modmsg"></div>
+      </div>
+    </div>
+    <section class="card">
+      <h2>Banned devices <span class="count" id="bancount"></span></h2>
+      <div class="scroll" style="max-height:280px"><table><tbody id="bansT"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>Audit log <span class="count" id="auditcount"></span></h2>
+      <p class="hint">Every admin action this server has taken, newest first. The file survives restarts.</p>
+      <div class="scroll" style="max-height:420px"><table><tbody id="auditT"></tbody></table></div>
+    </section>
+  </section>
+
+  <section class="panel" id="sec-system">
+    <section class="tiles" id="systiles"></section>
+    <section class="card">
+      <h2>Persistence</h2>
+      <div id="persist"></div>
+    </section>
+    <section class="card">
+      <h2>Configuration</h2>
+      <div class="scroll"><table><tbody id="configT"></tbody></table></div>
+    </section>
+  </section>
+
 </main>
 <script>
 (function () {
   'use strict';
   var KEY = new URLSearchParams(location.search).get('key') || '';
-  var state = { data: null, search: '', sort: null, dir: -1, expanded: null, lastFetch: 0, error: false };
+  var state = {
+    data: null, search: '', sort: null, dir: -1,
+    expanded: null, expandedPlayer: null, drawerMsg: null,
+    lastFetch: 0, error: false,
+  };
   var DAY = 86400000;
+  var NL = String.fromCharCode(10);
 
   // ------------------------------------------------------------- helpers --
   function esc(v) {
@@ -192,6 +364,7 @@ export const adminPageHTML = `<!doctype html>
   function fmtUsd(n) { return '$' + (Math.round(Number(n || 0) * 100) / 100).toFixed(2); }
   function dateLabel(t) { return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
   function fmtWhen(t) {
+    if (!t) return '—';
     var d = new Date(t);
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
       d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -204,6 +377,20 @@ export const adminPageHTML = `<!doctype html>
     var h = Math.floor(m / 60);
     if (h < 48) return h + 'h ' + (m % 60) + 'm';
     return Math.floor(h / 24) + 'd';
+  }
+  function fmtBytes(n) {
+    if (n == null) return '—';
+    if (n < 1024) return fmtNum(n) + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+  function fmtUptime(sec) {
+    var s = Math.floor(sec || 0);
+    var d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm ' + (s % 60) + 's';
   }
   function dayStart(t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
   function last30Days() {
@@ -221,6 +408,32 @@ export const adminPageHTML = `<!doctype html>
     el.innerHTML = html;
     if (sc) { sc.scrollTop = top; sc.scrollLeft = left; }
   }
+  /**
+   * A render that rebuilds a region containing inputs: snapshot their values
+   * and the caret first, put everything back after. Half-typed text must
+   * survive the five-second refresh or the drawer is unusable.
+   */
+  function keepInputs(ids, renderFn) {
+    var saved = {}, i, el;
+    var active = document.activeElement;
+    var focusId = active && active.id && ids.indexOf(active.id) >= 0 ? active.id : null;
+    for (i = 0; i < ids.length; i++) {
+      el = document.getElementById(ids[i]);
+      if (el) saved[ids[i]] = el.value;
+    }
+    renderFn();
+    for (i = 0; i < ids.length; i++) {
+      el = document.getElementById(ids[i]);
+      if (el && saved[ids[i]] != null) el.value = saved[ids[i]];
+    }
+    if (focusId) {
+      el = document.getElementById(focusId);
+      if (el) {
+        el.focus();
+        try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* number inputs refuse */ }
+      }
+    }
+  }
   function post(url, body, cb) {
     body.key = KEY;
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -228,6 +441,60 @@ export const adminPageHTML = `<!doctype html>
       .then(cb)
       .catch(function () { cb({ error: 'Network error' }); });
   }
+  function csvText(rows) {
+    return rows.map(function (row) {
+      return row.map(function (v) {
+        var s = String(v == null ? '' : v);
+        var needs = s.indexOf('"') >= 0 || s.indexOf(',') >= 0 || s.indexOf(NL) >= 0;
+        return needs ? '"' + s.split('"').join('""') + '"' : s;
+      }).join(',');
+    }).join(NL);
+  }
+  function downloadCsv(name, rows) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csvText(rows)], { type: 'text/csv' }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  function iso(t) { return t ? new Date(t).toISOString() : ''; }
+  function sparkSvg(counts, color) {
+    var W = 320, H = 84, pad = 8;
+    var max = Math.max.apply(null, counts.concat([1]));
+    var pts = counts.map(function (c, i) {
+      var x = pad + i * (W - 2 * pad) / (counts.length - 1);
+      var y = H - pad - c * (H - 2 * pad) / max;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round"/></svg>';
+  }
+  function perDay(items, at) {
+    var days = last30Days();
+    var map = {};
+    days.forEach(function (d) { map[d] = 0; });
+    items.forEach(function (it) {
+      var t = at(it);
+      if (!t) return;
+      var d = dayStart(t);
+      if (map[d] != null) map[d]++;
+    });
+    return days.map(function (d) { return map[d]; });
+  }
+
+  // ------------------------------------------------------------ sections --
+  var SECTIONS = ['overview', 'revenue', 'players', 'tables', 'games', 'economy', 'moderation', 'system'];
+  function applySection() {
+    var sec = (location.hash || '').replace('#', '');
+    if (SECTIONS.indexOf(sec) < 0) sec = 'overview';
+    var i;
+    var panels = document.querySelectorAll('.panel');
+    for (i = 0; i < panels.length; i++) panels[i].classList.toggle('active', panels[i].id === 'sec-' + sec);
+    var links = document.querySelectorAll('#nav a');
+    for (i = 0; i < links.length; i++) links[i].classList.toggle('active', links[i].getAttribute('href') === '#' + sec);
+  }
+  window.addEventListener('hashchange', applySection);
 
   // -------------------------------------------------------------- render --
   function renderStatus() {
@@ -237,9 +504,26 @@ export const adminPageHTML = `<!doctype html>
       el.innerHTML = '<span class="dot"></span>connection lost — retrying';
     } else {
       el.className = 'status';
-      el.innerHTML = '<span class="dot"></span>live · refreshes every 5s · updated ' +
+      el.innerHTML = '<span class="dot"></span>live · refreshes every 5s<br>updated ' +
         new Date(state.lastFetch).toLocaleTimeString();
     }
+  }
+
+  function renderAlerts() {
+    var c = state.data.config || {};
+    var html = '';
+    if (!c.dataDirEnv) {
+      html += '<div class="alert red"><b>DATA_DIR is not set.</b> Wallets, the ledger, bans, stats and the audit log live in the repo folder and are wiped on the next deploy. Point DATA_DIR at a persistent disk.</div>';
+    }
+    if (c.adminKeyDefault) {
+      html += '<div class="alert red"><b>The admin key is still the default.</b> Anyone who reads the source can open this page — set ADMIN_KEY in the environment.</div>';
+    }
+    if (c.stripe && !c.stripeWebhook) {
+      html += '<div class="alert red"><b>STRIPE_WEBHOOK_SECRET is missing.</b> Card checkouts will complete at Stripe and never credit coins here — every web sale becomes a support ticket.</div>';
+    } else if (!c.stripe) {
+      html += '<div class="alert amber"><b>Stripe is not configured</b> — the web store cannot take card payments. Only App Store purchases can credit coins.</div>';
+    }
+    document.getElementById('alerts').innerHTML = html;
   }
 
   function tileHtml(v, label, sub) {
@@ -252,6 +536,9 @@ export const adminPageHTML = `<!doctype html>
     var r = state.data.revenue || {};
     swap('tiles',
       tileHtml(fmtUsd(r.total), 'revenue (ledger)', fmtUsd(r.last7d) + ' in the last 7 days') +
+      tileHtml(fmtNum(t.dau), 'active today', '') +
+      tileHtml(fmtNum(t.wau), 'active 7 days', '') +
+      tileHtml(fmtNum(t.mau), 'active 30 days', '') +
       tileHtml(fmtNum(t.gamesStarted), 'games started', '') +
       tileHtml(fmtNum(t.gamesEnded), 'games finished', '') +
       tileHtml(fmtNum(t.liveRooms), 'live rooms', '') +
@@ -263,6 +550,24 @@ export const adminPageHTML = `<!doctype html>
       ? 'Ledger since ' + fmtWhen(r.since) + ' — purchases made before then predate the ledger and are not counted here.'
       : 'The ledger is empty — it records purchases from today onward; anything bought earlier predates it.';
     document.getElementById('revcaption').textContent = cap;
+  }
+
+  function renderSparklines() {
+    var games = state.data.recentGames || [];
+    var gCounts = perDay(games, function (g) { return g.at; });
+    var gTotal = gCounts.reduce(function (a, b) { return a + b; }, 0);
+    document.getElementById('spark-games').innerHTML = sparkSvg(gCounts, '#e3a93c');
+    document.getElementById('spark-games-cap').textContent =
+      gTotal + ' of the ' + games.length + ' most recent finished games fell in the last 30 days (peak ' +
+      Math.max.apply(null, gCounts.concat([0])) + '/day).';
+
+    var profs = state.data.profiles || [];
+    var pCounts = perDay(profs, function (p) { return p.created; });
+    var pTotal = pCounts.reduce(function (a, b) { return a + b; }, 0);
+    document.getElementById('spark-newp').innerHTML = sparkSvg(pCounts, '#4fd98b');
+    document.getElementById('spark-newp-cap').textContent =
+      pTotal + ' new player' + (pTotal === 1 ? '' : 's') + ' in the last 30 days, of ' +
+      fmtNum(profs.length) + ' all-time. Profiles older than the birthdate field count as born when last seen.';
   }
 
   function renderRevenue() {
@@ -315,12 +620,38 @@ export const adminPageHTML = `<!doctype html>
     document.getElementById('revchart').innerHTML = svg;
   }
 
+  function hbar(label, value, max, color, valText) {
+    var pct = max > 0 ? Math.max(0.5, value / max * 100) : 0;
+    return '<div class="hbar"><span class="lbl">' + esc(label) + '</span>' +
+      '<span class="track"><span class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></span></span>' +
+      '<span class="val">' + valText + '</span></div>';
+  }
+
+  function renderByPack() {
+    var r = state.data.revenue || {};
+    var packs = r.byPack || [];
+    var max = 0;
+    packs.forEach(function (p) { if (p.usd > max) max = p.usd; });
+    var html = '';
+    packs.forEach(function (p) {
+      html += hbar(p.packId, p.usd, max, '#7ba0f2',
+        '<span class="gold">' + fmtUsd(p.usd) + '</span> <span class="dim">· ' + fmtNum(p.count) + ' sale' + (p.count === 1 ? '' : 's') + '</span>');
+    });
+    if (!packs.length) html = '<div class="dim" style="font-size:13px">No paid packs in the ledger yet.</div>';
+    document.getElementById('bypack').innerHTML = html;
+    document.getElementById('revstats').innerHTML =
+      '<div><b>' + fmtNum(r.buyers) + '</b><span>distinct buyers</span></div>' +
+      '<div><b>' + (r.arpu == null ? '—' : fmtUsd(r.arpu)) + '</b><span>ARPU</span></div>' +
+      '<div><b>' + fmtNum(r.purchases) + '</b><span>paid purchases</span></div>';
+  }
+
   function renderPurchases() {
     var led = (state.data.ledger || []).slice().reverse().slice(0, 200);
     var html = '<tr><th>when</th><th>provider</th><th>pack / reason</th><th>usd</th><th>coins</th><th>buyer</th></tr>';
     led.forEach(function (e) {
+      var pill = e.provider === 'admin' ? 'warn' : (e.provider === 'win' ? 'ok' : 'dim');
       html += '<tr><td>' + fmtWhen(e.at) + '</td>' +
-        '<td><span class="pill ' + (e.provider === 'admin' ? 'warn' : 'dim') + '">' + esc(e.provider) + '</span></td>' +
+        '<td><span class="pill ' + pill + '">' + esc(e.provider) + '</span></td>' +
         '<td>' + esc(e.packId || e.note || '—') + '</td>' +
         '<td class="gold">' + (e.usd > 0 ? fmtUsd(e.usd) : '—') + '</td>' +
         '<td>' + fmtNum(e.coins) + '</td>' +
@@ -353,19 +684,68 @@ export const adminPageHTML = `<!doctype html>
       if (state.expanded === r.id) {
         var rows = (r.players || []).map(function (p) {
           var st = p.bankrupt ? '<span class="dim">bankrupt</span>' : (p.connected ? '<span class="ok">connected</span>' : '<span class="dim">away</span>');
+          var kick = (!p.isBot && p.code)
+            ? '<button class="danger sm" data-kick="' + esc(p.code) + '" data-room="' + esc(r.id) + '">Kick</button>'
+            : '';
           return '<tr><td>' + esc(p.name) + (p.isBot ? ' <span class="bot">(bot)</span>' : '') + '</td>' +
+            '<td class="mono">' + esc(p.code || '—') + '</td>' +
             '<td>' + st + '</td>' +
             '<td>' + (p.money == null ? '—' : '$' + fmtNum(p.money)) + '</td>' +
-            '<td>' + (p.netWorth == null ? '—' : '$' + fmtNum(p.netWorth)) + '</td></tr>';
-        }).join('') || '<tr><td colspan="4" class="dim">Nobody seated</td></tr>';
+            '<td>' + (p.netWorth == null ? '—' : '$' + fmtNum(p.netWorth)) + '</td>' +
+            '<td>' + kick + '</td></tr>';
+        }).join('') || '<tr><td colspan="6" class="dim">Nobody seated</td></tr>';
         html += '<tr class="detail"><td colspan="7"><div class="detail-box">' +
-          '<table><tr><th>player</th><th>state</th><th>cash</th><th>net worth</th></tr>' + rows + '</table>' +
+          '<table><tr><th>player</th><th>code</th><th>state</th><th>cash</th><th>net worth</th><th></th></tr>' + rows + '</table>' +
           '<button class="danger" data-close="' + esc(r.id) + '">Close this room</button>' +
           '</div></td></tr>';
       }
     });
     if (!rooms.length) html += '<tr><td colspan="7" class="dim">No live rooms</td></tr>';
     swap('roomsT', html);
+  }
+
+  function renderQuick() {
+    if (!state.data) return;
+    var now = Date.now();
+    var qs = (state.data.rooms || []).filter(function (r) { return r.quick && r.status === 'lobby'; });
+    var html = '<tr><th>room</th><th>seats</th><th>humans</th><th>kick-off</th></tr>';
+    qs.forEach(function (r) {
+      var humans = (r.players || []).filter(function (p) { return !p.isBot; }).length;
+      var fuse = r.quickStartAt
+        ? (r.quickStartAt > now ? Math.ceil((r.quickStartAt - now) / 1000) + 's' : 'now')
+        : '<span class="dim">waiting</span>';
+      html += '<tr><td class="mono">' + esc(r.id) + '</td>' +
+        '<td>' + fmtNum((r.players || []).length) + ' / ' + fmtNum(r.maxPlayers) + '</td>' +
+        '<td>' + fmtNum(humans) + '</td>' +
+        '<td class="gold">' + fuse + '</td></tr>';
+    });
+    if (!qs.length) html += '<tr><td colspan="4" class="dim">Nobody is queueing right now</td></tr>';
+    swap('quickT', html);
+  }
+
+  function renderOccupancy() {
+    var rooms = (state.data.rooms || []).filter(function (r) { return r.status !== 'ended'; });
+    var humans = 0, bots = 0, seats = 0;
+    rooms.forEach(function (r) {
+      seats += r.maxPlayers || 0;
+      (r.players || []).forEach(function (p) { if (p.isBot) bots++; else humans++; });
+    });
+    var empty = Math.max(0, seats - humans - bots);
+    var total = Math.max(1, humans + bots + empty);
+    var seg = function (n, color) {
+      if (n <= 0) return '';
+      return '<i style="width:' + (n / total * 100).toFixed(1) + '%;background:' + color + '"></i>';
+    };
+    var html = seats
+      ? '<div class="stack">' + seg(humans, '#e3a93c') + seg(bots, '#5d7a66') + seg(empty, '#182219') + '</div>'
+      : '<div class="dim" style="font-size:13px">No open tables.</div>';
+    html += '<div class="legend">' +
+      '<span><i style="background:#e3a93c"></i>' + fmtNum(humans) + ' human' + (humans === 1 ? '' : 's') + '</span>' +
+      '<span><i style="background:#5d7a66"></i>' + fmtNum(bots) + ' bot' + (bots === 1 ? '' : 's') + '</span>' +
+      '<span><i style="background:#182219"></i>' + fmtNum(empty) + ' empty seat' + (empty === 1 ? '' : 's') + '</span></div>';
+    html += '<div class="caption">' + fmtNum(rooms.length) + ' open table' + (rooms.length === 1 ? '' : 's') +
+      ' — quick tables seed bots, so a bot-heavy bar means the queue is carrying the room count.</div>';
+    document.getElementById('occupancy').innerHTML = html;
   }
 
   function renderGames() {
@@ -380,23 +760,97 @@ export const adminPageHTML = `<!doctype html>
     swap('games', html);
 
     var days = last30Days();
-    var map = {};
-    days.forEach(function (d) { map[d] = 0; });
-    games.forEach(function (g) { var d = dayStart(g.at); if (map[d] != null) map[d]++; });
-    var counts = days.map(function (d) { return map[d]; });
+    var counts = perDay(games, function (g) { return g.at; });
     var max = Math.max.apply(null, counts.concat([1]));
-    var W = 320, H = 84, pad = 8;
-    var pts = counts.map(function (c, i) {
-      var x = pad + i * (W - 2 * pad) / 29;
-      var y = H - pad - c * (H - 2 * pad) / max;
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
+    var W = 860, H = 160, padB = 20, padT = 8;
+    var slot = W / 30, bw = slot * 0.66;
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '">';
+    counts.forEach(function (v, i) {
+      var x = i * slot + (slot - bw) / 2;
+      if (v > 0) {
+        var h = Math.max(2, v * (H - padB - padT) / max);
+        svg += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - h).toFixed(1) + '" width="' + bw.toFixed(1) +
+          '" height="' + h.toFixed(1) + '" rx="2" fill="#e3a93c"><title>' + dateLabel(days[i]) + ': ' + v +
+          ' game' + (v === 1 ? '' : 's') + '</title></rect>';
+      } else {
+        svg += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - 1) + '" width="' + bw.toFixed(1) + '" height="1" fill="#2a4033"/>';
+      }
+    });
+    [0, 15, 29].forEach(function (i) {
+      svg += '<text x="' + (i * slot + slot / 2).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="middle" class="axis">' + dateLabel(days[i]) + '</text>';
+    });
+    svg += '</svg>';
+    document.getElementById('gameschart').innerHTML = svg;
     var total = counts.reduce(function (a, b) { return a + b; }, 0);
-    document.getElementById('sparkline').innerHTML =
-      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
-      '<polyline points="' + pts + '" fill="none" stroke="#e3a93c" stroke-width="2" stroke-linejoin="round"/></svg>';
-    document.getElementById('sparkcaption').textContent =
-      total + ' of the ' + games.length + ' most recent finished games fell in the last 30 days (peak ' + max + '/day).';
+    document.getElementById('gamescaption').textContent =
+      total + ' finished in the last 30 days (peak ' + max + '/day). Only the ' + games.length + ' most recent games are kept.';
+  }
+
+  function playerByCode(code) {
+    var profs = state.data.profiles || [];
+    for (var i = 0; i < profs.length; i++) if (profs[i].code === code) return profs[i];
+    return null;
+  }
+
+  function fact(label, value, raw) {
+    return '<div><span>' + esc(label) + '</span><b>' + (raw ? value : esc(value)) + '</b></div>';
+  }
+
+  function drawerHtml(p) {
+    var html = '<tr class="pdetail"><td colspan="9"><div class="detail-box">';
+
+    html += '<div class="facts">' +
+      fact('code', p.code) +
+      fact('name', (p.name || '—') + (p.flag ? ' ' + p.flag : '')) +
+      fact('coins', fmtNum(p.coins)) +
+      fact('karma', fmtNum(p.karma)) +
+      fact('friends', fmtNum(p.friends)) +
+      fact('sign-in', p.login ? p.login.provider + (p.email ? ' · ' + p.email : '') : 'anonymous') +
+      fact('created', fmtWhen(p.created)) +
+      fact('last seen', fmtWhen(p.seen)) +
+      fact('room', p.roomId ? p.roomId + ' (' + p.status + ')' : 'not seated') +
+      fact('standing', p.banned ? '<span class="pill bad">banned</span>' : '<span class="pill ok">in good standing</span>', true) +
+      '</div>';
+
+    var buys = (state.data.ledger || []).filter(function (e) { return e.code === p.code; }).reverse().slice(0, 15);
+    if (buys.length) {
+      var rows = '<tr><th>when</th><th>provider</th><th>pack / reason</th><th>usd</th><th>coins</th></tr>';
+      buys.forEach(function (e) {
+        rows += '<tr><td>' + fmtWhen(e.at) + '</td><td>' + esc(e.provider) + '</td>' +
+          '<td>' + esc(e.packId || e.note || '—') + '</td>' +
+          '<td class="gold">' + (e.usd > 0 ? fmtUsd(e.usd) : '—') + '</td>' +
+          '<td>' + fmtNum(e.coins) + '</td></tr>';
+      });
+      html += '<div style="width:100%"><h3>Ledger entries</h3><div class="inner-scroll"><table>' + rows + '</table></div></div>';
+    } else {
+      html += '<div class="dim" style="font-size:12px">No ledger entries for this player.</div>';
+    }
+
+    html += '<div class="mini-forms">' +
+      '<div class="mini">' +
+        '<div class="field"><label for="d-coins">Coins</label><input id="d-coins" type="number" min="1" step="1" placeholder="500"></div>' +
+        '<div class="field"><label for="d-creason">Reason</label><input id="d-creason" class="wide" autocomplete="off" placeholder="Refund, prize..."></div>' +
+        '<button class="btn sm" data-pcredit="' + esc(p.code) + '">Credit</button>' +
+      '</div>' +
+      '<div class="mini">' +
+        '<div class="field"><label for="d-karma">Karma 0–100</label><input id="d-karma" type="number" min="0" max="100" step="1" placeholder="' + esc(p.karma) + '"></div>' +
+        '<div class="field"><label for="d-kreason">Reason</label><input id="d-kreason" class="wide" autocomplete="off" placeholder="Reset, penalty..."></div>' +
+        '<button class="btn sm" data-pkarma="' + esc(p.code) + '">Set karma</button>' +
+      '</div>' +
+      '<div class="mini">' +
+      (p.banned
+        ? '<button class="btn sm ghost" data-punban="' + esc(p.code) + '">Lift the ban</button>'
+        : '<div class="field"><label for="d-breason">Ban reason</label><input id="d-breason" class="wide" autocomplete="off" placeholder="Abuse, spam..."></div>' +
+          '<button class="danger sm" data-pban="' + esc(p.code) + '">Ban device</button>') +
+      (p.roomId
+        ? '<button class="danger sm" data-pkick="' + esc(p.code) + '" data-room="' + esc(p.roomId) + '">Kick from ' + esc(p.roomId) + '</button>'
+        : '') +
+      '</div></div>';
+
+    var m = state.drawerMsg;
+    html += '<div class="msg' + (m ? ' ' + m.cls : '') + '" id="drawermsg">' + (m ? esc(m.text) : '') + '</div>';
+    html += '</div></td></tr>';
+    return html;
   }
 
   function renderPlayers() {
@@ -405,7 +859,8 @@ export const adminPageHTML = `<!doctype html>
     if (q) {
       profs = profs.filter(function (p) {
         var hay = (p.code + ' ' + (p.name || '') + ' ' + (p.email || '') + ' ' +
-          ((p.login && p.login.provider) || '') + ' ' + (p.status || '')).toLowerCase();
+          ((p.login && p.login.provider) || '') + ' ' + (p.status || '') +
+          (p.banned ? ' banned' : '')).toLowerCase();
         return hay.indexOf(q) >= 0;
       });
     }
@@ -414,24 +869,34 @@ export const adminPageHTML = `<!doctype html>
       profs.sort(function (a, b) { return ((Number(a[k]) || 0) - (Number(b[k]) || 0)) * (state.dir < 0 ? -1 : 1); });
     }
     var arrow = function (k) { return state.sort === k ? (state.dir < 0 ? ' ▾' : ' ▴') : ''; };
-    var html = '<tr><th>code</th><th>name</th><th>flag</th>' +
+    var html = '<tr><th>code</th><th>name</th>' +
       '<th class="sortable" data-sort="coins" title="Click to sort">coins' + arrow('coins') + '</th>' +
       '<th class="sortable" data-sort="karma" title="Click to sort">karma' + arrow('karma') + '</th>' +
-      '<th>friends</th><th>status</th><th>login</th></tr>';
+      '<th>friends</th>' +
+      '<th class="sortable" data-sort="seen" title="Click to sort">last seen' + arrow('seen') + '</th>' +
+      '<th class="sortable" data-sort="created" title="Click to sort">created' + arrow('created') + '</th>' +
+      '<th>status</th><th>login</th></tr>';
     profs.slice(0, 500).forEach(function (p) {
       var login = p.login
         ? esc(p.login.provider) + (p.email ? ' <span class="dim">' + esc(p.email) + '</span>' : '')
         : '<span class="dim">—</span>';
-      html += '<tr><td class="mono">' + esc(p.code) + '</td><td>' + esc(p.name || '—') + '</td>' +
-        '<td>' + esc(p.flag || '') + '</td><td class="gold">' + fmtNum(p.coins) + '</td>' +
+      html += '<tr class="row player-row' + (state.expandedPlayer === p.code ? ' open' : '') + '" data-player="' + esc(p.code) + '">' +
+        '<td class="mono">' + esc(p.code) + '</td>' +
+        '<td>' + esc(p.name || '—') + (p.flag ? ' ' + esc(p.flag) : '') +
+          (p.banned ? ' <span class="pill bad">banned</span>' : '') + '</td>' +
+        '<td class="gold">' + fmtNum(p.coins) + '</td>' +
         '<td>' + fmtNum(p.karma) + '</td><td>' + fmtNum(p.friends) + '</td>' +
+        '<td>' + fmtWhen(p.seen) + '</td><td>' + fmtWhen(p.created) + '</td>' +
         '<td>' + esc(p.status) + (p.roomId ? ' <span class="mono dim">(' + esc(p.roomId) + ')</span>' : '') + '</td>' +
         '<td>' + login + '</td></tr>';
+      if (state.expandedPlayer === p.code) html += drawerHtml(p);
     });
-    if (!profs.length) html += '<tr><td colspan="8" class="dim">' + (q ? 'Nobody matches that filter' : 'No profiles yet') + '</td></tr>';
+    if (!profs.length) html += '<tr><td colspan="9" class="dim">' + (q ? 'Nobody matches that filter' : 'No profiles yet') + '</td></tr>';
     document.getElementById('playercount').textContent =
       fmtNum(profs.length) + (q ? ' matching' : '') + (profs.length > 500 ? ' (showing 500)' : '');
-    swap('playersT', html);
+    keepInputs(['d-coins', 'd-creason', 'd-karma', 'd-kreason', 'd-breason'], function () {
+      swap('playersT', html);
+    });
   }
 
   function renderEconomy() {
@@ -445,14 +910,22 @@ export const adminPageHTML = `<!doctype html>
     if (!(e.topWallets || []).length) html += '<tr><td colspan="5" class="dim">No wallets yet</td></tr>';
     swap('wallets', html);
 
+    var f = e.flows || {};
+    var max = Math.max(f.wins || 0, f.purchases || 0, f.grants || 0, f.burned || 0);
+    document.getElementById('flows').innerHTML =
+      hbar('minted by wins', f.wins || 0, max, '#4fd98b', fmtNum(f.wins) + ' coins') +
+      hbar('minted by purchases', f.purchases || 0, max, '#7ba0f2', fmtNum(f.purchases) + ' coins') +
+      hbar('minted by admin', f.grants || 0, max, '#e3a93c', fmtNum(f.grants) + ' coins') +
+      hbar('burned in the store', f.burned || 0, max, '#e06c5f', fmtNum(f.burned) + ' coins');
+
     var b = e.karmaBuckets || [];
-    var max = Math.max.apply(null, b.concat([1]));
+    var kmax = Math.max.apply(null, b.concat([1]));
     var W = 300, H = 96, padB = 16, slot = W / 10, bw = slot * 0.7;
     var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '">';
     b.forEach(function (v, i) {
       var x = i * slot + (slot - bw) / 2;
       if (v > 0) {
-        var h = Math.max(2, v * (H - padB - 8) / max);
+        var h = Math.max(2, v * (H - padB - 8) / kmax);
         svg += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - h).toFixed(1) + '" width="' + bw.toFixed(1) +
           '" height="' + h.toFixed(1) + '" rx="2" fill="#e3a93c" opacity="' + (0.35 + 0.65 * i / 9).toFixed(2) +
           '"><title>karma ' + (i * 10) + '–' + (i === 9 ? 100 : i * 10 + 9) + ': ' + v + ' player' + (v === 1 ? '' : 's') + '</title></rect>';
@@ -471,91 +944,325 @@ export const adminPageHTML = `<!doctype html>
       '<div><b>' + fmtNum(e.coinsInCirculation) + '</b><span>coins held</span></div>';
   }
 
+  function renderModeration() {
+    var mod = state.data.moderation || {};
+    var bans = mod.bans || [];
+    document.getElementById('bancount').textContent = bans.length || '';
+    var html = '<tr><th>code</th><th>name</th><th>reason</th><th>banned</th><th></th></tr>';
+    bans.forEach(function (b) {
+      html += '<tr><td class="mono">' + esc(b.code) + '</td><td>' + esc(b.name || '—') + '</td>' +
+        '<td>' + esc(b.reason || '—') + '</td><td>' + fmtWhen(b.at) + '</td>' +
+        '<td><button class="btn ghost sm" data-unban="' + esc(b.code) + '">Unban</button></td></tr>';
+    });
+    if (!bans.length) html += '<tr><td colspan="5" class="dim">Nobody is banned.</td></tr>';
+    swap('bansT', html);
+
+    var audit = (mod.audit || []).slice().reverse();
+    document.getElementById('auditcount').textContent = audit.length || '';
+    var ah = '<tr><th>when</th><th>action</th><th>target</th><th>detail</th></tr>';
+    audit.forEach(function (a) {
+      var pill = a.action === 'ban' || a.action === 'kick' || a.action === 'close-room' ? 'bad'
+        : (a.action === 'credit' || a.action === 'karma' ? 'warn' : 'dim');
+      ah += '<tr><td>' + fmtWhen(a.at) + '</td>' +
+        '<td><span class="pill ' + pill + '">' + esc(a.action) + '</span></td>' +
+        '<td class="mono">' + esc(a.target || '—') + '</td>' +
+        '<td>' + esc(a.detail || '') + '</td></tr>';
+    });
+    if (!audit.length) ah += '<tr><td colspan="4" class="dim">No admin actions recorded yet. Every POST from this page lands here.</td></tr>';
+    swap('auditT', ah);
+  }
+
+  function renderSystem() {
+    var s = state.data.system || {};
+    var rbs = s.roomsByStatus || {};
+    swap('systiles',
+      tileHtml(fmtUptime(s.uptimeSec), 'uptime', '') +
+      tileHtml(fmtBytes(s.rss), 'memory (rss)', '') +
+      tileHtml(s.node || '—', 'node', '') +
+      tileHtml(fmtNum(s.sockets), 'open sockets', '') +
+      tileHtml(fmtNum(rbs.lobby), 'lobbies', '') +
+      tileHtml(fmtNum(rbs.playing), 'playing', ''));
+
+    var d = s.data || {};
+    var c = state.data.config || {};
+    var envPill = c.dataDirEnv
+      ? '<span class="pill ok">DATA_DIR set</span>'
+      : '<span class="pill bad">DATA_DIR unset — wiped on deploy</span>';
+    var html = '<div style="font-size:13px;margin-bottom:12px">Data directory ' + envPill +
+      '<div class="mono dim" style="margin-top:6px;word-break:break-all">' + esc(d.dir || '?') + '</div></div>';
+    var fileRow = function (name, info) {
+      return '<tr><td class="mono">' + esc(name) + '</td>' +
+        '<td>' + (info ? fmtBytes(info.size) : '<span class="dim">not written yet</span>') + '</td>' +
+        '<td>' + (info ? fmtWhen(info.savedAt) : '—') + '</td></tr>';
+    };
+    html += '<div class="scroll"><table><tr><th>file</th><th>size</th><th>last saved</th></tr>' +
+      fileRow('social.json — profiles, wallets, DMs', d.social) +
+      fileRow('ledger.json — every credit', d.ledger) +
+      fileRow('bans.json — banned devices', d.bans) +
+      fileRow('stats.json — game counters', d.stats) +
+      fileRow('audit.json — admin actions', d.audit) +
+      '</table></div>';
+    document.getElementById('persist').innerHTML = html;
+
+    var flag = function (on, okText, badText, badCls) {
+      return on ? '<span class="pill ok">' + okText + '</span>' : '<span class="pill ' + (badCls || 'bad') + '">' + badText + '</span>';
+    };
+    swap('configT',
+      '<tr><th>setting</th><th>state</th><th>why it matters</th></tr>' +
+      '<tr><td>ADMIN_KEY</td><td>' + flag(!c.adminKeyDefault, 'custom', 'still the default') +
+        '</td><td class="dim">Guards this page and every action on it.</td></tr>' +
+      '<tr><td>DATA_DIR</td><td>' + flag(c.dataDirEnv, 'set', 'unset') +
+        '</td><td class="dim">Without it every file above dies on the next deploy.</td></tr>' +
+      '<tr><td>Stripe checkout</td><td>' + flag(c.stripe, 'enabled', 'off', 'dim') +
+        '</td><td class="dim">Card payments on the web store.</td></tr>' +
+      '<tr><td>Stripe webhook</td><td>' + flag(c.stripeWebhook, 'secret set', 'missing', c.stripe ? 'bad' : 'dim') +
+        '</td><td class="dim">The only path that credits coins after a card payment.</td></tr>');
+  }
+
   function renderAll() {
     if (!state.data) return;
     renderStatus();
+    renderAlerts();
     renderTiles();
+    renderSparklines();
     renderRevenue();
+    renderByPack();
     renderPurchases();
     renderRooms();
+    renderQuick();
+    renderOccupancy();
     renderGames();
     renderPlayers();
     renderEconomy();
+    renderModeration();
+    renderSystem();
   }
 
   // ------------------------------------------------------------- actions --
-  function creditCoins() {
-    var code = document.getElementById('c-code').value.trim().toUpperCase();
-    var coins = parseInt(document.getElementById('c-coins').value, 10);
-    var reason = document.getElementById('c-reason').value.trim();
-    var msg = document.getElementById('actionmsg');
-    if (!code || !(coins > 0)) {
-      msg.textContent = 'Enter a friend code and a positive coin amount.';
-      msg.className = 'msg err';
-      return;
-    }
-    if (!confirm('Credit ' + fmtNum(coins) + ' coins to ' + code + '?' + (reason ? ' Reason: ' + reason : ''))) return;
-    post('/api/admin/credit', { code: code, coins: coins, reason: reason }, function (r) {
-      if (r && r.ok) {
-        msg.textContent = 'Credited ' + fmtNum(coins) + ' coins to ' + code +
-          (r.name ? ' (' + r.name + ')' : '') + ' — new balance ' + fmtNum(r.coins) + '.';
-        msg.className = 'msg ok';
-        document.getElementById('c-coins').value = '';
-        document.getElementById('c-reason').value = '';
-        refresh();
-      } else {
-        msg.textContent = (r && r.error) || 'Credit failed.';
-        msg.className = 'msg err';
-      }
-    });
+  function setMsg(id, text, ok) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'msg ' + (ok ? 'ok' : 'err');
+  }
+  function setDrawerMsg(text, ok) {
+    state.drawerMsg = { text: text, cls: ok ? 'ok' : 'err' };
+    var el = document.getElementById('drawermsg');
+    if (el) { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); }
   }
 
-  function closeRoom(id, msgEl) {
+  function creditCoins(code, coins, reason, done) {
+    if (!code || !(coins > 0)) return done({ error: 'Enter a friend code and a positive coin amount.' });
+    if (!confirm('Credit ' + fmtNum(coins) + ' coins to ' + code + '?' + (reason ? ' Reason: ' + reason : ''))) return;
+    post('/api/admin/credit', { code: code, coins: coins, reason: reason }, done);
+  }
+
+  function closeRoom(id, msgId) {
     if (!id) return;
     if (!confirm('Close room ' + id + '? Its table is torn down and everyone in it is disconnected.')) return;
     post('/api/admin/close-room', { roomId: id }, function (r) {
       if (r && r.ok) {
         if (state.expanded === id) state.expanded = null;
-        if (msgEl) { msgEl.textContent = 'Room ' + id + ' closed.'; msgEl.className = 'msg ok'; }
+        if (msgId) setMsg(msgId, 'Room ' + id + ' closed.', true);
         refresh();
       } else {
         var err = (r && r.error) || 'Could not close the room.';
-        if (msgEl) { msgEl.textContent = err; msgEl.className = 'msg err'; }
+        if (msgId) setMsg(msgId, err, false);
         else alert(err);
       }
     });
   }
 
+  function kickSeat(roomId, code, done) {
+    if (!confirm('Kick ' + code + ' from room ' + roomId + '? In a live game their deeds go back to the bank, like a timeout.')) return;
+    post('/api/admin/kick', { roomId: roomId, code: code }, done);
+  }
+
+  function banDevice(code, reason, done) {
+    if (!code) return done({ error: 'Enter a friend code.' });
+    if (!confirm('Ban ' + code + '? Their device can no longer join any table.' + (reason ? ' Reason: ' + reason : ''))) return;
+    post('/api/admin/ban', { code: code, reason: reason }, done);
+  }
+
   // -------------------------------------------------------------- wiring --
   document.addEventListener('click', function (e) {
     if (!e.target || !e.target.closest) return;
-    var closeBtn = e.target.closest('[data-close]');
-    if (closeBtn) { closeRoom(closeBtn.getAttribute('data-close'), null); return; }
-    var th = e.target.closest('th.sortable');
-    if (th) {
-      var k = th.getAttribute('data-sort');
-      if (state.sort === k) state.dir = -state.dir;
-      else { state.sort = k; state.dir = -1; }
+    var t = e.target;
+    var el;
+
+    el = t.closest('[data-close]');
+    if (el) { closeRoom(el.getAttribute('data-close'), null); return; }
+
+    el = t.closest('[data-kick]');
+    if (el) {
+      kickSeat(el.getAttribute('data-room'), el.getAttribute('data-kick'), function (r) {
+        if (!(r && r.ok)) alert((r && r.error) || 'Kick failed.');
+        refresh();
+      });
+      return;
+    }
+
+    el = t.closest('[data-unban]');
+    if (el) {
+      var code = el.getAttribute('data-unban');
+      if (!confirm('Lift the ban on ' + code + '?')) return;
+      post('/api/admin/unban', { code: code }, function (r) {
+        setMsg('modmsg', r && r.ok ? 'Ban lifted for ' + code + '.' : ((r && r.error) || 'Unban failed.'), !!(r && r.ok));
+        refresh();
+      });
+      return;
+    }
+
+    el = t.closest('[data-pcredit]');
+    if (el) {
+      var v = parseInt((document.getElementById('d-coins') || {}).value, 10);
+      creditCoins(el.getAttribute('data-pcredit'), v, ((document.getElementById('d-creason') || {}).value || '').trim(), function (r) {
+        if (r && r.ok) {
+          setDrawerMsg('Credited — new balance ' + fmtNum(r.coins) + '.', true);
+          var ci = document.getElementById('d-coins'); if (ci) ci.value = '';
+          refresh();
+        } else setDrawerMsg((r && r.error) || 'Credit failed.', false);
+      });
+      return;
+    }
+
+    el = t.closest('[data-pkarma]');
+    if (el) {
+      var code2 = el.getAttribute('data-pkarma');
+      var k = parseInt((document.getElementById('d-karma') || {}).value, 10);
+      var kr = ((document.getElementById('d-kreason') || {}).value || '').trim();
+      if (!(k >= 0 && k <= 100)) return setDrawerMsg('Karma is a number from 0 to 100.', false);
+      if (!confirm('Set karma of ' + code2 + ' to ' + k + '?' + (kr ? ' Reason: ' + kr : ''))) return;
+      post('/api/admin/karma', { code: code2, karma: k, reason: kr }, function (r) {
+        if (r && r.ok) { setDrawerMsg('Karma set to ' + r.karma + '.', true); refresh(); }
+        else setDrawerMsg((r && r.error) || 'Karma change failed.', false);
+      });
+      return;
+    }
+
+    el = t.closest('[data-pban]');
+    if (el) {
+      banDevice(el.getAttribute('data-pban'), ((document.getElementById('d-breason') || {}).value || '').trim(), function (r) {
+        if (r && r.ok) { setDrawerMsg('Banned ' + r.code + '.', true); refresh(); }
+        else setDrawerMsg((r && r.error) || 'Ban failed.', false);
+      });
+      return;
+    }
+
+    el = t.closest('[data-punban]');
+    if (el) {
+      var code3 = el.getAttribute('data-punban');
+      if (!confirm('Lift the ban on ' + code3 + '?')) return;
+      post('/api/admin/unban', { code: code3 }, function (r) {
+        if (r && r.ok) { setDrawerMsg('Ban lifted.', true); refresh(); }
+        else setDrawerMsg((r && r.error) || 'Unban failed.', false);
+      });
+      return;
+    }
+
+    el = t.closest('[data-pkick]');
+    if (el) {
+      kickSeat(el.getAttribute('data-room'), el.getAttribute('data-pkick'), function (r) {
+        if (r && r.ok) { setDrawerMsg('Kicked from ' + r.roomId + '.', true); refresh(); }
+        else setDrawerMsg((r && r.error) || 'Kick failed.', false);
+      });
+      return;
+    }
+
+    el = t.closest('th.sortable');
+    if (el) {
+      var s = el.getAttribute('data-sort');
+      if (state.sort === s) state.dir = -state.dir;
+      else { state.sort = s; state.dir = -1; }
       renderPlayers();
       return;
     }
-    var row = e.target.closest('.room-row');
-    if (row) {
-      var id = row.getAttribute('data-room');
+
+    el = t.closest('.room-row');
+    if (el) {
+      var id = el.getAttribute('data-room');
       state.expanded = state.expanded === id ? null : id;
       renderRooms();
+      return;
+    }
+
+    el = t.closest('.player-row');
+    if (el) {
+      var pc = el.getAttribute('data-player');
+      state.expandedPlayer = state.expandedPlayer === pc ? null : pc;
+      state.drawerMsg = null;
+      renderPlayers();
     }
   });
+
   document.getElementById('search').addEventListener('input', function (e) {
     state.search = e.target.value;
     renderPlayers();
   });
-  document.getElementById('c-go').addEventListener('click', creditCoins);
+
+  document.getElementById('c-go').addEventListener('click', function () {
+    var code = document.getElementById('c-code').value.trim().toUpperCase();
+    var coins = parseInt(document.getElementById('c-coins').value, 10);
+    var reason = document.getElementById('c-reason').value.trim();
+    creditCoins(code, coins, reason, function (r) {
+      if (r && r.ok) {
+        setMsg('actionmsg', 'Credited ' + fmtNum(coins) + ' coins to ' + code +
+          (r.name ? ' (' + r.name + ')' : '') + ' — new balance ' + fmtNum(r.coins) + '.', true);
+        document.getElementById('c-coins').value = '';
+        document.getElementById('c-reason').value = '';
+        refresh();
+      } else setMsg('actionmsg', (r && r.error) || 'Credit failed.', false);
+    });
+  });
+
   document.getElementById('k-go').addEventListener('click', function () {
     var id = document.getElementById('k-room').value.trim().toLowerCase();
-    var msg = document.getElementById('closemsg');
-    if (!id) { msg.textContent = 'Enter a room id.'; msg.className = 'msg err'; return; }
-    closeRoom(id, msg);
+    if (!id) return setMsg('closemsg', 'Enter a room id.', false);
+    closeRoom(id, 'closemsg');
+  });
+
+  document.getElementById('b-go').addEventListener('click', function () {
+    var msg = document.getElementById('b-msg').value.trim();
+    if (!msg) return setMsg('bmsg', 'Type a message first.', false);
+    if (!confirm('Send to every connected client?' + NL + NL + msg)) return;
+    post('/api/admin/broadcast', { message: msg }, function (r) {
+      if (r && r.ok) {
+        setMsg('bmsg', 'Sent' + (r.reached != null ? ' to ' + fmtNum(r.reached) + ' socket' + (r.reached === 1 ? '' : 's') : '') + '.', true);
+        document.getElementById('b-msg').value = '';
+        refresh();
+      } else setMsg('bmsg', (r && r.error) || 'Broadcast failed.', false);
+    });
+  });
+
+  document.getElementById('m-go').addEventListener('click', function () {
+    var code = document.getElementById('m-code').value.trim().toUpperCase();
+    var reason = document.getElementById('m-reason').value.trim();
+    banDevice(code, reason, function (r) {
+      if (r && r.ok) {
+        setMsg('modmsg', 'Banned ' + r.code + (r.name ? ' (' + r.name + ')' : '') + '.', true);
+        document.getElementById('m-code').value = '';
+        document.getElementById('m-reason').value = '';
+        refresh();
+      } else setMsg('modmsg', (r && r.error) || 'Ban failed.', false);
+    });
+  });
+
+  document.getElementById('csv-players').addEventListener('click', function () {
+    var rows = [['code', 'name', 'flag', 'coins', 'karma', 'friends', 'status', 'room', 'provider', 'email', 'last_seen', 'created', 'banned']];
+    (state.data && state.data.profiles || []).forEach(function (p) {
+      rows.push([p.code, p.name || '', p.flag || '', p.coins, p.karma, p.friends, p.status,
+        p.roomId || '', (p.login && p.login.provider) || '', p.email || '',
+        iso(p.seen), iso(p.created), p.banned ? 'yes' : 'no']);
+    });
+    downloadCsv('moneymove-players-' + new Date().toISOString().slice(0, 10) + '.csv', rows);
+  });
+
+  document.getElementById('csv-ledger').addEventListener('click', function () {
+    var rows = [['at', 'provider', 'pack', 'usd', 'coins', 'buyer_code', 'txn', 'note']];
+    (state.data && state.data.ledger || []).forEach(function (e) {
+      rows.push([iso(e.at), e.provider, e.packId || '', e.usd, e.coins, e.code || '', e.txn || '', e.note || '']);
+    });
+    downloadCsv('moneymove-ledger-' + new Date().toISOString().slice(0, 10) + '.csv', rows);
   });
 
   function refresh() {
@@ -573,8 +1280,12 @@ export const adminPageHTML = `<!doctype html>
   if (!KEY) {
     document.body.innerHTML = '<p style="padding:40px">Append ?key=YOUR_ADMIN_KEY to the URL to open the dashboard.</p>';
   } else {
+    applySection();
     refresh();
     setInterval(refresh, 5000);
+    // The quick-match fuse is the one number on the page that lies within
+    // five seconds — tick it by itself.
+    setInterval(renderQuick, 1000);
   }
 })();
 </script>

@@ -8,8 +8,10 @@ import { GameRoom, COLORS } from './game.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
-  allProfiles, attachLogin, detachLogin, meView, walletOf, awardCoins, buyItem, equipItem, sendDM, dmsWith,
-  bumpKarma, creditPurchase, ledgerView, adminCredit,
+  allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
+  bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
+  banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
+  ownedTally, dataFiles,
 } from './social.js';
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
 import { randomName } from './names.js';
@@ -246,7 +248,36 @@ app.post('/api/auth/apple', (req, res) => {
 // GET /admin?key=... — a live dashboard of rooms, games and profiles.
 // Set ADMIN_KEY in the environment; the default is for local tinkering only.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'moneymove-admin';
-const STATS_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'stats.json');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+const STATS_FILE = path.join(DATA_DIR, 'stats.json');
+
+// Every admin POST leaves a line here. The dashboard shows the tail; the file
+// is the memory — an operator action that isn't written down didn't happen.
+const AUDIT_FILE = path.join(DATA_DIR, 'audit.json');
+let auditLog = [];
+try {
+  const raw = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8'));
+  if (Array.isArray(raw)) auditLog = raw;
+} catch { /* first run */ }
+
+function audit(action, target, detail) {
+  auditLog.push({ at: Date.now(), action, target: String(target || ''), detail: String(detail || '').slice(0, 200) });
+  if (auditLog.length > 2000) auditLog.splice(0, auditLog.length - 2000);
+  try {
+    fs.mkdirSync(path.dirname(AUDIT_FILE), { recursive: true });
+    fs.writeFileSync(AUDIT_FILE, JSON.stringify(auditLog));
+  } catch (err) {
+    console.warn('audit: could not persist —', err.message);
+  }
+}
+
+/** stat() that shrugs — a missing file is an answer, not an error. */
+const fileInfo = (file) => {
+  try {
+    const s = fs.statSync(file);
+    return { size: s.size, savedAt: s.mtimeMs };
+  } catch { return null; }
+};
 const stats = { gamesStarted: 0, gamesEnded: 0, recent: [] };
 try {
   Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')));
@@ -279,7 +310,7 @@ function recordTransitions(room) {
     const winners = room.winningTeam != null
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
-    for (const w of winners) awardCoins(w.id, payout);
+    for (const w of winners) awardWin(w.id, payout, `won ${room.id} on ${room.map.name}`);
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
@@ -324,6 +355,38 @@ app.get('/api/admin/data', (req, res) => {
     try { return room.netWorth(p); } catch { return null; }
   };
 
+  const dayMs = 24 * 60 * 60 * 1000;
+  const activeSince = (ms) => profs.filter((p) => p.seen && now - p.seen < ms).length;
+
+  // Revenue sliced by pack, and who actually pays.
+  const byPack = new Map();
+  const buyers = new Set();
+  for (const e of paid) {
+    const k = e.packId || 'other';
+    const row = byPack.get(k) || { packId: k, usd: 0, coins: 0, count: 0 };
+    row.usd += e.usd;
+    row.coins += e.coins;
+    row.count++;
+    byPack.set(k, row);
+    if (e.code) buyers.add(e.code);
+  }
+  const revenueTotal = round2(paid.reduce((n, e) => n + e.usd, 0));
+
+  // Where coins come from and where they go. Mints are read off the ledger
+  // (wins only started writing entries when this shipped); the burn is the
+  // replacement price of every cosmetic sitting in a wallet.
+  const flows = { wins: 0, purchases: 0, grants: 0, burned: 0 };
+  for (const e of ledger) {
+    if (e.provider === 'win') flows.wins += e.coins;
+    else if (e.provider === 'admin') flows.grants += e.coins;
+    else flows.purchases += e.coins;
+  }
+  const tally = ownedTally();
+  for (const item of STORE_ITEMS) flows.burned += (tally[item.id] || 0) * item.price;
+
+  const roomsByStatus = { lobby: 0, playing: 0, ended: 0 };
+  for (const r of rooms.values()) roomsByStatus[r.status] = (roomsByStatus[r.status] || 0) + 1;
+
   res.json({
     totals: {
       gamesStarted: stats.gamesStarted,
@@ -333,19 +396,28 @@ app.get('/api/admin/data', (req, res) => {
       profiles: profs.length,
       coinsInCirculation,
       avgKarma,
+      dau: activeSince(dayMs),
+      wau: activeSince(7 * dayMs),
+      mau: activeSince(30 * dayMs),
     },
     revenue: {
       // The ledger began with a deploy; purchases before its first entry
       // exist only as dedupe ids with no amounts, so they are not counted.
       since: ledger[0]?.at || null,
-      total: round2(paid.reduce((n, e) => n + e.usd, 0)),
+      total: revenueTotal,
       last7d: round2(paid.filter((e) => e.at >= weekAgo).reduce((n, e) => n + e.usd, 0)),
       purchases: paid.length,
+      byPack: [...byPack.values()]
+        .map((r) => ({ ...r, usd: round2(r.usd) }))
+        .sort((a, b) => b.usd - a.usd),
+      buyers: buyers.size,
+      arpu: buyers.size ? round2(revenueTotal / buyers.size) : null,
     },
     ledger: ledger.slice(-1000),
     economy: {
       coinsInCirculation,
       avgKarma,
+      flows,
       signedIn: profs.filter((p) => p.login).length,
       anonymous: profs.filter((p) => !p.login).length,
       karmaBuckets,
@@ -358,6 +430,8 @@ app.get('/api/admin/data', (req, res) => {
       id: r.id, status: r.status, map: r.map.name,
       players: r.players.map((p) => ({
         name: p.name, isBot: !!p.isBot,
+        // The public code, so a seat can be kicked or looked up — never the token.
+        code: p.isBot ? null : codeForToken(p.id),
         bankrupt: !!p.bankrupt, connected: p.connected !== false,
         money: typeof p.money === 'number' ? p.money : null,
         netWorth: safeNetWorth(r, p),
@@ -366,9 +440,33 @@ app.get('/api/admin/data', (req, res) => {
       turns: r.turnCount || 0,
       ageMs: now - (r.createdAt || now),
       quick: !!r.quick,
+      maxPlayers: r.settings.maxPlayers,
+      quickStartAt: r.quickStartAt || null,
     })),
     recentGames: stats.recent,
     profiles: profs,
+    moderation: {
+      bans: bansView(),
+      audit: auditLog.slice(-300),
+    },
+    system: {
+      uptimeSec: Math.floor(process.uptime()),
+      rss: process.memoryUsage().rss,
+      node: process.version,
+      sockets: io.engine?.clientsCount ?? 0,
+      roomsByStatus,
+      data: {
+        ...dataFiles(),
+        stats: fileInfo(STATS_FILE),
+        audit: fileInfo(AUDIT_FILE),
+      },
+    },
+    config: {
+      dataDirEnv: !!process.env.DATA_DIR,
+      adminKeyDefault: ADMIN_KEY === 'moneymove-admin',
+      stripe: stripeEnabled(),
+      stripeWebhook: !!process.env.STRIPE_WEBHOOK_SECRET,
+    },
   });
 });
 
@@ -390,6 +488,7 @@ app.post('/api/admin/credit', (req, res) => {
   if (!adminBodyGuard(req, res)) return;
   const result = adminCredit(req.body?.code, req.body?.coins, req.body?.reason);
   if (result.error) return res.status(400).json(result);
+  audit('credit', result.code, `+${Math.floor(Number(req.body?.coins))} coins${req.body?.reason ? ' — ' + String(req.body.reason).slice(0, 140) : ''}`);
   console.log(`admin: credited ${result.coins} total to ${result.code} (+${Math.floor(Number(req.body?.coins))})`);
   res.json(result);
 });
@@ -412,8 +511,71 @@ app.post('/api/admin/close-room', (req, res) => {
   socketsOf.delete(id);
   seatsOf.delete(id);
   lastStatus.delete(id);
+  audit('close-room', id, '');
   console.log(`admin: closed room ${id}`);
   res.json({ ok: true });
+});
+
+/** Set a player's karma outright — the operator's thumb on the scale. */
+app.post('/api/admin/karma', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const result = setKarma(req.body?.code, req.body?.karma);
+  if (result.error) return res.status(400).json(result);
+  audit('karma', result.code, `set to ${result.karma}${req.body?.reason ? ' — ' + String(req.body.reason).slice(0, 140) : ''}`);
+  res.json(result);
+});
+
+/** Ban a device by its public code. The token underneath is what's banned. */
+app.post('/api/admin/ban', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const result = banByCode(req.body?.code, req.body?.reason);
+  if (result.error) return res.status(400).json(result);
+  audit('ban', result.code, String(req.body?.reason || '').slice(0, 140));
+  console.log(`admin: banned ${result.code}`);
+  res.json(result);
+});
+
+app.post('/api/admin/unban', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const result = unbanByCode(req.body?.code);
+  if (result.error) return res.status(400).json(result);
+  audit('unban', result.code, '');
+  console.log(`admin: unbanned ${result.code}`);
+  res.json(result);
+});
+
+/**
+ * Pull one seat out of a live table — the same exit a timeout takes: deeds
+ * back to the bank, turn order moves on, the client offers "watch how it ends".
+ */
+app.post('/api/admin/kick', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const roomId = String(req.body?.roomId || '').toLowerCase().slice(0, 12);
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: 'No such room' });
+  const token = tokenForCode(code);
+  const p = token ? room.player(token) : null;
+  if (!p) return res.status(404).json({ error: 'No seat with that code in this room' });
+  if (p.isBot) return res.status(400).json({ error: 'That seat is a bot — close the room instead' });
+  if (room.status === 'playing' && !p.bankrupt) {
+    room.say(`${p.name} was removed by the admin`, 'leave');
+    room.removeFromPlay(p, 'timeout');
+  } else {
+    room.removePlayer(token);
+  }
+  audit('kick', code, `from ${roomId}`);
+  res.json({ ok: true, code, roomId });
+});
+
+/** One line to every open client, over the toast every UI already renders. */
+app.post('/api/admin/broadcast', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const message = String(req.body?.message || '').trim().slice(0, 200);
+  if (!message) return res.status(400).json({ error: 'Nothing to say' });
+  io.emit('toast', { type: 'info', message });
+  audit('broadcast', 'everyone', message);
+  res.json({ ok: true, reached: io.engine?.clientsCount ?? null });
 });
 
 app.get(/^\/room\/.*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
@@ -555,6 +717,8 @@ io.on('connection', (socket) => {
 
 
   socket.on('createRoom', safely('createRoom', (payload = {}, cb) => {
+    const t = String(payload?.token || '').slice(0, 64);
+    if (t && isBanned(t)) return fail('You are banned from MoneyMove');
     const id = newRoomId();
     getRoom(id);
     if (typeof cb === 'function') cb({ roomId: id });
@@ -562,6 +726,8 @@ io.on('connection', (socket) => {
   }));
 
   socket.on('quickplay', safely('quickplay', (payload = {}, cb) => {
+    const t = String(payload?.token || '').slice(0, 64);
+    if (t && isBanned(t)) return fail('You are banned from MoneyMove');
     const room = quickMatchRoom();
     if (typeof cb === 'function') cb({ roomId: room.id });
     else socket.emit('roomCreated', { roomId: room.id });
@@ -569,6 +735,10 @@ io.on('connection', (socket) => {
 
   socket.on('join', safely('join', ({ roomId, token, name, flag } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
+    // The banned find out at the door, plainly — no seat, no spectating.
+    if (isBanned(String(token).slice(0, 64))) {
+      return socket.emit('joinFailed', { message: 'You are banned from MoneyMove', spectate: false });
+    }
     roomId = String(roomId).toLowerCase().slice(0, 12);
     room = getRoom(roomId);
     playerId = String(token).slice(0, 64);
@@ -673,7 +843,12 @@ io.on('connection', (socket) => {
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
   socket.on('rematch', guard(() => {
-    if (playerId !== room.hostId) return fail('Only the host can restart');
+    // First one to want another game gets to run it — whoever presses
+    // Play again takes the host chair, bots and the departed excepted.
+    const presser = room.player(playerId);
+    if (!presser || presser.isBot) return fail('Take a seat first');
+    if (room.status !== 'ended') return fail('The game is still on');
+    room.hostId = playerId;
     room.status = 'lobby';
     room.winner = null;
     room.winningTeam = null;
