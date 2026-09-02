@@ -37,10 +37,8 @@ export function renderBoard(state, root) {
     const tile = map.tiles[index];
     const el = document.createElement('div');
     el.className = `tile t-${side}${side === 'corner' ? ' corner' : ''}${isOwnable(tile) ? ' ownable' : ''} type-${tile.type}`;
-    const tint = tile.group ? groups[tile.group]?.color
-      : tile.type === 'airport' ? '#6aa2ff'
-      : tile.type === 'utility' ? '#3fd8ef' : '';
-    if (tint) el.style.setProperty('--g', tint);
+    // No tint at birth: the wash is the owner's mark, painted only once
+    // somebody buys the place (see the patch loop below).
     el.style.gridRow = row;
     el.style.gridColumn = col;
     el.dataset.i = index;
@@ -192,7 +190,9 @@ export function patchBoard(state) {
     const fullSet = !!(owner && tile.group
       && (state.map.groups?.[tile.group] || []).length
       && state.map.groups[tile.group].every((k) => ownership[k]?.owner === owner.id));
-    el.style.setProperty('--g', owner ? owner.color : (groupTint || 'transparent'));
+    // Unowned streets stay clean — the medallion names the country; the
+    // band is the owner's mark alone.
+    el.style.setProperty('--g', owner ? owner.color : 'transparent');
     el.classList.toggle('full-set', fullSet);
 
     const badge = el.querySelector('.tile-owner');

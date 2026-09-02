@@ -157,7 +157,10 @@ struct TileView: View {
         let P = Palette.current(scheme)
         let group = store.groupInfo(for: tile)
         // richup rule: a bought tile wears its owner's colour, not the group's.
-        let bandColor = ownerPlayer.map { Color(css: $0.color) } ?? bandColorFor(tile: tile, group: group)
+        // The medallion already says which country a street belongs to — an
+        // unowned tile stays clean. The band appears only once somebody owns
+        // it, wearing the owner's colour (thicker for a full set).
+        let bandColor = ownerPlayer.map { Color(css: $0.color) }
 
         ZStack {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -260,15 +263,6 @@ struct TileView: View {
         case "vacation": P.tileVacation
         case "prison": P.tileJail
         default: geom.layout.corners.contains(tile.index) ? P.tileCorner : P.card
-        }
-    }
-
-    private func bandColorFor(tile: TileData, group: GroupInfo?) -> Color? {
-        if let group { return Color(css: group.color) }
-        switch tile.type {
-        case "airport": return Color(hex: 0x5B8DEF)
-        case "utility": return Color(hex: 0x22D3EE)
-        default: return nil
         }
     }
 
