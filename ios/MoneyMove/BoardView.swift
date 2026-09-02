@@ -345,7 +345,9 @@ struct TileView: View {
                                 .foregroundStyle(P.good)
                         }
                     }
-                } else if let price = tile.price {
+                }
+                // The price never leaves — the buildings stack above it.
+                if let price = tile.price {
                     priceText(price, P)
                 }
             case "airport":

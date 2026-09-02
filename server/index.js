@@ -917,7 +917,11 @@ io.on('connection', (socket) => {
     if (releaseSeat(room.id, playerId, socket.id) > 0) return;
     clearPresence(playerId);
     room.removePlayer(playerId);
-    if ((socketsOf.get(room.id)?.size || 0) === 0 && room.players.length === 0) {
+    // Nobody left watching: an empty room dies, and so does a quick table —
+    // its remaining seats are house players performing to an empty theatre.
+    const deserted = (socketsOf.get(room.id)?.size || 0) === 0
+      && (room.players.length === 0 || (room.quick && room.players.every((pl) => pl.isBot)));
+    if (deserted) {
       room.dispose();
       rooms.delete(room.id);
       socketsOf.delete(room.id);

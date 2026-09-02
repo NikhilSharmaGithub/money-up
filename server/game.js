@@ -2149,8 +2149,9 @@ export class GameRoom {
 
     if (t.phase === 'action' && t.pending?.type === 'buy') {
       const tile = this.tile(t.pending.tile);
+      const denial = this.botSetRelevant(p, t.pending.tile);
       const wants = this.botWantsTile(p, t.pending.tile);
-      if (wants && p.money - tile.price > 150) return this.buy(p.id);
+      if (wants && p.money - tile.price >= this.botFloor(p, { denial })) return this.buy(p.id);
       return this.skipBuy(p.id);
     }
 
@@ -2294,6 +2295,35 @@ export class GameRoom {
       return;
     }
 
+    // No set within one street of done? Consolidate: in a long game where
+    // every colour is scattered one piece apiece, somebody has to start
+    // collecting or the table circles forever. Offer cash over the odds for
+    // a stray piece of the colour we lead — the step that unlocks the
+    // endgame swaps above.
+    if (!wants.length && this.turnCount > 30) {
+      for (const [group, idxs] of Object.entries(this.map.groups)) {
+        const mine = idxs.filter((i) => this.own(i)?.owner === p.id).length;
+        if (!mine || mine >= idxs.length - 1) continue;
+        const target = idxs.find((i) => {
+          const o = this.own(i);
+          return o && o.owner !== p.id && !(o.houses > 0)
+            && !this.player(o.owner)?.bankrupt && !p.refused?.includes(i);
+        });
+        if (target === undefined) continue;
+        const holder = this.player(this.own(target).owner);
+        const price = Math.floor(this.tile(target).price * 1.5 * this.botTemper(p));
+        if (p.money - price < this.botFloor(p)) continue;
+        p.lastAskedAt = this.turnCount;
+        this.proposeTrade(p.id, {
+          to: holder.id,
+          give: { money: price, tiles: [], cards: 0 },
+          get: { money: 0, tiles: [target], cards: 0 },
+        });
+        this.botSay(p, 'nudge', { name: holder.name }, { delay: 700 });
+        return;
+      }
+    }
+
     // Otherwise buy it, and pay over the odds — a colour is worth more than
     // the sticker price of the street that completes it.
     if (p.money < 600) return;
@@ -2320,22 +2350,89 @@ export class GameRoom {
     }
   }
 
+  /**
+   * A stable 0.9–1.1 temperament per bot, seeded from its id — the whole
+   * table shouldn't bid, build and fold on identical numbers like clones.
+   */
+  botTemper(p) {
+    let h = 0;
+    for (const c of String(p.id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return 0.9 + (h % 21) / 100;
+  }
+
+  /**
+   * What a street is WORTH to this bot — not what the sticker says. The last
+   * piece of anyone's colour is the whole game: finishing my own set tops the
+   * list, denying a rival's imminent set is barely behind it, and the
+   * second-to-last pieces ripple down from there.
+   */
+  botValueOf(p, index) {
+    const tile = this.tile(index);
+    if (tile.type !== 'property') return Math.floor(tile.price * 1.1);
+    const group = this.map.groups[tile.group] || [];
+    const k = group.length;
+    let mine = 0;
+    const rival = {};
+    for (const i of group) {
+      if (i === index) continue;
+      const o = this.own(i);
+      if (!o) continue;
+      if (o.owner === p.id) mine++;
+      else rival[o.owner] = (rival[o.owner] || 0) + 1;
+    }
+    const topRival = Math.max(0, ...Object.values(rival), 0);
+    let mult = 1;
+    if (mine === k - 1) mult = 2.2;             // finishes my set
+    else if (topRival === k - 1) mult = 2.0;    // denies an imminent set
+    else if (mine === k - 2 && k >= 3) mult = 1.4;
+    else if (topRival === k - 2 && k >= 3) mult = 1.25;
+    return Math.floor(tile.price * mult * this.botTemper(p));
+  }
+
+  /**
+   * The cash a bot keeps back to survive the table as built TODAY: enough
+   * for most of the worst rent it could walk into. Denial spends almost
+   * everything — comfort is worthless if a rival finishes their colour.
+   */
+  botFloor(p, { denial = false } = {}) {
+    if (denial) return Math.floor(40 * this.botTemper(p));
+    let worst = 0;
+    for (const [i, o] of Object.entries(this.ownership)) {
+      if (o.owner === p.id || o.mortgaged) continue;
+      const t = this.tile(Number(i));
+      if (t.type !== 'property' || !t.rent) continue;
+      worst = Math.max(worst, t.rent[Math.min(o.houses || 0, t.rent.length - 1)]);
+    }
+    return Math.floor(Math.min(400, Math.max(120, worst * 0.75)) * this.botTemper(p));
+  }
+
+  /** Whether the street moves any set race — the buys a winner never skips. */
+  botSetRelevant(p, index) {
+    return this.tile(index).type === 'property' && this.botValueOf(p, index) > this.tile(index).price * 1.2;
+  }
+
   botWantsTile(p, index) {
     const tile = this.tile(index);
     if (tile.type !== 'property') return true;
+    if (this.botSetRelevant(p, index)) return true;
     const group = this.map.groups[tile.group] || [];
     const mine = group.filter((i) => this.own(i)?.owner === p.id).length;
-    const theirs = group.filter((i) => this.own(i) && this.own(i).owner !== p.id).length;
-    if (theirs === group.length - 1 && mine === 0) return p.money > tile.price * 3;
     return mine > 0 || p.money > tile.price * 2;
   }
 
   botBuild(p) {
     let guard = 0;
-    while (guard++ < 12) {
+    while (guard++ < 24) {
+      const floor = this.botFloor(p);
       const candidates = this.tilesOf(p.id)
-        .filter((i) => this.canBuild(p.id, i) && p.money - this.tile(i).houseCost > 120)
-        .sort((a, b) => this.tile(b).price - this.tile(a).price);
+        .filter((i) => this.canBuild(p.id, i) && p.money - this.tile(i).houseCost >= floor)
+        .sort((a, b) => {
+          // Three houses is where rent bends — carpet every set to the knee
+          // before anyone gets a hotel, dearest streets first within a tier.
+          const ka = (this.own(a).houses || 0) < 3 ? 0 : 1;
+          const kb = (this.own(b).houses || 0) < 3 ? 0 : 1;
+          return ka - kb || this.tile(b).price - this.tile(a).price;
+        });
       if (!candidates.length) break;
       this.build(p.id, candidates[0]);
     }
@@ -2350,7 +2447,12 @@ export class GameRoom {
     if (!bots.length) return;
     const tile = this.tile(a.tile);
     for (const bot of bots) {
-      const cap = Math.min(bot.money - 100, Math.floor(tile.price * (this.botWantsTile(bot, a.tile) ? 1.15 : 0.6)));
+      // Each bot bids to ITS valuation of the street and not a dollar past —
+      // static ceilings are what make two sharks stop short of the moon.
+      const denial = this.botSetRelevant(bot, a.tile);
+      const worth = denial ? this.botValueOf(bot, a.tile)
+        : Math.floor(tile.price * (this.botWantsTile(bot, a.tile) ? 1.05 : 0.6));
+      const cap = Math.min(bot.money - this.botFloor(bot, { denial }), worth);
       const next = a.bid === 0 ? 10 : a.bid + 10;
       if (next <= cap) return this.bid(bot.id, next);
       this.passBid(bot.id);
@@ -2375,8 +2477,7 @@ export class GameRoom {
     const valueOf = (side, forPlayer) => {
       let v = side.money + side.cards * 40;
       for (const i of side.tiles) {
-        const t = this.tile(i);
-        v += t.price * (this.botWantsTile(forPlayer, i) ? 1.3 : 0.9);
+        v += Math.max(this.botValueOf(forPlayer, i), Math.floor(this.tile(i).price * 0.9));
       }
       return v;
     };
@@ -2393,7 +2494,7 @@ export class GameRoom {
 
     let bar = 1.15;
     if (completesForMe) bar = 0.7;        // happily pay a premium for the set
-    if (completesForThem) bar = Math.max(bar, 1.6); // arming a rival costs extra
+    if (completesForThem) bar = Math.max(bar, 2.0); // arming a rival costs dearly
     if (completesForMe && completesForThem) bar = 1.0; // an even swap suits us both
 
     const accept = incoming >= outgoing * bar && bot.money >= trade.get.money;

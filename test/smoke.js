@@ -1033,6 +1033,50 @@ console.log('\n▶ targeted rules');
   room.dispose();
 }
 
+{
+  // Denial: a rival one street from a full colour, that street on the block —
+  // a bot with ordinary cash outbids the sticker to kill the set.
+  const room = new GameRoom('shark', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'h', name: 'Hema' });
+  room.addPlayer({ id: 'u_shark1', name: 'Shark', isBot: true });
+  room.hostId = 'h';
+  room.settings.randomizeOrder = false;
+  room.start('h');
+  const [gname, gtiles] = Object.entries(room.map.groups).find(([, t]) => t.length === 3);
+  const last = gtiles[2];
+  gtiles.slice(0, 2).forEach((i) => { room.ownership[i] = { owner: 'h', houses: 0, mortgaged: false }; });
+  const bot = room.player('u_shark1');
+  bot.money = 500;
+  const price = room.tile(last).price;
+  const worth = room.botValueOf(bot, last);
+  if (worth < Math.floor(price * 1.8)) fail(`denial worth too shy: ${worth} for a $${price} street`);
+  // Drive the auction by hand: the human opens at list price, the shark answers.
+  room.auction = { tile: last, bid: price, leader: 'h', inRace: ['h', 'u_shark1'], endsAt: null };
+  room.runBotAuction();
+  if (room.auction.leader !== 'u_shark1' || room.auction.bid <= price) {
+    fail(`the shark let a set complete (bid ${room.auction.bid}, leader ${room.auction.leader})`);
+  } else ok('a bot outbids the sticker price to deny an imminent set');
+  room.auction = null;
+
+  // Trades: the set-completing street never moves for pocket change, and
+  // moves when the package pays the denial premium.
+  room.ownership[last] = { owner: 'u_shark1', houses: 0, mortgaged: false };
+  const cheapAsk = { from: 'h', to: 'u_shark1', give: { money: 20, tiles: [], cards: 0 }, get: { money: 0, tiles: [last], cards: 0 }, id: 't1' };
+  room.trades = [cheapAsk];
+  room.botTradeReply('t1');
+  if (room.own(last)?.owner !== 'u_shark1') fail('a set-completing street moved for pocket change');
+  else ok('a bot refuses to arm a rival for pocket change');
+  room.player('h').money = 5000;
+  const richAsk = { from: 'h', to: 'u_shark1', give: { money: price * 5, tiles: [], cards: 0 }, get: { money: 0, tiles: [last], cards: 0 }, id: 't2' };
+  room.trades = [richAsk];
+  room.botTradeReply('t2');
+  if (room.own(last)?.owner === 'u_shark1') fail('the premium package should have moved the street');
+  else ok('the same street moves when the package pays the premium');
+  room.dispose();
+}
+
+
 
 
 console.log('\n▶ cards through START');
