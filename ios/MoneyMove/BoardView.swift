@@ -202,7 +202,9 @@ struct TileView: View {
         // marquee take over the face once building starts, so the coin steps
         // aside rather than jostle them.
         .overlay(alignment: medallionAlignment) {
-            if tile.type == "property", (ownership?.houseCount ?? 0) == 0 {
+            // The house signs live in the tile body, so the street keeps its
+            // nationality while it grows — the coin never leaves the edge.
+            if tile.type == "property" {
                 Art.groupMedallion(group?.flag,
                                    group.map { Color(css: $0.color) } ?? P.ink3,
                                    size: medallionSize)

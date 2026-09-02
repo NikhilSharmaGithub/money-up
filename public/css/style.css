@@ -866,7 +866,17 @@ select { cursor: pointer; }
 .t-bottom .tile-houses { top: 1px; left: 0; right: 0; height: 21%; }
 .t-left .tile-houses   { right: 1px; top: 0; bottom: 0; width: 21%; flex-direction: column; }
 .t-right .tile-houses  { left: 1px; top: 0; bottom: 0; width: 21%; flex-direction: column; }
-.tile.has-buildings .medal { display: none; }
+/* Buildings and the flag share the inner edge: the coin slides toward one
+   end and the house signs take the rest — the street keeps its nationality
+   while it grows. */
+.tile.has-buildings.t-top .medal,
+.tile.has-buildings.t-bottom .medal { left: calc(24% - var(--medal-d) / 2); }
+.tile.has-buildings.t-left .medal,
+.tile.has-buildings.t-right .medal { top: calc(24% - var(--medal-d) / 2); }
+.t-top.has-buildings .tile-houses,
+.t-bottom.has-buildings .tile-houses { left: 42%; }
+.t-left.has-buildings .tile-houses,
+.t-right.has-buildings .tile-houses { top: 42%; }
 .tile-houses .house, .tile-houses .hotel {
   display: block; animation: popIn .35s var(--pop);
   width: clamp(7px, .82vw, 13px); height: clamp(7px, .82vw, 13px);
