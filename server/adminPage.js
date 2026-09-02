@@ -10,6 +10,13 @@
 // System — each deep-linkable via location.hash, so /admin?key=K#players goes
 // straight to the player table.
 //
+// The Overview is the front desk: a four-card hero row (revenue, players,
+// live-now, games — each with an in-card 14-day sparkline), a subordinate
+// stat strip, two 30-day area charts with real axes, a merged newest-first
+// activity feed (games, ledger credits, sign-ups, admin actions), and the
+// two most-used tools — broadcast and credit-coins — inlined as quick
+// actions that reuse the section forms' endpoints.
+//
 // House rules the page follows:
 //   - every user-controlled string (names, flags, emails, reasons, broadcast
 //     text) goes through esc() before touching innerHTML;
@@ -76,7 +83,9 @@ export const adminPageHTML = `<!doctype html>
   .panel { display: none; }
   .panel.active { display: block; }
 
-  .alert { border-radius: 12px; padding: 11px 14px; margin-bottom: 10px; font-size: 13px; border: 1px solid; line-height: 1.45; }
+  #alerts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+  #alerts:not(:empty) { margin-bottom: 14px; }
+  .alert { border-radius: 12px; padding: 9px 13px; font-size: 12px; border: 1px solid; line-height: 1.45; }
   .alert.red { background: rgba(224, 108, 95, .1); border-color: #6b3a31; color: #f0b9ae; }
   .alert.amber { background: rgba(227, 169, 60, .09); border-color: #6b5426; color: #e9c67f; }
   .alert b { font-weight: 700; }
@@ -86,6 +95,55 @@ export const adminPageHTML = `<!doctype html>
   .tile b { font-size: 24px; color: #e3a93c; font-weight: 700; letter-spacing: .3px; }
   .tile span { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; }
   .tile em { font-style: normal; font-size: 11px; color: #b8c4b4; }
+
+  /* ----------------------------------------------------- overview desk -- */
+  .hero { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+  .hcard { background: linear-gradient(180deg, #16221b, #111a15); border: 1px solid #263a2e; border-radius: 16px; padding: 15px 17px 13px; display: flex; flex-direction: column; gap: 9px; min-width: 0; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
+  .hlabel { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .hmain { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; row-gap: 6px; }
+  .hbig { font-size: 33px; line-height: 1; color: #e3a93c; font-weight: 700; letter-spacing: .3px; white-space: nowrap; }
+  .hbig small { font-size: 12px; color: #93a396; font-weight: 600; letter-spacing: .4px; }
+  .hside { display: flex; gap: 13px; padding-bottom: 3px; flex-wrap: wrap; }
+  .hside b { display: block; font-size: 14px; color: #efeadd; line-height: 1.1; white-space: nowrap; }
+  .hside span { display: block; font-size: 9px; color: #7d8b7f; text-transform: uppercase; letter-spacing: .8px; margin-top: 2px; white-space: nowrap; }
+  .hspark { margin-top: auto; }
+  .hspark svg { width: 100%; height: 46px; display: block; }
+  .hfoot { font-size: 11px; color: #93a396; line-height: 1.45; min-height: 15px; }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: #4fd98b; display: inline-block; flex: none; animation: pulse 1.8s ease-out infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(79, 217, 139, .55); }
+    70% { box-shadow: 0 0 0 7px rgba(79, 217, 139, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(79, 217, 139, 0); }
+  }
+  .substrip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .scard { background: #121b15; border: 1px solid #1f2f26; border-radius: 12px; padding: 9px 15px; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .scard b { font-size: 17px; color: #cfd8cb; font-weight: 700; white-space: nowrap; }
+  .scard span { font-size: 10px; color: #7d8b7f; text-transform: uppercase; letter-spacing: 1px; line-height: 1.35; }
+  .scard .microstack { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #0d1511; border: 1px solid #1f2f26; min-width: 34px; max-width: 90px; }
+  .scard .microstack i { display: block; height: 100%; }
+  .ovgrid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .ovcol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .ovcol .card { margin-bottom: 0; }
+  .feed { max-height: 420px; overflow-y: auto; }
+  .feed-row { display: flex; gap: 10px; padding: 8px 4px; border-bottom: 1px solid #16241b; align-items: flex-start; font-size: 12.5px; }
+  .feed-row:last-child { border-bottom: none; }
+  .feed-row .glyph { flex: none; width: 26px; height: 26px; border-radius: 8px; background: #0e1712; border: 1px solid #24382c; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .feed-row .glyph svg { width: 14px; height: 14px; display: block; }
+  .feed-row .ftext { flex: 1; min-width: 0; line-height: 1.45; color: #b8c4b4; overflow-wrap: break-word; }
+  .feed-row .ftext b { color: #efeadd; font-weight: 600; }
+  .feed-row .ftime { flex: none; font-size: 11px; color: #7d8b7f; padding-top: 2px; white-space: nowrap; }
+  .qa-label { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .qa-row { display: flex; gap: 8px; align-items: center; }
+  .qa-row input { min-width: 0; }
+  .qa-row .btn { flex: none; }
+  @media (max-width: 1150px) {
+    .hero, .substrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ovgrid { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .hero, .substrip { grid-template-columns: minmax(0, 1fr); }
+    .hbig { font-size: 28px; }
+  }
 
   .card { background: linear-gradient(180deg, #15201a, #111a15); border: 1px solid #263a2e; border-radius: 16px; padding: 16px 18px; margin-bottom: 18px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
   .cards { display: flex; gap: 16px; flex-wrap: wrap; align-items: stretch; }
@@ -97,7 +155,8 @@ export const adminPageHTML = `<!doctype html>
   th.sortable { cursor: pointer; color: #cfd8cb; }
   th.sortable:hover { color: #e3a93c; }
   .scroll { overflow: auto; border: 1px solid #1f2f26; border-radius: 10px; }
-  tr.row:hover td { background: rgba(227, 169, 60, .05); cursor: pointer; }
+  .scroll > table > tbody > tr:hover td { background: rgba(227, 169, 60, .03); }
+  tr.row:hover td { background: rgba(227, 169, 60, .05) !important; cursor: pointer; }
   tr.open td { background: rgba(227, 169, 60, .07); }
   .detail-box { background: #0e1712; border: 1px solid #24382c; border-radius: 10px; padding: 14px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
   .detail-box table th { position: static; }
@@ -180,17 +239,44 @@ export const adminPageHTML = `<!doctype html>
 
   <section class="panel" id="sec-overview">
     <div id="alerts"></div>
-    <section class="tiles" id="tiles"></section>
-    <div class="cards">
-      <div class="card" style="flex:1 1 300px">
-        <h2>Games per day</h2>
-        <div id="spark-games" class="chart"></div>
-        <div id="spark-games-cap" class="caption"></div>
+    <div class="hero" id="hero"></div>
+    <div class="substrip" id="substrip"></div>
+    <div class="ovgrid">
+      <div class="ovcol">
+        <div class="card">
+          <h2>Games per day — last 30</h2>
+          <div id="ov-games" class="chart"></div>
+          <div id="ov-games-cap" class="caption"></div>
+        </div>
+        <div class="card">
+          <h2>New players per day — last 30</h2>
+          <div id="ov-newp" class="chart"></div>
+          <div id="ov-newp-cap" class="caption"></div>
+        </div>
       </div>
-      <div class="card" style="flex:1 1 300px">
-        <h2>New players per day</h2>
-        <div id="spark-newp" class="chart"></div>
-        <div id="spark-newp-cap" class="caption"></div>
+      <div class="ovcol">
+        <div class="card">
+          <h2>Quick actions</h2>
+          <div class="qa-label">Broadcast to every connected client</div>
+          <div class="qa-row">
+            <input id="qa-bmsg" autocomplete="off" maxlength="200" placeholder="Maintenance in 10 minutes — finish your turns">
+            <button class="btn sm" id="qa-bgo" type="button">Send</button>
+          </div>
+          <div class="msg" id="qa-bres"></div>
+          <hr class="divider" style="margin:10px 0 12px">
+          <div class="qa-label">Credit coins to a friend code</div>
+          <div class="qa-row">
+            <input id="qa-code" autocomplete="off" spellcheck="false" placeholder="Code" style="width:104px;flex:none">
+            <input id="qa-coins" type="number" min="1" step="1" placeholder="Coins" style="width:86px;flex:none">
+            <input id="qa-reason" autocomplete="off" placeholder="Reason — refund, prize...">
+            <button class="btn sm" id="qa-cgo" type="button">Credit</button>
+          </div>
+          <div class="msg" id="qa-cres"></div>
+        </div>
+        <div class="card">
+          <h2>Activity <span class="count" id="feedcount"></span></h2>
+          <div class="feed" id="feed"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -218,7 +304,7 @@ export const adminPageHTML = `<!doctype html>
       </div>
     </div>
     <section class="card">
-      <h2>Purchases</h2>
+      <h2>Purchases <span class="count" id="purchasecount"></span></h2>
       <div class="toolbar"><button class="btn ghost sm" id="csv-ledger" type="button">Export ledger CSV</button></div>
       <div class="scroll" style="max-height:380px"><table><tbody id="purchases"></tbody></table></div>
     </section>
@@ -276,7 +362,7 @@ export const adminPageHTML = `<!doctype html>
       <div id="gamescaption" class="caption"></div>
     </section>
     <section class="card">
-      <h2>Recent games</h2>
+      <h2>Recent games <span class="count" id="gamecount"></span></h2>
       <div class="scroll" style="max-height:420px"><table><tbody id="games"></tbody></table></div>
     </section>
   </section>
@@ -393,10 +479,20 @@ export const adminPageHTML = `<!doctype html>
     return m + 'm ' + (s % 60) + 's';
   }
   function dayStart(t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
-  function last30Days() {
+  function lastNDays(n) {
     var days = [], now = Date.now();
-    for (var i = 29; i >= 0; i--) days.push(dayStart(now - i * DAY));
+    for (var i = n - 1; i >= 0; i--) days.push(dayStart(now - i * DAY));
     return days;
+  }
+  function last30Days() { return lastNDays(30); }
+  function fmtAgo(t) {
+    var s = Math.floor((Date.now() - t) / 1000);
+    if (s < 45) return 'now';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + 'm ago';
+    var h = Math.round(m / 60);
+    if (h < 24) return h + 'h ago';
+    return Math.round(h / 24) + 'd ago';
   }
   /** innerHTML swap that keeps the nearest scroll container where it was. */
   function swap(id, html) {
@@ -459,28 +555,150 @@ export const adminPageHTML = `<!doctype html>
     a.remove();
   }
   function iso(t) { return t ? new Date(t).toISOString() : ''; }
-  function sparkSvg(counts, color) {
-    var W = 320, H = 84, pad = 8;
-    var max = Math.max.apply(null, counts.concat([1]));
-    var pts = counts.map(function (c, i) {
-      var x = pad + i * (W - 2 * pad) / (counts.length - 1);
-      var y = H - pad - c * (H - 2 * pad) / max;
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
-      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round"/></svg>';
-  }
-  function perDay(items, at) {
-    var days = last30Days();
+  /** Bucket items into the given day list; val(it) weighs each item (default 1). */
+  function perDayOver(days, items, at, val) {
     var map = {};
     days.forEach(function (d) { map[d] = 0; });
     items.forEach(function (it) {
       var t = at(it);
       if (!t) return;
       var d = dayStart(t);
-      if (map[d] != null) map[d]++;
+      if (map[d] != null) map[d] += val ? val(it) : 1;
     });
     return days.map(function (d) { return map[d]; });
+  }
+  function perDay(items, at) { return perDayOver(last30Days(), items, at); }
+  function gradientDefs(id, color) {
+    return '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0" stop-color="' + color + '" stop-opacity=".32"/>' +
+      '<stop offset="1" stop-color="' + color + '" stop-opacity="0"/></linearGradient></defs>';
+  }
+  /** Tiny in-card sparkline: gradient area + line; dashed baseline when flat. */
+  function miniSpark(counts, color, id) {
+    var W = 160, H = 46, pad = 4;
+    var max = 0;
+    counts.forEach(function (c) { if (c > max) max = c; });
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">';
+    if (max <= 0) {
+      return svg + '<line x1="' + pad + '" y1="' + (H - 8) + '" x2="' + (W - pad) + '" y2="' + (H - 8) +
+        '" stroke="#2a4033" stroke-width="1.5" stroke-dasharray="2 5" stroke-linecap="round"/></svg>';
+    }
+    var pts = counts.map(function (c, i) {
+      var x = pad + (counts.length > 1 ? i * (W - 2 * pad) / (counts.length - 1) : (W - 2 * pad) / 2);
+      var y = H - 6 - c * (H - 15) / max;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    svg += gradientDefs(id, color);
+    svg += '<path d="M' + pad + ',' + (H - 2) + ' L' + pts.join(' L') + ' L' + (W - pad) + ',' + (H - 2) +
+      ' Z" fill="url(#' + id + ')"/>';
+    svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color +
+      '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    var lastPt = pts[pts.length - 1].split(',');
+    svg += '<circle cx="' + lastPt[0] + '" cy="' + lastPt[1] + '" r="2.6" fill="' + color + '"/>';
+    return svg + '</svg>';
+  }
+  /**
+   * The workhorse day-series chart: labeled y ticks, faint weekly verticals,
+   * gradient area under the line, a hoverable dot per day — and a designed
+   * skeleton (grid + dashed baseline + one line of copy) when there is no
+   * data yet, never a lone flat line.
+   */
+  function areaChart(days, counts, o) {
+    var W = 640, H = o.h || 190, padL = 46, padR = 12, padT = 12, padB = 24;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var max = 0;
+    counts.forEach(function (c) { if (c > max) max = c; });
+    var xFor = function (i) { return padL + (days.length > 1 ? i * plotW / (days.length - 1) : plotW / 2); };
+    var yFor = function (v) { return H - padB - (max > 0 ? v / max * plotH : 0); };
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    var i;
+    for (i = 7; i < days.length; i += 7) {
+      svg += '<line x1="' + xFor(i).toFixed(1) + '" y1="' + padT + '" x2="' + xFor(i).toFixed(1) +
+        '" y2="' + (H - padB) + '" stroke="#16251c" stroke-width="1"/>';
+    }
+    var ticks = max >= 4 ? [0, 0.5, 1] : [0, 1];
+    ticks.forEach(function (f) {
+      var y = H - padB - f * plotH;
+      svg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) +
+        '" stroke="#1e2f24" stroke-width="1"/>';
+      var lbl = max > 0 ? (o.fmt ? o.fmt(max * f) : String(Math.round(max * f))) : (f === 0 ? '0' : '');
+      if (lbl) svg += '<text x="' + (padL - 7) + '" y="' + (y + 3.5).toFixed(1) + '" text-anchor="end" class="axis">' + lbl + '</text>';
+    });
+    [0, Math.floor((days.length - 1) / 2), days.length - 1].forEach(function (di) {
+      svg += '<text x="' + xFor(di).toFixed(1) + '" y="' + (H - 7) + '" text-anchor="middle" class="axis">' + dateLabel(days[di]) + '</text>';
+    });
+    if (max > 0) {
+      var pts = counts.map(function (c, ci) { return xFor(ci).toFixed(1) + ',' + yFor(c).toFixed(1); });
+      svg += gradientDefs(o.id, o.color);
+      svg += '<path d="M' + xFor(0).toFixed(1) + ',' + (H - padB) + ' L' + pts.join(' L') + ' L' +
+        xFor(days.length - 1).toFixed(1) + ',' + (H - padB) + ' Z" fill="url(#' + o.id + ')"/>';
+      svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + o.color +
+        '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      counts.forEach(function (c, ci) {
+        svg += '<circle cx="' + xFor(ci).toFixed(1) + '" cy="' + yFor(c).toFixed(1) + '" r="2.4" fill="' + o.color +
+          '" fill-opacity="' + (c > 0 ? '1' : '.3') + '"><title>' + dateLabel(days[ci]) + ' — ' +
+          (o.tip ? o.tip(c) : c) + '</title></circle>';
+      });
+    } else {
+      svg += '<line x1="' + padL + '" y1="' + (H - padB) + '" x2="' + (W - padR) + '" y2="' + (H - padB) +
+        '" stroke="#2a4033" stroke-width="1.5" stroke-dasharray="3 6" stroke-linecap="round"/>';
+      svg += '<text x="' + (padL + plotW / 2).toFixed(1) + '" y="' + (padT + plotH / 2 + 4).toFixed(1) +
+        '" text-anchor="middle" class="empty">' + o.empty + '</text>';
+    }
+    return svg + '</svg>';
+  }
+  /** Seats at live tables as a strip of little squares: gold humans, sage bots, hollow empties. */
+  function seatStrip(humans, bots, empty) {
+    var W = 160, H = 46;
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMinYMid meet" aria-hidden="true">';
+    var total = humans + bots + empty;
+    if (total <= 0) {
+      return svg + '<line x1="4" y1="' + (H - 8) + '" x2="' + (W - 4) + '" y2="' + (H - 8) +
+        '" stroke="#2a4033" stroke-width="1.5" stroke-dasharray="2 5" stroke-linecap="round"/></svg>';
+    }
+    var cells = [];
+    var cap = 20, i;
+    var take = function (n, color, hollow) {
+      for (var k = 0; k < n; k++) cells.push({ c: color, hollow: hollow });
+    };
+    if (total <= cap) {
+      take(humans, '#e3a93c'); take(bots, '#5d7a66'); take(empty, '#1b2a20', true);
+    } else {
+      var hN = Math.round(humans / total * cap), bN = Math.round(bots / total * cap);
+      var eN = Math.max(0, cap - hN - bN);
+      take(hN, '#e3a93c'); take(bN, '#5d7a66'); take(eN, '#1b2a20', true);
+      // Two .5 shares both rounding up can mint a 21st cell — clip to the cap
+      // so the strip never grows a clipped third row.
+      if (cells.length > cap) cells.length = cap;
+    }
+    var size = 11, gap = 4, per = 10;
+    var yBase = cells.length > per ? 8 : 14;
+    for (i = 0; i < cells.length; i++) {
+      var col = i % per, row = Math.floor(i / per);
+      svg += '<rect x="' + (2 + col * (size + gap)).toFixed(1) + '" y="' + (yBase + row * (size + gap)).toFixed(1) +
+        '" width="' + size + '" height="' + size + '" rx="3" fill="' + cells[i].c + '"' +
+        (cells[i].hollow ? ' stroke="#24382c" stroke-width="1"' : '') + '/>';
+    }
+    return svg + '</svg>';
+  }
+  /** Hand-drawn 16x16 stroke glyphs for the activity feed. */
+  function glyph(kind) {
+    var s = '<svg viewBox="0 0 16 16" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="';
+    if (kind === 'game') {
+      return s + '#4fd98b"><path d="M5 2.8h6v3.6a3 3 0 0 1-6 0z"/>' +
+        '<path d="M5 3.8H3.2a2.3 2.3 0 0 0 2 2.6M11 3.8h1.8a2.3 2.3 0 0 1-2 2.6"/>' +
+        '<path d="M8 9.4v2M5.8 13.4h4.4"/></svg>';
+    }
+    if (kind === 'coin') {
+      return s + '#e3a93c"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.3"/></svg>';
+    }
+    if (kind === 'join') {
+      return s + '#b9c7bd"><circle cx="8" cy="5.4" r="2.5"/><path d="M3.6 13c.7-2.7 2.4-4.1 4.4-4.1s3.7 1.4 4.4 4.1"/></svg>';
+    }
+    if (kind === 'admin') {
+      return s + '#e88a7d"><path d="M8 2.2l4.6 1.7v3.3c0 2.9-1.8 4.9-4.6 6.4-2.8-1.5-4.6-3.5-4.6-6.4V3.9z"/></svg>';
+    }
+    return s + '#93a396"><circle cx="8" cy="8" r="5.5"/></svg>';
   }
 
   // ------------------------------------------------------------ sections --
@@ -531,43 +749,180 @@ export const adminPageHTML = `<!doctype html>
       (sub ? '<em>' + esc(sub) + '</em>' : '') + '</div>';
   }
 
-  function renderTiles() {
+  function renderHero() {
     var t = state.data.totals || {};
     var r = state.data.revenue || {};
-    swap('tiles',
-      tileHtml(fmtUsd(r.total), 'revenue (ledger)', fmtUsd(r.last7d) + ' in the last 7 days') +
-      tileHtml(fmtNum(t.dau), 'active today', '') +
-      tileHtml(fmtNum(t.wau), 'active 7 days', '') +
-      tileHtml(fmtNum(t.mau), 'active 30 days', '') +
-      tileHtml(fmtNum(t.gamesStarted), 'games started', '') +
-      tileHtml(fmtNum(t.gamesEnded), 'games finished', '') +
-      tileHtml(fmtNum(t.liveRooms), 'live rooms', '') +
-      tileHtml(fmtNum(t.liveSockets), 'live sockets', '') +
-      tileHtml(fmtNum(t.profiles), 'profiles', '') +
-      tileHtml(fmtNum(t.coinsInCirculation), 'coins in circulation', '') +
-      tileHtml(t.avgKarma == null ? '—' : Number(t.avgKarma).toFixed(1), 'average karma', ''));
-    var cap = r.since
-      ? 'Ledger since ' + fmtWhen(r.since) + ' — purchases made before then predate the ledger and are not counted here.'
-      : 'The ledger is empty — it records purchases from today onward; anything bought earlier predates it.';
-    document.getElementById('revcaption').textContent = cap;
+    var days14 = lastNDays(14);
+    var paid = (state.data.ledger || []).filter(function (e) { return e.usd > 0; });
+    var games = state.data.recentGames || [];
+    var profs = state.data.profiles || [];
+    var revSpark = perDayOver(days14, paid, function (e) { return e.at; }, function (e) { return e.usd; });
+    var gSpark = perDayOver(days14, games, function (g) { return g.at; });
+    var pSpark = perDayOver(days14, profs, function (p) { return p.created; });
+    var today = dayStart(Date.now());
+    var weekAgo = Date.now() - 7 * DAY;
+    var gToday = 0, g14 = 0, newWeek = 0;
+    games.forEach(function (g) {
+      if (g.at >= today) gToday++;
+      if (g.at >= today - 13 * DAY) g14++;
+    });
+    profs.forEach(function (p) { if (p.created && p.created >= weekAgo) newWeek++; });
+
+    var split = { stripe: 0, apple: 0 };
+    paid.forEach(function (e) { if (split[e.provider] != null) split[e.provider] += e.usd; });
+
+    var html = '';
+
+    var revFoot = paid.length
+      ? fmtUsd(split.stripe) + ' Stripe · ' + fmtUsd(split.apple) + ' Apple'
+      : 'Ledger starts today — the first sale draws the first line.';
+    html += '<div class="hcard"><div class="hlabel">Revenue</div>' +
+      '<div class="hmain"><b class="hbig">' + fmtUsd(r.total) + '</b>' +
+      '<div class="hside"><div><b>' + fmtUsd(r.last7d) + '</b><span>last 7 days</span></div>' +
+      '<div><b>' + fmtNum(r.purchases) + '</b><span>purchases</span></div></div></div>' +
+      '<div class="hspark">' + miniSpark(revSpark, '#7ba0f2', 'hs-rev') + '</div>' +
+      '<div class="hfoot">' + revFoot + '</div></div>';
+
+    var p14 = 0;
+    pSpark.forEach(function (c) { p14 += c; });
+    var pFoot = newWeek > 0
+      ? '+' + fmtNum(newWeek) + ' new profile' + (newWeek === 1 ? '' : 's') + ' this week — the line is sign-ups, last 14 days.'
+      : (p14 > 0
+        ? 'None this week — the line is sign-ups, last 14 days.'
+        : 'The line is sign-ups over 14 days — none since the birthdate field shipped.');
+    html += '<div class="hcard"><div class="hlabel">Players</div>' +
+      '<div class="hmain"><b class="hbig">' + fmtNum(t.dau) + '<small> today</small></b>' +
+      '<div class="hside"><div><b>' + fmtNum(t.wau) + '</b><span>7 days</span></div>' +
+      '<div><b>' + fmtNum(t.mau) + '</b><span>30 days</span></div>' +
+      '<div><b>' + fmtNum(t.profiles) + '</b><span>all-time</span></div></div></div>' +
+      '<div class="hspark">' + miniSpark(pSpark, '#4fd98b', 'hs-newp') + '</div>' +
+      '<div class="hfoot">' + pFoot + '</div></div>';
+
+    var rooms = state.data.rooms || [];
+    var humans = 0, bots = 0, seats = 0, inGame = 0, lobbies = 0, playing = 0;
+    rooms.forEach(function (rm) {
+      if (rm.status === 'ended') return;
+      if (rm.status === 'playing') playing++;
+      else if (rm.status === 'lobby') lobbies++;
+      seats += rm.maxPlayers || 0;
+      (rm.players || []).forEach(function (p) {
+        if (p.isBot) bots++; else humans++;
+        if (rm.status === 'playing') inGame++;
+      });
+    });
+    var alive = t.liveSockets > 0 || playing > 0 || humans > 0;
+    var liveFoot = alive
+      ? playing + ' playing · ' + lobbies + ' in lobby — ' + fmtNum(humans) + ' human' + (humans === 1 ? '' : 's') +
+        ', ' + fmtNum(bots) + ' bot' + (bots === 1 ? '' : 's') + ' seated.'
+      : 'The felt is quiet — no sockets, no seats, nothing moving.';
+    html += '<div class="hcard"><div class="hlabel">' + (alive ? '<span class="pulse"></span>' : '') + 'Live now</div>' +
+      '<div class="hmain"><b class="hbig">' + fmtNum(t.liveRooms) + '<small> room' + (t.liveRooms === 1 ? '' : 's') + '</small></b>' +
+      '<div class="hside"><div><b>' + fmtNum(t.liveSockets) + '</b><span>sockets</span></div>' +
+      '<div><b>' + fmtNum(inGame) + '</b><span>in game</span></div></div></div>' +
+      '<div class="hspark">' + seatStrip(humans, bots, Math.max(0, seats - humans - bots)) + '</div>' +
+      '<div class="hfoot">' + liveFoot + '</div></div>';
+
+    html += '<div class="hcard"><div class="hlabel">Games</div>' +
+      '<div class="hmain"><b class="hbig">' + fmtNum(gToday) + '<small> today</small></b>' +
+      '<div class="hside"><div><b>' + fmtNum(t.gamesEnded) + '</b><span>finished</span></div>' +
+      '<div><b>' + fmtNum(t.gamesStarted) + '</b><span>started</span></div></div></div>' +
+      '<div class="hspark">' + miniSpark(gSpark, '#e3a93c', 'hs-games') + '</div>' +
+      '<div class="hfoot">' + fmtNum(g14) + ' finished in the last 14 days.</div></div>';
+
+    swap('hero', html);
   }
 
-  function renderSparklines() {
+  function renderSubstrip() {
+    var t = state.data.totals || {};
+    var e = state.data.economy || {};
+    var humans = 0, bots = 0;
+    (state.data.rooms || []).forEach(function (rm) {
+      if (rm.status === 'ended') return;
+      (rm.players || []).forEach(function (p) { if (p.isBot) bots++; else humans++; });
+    });
+    var signedPct = t.profiles > 0 ? Math.round((e.signedIn || 0) / t.profiles * 100) : 0;
+    var seated = humans + bots;
+    var hPct = seated > 0 ? (humans / seated * 100).toFixed(1) : '0';
+    swap('substrip',
+      '<div class="scard"><b>' + fmtNum(t.coinsInCirculation) + '</b><span>coins in circulation</span></div>' +
+      '<div class="scard"><b>' + (t.avgKarma == null ? '—' : Number(t.avgKarma).toFixed(1)) + '</b><span>average karma</span></div>' +
+      '<div class="scard"><b>' + signedPct + '%</b><span>signed in · ' + fmtNum(e.signedIn) + ' of ' + fmtNum(t.profiles) + '</span></div>' +
+      '<div class="scard"><b>' + fmtNum(humans) + ' : ' + fmtNum(bots) + '</b>' +
+        (seated > 0 ? '<span class="microstack"><i style="width:' + hPct + '%;background:#e3a93c"></i><i style="flex:1;background:#5d7a66"></i></span>' : '') +
+        '<span>humans vs bots seated</span></div>');
+  }
+
+  function renderFeed() {
+    var evts = [];
+    (state.data.recentGames || []).forEach(function (g) {
+      if (!g.at) return;
+      var txt = g.winner
+        ? '<b>' + esc(g.winner) + '</b> won on ' + esc(g.map) + ' <span class="dim">· ' + esc(g.roomId) + ' · ' + fmtNum(g.turns) + ' turns</span>'
+        : 'Game ended on ' + esc(g.map) + ' <span class="dim">· ' + esc(g.roomId) + '</span>';
+      evts.push({ at: g.at, kind: 'game', html: txt });
+    });
+    (state.data.ledger || []).forEach(function (e) {
+      if (!e.at) return;
+      var txt;
+      if (e.provider === 'admin') txt = '<b>' + esc(e.code || '?') + '</b> credited ' + fmtNum(e.coins) + ' coins <span class="dim">· admin' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
+      else if (e.provider === 'win') txt = '<b>' + esc(e.code || '?') + '</b> earned ' + fmtNum(e.coins) + ' coins <span class="dim">· win payout</span>';
+      else txt = '<b>' + esc(e.code || '?') + '</b> bought ' + esc(e.packId || 'coins') + ' <span class="dim">· ' + esc(e.provider) + (e.usd > 0 ? ' · ' + fmtUsd(e.usd) : '') + '</span>';
+      evts.push({ at: e.at, kind: 'coin', html: txt });
+    });
+    var cutoff = Date.now() - 30 * DAY;
+    (state.data.profiles || []).forEach(function (p) {
+      if (!p.created || p.created < cutoff) return;
+      evts.push({ at: p.created, kind: 'join', html: '<b>' + esc(p.name || p.code) + '</b> joined <span class="dim">· new profile · ' + esc(p.code) + '</span>' });
+    });
+    ((state.data.moderation || {}).audit || []).forEach(function (a) {
+      // Credits already surface as their ledger entry — one line per story.
+      if (!a.at || a.action === 'credit') return;
+      evts.push({ at: a.at, kind: 'admin', html: '<b>' + esc(a.action) + '</b> ' + esc(a.target || '') + (a.detail ? ' <span class="dim">· ' + esc(a.detail) + '</span>' : '') });
+    });
+    evts.sort(function (a, b) { return b.at - a.at; });
+    var shown = evts.slice(0, 25);
+    document.getElementById('feedcount').textContent =
+      shown.length ? (shown.length < evts.length ? shown.length + ' of ' + fmtNum(evts.length) : String(shown.length)) : '';
+    var html = shown.map(function (ev) {
+      return '<div class="feed-row"><span class="glyph">' + glyph(ev.kind) + '</span>' +
+        '<div class="ftext">' + ev.html + '</div>' +
+        '<span class="ftime" title="' + esc(fmtWhen(ev.at)) + '">' + fmtAgo(ev.at) + '</span></div>';
+    }).join('');
+    if (!shown.length) {
+      html = '<div class="dim" style="font-size:13px;padding:8px 2px;line-height:1.5">Quiet so far — finished games, sales, sign-ups and admin actions land here as they happen.</div>';
+    }
+    var el = document.getElementById('feed');
+    var top = el.scrollTop;
+    el.innerHTML = html;
+    el.scrollTop = top;
+  }
+
+  function renderOverviewCharts() {
+    var days = last30Days();
     var games = state.data.recentGames || [];
     var gCounts = perDay(games, function (g) { return g.at; });
     var gTotal = gCounts.reduce(function (a, b) { return a + b; }, 0);
-    document.getElementById('spark-games').innerHTML = sparkSvg(gCounts, '#e3a93c');
-    document.getElementById('spark-games-cap').textContent =
-      gTotal + ' of the ' + games.length + ' most recent finished games fell in the last 30 days (peak ' +
-      Math.max.apply(null, gCounts.concat([0])) + '/day).';
+    var gPeak = Math.max.apply(null, gCounts.concat([0]));
+    document.getElementById('ov-games').innerHTML = areaChart(days, gCounts, {
+      id: 'ag-games', color: '#e3a93c', h: 208,
+      empty: 'No finished games yet — the first one draws the first point',
+      tip: function (v) { return v + ' game' + (v === 1 ? '' : 's'); },
+    });
+    document.getElementById('ov-games-cap').textContent = gTotal > 0
+      ? gTotal + ' of the ' + games.length + ' most recent finished games fell in the last 30 days (peak ' + gPeak + '/day).'
+      : 'Finished games land here as tables wrap up.';
 
     var profs = state.data.profiles || [];
     var pCounts = perDay(profs, function (p) { return p.created; });
     var pTotal = pCounts.reduce(function (a, b) { return a + b; }, 0);
-    document.getElementById('spark-newp').innerHTML = sparkSvg(pCounts, '#4fd98b');
-    document.getElementById('spark-newp-cap').textContent =
-      pTotal + ' new player' + (pTotal === 1 ? '' : 's') + ' in the last 30 days, of ' +
-      fmtNum(profs.length) + ' all-time. Profiles older than the birthdate field count as born when last seen.';
+    document.getElementById('ov-newp').innerHTML = areaChart(days, pCounts, {
+      id: 'ag-newp', color: '#4fd98b', h: 208,
+      empty: 'Sign-ups start counting now — profiles predate the birthdate field',
+      tip: function (v) { return v + ' new player' + (v === 1 ? '' : 's'); },
+    });
+    document.getElementById('ov-newp-cap').textContent = pTotal > 0
+      ? pTotal + ' new player' + (pTotal === 1 ? '' : 's') + ' in the last 30 days, of ' + fmtNum(profs.length) + ' all-time.'
+      : fmtNum(profs.length) + ' profiles all-time — older ones have no birthdate, so the line starts with the next sign-up.';
   }
 
   function renderRevenue() {
@@ -614,10 +969,16 @@ export const adminPageHTML = `<!doctype html>
       svg += '<text x="' + x + '" y="' + (H - 6) + '" text-anchor="middle" class="axis">' + dateLabel(days[i]) + '</text>';
     });
     if (!entries.length) {
-      svg += '<text x="' + (padL + plotW / 2) + '" y="' + (padT + plotH / 2) + '" text-anchor="middle" class="empty">No revenue in the ledger yet</text>';
+      svg += '<line x1="' + padL + '" y1="' + (H - padB) + '" x2="' + (W - padR) + '" y2="' + (H - padB) +
+        '" stroke="#2a4033" stroke-width="1.5" stroke-dasharray="3 6" stroke-linecap="round"/>';
+      svg += '<text x="' + (padL + plotW / 2) + '" y="' + (padT + plotH / 2) +
+        '" text-anchor="middle" class="empty">Ledger starts today — the first sale draws the first bar</text>';
     }
     svg += '</svg>';
     document.getElementById('revchart').innerHTML = svg;
+    document.getElementById('revcaption').textContent = (state.data.revenue || {}).since
+      ? 'Ledger since ' + fmtWhen(state.data.revenue.since) + ' — purchases made before then predate the ledger and are not counted here.'
+      : 'The ledger is empty — it records purchases from today onward; anything bought earlier predates it.';
   }
 
   function hbar(label, value, max, color, valText) {
@@ -661,6 +1022,7 @@ export const adminPageHTML = `<!doctype html>
       html += '<tr><td colspan="6" class="dim">No entries yet. The ledger records every credit from now on; older purchases predate it and exist only as receipt ids.</td></tr>';
     }
     swap('purchases', html);
+    document.getElementById('purchasecount').textContent = (state.data.ledger || []).length || '';
   }
 
   function statusWeight(s) { return s === 'playing' ? 0 : (s === 'lobby' ? 1 : 2); }
@@ -758,32 +1120,20 @@ export const adminPageHTML = `<!doctype html>
     });
     if (!games.length) html += '<tr><td colspan="6" class="dim">No finished games yet</td></tr>';
     swap('games', html);
+    document.getElementById('gamecount').textContent = games.length || '';
 
     var days = last30Days();
     var counts = perDay(games, function (g) { return g.at; });
-    var max = Math.max.apply(null, counts.concat([1]));
-    var W = 860, H = 160, padB = 20, padT = 8;
-    var slot = W / 30, bw = slot * 0.66;
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '">';
-    counts.forEach(function (v, i) {
-      var x = i * slot + (slot - bw) / 2;
-      if (v > 0) {
-        var h = Math.max(2, v * (H - padB - padT) / max);
-        svg += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - h).toFixed(1) + '" width="' + bw.toFixed(1) +
-          '" height="' + h.toFixed(1) + '" rx="2" fill="#e3a93c"><title>' + dateLabel(days[i]) + ': ' + v +
-          ' game' + (v === 1 ? '' : 's') + '</title></rect>';
-      } else {
-        svg += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - 1) + '" width="' + bw.toFixed(1) + '" height="1" fill="#2a4033"/>';
-      }
+    var max = Math.max.apply(null, counts.concat([0]));
+    document.getElementById('gameschart').innerHTML = areaChart(days, counts, {
+      id: 'ag-games2', color: '#e3a93c', h: 180,
+      empty: 'No finished games yet — the first one draws the first point',
+      tip: function (v) { return v + ' game' + (v === 1 ? '' : 's'); },
     });
-    [0, 15, 29].forEach(function (i) {
-      svg += '<text x="' + (i * slot + slot / 2).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="middle" class="axis">' + dateLabel(days[i]) + '</text>';
-    });
-    svg += '</svg>';
-    document.getElementById('gameschart').innerHTML = svg;
     var total = counts.reduce(function (a, b) { return a + b; }, 0);
-    document.getElementById('gamescaption').textContent =
-      total + ' finished in the last 30 days (peak ' + max + '/day). Only the ' + games.length + ' most recent games are kept.';
+    document.getElementById('gamescaption').textContent = total > 0
+      ? total + ' finished in the last 30 days (peak ' + max + '/day). Only the ' + games.length + ' most recent games are kept.'
+      : 'Finished games land here as tables wrap up. Only the most recent 100 are kept.';
   }
 
   function playerByCode(code) {
@@ -1023,8 +1373,10 @@ export const adminPageHTML = `<!doctype html>
     if (!state.data) return;
     renderStatus();
     renderAlerts();
-    renderTiles();
-    renderSparklines();
+    renderHero();
+    renderSubstrip();
+    renderFeed();
+    renderOverviewCharts();
     renderRevenue();
     renderByPack();
     renderPurchases();
@@ -1231,6 +1583,36 @@ export const adminPageHTML = `<!doctype html>
         document.getElementById('b-msg').value = '';
         refresh();
       } else setMsg('bmsg', (r && r.error) || 'Broadcast failed.', false);
+    });
+  });
+
+  // The Overview quick actions share the section forms' plumbing — same
+  // endpoints, same confirms, their own message lines.
+  document.getElementById('qa-bgo').addEventListener('click', function () {
+    var msg = document.getElementById('qa-bmsg').value.trim();
+    if (!msg) return setMsg('qa-bres', 'Type a message first.', false);
+    if (!confirm('Send to every connected client?' + NL + NL + msg)) return;
+    post('/api/admin/broadcast', { message: msg }, function (r) {
+      if (r && r.ok) {
+        setMsg('qa-bres', 'Sent' + (r.reached != null ? ' to ' + fmtNum(r.reached) + ' socket' + (r.reached === 1 ? '' : 's') : '') + '.', true);
+        document.getElementById('qa-bmsg').value = '';
+        refresh();
+      } else setMsg('qa-bres', (r && r.error) || 'Broadcast failed.', false);
+    });
+  });
+
+  document.getElementById('qa-cgo').addEventListener('click', function () {
+    var code = document.getElementById('qa-code').value.trim().toUpperCase();
+    var coins = parseInt(document.getElementById('qa-coins').value, 10);
+    var reason = document.getElementById('qa-reason').value.trim();
+    creditCoins(code, coins, reason, function (r) {
+      if (r && r.ok) {
+        setMsg('qa-cres', 'Credited ' + fmtNum(coins) + ' to ' + code + (r.name ? ' (' + r.name + ')' : '') +
+          ' — new balance ' + fmtNum(r.coins) + '.', true);
+        document.getElementById('qa-coins').value = '';
+        document.getElementById('qa-reason').value = '';
+        refresh();
+      } else setMsg('qa-cres', (r && r.error) || 'Credit failed.', false);
     });
   });
 
