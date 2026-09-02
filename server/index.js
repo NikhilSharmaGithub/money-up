@@ -680,26 +680,34 @@ function quickMatchRoom() {
 }
 
 /** Team chat stays inside the team: strip other teams' messages per viewer. */
-function stateFor(base, room, viewerId) {
+function stateFor(base, room, viewerIds) {
   if (!base.chat.some((m) => m.channel === 'team')) return base;
-  const team = viewerId != null ? room.player(viewerId)?.team : null;
-  return { ...base, chat: base.chat.filter((m) => m.channel !== 'team' || (team != null && m.team === team)) };
+  const teams = new Set();
+  for (const id of viewerIds || []) {
+    const t = room.player(id)?.team;
+    if (t != null) teams.add(t);
+  }
+  return { ...base, chat: base.chat.filter((m) => m.channel !== 'team' || teams.has(m.team)) };
+}
+
+/** The player ids this socket has claimed here — several, on pass & play. */
+function seatsHeldBy(roomId, socketId) {
+  const held = new Set();
+  for (const [playerId, socketIds] of seatsOf.get(roomId) || []) {
+    if (socketIds.has(socketId)) held.add(playerId);
+  }
+  return held;
 }
 
 function broadcast(room) {
   recordTransitions(room);
+  // Serialized once, then cut per socket: a viewer's own seats keep their
+  // real ids (the id is their secret token), everyone else's are aliased —
+  // see GameRoom.serializeFor. Spectators hold no seat and get only aliases.
   const base = room.serialize();
-  const delivered = new Set();
-  for (const [playerId, socketIds] of seatsOf.get(room.id) || []) {
-    const state = stateFor(base, room, playerId);
-    for (const sid of socketIds) {
-      io.to(sid).emit('state', state);
-      delivered.add(sid);
-    }
-  }
-  // Spectators (sockets without a seat) see everything but team chat.
   for (const sid of socketsOf.get(room.id) || []) {
-    if (!delivered.has(sid)) io.to(sid).emit('state', stateFor(base, room, null));
+    const held = seatsHeldBy(room.id, sid);
+    io.to(sid).emit('state', stateFor(room.serializeFor(held, base), room, held));
   }
   // Keep each seated player's presence in step with what the room is doing,
   // so a friends list can say "in a lobby" vs "in a game".
@@ -811,7 +819,8 @@ io.on('connection', (socket) => {
       room.startQuickMatch();
     }
     socket.emit('you', { playerId, roomId });
-    socket.emit('state', stateFor(room.serialize(), room, playerId));
+    const held = seatsHeldBy(roomId, socket.id);
+    socket.emit('state', stateFor(room.serializeFor(held), room, held));
   }));
 
   const guard = (fn) => safely('action', (...args) => {
@@ -826,13 +835,18 @@ io.on('connection', (socket) => {
     if (playerId !== room.hostId) return fail('Only the host can add bots');
     ok(room.addBot());
   }));
+  // Clients only ever see other players as aliases, so any id that names
+  // someone else is translated back to the real token at the door. A caller's
+  // own real token still passes through untouched — see GameRoom.resolveId.
   socket.on('kick', guard((targetId) => {
     if (playerId !== room.hostId) return fail('Only the host can remove players');
-    if (targetId === room.hostId) return;
-    room.removePlayer(targetId);
+    const target = room.resolveId(String(targetId || ''));
+    if (target === room.hostId) return;
+    room.removePlayer(target);
   }));
   socket.on('team', guard((team, targetId) => {
-    const target = targetId && targetId !== playerId ? targetId : playerId;
+    const asked = targetId ? room.resolveId(String(targetId)) : null;
+    const target = asked && asked !== playerId ? asked : playerId;
     if (target !== playerId) {
       // You can move yourself, and the host can shuffle the bots — nobody else.
       if (playerId !== room.hostId) return fail('Only the host can move other players');
@@ -871,7 +885,7 @@ io.on('connection', (socket) => {
   }));
   socket.on('unmortgage', onTurn((tile) => ok(room.unmortgage(playerId, Number(tile)))));
 
-  socket.on('trade:propose', guard((d = {}) => ok(room.proposeTrade(playerId, d))));
+  socket.on('trade:propose', guard((d = {}) => ok(room.proposeTrade(playerId, { ...d, to: room.resolveId(d.to) }))));
   socket.on('trade:respond', guard(({ id, accept } = {}) => ok(room.respondTrade(playerId, id, !!accept))));
   socket.on('trade:cancel', guard(({ id } = {}) => ok(room.cancelTrade(playerId, id))));
   socket.on('trade:ignore', guard(({ id, ignored } = {}) => ok(room.ignoreTrade(playerId, id, ignored !== false))));
@@ -880,32 +894,13 @@ io.on('connection', (socket) => {
   socket.on('payDebt', onTurn(() => ok(room.payDebt(playerId))));
   socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));
   socket.on('quit', guard(() => ok(room.quit(playerId))));
-  socket.on('grantTime', guard(({ id } = {}) => ok(room.grantTime(playerId, String(id || '')))));
+  socket.on('grantTime', guard(({ id } = {}) => ok(room.grantTime(playerId, room.resolveId(String(id || ''))))));
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
   socket.on('rematch', guard(() => {
     // First one to want another game gets to run it — whoever presses
-    // Play again takes the host chair, bots and the departed excepted.
-    const presser = room.player(playerId);
-    if (!presser || presser.isBot) return fail('Take a seat first');
-    if (room.status !== 'ended') return fail('The game is still on');
-    room.hostId = playerId;
-    room.status = 'lobby';
-    room.winner = null;
-    room.winningTeam = null;
-    room.ownership = {};
-    room.turn = null;
-    room.auction = null;
-    room.trades = [];
-    room.vacationPot = 0;
-    room.log = [];
-    room.players.forEach((p) => {
-      p.money = room.settings.startingCash;
-      p.pos = 0; p.jail = false; p.jailTurns = 0; p.getOutCards = 0;
-      p.bankrupt = false; p.skipTurns = 0;
-    });
-    room.say('Back to the lobby — set up the next game', 'system');
-    room.push();
+    // Play again takes the host chair; the departed stay departed.
+    ok(room.rematch(playerId));
   }));
 
   socket.on('disconnect', () => {

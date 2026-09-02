@@ -986,5 +986,297 @@ console.log('\n▶ targeted rules');
 }
 
 
+console.log('\n▶ cards through START');
+{
+  // An "advance" card wraps through START like any roll: salary and lap both.
+  // A backwards card stays salary-free.
+  const room = new GameRoom('mb', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  a.pos = room.map.size - 2;
+  const cash = a.money;
+  room.applyCard(a, { kind: 'moveBy', n: 3 });
+  if (a.pos !== 1) fail(`the forward card should land on tile 1, got ${a.pos}`);
+  if (a.money !== cash + 200) fail(`a forward card past START should pay the $200 salary (got ${a.money - cash})`);
+  if ((room.stats.a?.laps || 0) !== 1) fail('the wrap should count as a lap');
+
+  room.turn.pending = null;
+  room.turn.phase = 'end';
+  a.pos = 4;
+  const cash2 = a.money;
+  room.applyCard(a, { kind: 'moveBy', n: -3 });
+  if (a.pos !== 1) fail(`the backwards card should land on tile 1, got ${a.pos}`);
+  if (a.money !== cash2) fail(`a backwards card must not pay salary (moved $${a.money - cash2})`);
+  if ((room.stats.a?.laps || 0) !== 1) fail('walking backwards is not a lap');
+  room.dispose();
+  ok('moveBy cards pay the salary forward, never backwards');
+}
+
+console.log('\n▶ exits during a live auction');
+{
+  // Removing the roller mid-auction used to fork the table: nextTurn() handed
+  // the next player a roll phase and finishAuction later stomped it. The turn
+  // now stays parked on the auction until the hammer falls.
+  const room = new GameRoom('auc1', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const street = room.map.tiles.find((t) => t.type === 'property').index;
+  room.startAuction(street);
+  room.bid('b', 100);
+  room.removeFromPlay(room.player('a'), 'quit');
+  if (!room.auction) fail('the auction should continue while others still race');
+  if (room.turn.playerId !== 'a' || room.turn.phase !== 'auction') {
+    fail(`the turn advanced out from under a live auction (${room.turn.playerId}/${room.turn.phase})`);
+  }
+  room.passBid('c');
+  if (room.auction) fail('the auction should close once only the leader remains');
+  if (room.own(street)?.owner !== 'b') fail('the leader should still win the tile');
+  if (room.player('b').money !== 2400) fail(`the winner should pay exactly once, has ${room.player('b').money}`);
+  if (room.turn.playerId !== 'b' || room.turn.phase !== 'roll') {
+    fail(`the turn should pass on after the hammer (${room.turn.playerId}/${room.turn.phase})`);
+  }
+  room.dispose();
+  ok('a removed roller no longer forks a live auction');
+}
+
+{
+  // The leader leaving voids their bid: the escrow leaves with their cash and
+  // the bidding restarts at the minimum for whoever is left.
+  const room = new GameRoom('auc2', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const street = room.map.tiles.find((t) => t.type === 'property').index;
+  room.startAuction(street);
+  room.bid('b', 100);
+  room.removeFromPlay(room.player('b'), 'timeout');
+  if (!room.auction) fail('the auction should survive its leader leaving');
+  if (room.auction.leader !== null || room.auction.bid !== 0) fail('a removed leader\'s bid should be void');
+  if (room.player('b').money !== 0) fail('the escrow leaves with the removed leader');
+  const res = room.bid('c', 10);
+  if (res?.error) fail(`bidding should restart at $10 (${res.error})`);
+  room.passBid('a');
+  if (room.auction) fail('the auction should end with only the new leader left');
+  if (room.own(street)?.owner !== 'c') fail('the remaining bidder should win');
+  if (room.turn.playerId !== 'a' || room.turn.phase !== 'end') {
+    fail(`the roller keeps their turn when still in play (${room.turn.playerId}/${room.turn.phase})`);
+  }
+  room.dispose();
+  ok('a removed leader voids the bid without stalling the race');
+}
+
+{
+  // Bankruptcy mid-auction: the escrowed bid returns to the estate first, so
+  // the creditor inherits it rather than the void.
+  const room = new GameRoom('auc3', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const street = room.map.tiles.find((t) => t.type === 'property').index;
+  room.startAuction(street);
+  room.bid('b', 100);
+  room.bankrupt(room.player('b'), room.player('c'));
+  if (room.player('c').money !== 5000) fail(`the creditor should inherit the refunded escrow (got ${room.player('c').money})`);
+  if (!room.auction) fail('the race should carry on for the others');
+  if (room.auction.leader !== null || room.auction.bid !== 0) fail('a bankrupt leader\'s bid should be void');
+  room.dispose();
+  ok('a bankrupt leader\'s escrow goes to the creditor, not the void');
+}
+
+console.log('\n▶ debts and departures');
+{
+  // A "pay each player" debt settled late pays exactly the players it was
+  // owed to and who are still in the game — leavers shrink the bill.
+  const room = new GameRoom('pe2', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c', 'd'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.settings.vacationCash = true;
+  room.start('a');
+  const a = room.player('a');
+  a.money = 20;
+  room.applyCard(a, { kind: 'payEach', amount: 50 });
+  if (room.turn.phase !== 'debt') fail('an unaffordable payEach should open a debt');
+  room.removeFromPlay(room.player('d'), 'quit');
+  a.money = 500;
+  room.payDebt('a');
+  if (a.money !== 400) fail(`the bill should shrink to the survivors ($100), debtor paid ${500 - a.money}`);
+  if (room.player('b').money !== 2550 || room.player('c').money !== 2550) fail('each survivor should get their $50');
+  if (room.player('d').money !== 0) fail('a leaver must not be paid');
+  if (room.vacationPot !== 0) fail('the shrunken debt must not leak into the pot');
+  room.dispose();
+  ok('payEach settled late pays only the recipients still in the game');
+}
+
+{
+  // A doubles roll whose landing opened a debt still owes the re-roll.
+  const room = new GameRoom('dd', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'A' });
+  room.addPlayer({ id: 'b', name: 'B' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  const s = room.map.tiles.find((t) => t.type === 'property' && t.index >= 3).index;
+  room.ownership[s] = { owner: 'b', houses: 0, mortgaged: false };
+  a.pos = s - 2;
+  a.money = 0;
+  room.roll('a', [1, 1]);
+  if (room.turn.phase !== 'debt') fail('unpayable rent should stall in the debt phase');
+  a.money = 500;
+  room.payDebt('a');
+  if (room.turn.phase !== 'roll') fail(`settling the debt should hand the double back its re-roll (got ${room.turn.phase})`);
+
+  // …and a plain roll still ends the turn once the debt clears.
+  room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
+  a.pos = s - 3;
+  a.money = 0;
+  room.roll('a', [1, 2]);
+  if (room.turn.phase !== 'debt') fail('setup: the plain roll should open a debt too');
+  a.money = 500;
+  room.payDebt('a');
+  if (room.turn.phase !== 'end') fail('a plain roll must not gain a re-roll from the debt');
+  room.dispose();
+  ok('doubles survive a debt settlement, plain rolls do not');
+}
+
+console.log('\n▶ rematch');
+{
+  // Rematch drops the departed instead of resurrecting them as ghosts, and
+  // clears the removal flags on everyone who stays.
+  const room = new GameRoom('rm', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  room.quit('c');                                     // c walks out mid-game
+  room.bankrupt(room.player('b'), room.player('a'));  // a wins; b loses honestly
+  if (room.status !== 'ended') fail('setup: the game should have ended');
+  const res = room.rematch('a');
+  if (res?.error) fail(`rematch refused: ${res.error}`);
+  if (room.player('c')) fail('a quitter must not be resurrected on rematch');
+  const b = room.player('b');
+  if (!b) fail('an honest loser keeps their seat for the rematch');
+  else if (b.bankrupt || b.timedOut || b.removedFor || b.botControlled) fail('rematch should wipe the removal flags');
+  if (room.status !== 'lobby' || room.hostId !== 'a') fail('rematch should reopen the lobby under the presser');
+  room.dispose();
+  ok('rematch drops the departed and cleans the survivors');
+}
+
+console.log('\n▶ identity aliasing');
+{
+  // The player id is the wallet key on the HTTP API, so the state a viewer
+  // gets must never carry anyone else's real token — every other id is a
+  // stable, ordinary-looking alias, in every field it appears in.
+  const room = new GameRoom('leak', () => {});
+  room.map = MAPS.classic;
+  const tokA = 'secret-token-aaaa';
+  const tokB = 'secret-token-bbbb';
+  room.addPlayer({ id: tokA, name: 'Ava' });
+  room.addPlayer({ id: tokB, name: 'Bo' });
+  room.addBot();
+  room.hostId = tokA;
+  room.settings.randomizeOrder = false;
+  room.start(tokA);
+  room.ownership[1] = { owner: tokB, houses: 0, mortgaged: false };
+  const offer = room.proposeTrade(tokA, { to: tokB, give: { money: 10 }, get: {} });
+  room.setTradeViewing(tokB, offer.trade.id, true);
+  room.removePlayer(tokB); // opens an awaiting seat that carries B's id
+
+  const viewA = room.serializeFor([tokA]);
+  const viewB = room.serializeFor([tokB]);
+  const spect = room.serializeFor([]);
+  const jsonA = JSON.stringify(viewA);
+  const jsonB = JSON.stringify(viewB);
+  if (!jsonA.includes(tokA)) fail('a viewer must still find their own token in their state');
+  if (jsonA.includes(tokB)) fail("another player's token leaked into A's state");
+  if (jsonB.includes(tokA)) fail("another player's token leaked into B's state");
+  if (!jsonB.includes(tokB)) fail('B must still find their own token');
+  const spectJson = JSON.stringify(spect);
+  if (spectJson.includes(tokA) || spectJson.includes(tokB)) fail('a spectator must see only aliases');
+
+  // One alias per player, worn consistently across every field.
+  const aliasB = viewA.players.find((p) => p.name === 'Bo').id;
+  if (!/^u_[a-z0-9]+$/.test(aliasB)) fail(`an alias should look like an ordinary guest id, got ${aliasB}`);
+  if (viewA.ownership[1].owner !== aliasB) fail('ownership should wear the same alias as the roster');
+  if (viewA.trades[0].to !== aliasB) fail('trades should wear the alias');
+  if (viewA.awaiting[0]?.id !== aliasB) fail('the awaiting seat should wear the alias');
+  if (viewA.hostId !== tokA) fail("the host sees their own id on the host chair");
+  if (viewB.hostId !== viewB.players.find((p) => p.name === 'Ava').id) {
+    fail('hostId should match the aliased roster entry for other viewers');
+  }
+  if (viewA.turn.playerId !== tokA) fail("A's own turn id should stay real for A");
+  if (viewB.turn.playerId === tokA) fail('the turn id must be aliased for the other viewer');
+
+  // Stable across pushes (and the deterministic hash survives reconnects).
+  room.push();
+  room.push();
+  if (room.serializeFor([tokA]).players.find((p) => p.name === 'Bo').id !== aliasB) {
+    fail('aliases must be stable across pushes');
+  }
+
+  // Bots keep their ids — clients sniff the bot: prefix.
+  const botId = room.players.find((p) => p.isBot).id;
+  if (!viewA.players.some((p) => p.id === botId)) fail('bot ids must pass through untouched');
+
+  // Inbound: an alias resolves back to the token; a real token passes through.
+  if (room.resolveId(aliasB) !== tokB) fail('resolveId should translate an alias to its token');
+  if (room.resolveId(tokB) !== tokB) fail('resolveId must accept a real token unchanged');
+
+  // An aliased trade round-trips: A proposes to B by B's alias, B accepts.
+  const before = room.player(tokB).money;
+  const res = room.proposeTrade(tokA, { to: room.resolveId(aliasB), give: { money: 50 }, get: {} });
+  if (res.error) fail(`aliased trade refused: ${res.error}`);
+  else {
+    room.respondTrade(tokB, res.trade.id, true);
+    if (room.player(tokB).money !== before + 50) fail('the aliased trade never moved the money');
+  }
+
+  // The end-of-game reveal (winner, history, stats, titles) is aliased too.
+  room.bankrupt(room.player(tokB), room.player(tokA));
+  room.bankrupt(room.players.find((p) => p.isBot), room.player(tokA));
+  if (room.status !== 'ended') fail('setup: the game should have ended');
+  const endA = room.serializeFor([tokA]);
+  if (JSON.stringify(endA).includes(tokB)) fail('the end-of-game reveal leaked a token');
+  if (!endA.stats || !(tokA in endA.stats)) fail("A's own stats key should stay real");
+  if (endA.winner.id !== tokA) fail('the winner id should stay real for the winner');
+  const endB = room.serializeFor([tokB]);
+  if (JSON.stringify(endB).includes(tokA)) fail('the ended state leaked the winner\'s token');
+  room.dispose();
+  ok('tokens stay private: own ids real, everyone else stable aliases');
+}
+
+{
+  // Pass & play: guest seats (`token_pN`) ride separate sockets but share a
+  // screen — the whole family stays real for any of its sockets.
+  const room = new GameRoom('fam', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'tok-main', name: 'Main' });
+  room.addPlayer({ id: 'tok-main_p2', name: 'Guest' });
+  room.addPlayer({ id: 'tok-rival', name: 'Rival' });
+  const view = room.serializeFor(['tok-main']);
+  if (!view.players.some((p) => p.id === 'tok-main_p2')) fail('a pass & play guest seat must stay real on the main socket');
+  const guestView = room.serializeFor(['tok-main_p2']);
+  if (!guestView.players.some((p) => p.id === 'tok-main')) fail('the base seat must stay real on a guest socket');
+  if (guestView.players.some((p) => p.id === 'tok-rival')) fail('a rival token must still be aliased for the family');
+  room.dispose();
+  ok('a pass & play family sees itself, and only itself, unmasked');
+}
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);

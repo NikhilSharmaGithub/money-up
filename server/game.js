@@ -1,6 +1,7 @@
 // Server-authoritative game engine.
 // Every rule lives here; clients only send intents and render what comes back.
 
+import { createHash } from 'node:crypto';
 import { getMap, GROUPS } from './maps.js';
 import { buildDecks, shuffled } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
@@ -113,6 +114,11 @@ export class GameRoom {
     this.hooks = {};
     this.createdAt = Date.now();
     this.version = 0;
+    // A player's id doubles as their secret identity token, so the state a
+    // viewer receives swaps everyone else's for a room-scoped alias. Both
+    // directions of that disguise live here for the life of the room.
+    this.aliases = new Map();       // real id -> alias
+    this.tokensByAlias = new Map(); // alias -> real id
   }
 
   // ---------------------------------------------------------------- logging --
@@ -726,7 +732,7 @@ export class GameRoom {
   quit(id) {
     const p = this.player(id);
     if (!p) return { error: 'Unknown player' };
-    if (this.status !== 'playing') return this.leave(id) ?? { ok: true };
+    if (this.status !== 'playing') { this.removePlayer(id); return { ok: true }; }
     if (p.bankrupt) return { ok: true };
     this.say(`${p.name} left the game`, 'leave');
     this.removeFromPlay(p, 'quit');
@@ -748,13 +754,14 @@ export class GameRoom {
     p.money = 0;
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
-    if (this.auction) {
-      this.auction.inRace = this.auction.inRace.filter((x) => x !== p.id);
-      if (this.auction.leader === p.id) this.auction.leader = null;
-    }
+    // A live auction settles their exit itself: any escrowed bid is void
+    // (their cash left with them) and the race carries on without them.
+    const settled = this.settleAuctionExit(p);
     this.hooks.karma?.(p.id, -1, reason);
     if (this.checkGameEnd()) return;
-    if (this.turn?.playerId === p.id) this.nextTurn();
+    // While an auction still runs, the turn stays parked on the auction
+    // phase; finishAuction moves it on the moment the hammer falls.
+    if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
     else this.push();
   }
 
@@ -765,6 +772,16 @@ export class GameRoom {
 
   isCurrent(id) {
     return this.status === 'playing' && this.turn?.playerId === id;
+  }
+
+  /**
+   * The phase a resolved stop hands back to the roller: doubles roll again —
+   * unless the double was the one that opened the prison door (noReroll), or
+   * the player has just been locked up.
+   */
+  afterActionPhase(p = this.current) {
+    const d = this.turn?.dice;
+    return d && d[0] === d[1] && p && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
   }
 
   tile(i) {
@@ -1209,14 +1226,9 @@ export class GameRoom {
       }
 
       case 'moveBy': {
-        const size = this.map.size;
-        const from = p.pos;
-        let to = (p.pos + act.n) % size;
-        if (to < 0) to += size;
-        p.pos = to;
-        this.lastMove = { playerId: p.id, from, to, steps: act.n, at: Date.now() };
-        this.noteMove(p, from, to, act.n, 'card');
-        this.landOn(p, to);
+        // A forward hop walks the board like any roll — wrapping past START
+        // pays the salary and counts the lap. Backwards stays salary-free.
+        this.movePlayer(p, act.n, { collectSalary: act.n > 0, cause: 'card' });
         break;
       }
 
@@ -1278,7 +1290,13 @@ export class GameRoom {
           for (const other of others) other.money += act.amount;
           this.say(`${p.name} paid $${act.amount} to every player`, 'money');
         } else {
-          this.turn.debt = { debtor: p.id, creditor: null, amount: total, reason: 'to the other players', each: act.amount };
+          // The debt remembers exactly who it is owed to: anyone leaving the
+          // game before it settles shrinks the bill instead of being paid
+          // into the void — see payDebt.
+          this.turn.debt = {
+            debtor: p.id, creditor: null, amount: total, reason: 'to the other players',
+            each: act.amount, owedTo: others.map((o) => o.id),
+          };
           this.turn.phase = 'debt';
           this.say(`${p.name} owes $${total} to the other players and must raise funds`, 'warn');
           if (this.autoPlayed(p)) this.scheduleBot(900);
@@ -1327,7 +1345,7 @@ export class GameRoom {
     if (t.type === 'property') this.statFor(p).streetsBought++;
     this.say(`${p.name} bought ${t.name} for ${t.price}`, 'buy');
     this.turn.pending = null;
-    this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
+    this.turn.phase = this.afterActionPhase(p);
     this.push();
     this.maybeBot();
     return { ok: true };
@@ -1344,7 +1362,7 @@ export class GameRoom {
       this.startAuction(tileIndex);
     } else {
       this.say(`${p.name} passed on ${this.tile(tileIndex).name}`, 'info');
-      this.turn.phase = this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
+      this.turn.phase = this.afterActionPhase(p);
       this.push();
       this.maybeBot();
     }
@@ -1417,6 +1435,9 @@ export class GameRoom {
     const a = this.auction;
     if (!a) return { ok: true };
     clearTimeout(this.timers.auction);
+    this.auction = null;
+    // A game that ended mid-countdown has nothing left to award.
+    if (this.status !== 'playing') return { ok: true };
     const t = this.tile(a.tile);
     if (a.leader && !this.player(a.leader)?.bankrupt) {
       // The bid is already escrowed by bid(); just hand over the deed.
@@ -1427,13 +1448,44 @@ export class GameRoom {
     } else {
       this.say(`Nobody bid on ${t.name} — it stays with the bank`, 'auction');
     }
-    this.auction = null;
     const p = this.current;
-    this.turn.phase = this.turn.debt ? 'debt'
-      : (this.turn.dice && this.turn.dice[0] === this.turn.dice[1] && !p.jail && !this.turn.noReroll ? 'roll' : 'end');
+    if (!p || p.bankrupt) {
+      // The roller left while the hammer was up — their turn leaves with
+      // them now that the auction no longer needs it parked.
+      this.nextTurn();
+      return { ok: true };
+    }
+    this.turn.phase = this.turn.debt ? 'debt' : this.afterActionPhase(p);
     this.push();
     this.maybeBot();
     return { ok: true };
+  }
+
+  /**
+   * A player leaving play mid-auction must not fork the table: their exit is
+   * settled here, inside the auction, and the turn is never advanced out
+   * from under it — finishAuction hands the turn on when the hammer falls.
+   * The escrow follows the caller's rules: refunded into the leaver's cash
+   * for a bankruptcy (so a creditor inherits it), voided otherwise.
+   * Returns true when their exit ended the auction on the spot.
+   */
+  settleAuctionExit(p, { refund = false } = {}) {
+    const a = this.auction;
+    if (!a) return false;
+    a.inRace = a.inRace.filter((x) => x !== p.id);
+    if (a.leader === p.id) {
+      if (refund) p.money += a.bid;
+      a.leader = null;
+      a.bid = 0;
+      this.say(`${p.name}'s bid is void — the auction restarts at $10`, 'auction');
+    }
+    // The same close passBid uses: nobody left, or only the leader is.
+    if (a.inRace.length === 0 || (a.inRace.length === 1 && a.leader)) {
+      this.finishAuction();
+      return true;
+    }
+    this.maybeBotAuction();
+    return false;
   }
 
   // -------------------------------------------------------------------- jail --
@@ -1549,13 +1601,31 @@ export class GameRoom {
   }
 
   // -------------------------------------------------------------------- debt --
+  /** The players a per-player debt still owes: recorded at card time, alive now. */
+  debtRecipients(d) {
+    const ids = d.owedTo || this.active.filter((o) => o.id !== d.debtor).map((o) => o.id);
+    return ids.map((x) => this.player(x)).filter((o) => o && !o.bankrupt);
+  }
+
+  /**
+   * What the open debt costs right now. A "pay every player" debt is owed to
+   * the people recorded on it — anyone who left the game since the card was
+   * drawn shrinks the bill instead of being paid into the void.
+   */
+  debtDue(d = this.turn?.debt) {
+    if (!d) return 0;
+    if (!d.each) return d.amount;
+    return d.each * this.debtRecipients(d).length;
+  }
+
   settleDebtIfPossible() {
     const d = this.turn?.debt;
     if (!d) return;
     const p = this.player(d.debtor);
-    if (p.money >= d.amount) {
-      // stays in debt phase until the player confirms, but bots settle instantly
-      if (this.autoPlayed(p)) this.payDebt(p.id);
+    if (p.money >= this.debtDue(d)) {
+      // Stays in debt phase until the player confirms; an auto-played seat
+      // settles on the bot clock, so the pause reads like a person doing it.
+      if (this.autoPlayed(p)) this.scheduleBot(900);
     }
   }
 
@@ -1563,24 +1633,24 @@ export class GameRoom {
     const d = this.turn?.debt;
     if (!d || d.debtor !== id) return { error: 'No debt' };
     const p = this.player(id);
-    if (p.money < d.amount) return { error: 'Still not enough money' };
-    p.money -= d.amount;
+    const recipients = d.each ? this.debtRecipients(d) : null;
+    const amount = recipients ? d.each * recipients.length : d.amount;
+    if (p.money < amount) return { error: 'Still not enough money' };
+    p.money -= amount;
     const creditor = d.creditor ? this.player(d.creditor) : null;
     if (creditor) {
-      creditor.money += d.amount;
+      creditor.money += amount;
       // Rent is the only charge that stalls the turn with a named creditor,
       // so a settled debt with one is a rent payment finally landing.
-      this.noteRent(p, creditor, d.amount, d.reason?.startsWith('for ') ? d.reason.slice(4) : null);
-    } else if (d.each) {
-      // "pay every player" card settled late: the money goes to the players,
-      // never to the vacation pot.
-      for (const other of this.active) {
-        if (other.id !== p.id) other.money += d.each;
-      }
+      this.noteRent(p, creditor, amount, d.reason?.startsWith('for ') ? d.reason.slice(4) : null);
+    } else if (recipients) {
+      // "pay every player" card settled late: the money goes to the players
+      // it was owed to and who are still in the game — never to the pot.
+      for (const other of recipients) other.money += d.each;
     } else if (this.settings.vacationCash) {
-      this.vacationPot += d.amount;
+      this.vacationPot += amount;
     }
-    this.say(`${p.name} settled a debt of $${d.amount}`, 'money');
+    this.say(`${p.name} settled a debt of $${amount}`, 'money');
     this.turn.debt = null;
 
     if (d.jailRelease) {
@@ -1595,7 +1665,8 @@ export class GameRoom {
       if (this.turn.debt) this.turn.phase = 'debt';
       else if (this.turn.pending) this.turn.phase = 'action';
     } else {
-      this.turn.phase = this.turn.pending ? 'action' : 'end';
+      // A doubles roll whose landing opened this debt still owes a re-roll.
+      this.turn.phase = this.turn.pending ? 'action' : this.afterActionPhase(p);
     }
     this.push();
     this.maybeBot();
@@ -1621,6 +1692,8 @@ export class GameRoom {
    * means one team, not one player — a team survives while any member does.
    */
   checkGameEnd() {
+    // Already decided — an exit settled mid-removal can land here twice.
+    if (this.status === 'ended') return true;
     const alive = this.active;
     if (this.teamsOn) {
       const teams = [...new Set(alive.map((p) => p.team))];
@@ -1651,6 +1724,10 @@ export class GameRoom {
 
   bankrupt(p, creditor) {
     p.bankrupt = true;
+    // Settle any live auction before the estate is counted: an escrowed bid
+    // returns to the leaver's cash so a creditor inherits it too, and the
+    // race carries on (or closes) without forking the turn.
+    const settled = this.settleAuctionExit(p, { refund: true });
     const tiles = this.tilesOf(p.id);
     if (creditor && !creditor.bankrupt) {
       creditor.money += Math.max(0, p.money);
@@ -1670,14 +1747,9 @@ export class GameRoom {
     }
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
-    // Drop them from any running auction so it can't stall on their bid.
-    if (this.auction) {
-      this.auction.inRace = this.auction.inRace.filter((x) => x !== p.id);
-      if (this.auction.leader === p.id) this.auction.leader = null;
-    }
 
     if (this.checkGameEnd()) return;
-    if (this.turn?.playerId === p.id) this.nextTurn();
+    if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
     else this.push();
   }
 
@@ -1860,6 +1932,49 @@ export class GameRoom {
     this.push();
   }
 
+  // ----------------------------------------------------------------- rematch --
+  /**
+   * Back to the lobby for another round. Whoever pressed Play again takes the
+   * host chair. The departed stay departed: seats that quit, timed out or are
+   * still disconnected are dropped rather than resurrected as bot-played
+   * ghosts, and the survivors' removal flags are wiped clean.
+   */
+  rematch(id) {
+    const presser = this.player(id);
+    if (!presser || presser.isBot) return { error: 'Take a seat first' };
+    if (this.status !== 'ended') return { error: 'The game is still on' };
+    const stays = (p) => p === presser || p.isBot || (p.connected !== false && !p.removedFor);
+    for (const p of this.players) {
+      if (stays(p)) continue;
+      clearTimeout(this.timers[`grace:${p.id}`]);
+      this.say(`${p.name} left the room`, 'leave');
+    }
+    this.players = this.players.filter(stays);
+    this.awaiting = {};
+    this.hostId = id;
+    this.status = 'lobby';
+    this.winner = null;
+    this.winningTeam = null;
+    this.ownership = {};
+    this.turn = null;
+    this.auction = null;
+    this.trades = [];
+    this.vacationPot = 0;
+    this.log = [];
+    this.reliefCard = null;
+    this.reliefExplained = false;
+    this.players.forEach((p) => {
+      p.money = this.settings.startingCash;
+      p.pos = 0; p.jail = false; p.jailTurns = 0; p.getOutCards = 0;
+      p.bankrupt = false; p.skipTurns = 0;
+      p.timedOut = false; p.removedFor = null; p.botControlled = false;
+      p.blockedLaps = 0; p.refused = [];
+    });
+    this.say('Back to the lobby — set up the next game', 'system');
+    this.push();
+    return { ok: true };
+  }
+
   // ------------------------------------------------------------------- chat --
   sendChat(id, text, channel) {
     const p = this.player(id);
@@ -1911,7 +2026,7 @@ export class GameRoom {
 
     if (t.phase === 'debt') {
       const d = t.debt;
-      if (p.money >= d.amount) return this.payDebt(p.id);
+      if (p.money >= this.debtDue(d)) return this.payDebt(p.id);
       if (this.autoLiquidate(p)) {
         this.push();
         return this.scheduleBot(500);
@@ -2236,6 +2351,96 @@ export class GameRoom {
       lastMove: this.lastMove,
       moves: this.actionMoves,
       version: this.version,
+    };
+  }
+
+  /**
+   * A player's id doubles as their secret identity token — it opens their
+   * wallet, mail and purchases on the HTTP API — so nobody else's may ever
+   * reach a client. Each id gets a stable, room-scoped stand-in shaped like
+   * any ordinary guest id (the quick-bot ids wear the same cut for the same
+   * reason); the hash keeps it identical across pushes and reconnects, and
+   * the maps remember both directions for the life of the room.
+   */
+  aliasFor(id) {
+    const known = this.aliases.get(id);
+    if (known) return known;
+    const digest = createHash('sha1').update(`${this.id}:${id}`).digest();
+    let alias = `u_${BigInt(`0x${digest.subarray(0, 12).toString('hex')}`).toString(36)}`;
+    // Two ids hashing together is astronomically unlikely, but an alias must
+    // never point at two people — or shadow a real seat at this table.
+    while ((this.tokensByAlias.has(alias) && this.tokensByAlias.get(alias) !== id)
+      || this.players.some((p) => p.id === alias)) alias += '0';
+    this.aliases.set(id, alias);
+    this.tokensByAlias.set(alias, id);
+    return alias;
+  }
+
+  /** Inbound ids may arrive as an alias or as the caller's own real token. */
+  resolveId(id) {
+    if (id == null) return id;
+    return this.tokensByAlias.get(id) || id;
+  }
+
+  /**
+   * The state as one viewer may see it. The seats their socket claims stay
+   * real — plus the rest of that pass & play family: `token_pN` guests ride
+   * separate sockets but share a screen, and the base token could mint every
+   * guest token anyway. Bots keep their ids (clients sniff the `bot:` prefix,
+   * and quick-table ids are already fakes), and every other id is swapped for
+   * its alias in every field it appears in.
+   */
+  serializeFor(viewerIds, base = this.serialize()) {
+    const claimed = viewerIds instanceof Set ? viewerIds : new Set(viewerIds || []);
+    const bases = new Set([...claimed].map((id) => String(id).replace(/_p\d+$/, '')));
+    const owned = new Set(claimed);
+    for (const p of this.players) {
+      if (bases.has(p.id.replace(/_p\d+$/, ''))) owned.add(p.id);
+    }
+    const mapId = (id) => {
+      if (id == null || owned.has(id)) return id;
+      if (this.player(id)?.isBot) return id;
+      return this.aliasFor(id);
+    };
+    const mapKeys = (obj) => Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [mapId(k), v]),
+    );
+    return {
+      ...base,
+      hostId: mapId(base.hostId),
+      players: base.players.map((p) => ({ ...p, id: mapId(p.id) })),
+      ownership: Object.fromEntries(Object.entries(base.ownership)
+        .map(([i, o]) => [i, { ...o, owner: mapId(o.owner) }])),
+      turn: base.turn && {
+        ...base.turn,
+        playerId: mapId(base.turn.playerId),
+        debt: base.turn.debt && {
+          ...base.turn.debt,
+          debtor: mapId(base.turn.debt.debtor),
+          creditor: mapId(base.turn.debt.creditor),
+          owedTo: base.turn.debt.owedTo?.map(mapId),
+        },
+      },
+      auction: base.auction && {
+        ...base.auction,
+        leader: mapId(base.auction.leader),
+        inRace: base.auction.inRace.map(mapId),
+      },
+      trades: base.trades.map((t) => ({
+        ...t,
+        from: mapId(t.from),
+        to: mapId(t.to),
+        viewers: t.viewers?.map(mapId),
+      })),
+      awaiting: base.awaiting.map((a) => ({
+        ...a, id: mapId(a.id), granted: (a.granted || []).map(mapId),
+      })),
+      winner: base.winner && { ...base.winner, id: mapId(base.winner.id) },
+      history: base.history.map((h) => ({ ...h, w: mapKeys(h.w) })),
+      stats: base.stats && mapKeys(base.stats),
+      titles: base.titles && mapKeys(base.titles),
+      lastMove: base.lastMove && { ...base.lastMove, playerId: mapId(base.lastMove.playerId) },
+      moves: base.moves.map((m) => ({ ...m, playerId: mapId(m.playerId) })),
     };
   }
 
