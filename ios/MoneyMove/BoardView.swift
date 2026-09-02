@@ -2,11 +2,12 @@
 // length — Blitz is 6 a side, Worldwide 11), tokens animating between tiles,
 // and a centre well the game screen drops its dice/actions into.
 //
-// Tiles read like richup's: the group's banner, tiny street name, price — and
-// once a tile is bought its colour band turns into the owner's colour, so a
-// glance at the ring tells you who holds what. A full country gets a thicker
-// band. Every mark on a tile is drawn (see Art.swift): emoji were another
-// vendor's artwork and made the same board look different on every device.
+// Tiles read like richup's: a round flag medallion riding the inner edge,
+// tiny street name, price — and once a tile is bought its colour band turns
+// into the owner's colour, so a glance at the ring tells you who holds
+// what. A full country gets a thicker band. Every mark on a tile is drawn
+// (see Art.swift): emoji were another vendor's artwork and made the same
+// board look different on every device.
 
 import SwiftUI
 
@@ -192,6 +193,20 @@ struct TileView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(isActive ? P.gold : P.rule, lineWidth: isActive ? 2 : 0.7)
         }
+        // The country's medallion, worn richup-style: half on the tile, half
+        // over the board, centred on the inner edge — the same edge the band
+        // hugs, so the flag sits in its group's colour. Houses and the hotel
+        // marquee take over the face once building starts, so the coin steps
+        // aside rather than jostle them.
+        .overlay(alignment: medallionAlignment) {
+            if tile.type == "property", (ownership?.houseCount ?? 0) == 0 {
+                Art.groupMedallion(group?.flag,
+                                   group.map { Color(css: $0.color) } ?? P.ink3,
+                                   size: medallionSize)
+                    .offset(medallionOffset)
+                    .allowsHitTesting(false)
+            }
+        }
         .shadow(color: isActive ? P.gold.opacity(0.5) : .clear, radius: 6)
         // On the table only once dealt AND out of the quick-match deck — the
         // undealt pose is exactly the one the deal animation flies out of.
@@ -257,6 +272,37 @@ struct TileView: View {
         }
     }
 
+    /// Medallion diameter, cut to the tile: Blitz's chunky tiles and
+    /// Worldwide's slim ones both get a coin that looks deliberate.
+    private var medallionSize: CGFloat {
+        let f = geom.frame(of: tile.index)
+        return min(21, max(13, min(f.width, f.height) * 0.5))
+    }
+
+    /// Which edge of the frame the medallion clings to — always the inner
+    /// one, mirroring band(): bottom row wears it up top, top row down low,
+    /// the columns on whichever side faces the middle.
+    private var medallionAlignment: Alignment {
+        switch geom.side(of: tile.index) {
+        case .top: .bottom
+        case .bottom: .top
+        case .trailing: .leading
+        default: .trailing
+        }
+    }
+
+    /// The half-out nudge: pushed one radius past the inner edge so the coin
+    /// straddles it — half on the tile, half over the table.
+    private var medallionOffset: CGSize {
+        let r = medallionSize / 2
+        return switch geom.side(of: tile.index) {
+        case .top: CGSize(width: 0, height: r)
+        case .bottom: CGSize(width: 0, height: -r)
+        case .trailing: CGSize(width: -r, height: 0)
+        default: CGSize(width: r, height: 0)
+        }
+    }
+
     @ViewBuilder private func band(color: Color, thickness: CGFloat = 5) -> some View {
         let edge = geom.side(of: tile.index)
         // The band hugs the edge that faces the centre of the board.
@@ -279,9 +325,8 @@ struct TileView: View {
         VStack(spacing: 1) {
             switch tile.type {
             case "property":
-                // The country's pennant, in the group's own colour — a drawn
-                // banner says the same thing a flag emoji did on every device.
-                Art.groupFlag(group?.flag, group.map { Color(css: $0.color) } ?? P.ink3, size: 13)
+                // The flag left the face for the medallion on the inner edge
+                // (see the overlay in body), so the name leads the card now.
                 nameText(P)
                 if houses == 5 {
                     // The hotel gets a marquee, not a dot.
@@ -497,7 +542,8 @@ struct TokenLayer: View {
 }
 
 /// One token, standing at its tile's inner edge (pushed toward the middle of
-/// the board so it never covers the flag or the price).
+/// the board, clear of the name and price — it stands over the flag medallion
+/// there, the way a piece sits on a coin, and the token layer draws on top).
 private struct PlacedToken: View {
     let player: PlayerState
     let alive: [PlayerState]

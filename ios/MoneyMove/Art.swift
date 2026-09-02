@@ -594,7 +594,8 @@ struct GroupFlag: View {
         }
     }
 
-    private static let art: [String: FlagArt] = [
+    // Shared with GroupMedallion below — same drawings, two frames.
+    fileprivate static let art: [String: FlagArt] = [
         "\u{1F1EE}\u{1F1F3}": FlagArt(bands: [(hex(0xFF9933), 6, 6.7), (.white, 12.7, 6.6), (hex(0x138808), 19.3, 6.7)]) { ctx in
             ctx.stroke(A.circle(16, 16, 2.7), with: .color(hex(0x004466)), lineWidth: 1.1)
         },
@@ -665,9 +666,70 @@ struct GroupFlag: View {
     ]
 }
 
+/// The round medallion a property tile pins to its inner edge — richup's
+/// look. The same drawn flag as GroupFlag, but scaled to COVER a circle: the
+/// 30×20 panel blown up until its short side spans the disc, centred, and the
+/// width that hangs over simply cropped away. A thin light ring and a soft
+/// shadow lift it off the tile in both palettes.
+///
+/// Regional boards keep their pictograph: the mark sits centred in the same
+/// circle on a recessed wash, so a castle reads as a badge rather than
+/// pretending to be a flag. No mark at all falls back to the group pennant.
+struct GroupMedallion: View {
+    @Environment(\.colorScheme) private var scheme
+    let mark: String
+    let colour: Color
+    var size: CGFloat = 18
+
+    var body: some View {
+        let key = mark.replacingOccurrences(of: "\u{FE0F}", with: "")
+        Group {
+            if let art = GroupFlag.art[key] {
+                Canvas { ctx, sz in
+                    var face = ctx
+                    face.clip(to: Path(ellipseIn: CGRect(origin: .zero, size: sz)))
+                    // Cover, not contain: scale so 20 grid units (the panel's
+                    // height) fill the diameter, and put the panel's centre —
+                    // (16, 16) in grid space — at the centre of the disc.
+                    let s = sz.height / 20
+                    face.translateBy(x: sz.width / 2 - 16 * s, y: sz.height / 2 - 16 * s)
+                    face.scaleBy(x: s, y: s)
+                    face.fill(A.rect(1, 6, 30, 20), with: .color(.white))
+                    for (c, start, extent) in art.bands {
+                        face.fill(art.vertical ? A.rect(start, 6, extent, 20) : A.rect(1, start, 30, extent),
+                                  with: .color(c))
+                    }
+                    art.motif(face)
+                }
+            } else {
+                Circle().fill(Palette.current(scheme).sunken)
+                    .overlay {
+                        if mark.isEmpty {
+                            GroupBanner(colour: colour, size: size * 0.6)
+                        } else {
+                            Text(mark).font(.system(size: size * 0.56))
+                        }
+                    }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        // A fixed near-white, not a palette ink: the ring has to read as the
+        // same coin rim on a cream board and a midnight one.
+        .overlay(Circle().stroke(Color(hex: 0xF7F4EC).opacity(0.95), lineWidth: 1.5))
+        .shadow(color: .black.opacity(0.35), radius: 2.5, y: 1)
+    }
+}
+
 extension Art {
     static func groupFlag(_ mark: String?, _ colour: Color, size: CGFloat = 18) -> GroupFlag {
         GroupFlag(mark: mark ?? "", colour: colour, size: size)
+    }
+
+    /// The board-tile badge — see GroupMedallion. Deed sheets and pickers keep
+    /// the rectangular groupFlag; only tiles wear the coin.
+    static func groupMedallion(_ mark: String?, _ colour: Color, size: CGFloat = 18) -> GroupMedallion {
+        GroupMedallion(mark: mark ?? "", colour: colour, size: size)
     }
 }
 

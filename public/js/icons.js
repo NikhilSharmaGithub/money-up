@@ -614,7 +614,10 @@ export function groupFlag(mark, colour, size, cls = '') {
   const art = FLAG_ART[String(mark || '').replace(/\uFE0F/g, '')];
   if (art) {
     const dim = size == null ? '' : ` style="width:${px(size)};height:${px(size)}"`;
-    return `<svg viewBox="0 0 32 32" fill="none" class="ico${cls ? ` ${cls}` : ''}"${dim}` +
+    // `flag-art` marks this as cloth that can be cropped: the board's
+    // medallion blows it up past its circle so the flag fills the disc edge
+    // to edge — which must never happen to a pictograph or the pennant.
+    return `<svg viewBox="0 0 32 32" fill="none" class="ico flag-art${cls ? ` ${cls}` : ''}"${dim}` +
       ` aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">${art}</svg>`;
   }
   if (mark) return `<span class="group-mark" aria-hidden="true">${mark}</span>`;

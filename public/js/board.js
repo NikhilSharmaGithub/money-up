@@ -62,21 +62,28 @@ export function renderBoard(state, root) {
 }
 
 // Each tile carries the group colour as a wash from the inner edge, a round
-// medallion for identity, and the price on its own chip at the outer edge.
+// medallion for identity astride that edge, and the price on its own chip at
+// the outer edge.
 function tileMarkup(tile, groups) {
   const g = tile.group ? groups[tile.group] : null;
   const price = tile.price ? `<span class="tile-price">${tile.price}$</span>` : '';
-  // A country used to fly an emoji — missing outright on Windows, and a
-  // different vendor's drawing on every other platform — and Windows draws no
-  // flag at all. Countries get their flag drawn instead; the regional boards
-  // keep their pictograph, which every platform does have a glyph for.
-  const banner = (group) => `<span class="medal">${groupFlag(group?.flag, group?.color)}</span>`;
   const art = (drawing, cls = '') => `<span class="tile-art ${cls}">${drawing}</span>`;
+
+  // A country used to fly an emoji — missing outright on Windows, and a
+  // different vendor's drawing on every other platform. Countries get their
+  // flag drawn instead, cropped into a round medallion that rides the tile's
+  // inner edge — half on the colour band, half out over the board, the way a
+  // printed richup board wears them. The regional boards keep their
+  // pictograph, centred in the same circle. It is its own layer rather than
+  // part of the body: the body rotates on the side columns, and a flag has
+  // to read upright from every seat.
+  const medal = tile.type === 'property'
+    ? `<span class="medal">${groupFlag(g?.flag, g?.color)}</span>` : '';
 
   let body;
   switch (tile.type) {
     case 'property':
-      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${banner(g)}`;
+      body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>`;
       break;
     case 'airport':
       body = `${price}<span class="tile-name">${escapeHtml(tile.name)}</span>${art(ART.airport)}`;
@@ -123,6 +130,7 @@ function tileMarkup(tile, groups) {
 
   return `<div class="tile-wash"></div>
     <div class="tile-body">${body}</div>
+    ${medal}
     <div class="tile-houses"></div>
     ${stamp}
     <div class="tile-owner"></div>`;
