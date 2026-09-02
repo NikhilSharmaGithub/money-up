@@ -168,6 +168,10 @@ app.post('/api/store/checkout', async (req, res) => {
 });
 
 /** A nickname for anyone who'd rather not think of one. */
+// Render's health check knocks here during deploys, so traffic only moves
+// to a new process once it actually answers — no more mid-deploy 502s.
+app.get('/healthz', (_req, res) => res.json({ ok: true, uptimeSec: Math.round(process.uptime()) }));
+
 app.get('/api/name', (_req, res) => res.json({ name: randomName() }));
 
 app.get('/api/wallet', (req, res) => {
