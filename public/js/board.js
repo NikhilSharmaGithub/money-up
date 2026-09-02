@@ -2,7 +2,7 @@
 // buildings on every update, and animates player tokens on a floating layer so
 // they can hop tile-by-tile instead of teleporting.
 
-import { ART, utilityArt, icon, groupFlag } from './icons.js';
+import { ART, utilityArt, icon, groupFlag, circleFlag } from './icons.js';
 import { sfx } from './sound.js';
 
 let builtMapId = null;
@@ -78,7 +78,7 @@ function tileMarkup(tile, groups) {
   // part of the body: the body rotates on the side columns, and a flag has
   // to read upright from every seat.
   const medal = tile.type === 'property'
-    ? `<span class="medal">${groupFlag(g?.flag, g?.color)}</span>` : '';
+    ? `<span class="medal">${circleFlag(g?.flag, g?.color)}</span>` : '';
 
   let body;
   switch (tile.type) {

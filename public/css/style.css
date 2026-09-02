@@ -787,13 +787,17 @@ select { cursor: pointer; }
 .t-bottom .medal { top:    calc(var(--medal-d) / -2); left: calc(50% - var(--medal-d) / 2); }
 .t-left .medal   { right:  calc(var(--medal-d) / -2); top:  calc(50% - var(--medal-d) / 2); }
 .t-right .medal  { left:   calc(var(--medal-d) / -2); top:  calc(50% - var(--medal-d) / 2); }
-/* A drawn flag is a landscape cloth on a square canvas: blown up past the
-   circle and centred, the cloth covers the disc edge to edge — the crop IS
-   the medallion, no letterboxing. */
+/* A circle-native coin flag is drawn for the disc already — stripes meet the
+   rim inside the artwork, the gloss and inner rim are part of it — so it sits
+   at exactly the medallion's size, no blow-up. */
+.medal svg.flag-coin { width: 100%; height: 100%; display: block; }
+/* A legacy drawn flag is a landscape cloth on a square canvas: blown up past
+   the circle and centred, the cloth covers the disc edge to edge — the crop
+   IS the medallion, no letterboxing. Only the fallback path uses this now. */
 .medal svg.flag-art { width: 170%; height: 170%; display: block; }
 /* Pictographs and the pennant fallback are marks, not cloth: they sit whole,
    centred on the soft card ground. */
-.medal svg:not(.flag-art) { width: 72%; height: 72%; display: block; }
+.medal svg:not(.flag-art):not(.flag-coin) { width: 72%; height: 72%; display: block; }
 .medal .group-mark { font-size: calc(var(--medal-d) * .58); vertical-align: 0; }
 /* The body dims under a mortgage; the medallion lives outside it now, so it
    dims itself to match. */

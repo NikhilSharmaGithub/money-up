@@ -666,11 +666,257 @@ struct GroupFlag: View {
     ]
 }
 
+// ----------------------------------------------------------- circle coins --
+// Circle-native flag art for the board medallion, ported 1:1 from
+// public/js/icons.js CIRCLE_FLAG_ART. Same 32×32 canvas; the visible world is
+// the circle at (16,16), radius 15. Stripes run edge to edge of the circle,
+// cantons and emblems sit re-composed for the round frame — nothing looks
+// amputated — and the shared enamel finish (a top-light gloss crescent plus a
+// faint shade just inside the rim) is stamped over every flag inside the same
+// clip, so the disc reads as a struck coin rather than a flat sticker.
+
+private enum CircleFlagArt {
+    /// toFixed(2), as the web applies to computed star/spoke vertices.
+    static func f2(_ v: CGFloat) -> CGFloat { (v * 100).rounded() / 100 }
+
+    /// n-point star as one closed path; `rot` −90 aims the first point up;
+    /// `inner` is a ratio of R. Mirrors icons.js star() vertex for vertex.
+    static func star(_ cx: CGFloat, _ cy: CGFloat, _ points: Int, _ R: CGFloat,
+                     _ rot: CGFloat = -90, _ inner: CGFloat = 0.45) -> Path {
+        let step = 180 / CGFloat(points)
+        var path = Path()
+        for i in 0..<(points * 2) {
+            let a = (rot + CGFloat(i) * step) * .pi / 180
+            let r = i.isMultiple(of: 2) ? R : R * inner
+            let q = CGPoint(x: f2(cx + r * cos(a)), y: f2(cy + r * sin(a)))
+            if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    /// Horizontal / vertical thirds that fill the whole square (the clip
+    /// rounds them off). First colour paints the full disc so band seams
+    /// cannot show; bands 2 and 3 start at 10.67 and 21.33 and run to 32.
+    static func discH3(_ ctx: GraphicsContext, _ a: Color, _ b: Color, _ c: Color) {
+        ctx.fill(A.rect(0, 0, 32, 32), with: .color(a))
+        ctx.fill(A.rect(0, 10.67, 32, 21.33), with: .color(b))
+        ctx.fill(A.rect(0, 21.33, 32, 10.67), with: .color(c))
+    }
+
+    static func discV3(_ ctx: GraphicsContext, _ a: Color, _ b: Color, _ c: Color) {
+        ctx.fill(A.rect(0, 0, 32, 32), with: .color(a))
+        ctx.fill(A.rect(10.67, 0, 21.33, 32), with: .color(b))
+        ctx.fill(A.rect(21.33, 0, 10.67, 32), with: .color(c))
+    }
+
+    /// The Union cross layout, reused at full disc size by GB and at canton
+    /// size by AU: corner-to-corner diagonals white dw over red dr, then the
+    /// centred cross white cw over red cr. Butt caps, as SVG strokes default.
+    static func unionJack(_ ctx: GraphicsContext, _ w: CGFloat, _ h: CGFloat,
+                          _ dw: CGFloat, _ dr: CGFloat, _ cw: CGFloat, _ cr: CGFloat) {
+        var diag = Path()
+        diag.move(to: A.p(0, 0)); diag.addLine(to: A.p(w, h))
+        diag.move(to: A.p(w, 0)); diag.addLine(to: A.p(0, h))
+        var cross = Path()
+        cross.move(to: A.p(w / 2, 0)); cross.addLine(to: A.p(w / 2, h))
+        cross.move(to: A.p(0, h / 2)); cross.addLine(to: A.p(w, h / 2))
+        ctx.stroke(diag, with: .color(.white), lineWidth: dw)
+        ctx.stroke(diag, with: .color(hex(0xC8102E)), lineWidth: dr)
+        ctx.stroke(cross, with: .color(.white), lineWidth: cw)
+        ctx.stroke(cross, with: .color(hex(0xC8102E)), lineWidth: cr)
+    }
+
+    /// India's chakra: a real 24-spoke wheel, stroke-weighted so the spokes
+    /// fuse into a ring texture at 22px and separate into spokes at 64px.
+    static func chakra(_ ctx: GraphicsContext) {
+        let navy = hex(0x000080)
+        ctx.stroke(A.circle(16, 16, 4), with: .color(navy), lineWidth: 1.1)
+        var spokes = Path()
+        for i in 0..<24 {
+            let a = CGFloat(i) * .pi / 12
+            spokes.move(to: A.p(f2(16 + 1.2 * cos(a)), f2(16 + 1.2 * sin(a))))
+            spokes.addLine(to: A.p(f2(16 + 3.5 * cos(a)), f2(16 + 3.5 * sin(a))))
+        }
+        ctx.stroke(spokes, with: .color(navy), lineWidth: 0.72)
+        ctx.fill(A.circle(16, 16, 1), with: .color(navy))
+    }
+
+    /// Canada's maple leaf: the right half declared once and mirrored across
+    /// x=16, exactly as the web builds its path.
+    static let mapleLeaf: Path = {
+        let half: [(CGFloat, CGFloat)] = [
+            (16, 7.8), (17.1, 10.4), (19.2, 9.6), (18.6, 12.1), (21.4, 11.4),
+            (20.3, 13.8), (22.9, 13.9), (21.2, 16.1), (22.6, 18.3), (19.3, 17.9),
+            (19.8, 20.3), (16.7, 19.4), (16.7, 23.2),
+        ]
+        return A.poly(half + half.dropFirst().reversed().map { (f2(32 - $0.0), $0.1) })
+    }()
+
+    /// China's constellation: big star plus four minors, each minor rotated so
+    /// one point aims at the big star's centre, as the real sheet demands.
+    static func cnStars(_ ctx: GraphicsContext) {
+        let yellow = hex(0xFFFF00)
+        ctx.fill(star(10, 11, 5, 4.6, -90, 0.382), with: .color(yellow))
+        for (x, y) in [(17.5, 6.3), (20.6, 9.4), (20.6, 13.6), (17.5, 16.7)] as [(CGFloat, CGFloat)] {
+            ctx.fill(star(x, y, 5, 1.7, atan2(11 - y, 10 - x) * 180 / .pi, 0.5),
+                     with: .color(yellow))
+        }
+    }
+
+    /// Brazil's white band — the web's `M10.9 14.5 A12.5 12.5 0 0 1 21.2 16.9`
+    /// resolved (centre 13.4797, 26.731; −101.914° → −51.855°) and sampled, so
+    /// no arc-direction API ambiguity can flip it between platforms.
+    static let brBand: Path = {
+        var path = Path()
+        let cx: CGFloat = 13.4797, cy: CGFloat = 26.731
+        for i in 0...32 {
+            let a = (-101.914 + (101.914 - 51.855) * CGFloat(i) / 32) * .pi / 180
+            let q = CGPoint(x: cx + 12.5 * cos(a), y: cy + 12.5 * sin(a))
+            if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
+        }
+        return path
+    }()
+
+    /// Spain's shield: `M7.5 13.4h4.8v3.4` then the bottom semicircle
+    /// (centre 9.9, 16.8, r 2.4, 0° → 180° through the bottom), closed.
+    static let esShield: Path = {
+        var path = Path()
+        path.move(to: A.p(7.5, 13.4))
+        path.addLine(to: A.p(12.3, 13.4))
+        path.addLine(to: A.p(12.3, 16.8))
+        for i in 0...16 {
+            let a = CGFloat(i) / 16 * .pi
+            path.addLine(to: A.p(9.9 + 2.4 * cos(a), 16.8 + 2.4 * sin(a)))
+        }
+        path.closeSubpath()
+        return path
+    }()
+
+    /// The coin finish, stamped once over every flag inside the same clip:
+    /// gloss ellipse (16, 4.5) rx15 ry10.5 white .12, inner rim r14.25 black
+    /// .10 at width 1.5 — same numbers as the web's COIN_FINISH.
+    static func finish(_ ctx: GraphicsContext) {
+        ctx.fill(Path(ellipseIn: CGRect(x: 1, y: -6, width: 30, height: 21)),
+                 with: .color(.white.opacity(0.12)))
+        ctx.stroke(A.circle(16, 16, 14.25), with: .color(.black.opacity(0.10)), lineWidth: 1.5)
+    }
+
+    static let art: [String: (GraphicsContext) -> Void] = [
+        // India — saffron/white/green thirds, navy chakra.
+        "\u{1F1EE}\u{1F1F3}": { ctx in
+            discH3(ctx, hex(0xFF9933), .white, hex(0x138808))
+            chakra(ctx)
+        },
+        // United Kingdom — the full Union flag composed for the disc.
+        "\u{1F1EC}\u{1F1E7}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(hex(0x012169)))
+            unionJack(ctx, 32, 32, 6, 2, 10, 6)
+        },
+        // United States — seven explicit stripes (whites drawn as the ground,
+        // reds at the web's exact rows), navy canton three stripes deep with
+        // the dot-grid star field; a white stripe runs under the canton edge.
+        "\u{1F1FA}\u{1F1F8}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(.white))
+            for y in [0, 9.14, 18.29, 27.43] as [CGFloat] {
+                ctx.fill(A.rect(0, y, 32, 4.57), with: .color(hex(0xB31942)))
+            }
+            ctx.fill(A.rect(0, 0, 14.5, 13.71), with: .color(hex(0x0A3161)))
+            let rows: [(CGFloat, [CGFloat])] = [
+                (2.4, [2.5, 5.7, 8.9, 12.1]), (5.2, [4.1, 7.3, 10.5]),
+                (8, [2.5, 5.7, 8.9, 12.1]), (10.8, [4.1, 7.3, 10.5]),
+            ]
+            for (y, xs) in rows {
+                for x in xs { ctx.fill(A.circle(x, y, 0.8), with: .color(.white)) }
+            }
+        },
+        // Brazil — rhombus points near the rim, globe with the white band.
+        "\u{1F1E7}\u{1F1F7}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(hex(0x009C3B)))
+            ctx.fill(A.poly([(16, 3.6), (28.4, 16), (16, 28.4), (3.6, 16)]),
+                     with: .color(hex(0xFFDF00)))
+            ctx.fill(A.circle(16, 16, 5.5), with: .color(hex(0x012169)))
+            ctx.stroke(brBand, with: .color(.white), lineWidth: 1.4)
+        },
+        // Germany.
+        "\u{1F1E9}\u{1F1EA}": { ctx in discH3(ctx, .black, hex(0xDD0000), hex(0xFFCE00)) },
+        // France.
+        "\u{1F1EB}\u{1F1F7}": { ctx in discV3(ctx, hex(0x002654), .white, hex(0xCE1126)) },
+        // Italy.
+        "\u{1F1EE}\u{1F1F9}": { ctx in discV3(ctx, hex(0x008C45), hex(0xF4F5F0), hex(0xCD212A)) },
+        // China — constellation shifted toward centre so it sits whole.
+        "\u{1F1E8}\u{1F1F3}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(hex(0xEE1C25)))
+            cnStars(ctx)
+        },
+        // Japan — the sun, centred.
+        "\u{1F1EF}\u{1F1F5}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(.white))
+            ctx.fill(A.circle(16, 16, 8.4), with: .color(hex(0xBC002D)))
+        },
+        // Israel — stripes edge to edge, Magen David as two stroked triangles.
+        "\u{1F1EE}\u{1F1F1}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(.white))
+            let blue = hex(0x0038B8)
+            ctx.fill(A.rect(0, 5.2, 32, 3.8), with: .color(blue))
+            ctx.fill(A.rect(0, 23, 32, 3.8), with: .color(blue))
+            ctx.stroke(A.poly([(16, 10.9), (20.42, 18.55), (11.58, 18.55)]),
+                       with: .color(blue), lineWidth: 1.25)
+            ctx.stroke(A.poly([(16, 21.1), (11.58, 13.45), (20.42, 13.45)]),
+                       with: .color(blue), lineWidth: 1.25)
+        },
+        // Canada — red bars to the rim, the mirrored maple leaf on the pale.
+        "\u{1F1E8}\u{1F1E6}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(.white))
+            let red = hex(0xD80621)
+            ctx.fill(A.rect(0, 0, 8, 32), with: .color(red))
+            ctx.fill(A.rect(24, 0, 8, 32), with: .color(red))
+            ctx.fill(mapleLeaf, with: .color(red))
+        },
+        // Turkey — crescent from two offset circles, star pointing at it.
+        "\u{1F1F9}\u{1F1F7}": { ctx in
+            let red = hex(0xE30A17)
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(red))
+            ctx.fill(A.circle(12.5, 16, 7), with: .color(.white))
+            ctx.fill(A.circle(14.4, 16, 5.7), with: .color(red))
+            ctx.fill(star(22.5, 16, 5, 3.2, 180, 0.382), with: .color(.white))
+        },
+        // Romania.
+        "\u{1F1F7}\u{1F1F4}": { ctx in discV3(ctx, hex(0x002B7F), hex(0xFCD116), hex(0xCE1126)) },
+        // Spain — 1:2:1 bands, the crest hinted toward the hoist.
+        "\u{1F1EA}\u{1F1F8}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(hex(0xF1BF00)))
+            let red = hex(0xAA151B)
+            ctx.fill(A.rect(0, 0, 32, 8), with: .color(red))
+            ctx.fill(A.rect(0, 24, 32, 8), with: .color(red))
+            // The web draws both crest pieces in one .9-opacity group; the
+            // shapes never overlap, so per-shape opacity is identical.
+            ctx.fill(A.rrect(8.3, 11.9, 3.2, 1, 0.4), with: .color(red.opacity(0.9)))
+            ctx.fill(esShield, with: .color(red.opacity(0.9)))
+        },
+        // Australia — Union canton upper-left, Commonwealth star below it,
+        // the Southern Cross (four 7-point majors + 5-point ε) on the fly.
+        "\u{1F1E6}\u{1F1FA}": { ctx in
+            ctx.fill(A.rect(0, 0, 32, 32), with: .color(hex(0x012169)))
+            unionJack(ctx, 16, 14, 2.6, 1.1, 4.6, 2.6)
+            ctx.fill(star(8, 22, 7, 3.4, -90, 0.5), with: .color(.white))
+            for (x, y) in [(24.0, 4.5), (24.0, 27.0), (20.0, 12.5), (27.5, 10.5)] {
+                ctx.fill(star(x, y, 7, 1.9, -90, 0.5), with: .color(.white))
+            }
+            ctx.fill(star(25, 17.5, 5, 1.2, -90, 0.5), with: .color(.white))
+        },
+        // Ireland.
+        "\u{1F1EE}\u{1F1EA}": { ctx in discV3(ctx, hex(0x169B62), .white, hex(0xFF883E)) },
+    ]
+}
+
 /// The round medallion a property tile pins to its inner edge — richup's
-/// look. The same drawn flag as GroupFlag, but scaled to COVER a circle: the
-/// 30×20 panel blown up until its short side spans the disc, centred, and the
-/// width that hangs over simply cropped away. A thin light ring and a soft
-/// shadow lift it off the tile in both palettes.
+/// look. Flags with circle-native art (CircleFlagArt, ported from the web's
+/// CIRCLE_FLAG_ART) are drawn composed for the disc — stripes to the rim,
+/// nothing cropped — with the shared enamel finish inside the clip. A flag
+/// without coin art keeps the old treatment: the 30×20 GroupFlag panel blown
+/// up until its short side spans the disc, centred, overflow cropped. A thin
+/// light ring and a soft shadow lift it off the tile in both palettes.
 ///
 /// Regional boards keep their pictograph: the mark sits centred in the same
 /// circle on a recessed wash, so a castle reads as a badge rather than
@@ -684,7 +930,21 @@ struct GroupMedallion: View {
     var body: some View {
         let key = mark.replacingOccurrences(of: "\u{FE0F}", with: "")
         Group {
-            if let art = GroupFlag.art[key] {
+            if let coin = CircleFlagArt.art[key] {
+                // Circle-native: web coordinates (32×32 grid, visible world =
+                // circle (16,16) r15) scaled by size/32. The card ground shows
+                // through the 1-unit margin outside r15, exactly as the web
+                // medal's background does around its coin SVG.
+                Canvas { ctx, sz in
+                    ctx.fill(Path(ellipseIn: CGRect(origin: .zero, size: sz)),
+                             with: .color(Palette.current(scheme).card))
+                    var face = ctx
+                    face.scaleBy(x: sz.width / 32, y: sz.height / 32)
+                    face.clip(to: A.circle(16, 16, 15))
+                    coin(face)
+                    CircleFlagArt.finish(face)
+                }
+            } else if let art = GroupFlag.art[key] {
                 Canvas { ctx, sz in
                     var face = ctx
                     face.clip(to: Path(ellipseIn: CGRect(origin: .zero, size: sz)))

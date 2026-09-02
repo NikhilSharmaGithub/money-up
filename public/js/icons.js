@@ -604,6 +604,164 @@ const FLAG_ART = {
     <rect x="21" y="6" width="10" height="20" rx="2.5" fill="#ff883e"/>`),
 };
 
+// ---------------------------------------------------------- circle flags --
+// The medallion used to take the rectangular cloth above and blow it up to
+// 170% so the disc cropped it — and a cropped rectangle never reads as a
+// coin: cantons slide half out of frame, diagonals lose their corners,
+// everything looks amputated. So the same sixteen flags are laid out AGAIN,
+// natively for a disc, the way circle-flag icon sets do it: stripes run edge
+// to edge of the circle, cantons and emblems are re-composed for the round
+// frame, and a shared enamel finish — a top-light gloss and a faint inner rim
+// — makes the disc read as a struck coin rather than a flat sticker. Same
+// 32x32 canvas; the visible world is the circle at (16,16), radius 15.
+
+const f2 = (n) => +n.toFixed(2);
+
+/** An n-point star as one filled path. rot -90 aims the first point up. */
+const star = (cx, cy, points, R, rot = -90, inner = .45) => {
+  const step = 180 / points;
+  let d = '';
+  for (let i = 0; i < points * 2; i++) {
+    const a = ((rot + i * step) * Math.PI) / 180;
+    const r = i % 2 ? R * inner : R;
+    d += `${i ? 'L' : 'M'}${f2(cx + r * Math.cos(a))} ${f2(cy + r * Math.sin(a))}`;
+  }
+  return `<path d="${d}z"/>`;
+};
+
+// Horizontal / vertical thirds that fill the whole square (the clip rounds
+// them off). First colour paints the full disc so band seams cannot show.
+const discH3 = (a, b, c) => `<rect width="32" height="32" fill="${a}"/>` +
+  `<rect y="10.67" width="32" height="21.33" fill="${b}"/>` +
+  `<rect y="21.33" width="32" height="10.67" fill="${c}"/>`;
+const discV3 = (a, b, c) => `<rect width="32" height="32" fill="${a}"/>` +
+  `<rect x="10.67" width="21.33" height="32" fill="${b}"/>` +
+  `<rect x="21.33" width="10.67" height="32" fill="${c}"/>`;
+
+// The Union cross layout, reused at full disc size by GB and at canton size
+// by AU. Widths follow the real sheet: St George red = 1/5 of height with a
+// fimbriation of 1/15 each side; the saltire white band 1/5, red 1/15.
+const unionJack = (w, h, dw, dr, cw, cr) =>
+  `<path d="M0 0 ${w} ${h}M${w} 0 0 ${h}" stroke="#fff" stroke-width="${dw}"/>` +
+  `<path d="M0 0 ${w} ${h}M${w} 0 0 ${h}" stroke="#C8102E" stroke-width="${dr}"/>` +
+  `<path d="M${w / 2} 0V${h}M0 ${h / 2}H${w}" stroke="#fff" stroke-width="${cw}"/>` +
+  `<path d="M${w / 2} 0V${h}M0 ${h / 2}H${w}" stroke="#C8102E" stroke-width="${cr}"/>`;
+
+// India's chakra: a real 24-spoke wheel, stroke-weighted so the spokes fuse
+// into a legible ring texture at 22px and separate into spokes at 64px.
+const chakra = (() => {
+  let spokes = '';
+  for (let i = 0; i < 24; i++) {
+    const a = (i * Math.PI) / 12;
+    spokes += `<line x1="${f2(16 + 1.2 * Math.cos(a))}" y1="${f2(16 + 1.2 * Math.sin(a))}"` +
+      ` x2="${f2(16 + 3.5 * Math.cos(a))}" y2="${f2(16 + 3.5 * Math.sin(a))}"/>`;
+  }
+  return `<g stroke="#000080" fill="none"><circle cx="16" cy="16" r="4" stroke-width="1.1"/>` +
+    `<g stroke-width=".72">${spokes}</g></g><circle cx="16" cy="16" r="1" fill="#000080"/>`;
+})();
+
+// Canada's maple leaf: the right half is declared once — top spike, two upper
+// spikes, side point, lower spike, base point, stem — and mirrored across
+// x=16, which keeps the leaf symmetric however much the points get tuned.
+const mapleLeaf = (() => {
+  const half = [
+    [16, 7.8], [17.1, 10.4], [19.2, 9.6], [18.6, 12.1], [21.4, 11.4],
+    [20.3, 13.8], [22.9, 13.9], [21.2, 16.1], [22.6, 18.3], [19.3, 17.9],
+    [19.8, 20.3], [16.7, 19.4], [16.7, 23.2],
+  ];
+  const right = half.map(([x, y]) => `${x} ${y}`);
+  const left = half.slice(1).reverse().map(([x, y]) => `${f2(32 - x)} ${y}`);
+  return `<path d="M${right.join(' L')} L${left.join(' L')}z" fill="#D80621"/>`;
+})();
+
+// China's constellation: the big star plus four minors, each minor rotated so
+// one point aims at the big star's centre, as the real sheet demands.
+const cnStars = (() => {
+  const minors = [[17.5, 6.3], [20.6, 9.4], [20.6, 13.6], [17.5, 16.7]]
+    .map(([x, y]) => star(x, y, 5, 1.7, (Math.atan2(11 - y, 10 - x) * 180) / Math.PI, .5))
+    .join('');
+  return `<g fill="#FFFF00">${star(10, 11, 5, 4.6, -90, .382)}${minors}</g>`;
+})();
+
+const CIRCLE_FLAG_ART = {
+  // India — saffron/white/green thirds, navy chakra sized 3/4 of the band.
+  '\u{1F1EE}\u{1F1F3}': discH3('#FF9933', '#FFFFFF', '#138808') + chakra,
+  // United Kingdom — the full Union flag composed for the disc.
+  '\u{1F1EC}\u{1F1E7}': `<rect width="32" height="32" fill="#012169"/>` +
+    unionJack(32, 32, 6, 2, 10, 6),
+  // United States — seven explicit stripes (red AND white drawn), navy canton
+  // three stripes deep with a dot-grid star field; a white stripe runs under
+  // the canton's lower edge exactly as on the real flag.
+  '\u{1F1FA}\u{1F1F8}': `<g fill="#B31942"><rect width="32" height="4.57"/>` +
+    `<rect y="9.14" width="32" height="4.57"/><rect y="18.29" width="32" height="4.57"/>` +
+    `<rect y="27.43" width="32" height="4.57"/></g>` +
+    `<g fill="#FFFFFF"><rect y="4.57" width="32" height="4.57"/>` +
+    `<rect y="13.71" width="32" height="4.58"/><rect y="22.86" width="32" height="4.57"/></g>` +
+    `<rect width="14.5" height="13.71" fill="#0A3161"/>` +
+    `<g fill="#FFFFFF"><circle cx="2.5" cy="2.4" r=".8"/><circle cx="5.7" cy="2.4" r=".8"/>` +
+    `<circle cx="8.9" cy="2.4" r=".8"/><circle cx="12.1" cy="2.4" r=".8"/>` +
+    `<circle cx="4.1" cy="5.2" r=".8"/><circle cx="7.3" cy="5.2" r=".8"/><circle cx="10.5" cy="5.2" r=".8"/>` +
+    `<circle cx="2.5" cy="8" r=".8"/><circle cx="5.7" cy="8" r=".8"/>` +
+    `<circle cx="8.9" cy="8" r=".8"/><circle cx="12.1" cy="8" r=".8"/>` +
+    `<circle cx="4.1" cy="10.8" r=".8"/><circle cx="7.3" cy="10.8" r=".8"/><circle cx="10.5" cy="10.8" r=".8"/></g>`,
+  // Brazil — rhombus points reach near the rim; globe with the white band.
+  '\u{1F1E7}\u{1F1F7}': `<rect width="32" height="32" fill="#009C3B"/>` +
+    `<path d="M16 3.6 28.4 16 16 28.4 3.6 16z" fill="#FFDF00"/>` +
+    `<circle cx="16" cy="16" r="5.5" fill="#012169"/>` +
+    `<path d="M10.9 14.5 A 12.5 12.5 0 0 1 21.2 16.9" stroke="#fff" stroke-width="1.4" fill="none"/>`,
+  // Germany.
+  '\u{1F1E9}\u{1F1EA}': discH3('#000000', '#DD0000', '#FFCE00'),
+  // France.
+  '\u{1F1EB}\u{1F1F7}': discV3('#002654', '#FFFFFF', '#CE1126'),
+  // Italy.
+  '\u{1F1EE}\u{1F1F9}': discV3('#008C45', '#F4F5F0', '#CD212A'),
+  // China — constellation shifted toward centre so it sits whole in the disc.
+  '\u{1F1E8}\u{1F1F3}': `<rect width="32" height="32" fill="#EE1C25"/>` + cnStars,
+  // Japan — the sun, centred.
+  '\u{1F1EF}\u{1F1F5}': `<rect width="32" height="32" fill="#FFFFFF"/>` +
+    `<circle cx="16" cy="16" r="8.4" fill="#BC002D"/>`,
+  // Israel — two stripes edge to edge, Magen David as two stroked triangles.
+  '\u{1F1EE}\u{1F1F1}': `<rect width="32" height="32" fill="#FFFFFF"/>` +
+    `<rect y="5.2" width="32" height="3.8" fill="#0038B8"/>` +
+    `<rect y="23" width="32" height="3.8" fill="#0038B8"/>` +
+    `<g stroke="#0038B8" stroke-width="1.25" fill="none">` +
+    `<path d="M16 10.9 20.42 18.55 11.58 18.55z"/>` +
+    `<path d="M16 21.1 11.58 13.45 20.42 13.45z"/></g>`,
+  // Canada — red bars to the rim, the mirrored maple leaf on the pale.
+  '\u{1F1E8}\u{1F1E6}': `<rect width="32" height="32" fill="#FFFFFF"/>` +
+    `<rect width="8" height="32" fill="#D80621"/>` +
+    `<rect x="24" width="8" height="32" fill="#D80621"/>` + mapleLeaf,
+  // Turkey — crescent from two offset circles, star with a point toward it.
+  '\u{1F1F9}\u{1F1F7}': `<rect width="32" height="32" fill="#E30A17"/>` +
+    `<circle cx="12.5" cy="16" r="7" fill="#FFFFFF"/>` +
+    `<circle cx="14.4" cy="16" r="5.7" fill="#E30A17"/>` +
+    `<g fill="#FFFFFF">${star(22.5, 16, 5, 3.2, 180, .382)}</g>`,
+  // Romania.
+  '\u{1F1F7}\u{1F1F4}': discV3('#002B7F', '#FCD116', '#CE1126'),
+  // Spain — 1:2:1 bands, the crest hinted toward the hoist.
+  '\u{1F1EA}\u{1F1F8}': `<rect width="32" height="32" fill="#F1BF00"/>` +
+    `<rect width="32" height="8" fill="#AA151B"/>` +
+    `<rect y="24" width="32" height="8" fill="#AA151B"/>` +
+    `<g fill="#AA151B" opacity=".9"><rect x="8.3" y="11.9" width="3.2" height="1" rx=".4"/>` +
+    `<path d="M7.5 13.4h4.8v3.4a2.4 2.4 0 0 1-4.8 0z"/></g>`,
+  // Australia — Union canton upper-left, Commonwealth star below it, the
+  // Southern Cross (four 7-point majors + 5-point epsilon) on the fly half.
+  '\u{1F1E6}\u{1F1FA}': `<rect width="32" height="32" fill="#012169"/>` +
+    unionJack(16, 14, 2.6, 1.1, 4.6, 2.6) +
+    `<g fill="#FFFFFF">${star(8, 22, 7, 3.4, -90, .5)}` +
+    `${star(24, 4.5, 7, 1.9, -90, .5)}${star(24, 27, 7, 1.9, -90, .5)}` +
+    `${star(20, 12.5, 7, 1.9, -90, .5)}${star(27.5, 10.5, 7, 1.9, -90, .5)}` +
+    `${star(25, 17.5, 5, 1.2, -90, .5)}</g>`,
+  // Ireland.
+  '\u{1F1EE}\u{1F1EA}': discV3('#169B62', '#FFFFFF', '#FF883E'),
+};
+
+// The coin finish, written once and stamped over every flag inside the same
+// clip: a top-light gloss crescent and a faint shade just inside the rim, so
+// the disc reads as enamel with a curved face rather than a printed dot.
+const COIN_FINISH = `<ellipse cx="16" cy="4.5" rx="15" ry="10.5" fill="#fff" opacity=".12"/>` +
+  `<circle cx="16" cy="16" r="14.25" fill="none" stroke="#000" stroke-opacity=".1" stroke-width="1.5"/>`;
+
 /**
  * A board group's mark. Real countries get their flag drawn; the regional
  * boards use pictograph emoji (a castle for Rajasthan, a lion for Gujarat)
@@ -622,4 +780,30 @@ export function groupFlag(mark, colour, size, cls = '') {
   }
   if (mark) return `<span class="group-mark" aria-hidden="true">${mark}</span>`;
   return groupBanner(colour, size, cls);
+}
+
+// Each rendered coin gets its own clipPath id: the same flag appears on two
+// or three tiles of a group, and a url(#…) reference to a twin inside a
+// hidden tile (has-buildings hides its medallion) is not worth trusting.
+let coinSeq = 0;
+
+/**
+ * The medallion's mark: circle-native art where a flag has been re-laid-out
+ * for the disc, clipped to the circle at (16,16) r15 with the shared coin
+ * finish stamped on top. Any mark without circle art falls back to
+ * groupFlag() unchanged — the cropped rectangle for a rect-only flag, the
+ * pictograph pass-through, the pennant. Deed sheets and everything else keep
+ * calling groupFlag() and never see this.
+ */
+export function circleFlag(mark, colour, size, cls = '') {
+  const art = CIRCLE_FLAG_ART[String(mark || '').replace(/\uFE0F/g, '')];
+  if (!art) return groupFlag(mark, colour, size, cls);
+  const dim = size == null ? '' : ` style="width:${px(size)};height:${px(size)}"`;
+  const id = `coinclip-${++coinSeq}`;
+  // `flag-coin` tells the CSS this art is already circular: it sits at 100%
+  // of the medallion, never the 170% blow-up the rectangles need.
+  return `<svg viewBox="0 0 32 32" fill="none" class="ico flag-coin${cls ? ` ${cls}` : ''}"${dim}` +
+    ` aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">` +
+    `<clipPath id="${id}"><circle cx="16" cy="16" r="15"/></clipPath>` +
+    `<g clip-path="url(#${id})">${art}${COIN_FINISH}</g></svg>`;
 }
