@@ -836,6 +836,20 @@ select { cursor: pointer; }
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35));
 }
 .tile-houses .hotel { width: clamp(9px, 1.05vw, 17px); height: clamp(9px, 1.05vw, 17px); }
+.tile-houses .house-count {
+  font-size: clamp(7px, .78vw, 11px); font-weight: 900; line-height: 1;
+  color: var(--good, #2e9e63); animation: popIn .35s var(--pop);
+}
+.tile-houses .hotel-badge {
+  display: flex; align-items: center; gap: 2px; padding: 1px 4px;
+  background: linear-gradient(180deg, var(--red), var(--red-deep, var(--red)));
+  border-radius: 999px; color: #fff; animation: popIn .35s var(--pop);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4));
+}
+.tile-houses .hotel-badge svg { width: clamp(8px, .9vw, 14px); height: clamp(8px, .9vw, 14px); display: block; }
+.tile-houses .hotel-badge b { font-size: clamp(5px, .55vw, 8px); font-weight: 900; letter-spacing: .4px; }
+.t-left .tile-houses .hotel-badge, .t-right .tile-houses .hotel-badge { flex-direction: column; padding: 3px 1px; gap: 1px; }
+.t-left .tile-houses .hotel-badge b, .t-right .tile-houses .hotel-badge b { writing-mode: vertical-rl; letter-spacing: .3px; }
 .tile-houses svg { width: 100%; height: 100%; display: block; }
 @keyframes popIn { from { transform: scale(0); } }
 

@@ -79,6 +79,7 @@ struct LandingView: View {
             store.refreshWallet()
         }
         .task {
+            store.refreshAdsConfig()
             await loadAuthConfig()
             await refreshMe()
         }

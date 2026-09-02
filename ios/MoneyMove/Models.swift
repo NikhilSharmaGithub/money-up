@@ -31,6 +31,11 @@ struct GameState: Codable, Equatable {
     var winner: WinnerInfo?
     var lastCard: LastCard?
     var lastMove: LastMove?
+    /// Every leg of the current action, in execution order — one roll can
+    /// move a piece twice (walk onto Surprise, then the card sends it on),
+    /// and the theatre wants each leg on its own cue. Optional: old servers
+    /// send nothing and the client falls back to lastMove pacing.
+    var moves: [MoveLeg]?
     /// The deadlock rule's one-time explainer, set the first time this table
     /// could ever hit it. It rides every push from then on, so it is the `at`
     /// stamp — not its presence — that says whether it is news.
@@ -390,6 +395,18 @@ struct LastMove: Codable, Equatable {
     var from: Int
     var to: Int
     var steps: Int
+    var at: Double
+}
+
+/// One scripted move of the current action. `cause` is the cue sheet:
+/// "roll" waits for the dice, "card" waits for the card to be read,
+/// "jail" is the long walk nobody narrates twice.
+struct MoveLeg: Codable, Equatable {
+    var playerId: String
+    var from: Int
+    var to: Int
+    var steps: Int
+    var cause: String?
     var at: Double
 }
 

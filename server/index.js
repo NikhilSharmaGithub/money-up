@@ -114,6 +114,40 @@ app.get('/api/dm', (req, res) => {
 });
 
 // ---- store & wallet ------------------------------------------------------
+// ---- rewarded ads (scaffolding) -------------------------------------------
+// The whole system ships dark: ADS_ENABLED=1 turns it on once there are
+// enough players to be worth an advertiser's time. Until then the config
+// says "off", the clients hide every ad button, and the reward endpoint
+// refuses — so nothing exploitable exists while nothing is watchable.
+const ADS_ENABLED = process.env.ADS_ENABLED === '1';
+const AD_PLACEMENTS = {
+  // Win a game, watch one ad, double the purse.
+  doubleWin: { kind: 'multiplier', factor: 2, description: 'Double your win payout' },
+  // A modest faucet for the coinless, capped per day when enabled.
+  freeCoins: { kind: 'grant', coins: 25, dailyCap: 4, description: 'A few coins for a view' },
+};
+
+app.get('/api/ads/config', (_req, res) => {
+  res.json({ enabled: ADS_ENABLED, provider: 'admob', placements: AD_PLACEMENTS });
+});
+
+// The client reports a finished rewarded view. When ads go live this is
+// where AdMob's server-side verification callback gets checked before a
+// single coin moves; while dark it simply refuses.
+app.post('/api/ads/reward', (req, res) => {
+  if (!ADS_ENABLED) return res.status(403).json({ error: 'Ads are not enabled on this server' });
+  const { token, placement, nonce } = req.body || {};
+  const spec = AD_PLACEMENTS[placement];
+  if (!token || !spec || !nonce) return res.status(400).json({ error: 'Bad reward claim' });
+  // TODO(go-live): verify AdMob SSV signature for this nonce before paying.
+  const coins = spec.kind === 'grant' ? spec.coins : 0;
+  if (!coins) return res.status(400).json({ error: 'This placement pays elsewhere' });
+  const out = creditPurchase(String(token).slice(0, 64), `ads:${String(nonce).slice(0, 64)}`, coins,
+    { provider: 'ads', packId: placement, usd: 0 });
+  if (out.error) return res.status(400).json(out);
+  res.json({ ok: true, coins: out.coins });
+});
+
 app.get('/api/store', (_req, res) => res.json({
   items: STORE_ITEMS,
   packs: COIN_PACKS,

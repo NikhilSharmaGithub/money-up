@@ -787,7 +787,7 @@ function renderMyStuff(state, meId, el, actions) {
       <div class="pot-amount">${money(state.vacationPot)}</div>
     </div>` : ''}
 
-    ${state.status === 'ended' && state.hostId === meId
+    ${state.status === 'ended'
       ? `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again with the same players</button>`
       : ''}
   `;
@@ -1645,7 +1645,7 @@ export function openJoinNameModal(roomId, onJoin) {
 }
 
 /** Two ways out of a live game, spelled out — one keeps the chair, one doesn't. */
-export function openLeaveModal({ onKeepSeat, onQuit }) {
+export function openLeaveModal({ onKeepSeat, onQuit, onConcede }) {
   openModal(`
     <h2>Leaving the table?</h2>
     <p class="sub">The game is still running — pick how you go.</p>
@@ -1658,12 +1658,18 @@ export function openLeaveModal({ onKeepSeat, onQuit }) {
         <b>${icon('door')} Leave for good</b>
         <span>Your deeds go back to the bank and the table plays on without you.</span>
       </button>
+      ${onConcede ? `<button class="leave-choice bad" id="lConcede">
+        <b>${icon('gavel')} Give up — declare bankruptcy</b>
+        <span>You go bankrupt on the spot but keep your seat to watch the end.</span>
+      </button>` : ''}
     </div>
     <p class="karma-note">Leaving or timing out costs 1 karma.</p>
     <div class="modal-actions"><button class="btn ghost" id="lStay">Stay in the game</button></div>`, (root) => {
     $('#lStay', root).onclick = closeModal;
     $('#lBack', root).onclick = () => { sfx.click(); closeModal(); onKeepSeat(); };
     $('#lQuit', root).onclick = () => { sfx.click(); closeModal(); onQuit(); };
+    const con = $('#lConcede', root);
+    if (con) con.onclick = () => { sfx.click(); closeModal(); onConcede(); };
   }, 'small');
 }
 
@@ -2224,6 +2230,11 @@ function worthChartSVG(state) {
     </div>`;
 }
 
+// Rewarded-ads config, set once by app.js. Ships dark; when the server
+// flips it on, the win sheet grows its double-up button and nothing else.
+let adsConfig = null;
+export const setAdsConfig = (c) => { adsConfig = c; };
+
 export function showGameOver(state, meId, actions) {
   openModal(`
     <div class="go-crown">${icon('trophy')}</div>
@@ -2231,9 +2242,11 @@ export function showGameOver(state, meId, actions) {
     ${worthChartSVG(state)}
     ${reportCardHTML(state, meId)}
     <div class="modal-actions go-actions">
-      ${state.hostId === meId
-        ? `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>`
-        : '<div class="dim small go-wait">Sit tight — the host can deal the same table again.</div>'}
+      ${adsConfig?.enabled && state.winner?.id === meId
+        ? `<button class="btn primary big wrap" id="gDouble">${icon('coin')} Watch an ad — double your winnings</button>`
+        : ''}
+      <button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>
+      ${state.hostId === meId ? '' : '<div class="dim small go-wait">First to press it hosts the next one.</div>'}
       <div class="row-2">
         <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>
         <button class="btn ghost" id="gClose">Stay on this board</button>
@@ -2244,6 +2257,8 @@ export function showGameOver(state, meId, actions) {
     $('#gHome', root).onclick = () => { sfx.click(); closeModal(); actions.goHome?.(); };
     const again = $('#gAgain', root);
     if (again) again.onclick = () => { closeModal(); actions.rematch(); };
+    const dbl = $('#gDouble', root);
+    if (dbl) dbl.onclick = () => actions.watchAd?.('doubleWin');
   });
 }
 

@@ -202,8 +202,10 @@ export function patchBoard(state) {
     if (houses.dataset.v !== String(h)) {
       houses.dataset.v = String(h);
       houses.innerHTML = h === 5
-        ? `<span class="hotel">${ART.hotel}</span>`
-        : Array.from({ length: h }, () => `<span class="house">${ART.house}</span>`).join('');
+        ? `<span class="hotel-badge">${ART.hotel}<b>HOTEL</b></span>`
+        : h > 0
+          ? `<span class="house">${ART.house}</span>${h > 1 ? `<b class="house-count">${h}×</b>` : ''}`
+          : '';
     }
   });
 }

@@ -284,11 +284,26 @@ struct TileView: View {
                 Art.groupFlag(group?.flag, group.map { Color(css: $0.color) } ?? P.ink3, size: 13)
                 nameText(P)
                 if houses == 5 {
-                    Art.icon(.hotel, size: 11)
+                    // The hotel gets a marquee, not a dot.
+                    HStack(spacing: 2) {
+                        Art.icon(.hotel, size: 10, tint: .white)
+                        Text("HOTEL")
+                            .font(.system(size: 6.5, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                    .background(LinearGradient(colors: [P.red, P.redDeep],
+                                               startPoint: .top, endPoint: .bottom),
+                                in: Capsule())
                 } else if houses > 0 {
-                    Text(String(repeating: "▪︎", count: houses))
-                        .font(.system(size: 8.5, weight: .black))
-                        .foregroundStyle(P.good)
+                    HStack(spacing: 2) {
+                        Art.icon(.house, size: 10, tint: P.good)
+                        if houses > 1 {
+                            Text("\(houses)×")
+                                .font(.system(size: 8.5, weight: .black, design: .rounded))
+                                .foregroundStyle(P.good)
+                        }
+                    }
                 } else if let price = tile.price {
                     priceText(price, P)
                 }
@@ -359,6 +374,8 @@ final class TokenWalker: ObservableObject {
     private var targets: [String: Int] = [:]
     private var lastMoveAt: Double = 0
 
+    private var seenActionAt: Double = 0
+
     func reconcile(_ state: GameState) {
         let alive = state.players.filter { !$0.isBankrupt }
         for gone in shown.keys where !alive.contains(where: { $0.id == gone }) {
@@ -366,11 +383,20 @@ final class TokenWalker: ObservableObject {
             tasks[gone]?.cancel()
         }
 
+        // A scripted action plays leg by leg; the legacy single-move path
+        // below stays for old servers and for everyone the script skips.
+        let legs = state.moves ?? []
+        var scripted: String? = nil
+        if let newest = legs.last?.at, newest != seenActionAt, let pid = legs.first?.playerId {
+            seenActionAt = newest
+            if shown[pid] != nil { playLegs(legs, state: state); scripted = pid }
+        }
+
         let move = state.lastMove
         let fresh = move != nil && move!.at != lastMoveAt
         if fresh { lastMoveAt = move!.at }
 
-        for p in alive {
+        for p in alive where p.id != scripted {
             let current = shown[p.id]
             guard current != p.pos else { targets.removeValue(forKey: p.id); continue }
             // A walk already heading to this exact tile keeps going — state
@@ -407,6 +433,45 @@ final class TokenWalker: ObservableObject {
             }
         }
     }
+
+    /// Walks one action's legs on their cues: dice lead-in first, the card's
+    /// leg only after the popup has had its read, teleport legs as one glide.
+    private func playLegs(_ legs: [MoveLeg], state: GameState) {
+        guard let pid = legs.first?.playerId, let finalTo = legs.last?.to else { return }
+        tasks[pid]?.cancel()
+        targets[pid] = finalTo
+        let size = state.map.size
+        let hasCard = state.lastCard.map { abs($0.at - (legs.last?.at ?? 0)) < 2500 } ?? false
+        let (starts, _) = Choreography.timeline(legs, boardSize: size, hasCard: hasCard)
+        let t0 = Date()
+
+        tasks[pid] = Task { [weak self] in
+            for (i, leg) in legs.enumerated() {
+                let wait = starts[i] - Date().timeIntervalSince(t0)
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                guard !Task.isCancelled else { return }
+                let d = Choreography.distance(of: leg, boardSize: size)
+                guard d > 0 else {
+                    self?.shown[pid] = leg.to
+                    SoundKit.shared.land()
+                    continue
+                }
+                let dir = leg.steps > 0 ? 1 : -1
+                let pace = Choreography.pace(forDistance: d)
+                var at = leg.from
+                for _ in 0..<d {
+                    guard !Task.isCancelled else { return }
+                    at = (at + dir + size) % size
+                    self?.shown[pid] = at
+                    if at == leg.to { SoundKit.shared.land() } else { SoundKit.shared.step() }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55)
+                    try? await Task.sleep(for: .seconds(pace))
+                }
+            }
+            self?.tasks.removeValue(forKey: pid)
+            self?.targets.removeValue(forKey: pid)
+        }
+    }
 }
 
 struct TokenLayer: View {
@@ -424,6 +489,7 @@ struct TokenLayer: View {
                 }
             }
             .onChange(of: state.lastMove?.at) { walker.reconcile(state) }
+            .onChange(of: state.moves?.last?.at) { walker.reconcile(state) }
             .onChange(of: state.version) { walker.reconcile(state) }
             .onAppear { walker.reconcile(state) }
         }

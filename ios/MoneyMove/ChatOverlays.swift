@@ -502,17 +502,25 @@ struct GameOverSheet: View {
     /// sits directly under the result where everyone is still looking.
     @ViewBuilder
     private func rematchAction(_ P: Palette) -> some View {
-        if store.isHost {
+        // Anyone can call the next game — whoever presses first takes the
+        // host chair, and the server hands them the lobby.
+        VStack(spacing: 5) {
+            // Dark until the server turns ads on — then a win can double up.
+            if store.adsConfig?.enabled == true, store.state?.winner?.id == store.meId {
+                MMIconButton(.coin, "Watch an ad — double your winnings", kind: .primary, big: true) {
+                    store.showToast("Rewarded ads are not live yet")
+                }
+            }
             MMIconButton(.replay, "Play again with the same players", kind: .primary, big: true) {
                 store.rematch()
                 Haptics.tap()
                 dismiss()
             }
-        } else {
-            Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
-                .font(.system(size: 12.5, weight: .medium, design: .rounded))
-                .foregroundStyle(P.ink3)
-                .multilineTextAlignment(.center)
+            if !store.isHost {
+                Text("First to press it hosts the next one.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
         }
     }
 

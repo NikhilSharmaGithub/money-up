@@ -27,6 +27,13 @@ struct AuthConfig: Decodable {
 }
 
 /// Who this device is (GET /api/me) — the profile card's whole content.
+/// Rewarded-ads switchboard, fetched from /api/ads/config. Ships dark —
+/// while `enabled` is false no ad UI exists anywhere in the app.
+struct AdsConfig: Decodable, Equatable {
+    var enabled: Bool?
+    var provider: String?
+}
+
 struct MeInfo: Decodable, Equatable {
     var code: String?
     var name: String?

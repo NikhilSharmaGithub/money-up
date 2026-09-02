@@ -47,6 +47,8 @@ final class GameStore: ObservableObject {
     @Published var connection: SocketIOClient.Status = .disconnected
     @Published var toast: ToastMessage?
     @Published var cardPopup: LastCard?
+    /// nil until fetched; every ad affordance hides unless enabled == true.
+    @Published var adsConfig: AdsConfig?
     /// The deadlock rule, raised as a card the one time it is news.
     @Published var reliefPopup: ReliefCard?
     /// Which explainer this device has already read. Kept on disk against its
@@ -403,7 +405,15 @@ final class GameStore: ObservableObject {
         if let card = new.lastCard, card.at != lastCardAt {
             lastCardAt = card.at
             if old != nil {
-                let delay = walkDelay(in: new, eventAt: card.at)
+                // Servers that ship the moves script give the exact reveal
+                // cue; the walk-length heuristic covers the older ones.
+                let legs = new.moves ?? []
+                let delay: Double
+                if let newest = legs.last?.at, abs(newest - card.at) < 2500 {
+                    delay = Choreography.timeline(legs, boardSize: new.map.size, hasCard: true).cardAt ?? 0
+                } else {
+                    delay = walkDelay(in: new, eventAt: card.at)
+                }
                 if delay > 0 {
                     Task { [weak self] in
                         try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
@@ -714,6 +724,9 @@ final class GameStore: ObservableObject {
     func unmortgage(_ tile: Int) { emitAsActive("unmortgage", [tile]) }
     func payDebt() { emitAsActive("payDebt") }
     func declareBankrupt() { emitAsActive("bankrupt") }
+    /// The white flag, thrown by THIS device's own seat — off-turn is fine,
+    /// conceding is a right, not a turn action.
+    func concede() { emitAs(meId, "bankrupt") }
     /// Walk out of a live game for good: the deeds go back to the bank, the
     /// seat stays as a spectator, and it costs a point of karma.
     func quitGame() {
@@ -740,6 +753,12 @@ final class GameStore: ObservableObject {
         (state?.settings.teams ?? 0) > 0 && state?.player(meId)?.team != nil
     }
     func rematch() { emit("rematch") }
+    func refreshAdsConfig() {
+        Task { [weak self] in
+            let cfg: AdsConfig? = try? await self?.fetchJSON("/api/ads/config")
+            await MainActor.run { self?.adsConfig = cfg }
+        }
+    }
 
     /// `from` picks which local seat proposes — a corner pod trades as its own
     /// player, not as whoever happens to hold the turn.

@@ -9,7 +9,7 @@ import {
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
-  renderAwaiting, openReportCard,
+  renderAwaiting, openReportCard, setAdsConfig,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -137,6 +137,8 @@ function showLanding() {
   renderRecentGames();
 
   refreshWallet();
+  // Rewarded-ads switchboard — dark today, one env var away from live.
+  fetch(api('/api/ads/config')).then((r) => r.json()).then(setAdsConfig).catch(() => {});
   refreshProfileChip();
   watchPublicRooms();
   initGoogleSignIn();
@@ -1085,6 +1087,10 @@ $('#leaveBtn').addEventListener('click', () => {
         // Let the quit reach the server before the socket goes down under it.
         setTimeout(goHome, 150);
       },
+      // Conceding is only on the table while this seat is still in the game.
+      onConcede: state?.players?.some((p) => p.id === meId && !p.bankrupt)
+        ? () => actions.bankrupt()
+        : null,
     });
     return;
   }

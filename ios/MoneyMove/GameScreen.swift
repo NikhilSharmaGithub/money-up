@@ -107,23 +107,30 @@ struct GameScreen: View {
                 } else {
                     // Two zones: the board high, and one control cluster at the
                     // bottom — player strip directly above the action dock, no
-                    // orphaned bands floating in between.
-                    BoardView(onTapTile: { sheet = .deed($0) }) {
-                        CenterWell(openHistory: { sheet = .chatLog(1) })
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.top, 2)
+                    // orphaned bands floating in between. The chat bubble
+                    // floats over the seam, thumb-height, always reachable.
+                    ZStack(alignment: .bottomTrailing) {
+                        VStack(spacing: 0) {
+                            BoardView(onTapTile: { sheet = .deed($0) }) {
+                                CenterWell(openHistory: { sheet = .chatLog(1) })
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.top, 2)
 
-                    Spacer(minLength: 10)
+                            Spacer(minLength: 10)
 
-                    PlayerStrip(onTapPlayer: { p in
-                        if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                           store.me?.isBankrupt != true {
-                            sheet = .trade(from: store.activeId, to: p.id, give: [], want: [])
+                            PlayerStrip(onTapPlayer: { p in
+                                if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
+                                   store.me?.isBankrupt != true {
+                                    sheet = .trade(from: store.activeId, to: p.id, give: [], want: [])
+                                }
+                            })
+
+                            bottomPanel
                         }
-                    })
 
-                    bottomPanel
+                        chatBubble(P)
+                    }
                 }
             } else {
                 Spacer()
@@ -206,6 +213,32 @@ struct GameScreen: View {
         }
     }
 
+    // MARK: - chat bubble
+
+    /// The round chat button, floated bottom-right at thumb height — the
+    /// table talk is one tap away without giving up any board room.
+    private func chatBubble(_ P: Palette) -> some View {
+        Button {
+            sheet = .chatLog(0)
+            Haptics.tap()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(LinearGradient(colors: [P.gold, P.red],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 50, height: 50)
+                    .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(P.accentInk)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 14)
+        .padding(.bottom, 128)
+        .accessibilityLabel("Open chat")
+    }
+
     // MARK: - top bar
 
     private func topBar(_ P: Palette) -> some View {
@@ -236,6 +269,11 @@ struct GameScreen: View {
                     store.leaveRoom()
                     store.lastRoom = room
                     store.lastGuests = guestCount
+                }
+                Button("Give up — declare bankruptcy", role: .destructive) {
+                    // Conceding hands the streets to the bank and keeps the
+                    // seat as a spectator — the table plays on.
+                    store.concede()
                 }
                 Button("Leave for good", role: .destructive) {
                     // The quit has to reach the server before the socket goes
