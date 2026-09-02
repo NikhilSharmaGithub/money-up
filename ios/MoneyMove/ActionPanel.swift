@@ -57,7 +57,7 @@ struct ActionPanel: View {
         .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
             Button("Go bankrupt", role: .destructive) { store.declareBankrupt() }
         } message: {
-            Text("Everything you own goes to your creditor and you are out of the game.")
+            Text("Everything you own goes to whoever you owe, and you are out of the game.")
         }
     }
 
@@ -191,24 +191,51 @@ struct ActionPanel: View {
         }
     }
 
+    /// The climb out of the red. The server already took every rupee the
+    /// debtor had, so the balance below zero IS what's still owed — and every
+    /// rupee raised streams straight to whoever the debt names, the number
+    /// climbing toward zero on its own. This panel just shows the climb and
+    /// opens the doors that raise cash; nothing here "pays" anything.
     private func debtControls(turn: TurnState, P: Palette) -> some View {
         let debt = turn.debt
-        let amount = debt?.amount ?? 0
-        let creditor = store.state?.player(debt?.creditor)
+        let debtor = store.state?.player(debt?.debtor)
+        // Live off the balance itself — debt.amount is the same number, but
+        // the climb should read straight from the figure that moves.
+        let remaining = max(0, -(debtor?.money ?? 0))
+        let mine = debtor?.id == store.meId
+        // Rent streams to a named creditor; a payEach card to the players it
+        // still owes, by name; taxes, repairs and fines to the bank.
+        let payee = store.state?.debtPayee(debt) ?? "the bank"
         return VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(P.bad)
-                Text("You owe \(money(amount))\(creditor.map { " to \($0.name)" } ?? " to the bank")")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(P.bad)
+                    Text("\(money(remaining)) in the red")
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.bad)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.4), value: remaining)
+                        .debtPulse(remaining > 0)
+                }
+                // Pass & play: name whose hole this is when the phone is
+                // speaking for a seat that isn't the primary player's.
+                Text(mine
+                     ? "Everything you raise goes to \(payee) until you're square."
+                     : "\(debtor?.name ?? "This player") is in the red — everything they raise goes to \(payee) until they're square.")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(P.redSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Button("Pay \(money(amount))") { store.payDebt() }
+            // The gate, not a payment: it only opens once the balance has
+            // climbed back to zero (the server usually closes the debt itself
+            // the instant it does).
+            Button("Back in the black") { store.payDebt() }
                 .buttonStyle(MMButtonStyle(kind: .good, big: true))
-                .disabled((store.me?.money ?? 0) < amount)
+                .disabled(remaining > 0)
             HStack(spacing: 8) {
                 Button("Raise cash") { openProperties() }
                     .buttonStyle(MMButtonStyle(kind: .ghost, big: true))

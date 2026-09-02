@@ -464,31 +464,35 @@ struct PropertiesSheet: View {
 
     // MARK: - raising cash
 
-    /// Owing money turns this sheet into a rescue plan: what is still missing,
-    /// then the biggest sources of cash first — so paying up is a few taps
-    /// rather than a hunt down the list.
+    /// Owing money turns this sheet into a rescue plan: the balance below zero
+    /// is exactly what is still owed — every sale streams straight through to
+    /// whoever the debt names, so the number here climbs to zero as the rows
+    /// below get tapped, biggest sources of cash first.
     @ViewBuilder
     private func raiseCashCard(_ P: Palette) -> some View {
         if let turn = store.state?.turn, turn.phase == "debt",
            let debt = turn.debt, debt.debtor == store.activeId {
-            let cash = store.me?.money ?? 0
-            let short = max(0, debt.amount - cash)
+            let remaining = max(0, -(store.me?.money ?? 0))
             let options = raiseOptions
             let raisable = options.reduce(0) { $0 + $1.amount }
+            let payee = store.state?.debtPayee(debt) ?? "the bank"
 
             MMCard {
                 VStack(alignment: .leading, spacing: 10) {
-                    PanelTitle(short > 0 ? "Still to raise" : "You can cover it")
-                    Text(money(short > 0 ? short : debt.amount))
+                    PanelTitle(remaining > 0 ? "Still in the red" : "Back in the black")
+                    Text(money(remaining))
                         .font(.system(size: 30, weight: .heavy, design: .rounded))
-                        .foregroundStyle(short > 0 ? P.bad : P.good)
-                    Text(short > 0
-                         ? "You owe \(money(debt.amount)) and hold \(money(cash))."
-                         : "Close this and pay the \(money(debt.amount)).")
+                        .foregroundStyle(remaining > 0 ? P.bad : P.good)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.4), value: remaining)
+                        .debtPulse(remaining > 0)
+                    Text(remaining > 0
+                         ? "Everything you raise goes straight to \(payee) — watch this climb to zero."
+                         : "You're square — the debt has settled itself.")
                         .font(.system(size: 12.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
 
-                    if short > 0 {
+                    if remaining > 0 {
                         if options.isEmpty {
                             Text("Nothing left to sell or mortgage.")
                                 .font(.system(size: 12.5, weight: .semibold, design: .rounded))
@@ -499,7 +503,7 @@ struct PropertiesSheet: View {
                                     raiseRow(option, P)
                                 }
                             }
-                            Text(raisable >= short
+                            Text(raisable >= remaining
                                  ? "Biggest first — these add up to \(money(raisable))."
                                  : "These add up to \(money(raisable)); selling buildings first can unlock more.")
                                 .font(.system(size: 11.5, weight: .medium, design: .rounded))

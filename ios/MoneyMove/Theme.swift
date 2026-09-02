@@ -431,8 +431,36 @@ extension String {
     var moneyFormatted: String { self }
 }
 
+/// "$1,300" — and, now that an unpaid debt lives as a negative balance,
+/// "−$1,300": a real minus sign out front, never the formatter's "$-1,300".
 func money(_ n: Int) -> String {
     let f = NumberFormatter()
     f.numberStyle = .decimal
-    return "$" + (f.string(from: NSNumber(value: n)) ?? "\(n)")
+    let grouped = f.string(from: NSNumber(value: abs(n))) ?? "\(abs(n))"
+    return (n < 0 ? "−$" : "$") + grouped
+}
+
+/// The soft heartbeat on a balance below zero. The colour already carries the
+/// alarm — this just keeps the number breathing until the seat is back in the
+/// black, the same quiet cadence as the "… is viewing" line.
+struct DebtPulse: ViewModifier {
+    let active: Bool
+    @State private var dim = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(active && dim ? 0.55 : 1)
+            .animation(active
+                       ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                       : .easeOut(duration: 0.2),
+                       value: dim)
+            .onAppear { dim = active }
+            .onChange(of: active) { _, on in dim = on }
+    }
+}
+
+extension View {
+    /// Gentle pulse while `active` — every money label bound to a balance
+    /// wears this so a seat in the red reads as one thing everywhere.
+    func debtPulse(_ active: Bool) -> some View { modifier(DebtPulse(active: active)) }
 }

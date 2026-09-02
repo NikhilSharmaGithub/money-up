@@ -1050,6 +1050,17 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .pmoney.bump { animation: bump .45s var(--pop); }
 @keyframes bump { 40% { transform: scale(1.16); } }
 
+/* A wallet below zero IS the debt — the number prints in the danger red and
+   the row breathes a soft red ring while the balance climbs back to zero:
+   a debt being worked off, not an alarm going off. (Declared after .turn so
+   the red border outranks the brass one on the debtor's own turn.) */
+.pmoney.neg { color: var(--bad); }
+.player-card.in-debt { border-color: color-mix(in srgb, var(--bad) 55%, var(--rule)); animation: debtPulse 2.2s ease-in-out infinite; }
+@keyframes debtPulse {
+  0%, 100% { box-shadow: var(--shadow-sm); }
+  50%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 24%, transparent), var(--shadow-sm); }
+}
+
 .chips { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
 .chip {
   font-style: normal; font-size: 9.5px; font-weight: 800; line-height: 1;
@@ -1871,6 +1882,8 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .raise-what { flex: 1; min-width: 0; font-size: 12px; font-weight: 650; line-height: 1.35; }
 .good-text { color: var(--good); font-weight: 750; }
 .bad-text  { color: var(--bad); font-weight: 750; }
+/* A negative balance wherever one prints outside the roster (standings etc.). */
+.neg-money { color: var(--bad); }
 
 /* ── trade composer: totals, verdict and the fairness helper ── */
 .trade-totals {

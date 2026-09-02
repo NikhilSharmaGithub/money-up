@@ -554,11 +554,15 @@ struct PlayerStrip: View {
                                     }
                                 }
                                 HStack(spacing: 4) {
+                                    // In the red the number wears the bad
+                                    // colour and breathes — the balance itself
+                                    // is the debt, climbing back toward zero.
                                     Text(standingLabel(p))
                                         .font(.system(size: 13, weight: .heavy, design: .rounded))
-                                        .foregroundStyle(p.isBankrupt ? P.ink3 : P.good)
+                                        .foregroundStyle(p.isBankrupt ? P.ink3 : (p.inDebt ? P.bad : P.good))
                                         .contentTransition(.numericText())
                                         .animation(.snappy(duration: 0.4), value: p.money)
+                                        .debtPulse(p.inDebt)
                                     let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
                                     if owned > 0, !p.isBankrupt {
                                         Text("·  \(owned)")
@@ -1090,9 +1094,10 @@ private struct PlayerPod: View {
                     HStack(spacing: 5) {
                         Text(money(player.money))
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
-                            .foregroundStyle(P.good)
+                            .foregroundStyle(player.inDebt ? P.bad : P.good)
                             .contentTransition(.numericText())
                             .animation(.snappy(duration: 0.4), value: player.money)
+                            .debtPulse(player.inDebt)
                         if player.lapsBlocked > 0, !player.isBankrupt {
                             DeadlockLaps(left: player.lapsToRelief)
                         }

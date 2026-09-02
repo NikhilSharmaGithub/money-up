@@ -15,7 +15,13 @@ export const FLAGS = [
   '🇹🇭', '🇻🇳', '🇵🇭', '🇮🇩', '🇵🇰', '🇧🇩', '🇱🇰', '🇳🇵', '🇦🇺', '🇳🇿',
   '🇨🇦', '🇲🇽', '🇦🇷', '🇨🇱', '🇨🇴', '🇷🇺', '🇸🇬', '🇲🇾', '🏴‍☠️', '🌍',
 ];
-const money = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
+// A balance can sit below zero now — a debt being worked off — and the plain
+// formatter would print that as "$-1,300". A real minus sign goes in front of
+// the currency instead, the way the delta bubbles already write it.
+const money = (n) => {
+  const v = Number(n || 0);
+  return `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString('en-US')}`;
+};
 
 // ─────────────────────────────────────────────────────────────── toasts ──
 const MAX_TOASTS = 3;
@@ -297,6 +303,11 @@ export function renderPlayers(state, meId, el, actions) {
 
     // money + delta bubble
     const moneyEl = card.querySelector('.pmoney');
+    // Below zero the wallet IS the debt: it wears the danger red, and the row
+    // pulses quietly until the balance climbs back into the black.
+    const inRed = p.money < 0 && !isOut(p);
+    card.classList.toggle('in-debt', inRed);
+    moneyEl.classList.toggle('neg', inRed);
     const shown = state.status === 'lobby' ? money(p.money)
       : p.timedOut ? '<span class="dim">out of the game</span>'
       : p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.money);
@@ -622,16 +633,32 @@ function oneAwayRow(state, meId, key) {
 }
 
 /**
+ * Where an open debt streams to, written the way a sentence needs it: the
+ * creditor's coloured name, the still-owed players of a payEach split, or
+ * plain "the bank" when the money simply leaves the game.
+ */
+function debtDestination(state, d) {
+  const names = (d.owedTo || [])
+    .map((id, k) => ({ p: state.players.find((x) => x.id === id), left: d.owedLeft?.[k] ?? 0 }))
+    .filter((r) => r.p && !r.p.bankrupt && r.left > 0)
+    .map((r) => `<b style="color:${r.p.color}">${escapeHtml(r.p.name)}</b>`);
+  if (names.length > 1) return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  if (names.length === 1) return names[0];
+  const creditor = d.creditor ? state.players.find((x) => x.id === d.creditor) : null;
+  return creditor ? `<b style="color:${creditor.color}">${escapeHtml(creditor.name)}</b>` : 'the bank';
+}
+
+/**
  * Owing money turns the panel into a scavenger hunt through your own deeds.
- * This puts the shortfall on top and the biggest levers under it, so paying up
- * is a few taps rather than a search.
+ * The wallet is the ledger now — the red on it is exactly what is still owed,
+ * and every dollar raised streams straight through — so this puts the climb
+ * that is left on top and the biggest levers under it.
  */
 function raiseCashPanel(state, meId) {
   const d = state.turn?.phase === 'debt' ? state.turn.debt : null;
   if (state.status !== 'playing' || !d || d.debtor !== meId) return '';
 
-  const cash = state.players.find((p) => p.id === meId)?.money || 0;
-  const short = Math.max(0, (d.amount || 0) - cash);
+  const owed = Math.max(0, -(state.players.find((p) => p.id === meId)?.money || 0));
 
   const moves = [];
   Object.entries(state.ownership).forEach(([key, o]) => {
@@ -648,10 +675,10 @@ function raiseCashPanel(state, meId) {
   moves.sort((a, b) => b.value - a.value);
   const reach = moves.reduce((sum, m) => sum + m.value, 0);
 
-  const head = short === 0
-    ? `<div class="raise-line good-text">You can cover it — hit <b>Pay ${money(d.amount)}</b> on the board.</div>`
-    : `<div class="raise-line">Still to raise <b class="bad-text">${money(short)}</b>
-         <span class="dim small">of ${money(d.amount)}</span></div>`;
+  const head = owed === 0
+    ? '<div class="raise-line good-text">You\'re square — the turn carries on.</div>'
+    : `<div class="raise-line">Everything you raise goes straight to ${debtDestination(state, d)}
+         until you're square — <b class="bad-text">${money(-owed)}</b> still to climb.</div>`;
 
   const list = moves.length
     ? moves.slice(0, 8).map((m) => `<div class="raise-row">
@@ -662,15 +689,15 @@ function raiseCashPanel(state, meId) {
 
   // Say it straight when the deeds don't add up: a hopeful list would only
   // waste the taps that are left.
-  const foot = short > 0 && reach < short
+  const foot = owed > 0 && reach < owed
     ? `<div class="raise-line dim small">Everything above adds up to ${money(reach)} — you will need a trade to close the gap.</div>`
     : '';
 
   return `<div class="panel raise-panel">
-      <div class="panel-title">${icon('payment')} You owe ${money(d.amount)}</div>
+      <div class="panel-title">${icon('payment')} ${owed > 0 ? `You're ${money(owed)} in the red` : 'Back in the black'}</div>
       ${head}
-      ${short > 0 ? list : ''}
-      ${short > 0 ? foot : ''}
+      ${owed > 0 ? list : ''}
+      ${owed > 0 ? foot : ''}
     </div>`;
 }
 
@@ -1021,12 +1048,18 @@ export function renderCenter(state, meId, actions) {
   let status = '';
 
   if (t.phase === 'debt') {
-    const d = t.debt;
-    const creditor = d.creditor ? state.players.find((p) => p.id === d.creditor) : null;
-    html = `<button class="btn good big" id="cPayDebt" ${me.money < d.amount ? 'disabled' : ''}>Pay ${money(d.amount)}</button>
+    // The wallet is the ledger: what is still owed is exactly the red on the
+    // balance, so it climbs live as every raised dollar streams through. The
+    // button is the old pay control kept as an exit — it only unlocks once
+    // the balance touches zero (the server usually closes the debt itself
+    // before this frame is even seen).
+    const owed = Math.max(0, -(me.money || 0));
+    html = `<button class="btn good big" id="cPayDebt" ${owed > 0 ? 'disabled' : ''}>Back in the black — continue</button>
             <button class="btn bad wide" id="cBankrupt">Declare bankruptcy</button>`;
-    status = `<div class="alert">You owe <b>${money(d.amount)}</b>${creditor ? ` to <b style="color:${creditor.color}">${escapeHtml(creditor.name)}</b>` : ' to the bank'}</div>
-      <div class="dim small">Your properties panel lists the fastest ways to raise it.</div>`;
+    status = owed > 0
+      ? `<div class="alert">You're <b>${money(owed)}</b> in the red — everything you raise goes to ${debtDestination(state, t.debt || {})} until you're square.</div>
+         <div class="dim small">Your properties panel lists the fastest ways to raise it.</div>`
+      : '<div class="dim small">Debt settled — carrying on.</div>';
   } else if (t.phase === 'action' && t.pending?.type === 'buy') {
     const tile = state.map.tiles[t.pending.tile];
     cardEl.innerHTML = deedMarkup(state, t.pending.tile, { compact: true }) || '';
@@ -1920,7 +1953,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
                  aria-label="Cash from ${escapeHtml(player.name)}" />
           <b class="cs-bubble" data-cash-out="${prefix}">$0</b>
         </div>
-        <span class="cs-max">max ${money(player.money)}</span>
+        <span class="cs-max">max ${money(Math.max(0, player.money))}</span>
       </div>
       ${player.getOutCards ? `<label class="field tight"><span>Prison cards · max ${player.getOutCards}</span>
         <input type="number" min="0" max="${player.getOutCards}" value="" placeholder="0" data-cards="${prefix}" /></label>` : ''}
@@ -2152,7 +2185,8 @@ export function reportCardHTML(state, meId) {
         <span class="rank-name">${escapeHtml(p.name)}</span>
         ${t ? `<span class="rank-title">${icon(TITLE_ART[t.title] || 'sparkle', 14)}<b>${escapeHtml(t.title)}</b><i>${escapeHtml(t.reason || '')}</i></span>` : ''}
       </span>
-      <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.netWorth)}</span>
+      <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>'
+        : p.netWorth < 0 ? `<span class="neg-money">${money(p.netWorth)}</span>` : money(p.netWorth)}</span>
     </div>`;
   }).join('');
   return `<p class="sub">Final standings</p>${rows}${statsTableHTML(state, rank)}`;

@@ -52,6 +52,22 @@ struct GameState: Codable, Equatable {
         return players.first { $0.id == id }
     }
 
+    /// Where an open debt streams, written the way a sentence needs it: the
+    /// creditor's name, the still-owed players of a payEach split, or plain
+    /// "the bank" when the money simply leaves the game.
+    func debtPayee(_ d: DebtState?) -> String {
+        if let c = player(d?.creditor) { return c.name }
+        let names = (d?.owedTo ?? []).enumerated().compactMap { k, id -> String? in
+            guard let p = player(id), !p.isBankrupt else { return nil }
+            if let left = d?.owedLeft?[safe: k], left <= 0 { return nil }
+            return p.name
+        }
+        if names.count > 1 {
+            return names.dropLast().joined(separator: ", ") + " and " + names.last!
+        }
+        return names.first ?? "the bank"
+    }
+
     func owner(of tile: Int) -> TileOwnership? { ownership[String(tile)] }
 
     var isLobby: Bool { status == "lobby" }
@@ -157,6 +173,10 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }
     var wasRemoved: Bool { timedOut ?? false }
+    /// Below zero and still at the table: the debt phase, where the negative
+    /// balance IS the amount left to pay and every gain streams to whoever is
+    /// owed until it climbs back to zero.
+    var inDebt: Bool { money < 0 && !isBankrupt }
 
     /// Laps the server has counted, and the same number the way a player wants
     /// to read it — how many are LEFT. RELIEF_LAPS in server/game.js.
@@ -215,6 +235,13 @@ struct DebtState: Codable, Equatable {
     var creditor: String?
     var amount: Int
     var reason: String?
+    /// A payEach charge is owed to several players at once; the server names
+    /// them here (creditor stays nil) so the panel can say who the money is
+    /// streaming to. Old servers never send it.
+    var owedTo: [String]?
+    /// What each of `owedTo` is still owed, same order — a paid-off or
+    /// departed recipient drops out of the debt copy. Old servers omit it.
+    var owedLeft: [Int]?
 }
 
 struct AuctionState: Codable, Equatable {

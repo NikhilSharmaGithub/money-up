@@ -36,9 +36,11 @@ struct ResultStandingsCard: View {
                             addFriendButton(r, P)
                         }
                         Spacer()
+                        // A game can end while a seat is still in the red —
+                        // the worth prints in the danger colour, never green.
                         Text(r.outcomeLabel ?? money(r.worth))
                             .font(.system(size: 13.5, weight: .heavy, design: .rounded))
-                            .foregroundStyle(r.bankrupt ? P.ink3 : P.good)
+                            .foregroundStyle(r.bankrupt ? P.ink3 : (r.worth < 0 ? P.bad : P.good))
                     }
                     .opacity(r.bankrupt ? 0.6 : 1)
                 }

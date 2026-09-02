@@ -128,6 +128,13 @@ export class GameRoom {
   }
 
   push() {
+    // Old clients render "Pay $X" straight off turn.debt.amount, so the
+    // number is re-derived from the debtor's balance on every broadcast.
+    const d = this.turn?.debt;
+    if (d) {
+      const debtor = this.player(d.debtor);
+      if (debtor) d.amount = Math.max(0, -debtor.money);
+    }
     this.version++;
     this.onUpdate(this);
   }
@@ -593,7 +600,7 @@ export class GameRoom {
     }
 
     p.money -= price;
-    seller.money += price;
+    this.receive(seller, price);
     this.own(tileIndex).owner = p.id;
     p.blockedLaps = 0;
     this.say(`Deadlock rule: ${tile.name} moves from ${seller.name} to ${p.name} for ${moneyText(price)}`, 'trade');
@@ -602,7 +609,6 @@ export class GameRoom {
       text: `The board rolled a ${roll}: ${tile.name} changes hands for ${moneyText(price)}.`,
       at: Date.now(),
     };
-    this.settleDebtIfPossible();
     this.push();
   }
 
@@ -753,6 +759,7 @@ export class GameRoom {
     for (const i of this.tilesOf(p.id)) delete this.ownership[i];
     p.money = 0;
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
+    else this.forgiveDebtTo(p);
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
     // A live auction settles their exit itself: any escrowed bid is void
     // (their cash left with them) and the race carries on without them.
@@ -847,14 +854,16 @@ export class GameRoom {
     });
   }
 
-  /** One rent payment actually landing — straight away or via a settled debt. */
-  noteRent(payer, owner, amount, tileName) {
+  /** One rent payment actually landing — in full, or one slice of a streamed
+   *  debt at a time. The biggest-rent title judges the whole bill (`soFar`),
+   *  never the individual pieces. */
+  noteRent(payer, owner, amount, tileName, soFar = amount) {
     if (!(amount > 0) || !payer || !owner) return;
     this.statFor(payer).rentPaid += amount;
     const s = this.statFor(owner);
     s.rentCollected += amount;
-    if (amount > s.biggestRent) {
-      s.biggestRent = amount;
+    if (soFar > s.biggestRent) {
+      s.biggestRent = soFar;
       s.biggestRentTile = tileName || null;
     }
   }
@@ -898,27 +907,116 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------- money --
+  /** What a bank-bound rupee does when it lands: joins the vacation pot when
+   *  that rule collects it, and otherwise simply ceases to exist. */
+  bankSink(amount) {
+    if (amount > 0 && this.settings.vacationCash) this.vacationPot += amount;
+  }
+
+  /** The street name a rent reason carries, for the stats. */
+  rentTileFrom(reason) {
+    return reason?.startsWith('for ') ? reason.slice(4) : null;
+  }
+
   credit(p, amount, reason = '') {
-    p.money += amount;
+    this.receive(p, amount);
     if (reason) this.say(`${p.name} received $${amount} ${reason}`, 'money');
   }
 
   /**
-   * Charge the *current* player. If they cannot pay, a debt is opened and the
-   * turn stalls in the "debt" phase until they liquidate or go bankrupt.
+   * Every rupee a player gains arrives through here — house sales, mortgages,
+   * trade cash, salary, card windfalls, all of it. A player in the red does
+   * not pocket new money: it flows straight through to whoever the open debt
+   * names, and their balance climbs toward zero as it does. Only what is left
+   * once the debt closes actually stays in their pocket.
+   */
+  receive(p, amount) {
+    if (!(amount > 0)) return;
+    const d = this.turn?.debt;
+    const owed = d && d.debtor === p.id ? Math.max(0, -p.money) : 0;
+    p.money += amount;                 // the climb — the creditors are paid alongside it
+    if (!owed) return;
+    this.streamDebt(d, p, Math.min(amount, owed));
+    d.amount = Math.max(0, -p.money);
+    this.settleDebtIfPossible();
+  }
+
+  /** One recovered slice leaving the debtor's ledger for whoever the debt names. */
+  streamDebt(d, p, slice) {
+    if (!(slice > 0)) return;
+    const left = Math.max(0, -p.money);
+    const toGo = left > 0 ? ` — $${left} still owed` : '';
+    if (d.owedTo) {
+      this.splitAmongOwed(d, slice);
+      this.say(`$${slice} flows straight to the players ${p.name} owes${toGo}`, 'money');
+      return;
+    }
+    const creditor = d.creditor ? this.player(d.creditor) : null;
+    if (creditor && !creditor.bankrupt) {
+      creditor.money += slice;
+      // The only charge that stalls a turn with a named creditor is rent, so
+      // every slice counts toward the rent stats as it lands.
+      d.rentSoFar = (d.rentSoFar || 0) + slice;
+      this.noteRent(p, creditor, slice, this.rentTileFrom(d.reason), d.rentSoFar);
+      this.say(`$${slice} flows straight from ${p.name} to ${creditor.name}${toGo}`, 'money');
+    } else {
+      this.bankSink(slice);
+      this.say(`$${slice} flows straight to the bank${toGo}`, 'money');
+    }
+  }
+
+  /**
+   * Split one slice across the players a payEach debt still owes, pro rata to
+   * what each is owed. Floored shares against a shrinking pool: the last
+   * recipient absorbs the rounding, so no coin is ever lost or duplicated.
+   */
+  splitAmongOwed(d, slice) {
+    const alive = (i) => {
+      const r = this.player(d.owedTo[i]);
+      return r && !r.bankrupt && d.owedLeft[i] > 0 ? r : null;
+    };
+    let pool = d.owedTo.reduce((sum, _, i) => sum + (alive(i) ? d.owedLeft[i] : 0), 0);
+    let left = Math.min(slice, pool);
+    for (let i = 0; i < d.owedTo.length && left > 0; i++) {
+      const r = alive(i);
+      if (!r) continue;
+      const share = Math.min(d.owedLeft[i], Math.floor((left * d.owedLeft[i]) / pool));
+      pool -= d.owedLeft[i];
+      d.owedLeft[i] -= share;
+      left -= share;
+      r.money += share;
+    }
+  }
+
+  /**
+   * Charge the *current* player. Whatever they can cover moves right now; the
+   * rest becomes a negative balance — the amount still owed — and the turn
+   * stalls in the "debt" phase. From then on every rupee they gain streams
+   * straight to whoever is owed (see receive) until the balance climbs back
+   * to zero. Nothing is ever minted to close the gap.
    */
   charge(p, amount, creditor = null, reason = '') {
     if (amount <= 0) return true;
-    if (p.money >= amount) {
-      p.money -= amount;
-      if (creditor) creditor.money += amount;
-      else if (this.settings.vacationCash) this.vacationPot += amount;
+    const pay = Math.max(0, Math.min(p.money, amount));
+    if (creditor) creditor.money += pay;
+    else this.bankSink(pay);
+    p.money -= amount;
+    if (p.money >= 0) {
+      if (creditor) this.noteRent(p, creditor, pay, this.rentTileFrom(reason));
       if (reason) this.say(`${p.name} paid $${amount} ${reason}`, 'money');
       return true;
     }
-    this.turn.debt = { debtor: p.id, creditor: creditor?.id || null, amount, reason };
+    this.turn.debt = {
+      debtor: p.id,
+      creditor: creditor?.id || null,
+      amount: -p.money,               // re-derived from the balance on every push
+      reason,
+      rentSoFar: creditor ? pay : 0,
+    };
     this.turn.phase = 'debt';
-    this.say(`${p.name} owes $${amount} ${reason} and must raise funds`, 'warn');
+    if (creditor && pay > 0) this.noteRent(p, creditor, pay, this.rentTileFrom(reason));
+    if (pay > 0) this.say(`${p.name} paid $${pay} ${reason} and still owes $${-p.money}`, 'warn');
+    else this.say(`${p.name} owes $${amount} ${reason} and must raise funds`, 'warn');
     if (this.autoPlayed(p)) this.scheduleBot(900);
     return false;
   }
@@ -930,8 +1028,8 @@ export class GameRoom {
     }
     if (p.money >= amount) {
       p.money -= amount;
-      if (creditor) creditor.money += amount;
-      else if (this.settings.vacationCash) this.vacationPot += amount;
+      if (creditor) this.receive(creditor, amount);
+      else this.bankSink(amount);
       return true;
     }
     this.bankrupt(p, creditor);
@@ -986,7 +1084,8 @@ export class GameRoom {
           p.jail = false;
           p.jailTurns = 0;
           this.movePlayer(p, d1 + d2);
-          this.turn.phase = this.turn.pending ? this.turn.phase : 'end';
+          // The walk itself can land on unpayable rent — that debt must stand.
+          this.turn.phase = this.turn.debt ? 'debt' : (this.turn.pending ? this.turn.phase : 'end');
         } else {
           // Can't pay yet: remember the rolled move so settling the fine in
           // the debt phase actually opens the cell and walks the player out.
@@ -1015,8 +1114,9 @@ export class GameRoom {
     this.say(`${p.name} rolled ${d1} + ${d2} = ${d1 + d2}${isDouble ? ' (double!)' : ''}`, 'dice');
     this.movePlayer(p, d1 + d2);
     if (this.turn.phase !== 'debt' && !this.turn.pending && this.turn.phase !== 'auction') {
-      this.turn.phase = isDouble && !p.jail ? 'roll' : 'end';
-      if (isDouble && !p.jail) this.say(`${p.name} rolls again`, 'info');
+      const encore = isDouble && !p.jail && !this.turn.noReroll;
+      this.turn.phase = encore ? 'roll' : 'end';
+      if (encore) this.say(`${p.name} rolls again`, 'info');
     }
     this.push();
     this.maybeBot();
@@ -1041,7 +1141,7 @@ export class GameRoom {
     if (animate) this.noteMove(p, from, to, steps, cause);
     if (steps > 0 && to < from && collectSalary) this.statFor(p).laps++;
     if (passedStart && collectSalary) {
-      p.money += SALARY;
+      this.receive(p, SALARY);
       this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
       this.noteLap(p);
     }
@@ -1056,7 +1156,7 @@ export class GameRoom {
     this.lastMove = { playerId: p.id, from, to, steps: 0, at: Date.now() };
     this.noteMove(p, from, to, 0, cause);
     if (passedStart && collectSalary) {
-      p.money += SALARY;
+      this.receive(p, SALARY);
       this.statFor(p).laps++;
       this.say(`${p.name} passed START and collected ${SALARY}`, 'money');
       this.noteLap(p);
@@ -1069,7 +1169,7 @@ export class GameRoom {
     const t = this.tile(index);
     switch (t.type) {
       case 'start':
-        p.money += START_BONUS;
+        this.receive(p, START_BONUS);
         this.say(`${p.name} landed right on START — $${START_BONUS}!`, 'money');
         break;
 
@@ -1085,10 +1185,14 @@ export class GameRoom {
       case 'vacation': {
         if (this.settings.vacationCash && this.vacationPot > 0) {
           this.say(`${p.name} collected the $${this.vacationPot} vacation pot`, 'money');
-          p.money += this.vacationPot;
+          const pot = this.vacationPot;
           this.vacationPot = 0;
+          this.receive(p, pot);
         }
         p.skipTurns = 1;
+        // A vacation starts NOW: the rest of this turn is cancelled too —
+        // a double buys no encore from a deck chair.
+        this.turn.noReroll = true;
         this.say(`${p.name} is on vacation and will miss the next turn`, 'info');
         break;
       }
@@ -1100,7 +1204,7 @@ export class GameRoom {
       }
 
       case 'refund':
-        p.money += t.amount;
+        this.receive(p, t.amount);
         this.say(`${p.name} received a $${t.amount} tax refund`, 'money');
         break;
 
@@ -1138,7 +1242,9 @@ export class GameRoom {
             this.botSay(owner, 'bigRentTaken');
             this.botSay(p, 'bigRentPaid');
           }
-          if (this.charge(p, rent, owner, `for ${t.name}`)) this.noteRent(p, owner, rent, t.name);
+          // charge() itself notes the rent — the full amount when it clears,
+          // and each streamed slice as it lands when it does not.
+          this.charge(p, rent, owner, `for ${t.name}`);
         }
         break;
       }
@@ -1207,7 +1313,7 @@ export class GameRoom {
   applyCard(p, act) {
     switch (act.kind) {
       case 'money':
-        if (act.amount >= 0) p.money += act.amount;
+        if (act.amount >= 0) this.receive(p, act.amount);
         else this.charge(p, -act.amount, null, 'for a card');
         break;
 
@@ -1240,7 +1346,7 @@ export class GameRoom {
             const passedStart = idx < p.pos;
             const from = p.pos;
             p.pos = idx;
-            if (passedStart) { p.money += SALARY; this.statFor(p).laps++; this.say(`${p.name} passed START (+${SALARY})`, 'money'); }
+            if (passedStart) { this.receive(p, SALARY); this.statFor(p).laps++; this.say(`${p.name} passed START (+${SALARY})`, 'money'); }
             this.lastMove = { playerId: p.id, from, to: idx, steps: step, at: Date.now() };
             this.noteMove(p, from, idx, step, 'card');
             this.landOn(p, idx, { payMultiplier: act.payMultiplier });
@@ -1255,7 +1361,7 @@ export class GameRoom {
         const total = owned * Math.abs(act.amount);
         if (!owned || !total) { this.say(`${p.name} owns no streets — the card fizzles`, 'info'); break; }
         if (act.amount >= 0) {
-          p.money += total;
+          this.receive(p, total);
           this.say(`${p.name} collects $${total} across ${owned} street${owned === 1 ? '' : 's'}`, 'money');
         } else {
           this.charge(p, total, null, `across ${owned} street${owned === 1 ? '' : 's'}`);
@@ -1287,18 +1393,25 @@ export class GameRoom {
           // Straight to the players — this money must never touch the
           // vacation pot, so it can't go through charge()'s bank path.
           p.money -= total;
-          for (const other of others) other.money += act.amount;
+          for (const other of others) this.receive(other, act.amount);
           this.say(`${p.name} paid $${act.amount} to every player`, 'money');
         } else {
-          // The debt remembers exactly who it is owed to: anyone leaving the
-          // game before it settles shrinks the bill instead of being paid
-          // into the void — see payDebt.
+          // The debt remembers exactly who it is owed to, and how much each:
+          // the cash on hand splits pro rata right now, every later gain
+          // streams the same way, and anyone leaving the game before it
+          // settles is forgiven instead of being paid into the void.
+          const pay = Math.max(0, p.money);
+          p.money -= total;
           this.turn.debt = {
-            debtor: p.id, creditor: null, amount: total, reason: 'to the other players',
-            each: act.amount, owedTo: others.map((o) => o.id),
+            debtor: p.id, creditor: null, amount: -p.money, reason: 'to the other players',
+            each: act.amount,
+            owedTo: others.map((o) => o.id),
+            owedLeft: others.map(() => act.amount),
           };
           this.turn.phase = 'debt';
-          this.say(`${p.name} owes $${total} to the other players and must raise funds`, 'warn');
+          if (pay > 0) this.splitAmongOwed(this.turn.debt, pay);
+          if (pay > 0) this.say(`${p.name} paid $${pay} to the other players and still owes $${-p.money}`, 'warn');
+          else this.say(`${p.name} owes $${total} to the other players and must raise funds`, 'warn');
           if (this.autoPlayed(p)) this.scheduleBot(900);
         }
         break;
@@ -1560,9 +1673,8 @@ export class GameRoom {
     }
     o.houses--;
     const refund = Math.floor(t.houseCost / 2);
-    p.money += refund;
     this.say(`${p.name} sold a building on ${t.name} for $${refund}`, 'build');
-    this.settleDebtIfPossible();
+    this.receive(p, refund);
     if (!silent) this.push();
     return true;
   }
@@ -1579,9 +1691,8 @@ export class GameRoom {
     }
     o.mortgaged = true;
     const value = Math.floor(t.price / 2);
-    p.money += value;
     this.say(`${p.name} mortgaged ${t.name} for $${value}`, 'mortgage');
-    this.settleDebtIfPossible();
+    this.receive(p, value);
     if (!silent) this.push();
     return true;
   }
@@ -1601,57 +1712,20 @@ export class GameRoom {
   }
 
   // -------------------------------------------------------------------- debt --
-  /** The players a per-player debt still owes: recorded at card time, alive now. */
-  debtRecipients(d) {
-    const ids = d.owedTo || this.active.filter((o) => o.id !== d.debtor).map((o) => o.id);
-    return ids.map((x) => this.player(x)).filter((o) => o && !o.bankrupt);
-  }
-
   /**
-   * What the open debt costs right now. A "pay every player" debt is owed to
-   * the people recorded on it — anyone who left the game since the card was
-   * drawn shrinks the bill instead of being paid into the void.
+   * The moment the debtor's balance climbs back to zero the debt is done —
+   * no confirmation step, because the money already flowed as it arrived.
+   * The turn picks up exactly where the charge interrupted it: a doubles
+   * roll keeps its re-roll, a paid-off prison fine opens the cell and walks
+   * the stored move, and a pending purchase gets resolved.
    */
-  debtDue(d = this.turn?.debt) {
-    if (!d) return 0;
-    if (!d.each) return d.amount;
-    return d.each * this.debtRecipients(d).length;
-  }
-
   settleDebtIfPossible() {
     const d = this.turn?.debt;
     if (!d) return;
     const p = this.player(d.debtor);
-    if (p.money >= this.debtDue(d)) {
-      // Stays in debt phase until the player confirms; an auto-played seat
-      // settles on the bot clock, so the pause reads like a person doing it.
-      if (this.autoPlayed(p)) this.scheduleBot(900);
-    }
-  }
-
-  payDebt(id) {
-    const d = this.turn?.debt;
-    if (!d || d.debtor !== id) return { error: 'No debt' };
-    const p = this.player(id);
-    const recipients = d.each ? this.debtRecipients(d) : null;
-    const amount = recipients ? d.each * recipients.length : d.amount;
-    if (p.money < amount) return { error: 'Still not enough money' };
-    p.money -= amount;
-    const creditor = d.creditor ? this.player(d.creditor) : null;
-    if (creditor) {
-      creditor.money += amount;
-      // Rent is the only charge that stalls the turn with a named creditor,
-      // so a settled debt with one is a rent payment finally landing.
-      this.noteRent(p, creditor, amount, d.reason?.startsWith('for ') ? d.reason.slice(4) : null);
-    } else if (recipients) {
-      // "pay every player" card settled late: the money goes to the players
-      // it was owed to and who are still in the game — never to the pot.
-      for (const other of recipients) other.money += d.each;
-    } else if (this.settings.vacationCash) {
-      this.vacationPot += amount;
-    }
-    this.say(`${p.name} settled a debt of $${amount}`, 'money');
+    if (!p || p.money < 0) return;
     this.turn.debt = null;
+    this.say(`${p.name} is back in the black — the debt is settled`, 'money');
 
     if (d.jailRelease) {
       // The prison fine is paid — open the cell and play out the stored roll.
@@ -1668,9 +1742,46 @@ export class GameRoom {
       // A doubles roll whose landing opened this debt still owes a re-roll.
       this.turn.phase = this.turn.pending ? 'action' : this.afterActionPhase(p);
     }
-    this.push();
     this.maybeBot();
+  }
+
+  /**
+   * Kept for older clients whose debt sheet still offers a "pay" button.
+   * Money streams to the creditors the moment it arrives now, so by the time
+   * this could succeed the debt has already closed itself — answer honestly
+   * either way.
+   */
+  payDebt(id) {
+    const d = this.turn?.debt;
+    if (!d || d.debtor !== id) return { error: 'No debt' };
+    const p = this.player(id);
+    if (p.money < 0) return { error: 'Still not enough money' };
+    this.settleDebtIfPossible();
+    this.push();
     return { ok: true };
+  }
+
+  /**
+   * A player leaving play takes their claims with them: whatever the open
+   * debt still owed them is forgiven, and the debtor's balance climbs by
+   * that much — the money was never going to be printed for an empty chair.
+   */
+  forgiveDebtTo(leaver) {
+    const d = this.turn?.debt;
+    if (!d || d.debtor === leaver.id) return;
+    const debtor = this.player(d.debtor);
+    if (!debtor) return;
+    if (d.creditor === leaver.id) {
+      debtor.money += Math.max(0, -debtor.money);
+    } else if (d.owedTo) {
+      const i = d.owedTo.indexOf(leaver.id);
+      if (i === -1) return;
+      debtor.money += Math.max(0, Math.min(d.owedLeft[i], -debtor.money));
+      d.owedTo.splice(i, 1);
+      d.owedLeft.splice(i, 1);
+    } else return;
+    d.amount = Math.max(0, -debtor.money);
+    this.settleDebtIfPossible();
   }
 
   declareBankrupt(id) {
@@ -1729,23 +1840,22 @@ export class GameRoom {
     // race carries on (or closes) without forking the turn.
     const settled = this.settleAuctionExit(p, { refund: true });
     const tiles = this.tilesOf(p.id);
+    // The streets do NOT follow the debt: whatever cash existed already
+    // streamed to the creditor — the estate itself goes back on the market,
+    // houses razed and mortgages cleared, for whoever lands there next.
     if (creditor && !creditor.bankrupt) {
       creditor.money += Math.max(0, p.money);
-      for (const i of tiles) {
-        const o = this.own(i);
-        o.owner = creditor.id;
-        o.houses = 0;
-      }
-      this.say(`${p.name} went bankrupt — everything goes to ${creditor.name}`, 'bankrupt');
+      this.say(`${p.name} went bankrupt — ${creditor.name} keeps what was paid, the streets return to the bank`, 'bankrupt');
     } else {
-      for (const i of tiles) delete this.ownership[i];
-      this.say(`${p.name} went bankrupt — assets return to the bank`, 'bankrupt');
+      this.say(`${p.name} went bankrupt — the streets return to the bank`, 'bankrupt');
     }
+    for (const i of tiles) delete this.ownership[i];
     p.money = 0;
     for (const other of this.players) {
       if (other.id !== p.id) this.botSay(other, 'bust', { name: p.name });
     }
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
+    else this.forgiveDebtTo(p);
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
 
     if (this.checkGameEnd()) return;
@@ -1799,7 +1909,10 @@ export class GameRoom {
       this.push();
       return { ok: true };
     }
-    if (from.money < trade.give.money || to.money < trade.get.money) {
+    // A zero-cash side is always affordable — a debtor's negative balance
+    // must not block them trading streets to dig themselves out.
+    if ((trade.give.money > 0 && from.money < trade.give.money)
+      || (trade.get.money > 0 && to.money < trade.get.money)) {
       this.say('Trade failed — someone no longer has the cash', 'warn');
       this.push();
       return { error: 'Insufficient funds' };
@@ -1820,9 +1933,9 @@ export class GameRoom {
       return { error: 'Offer is out of date' };
     }
     from.money -= trade.give.money;
-    to.money += trade.give.money;
     to.money -= trade.get.money;
-    from.money += trade.get.money;
+    this.receive(to, trade.give.money);
+    this.receive(from, trade.get.money);
     from.getOutCards -= trade.give.cards;
     to.getOutCards += trade.give.cards;
     to.getOutCards -= trade.get.cards;
@@ -1832,7 +1945,6 @@ export class GameRoom {
     this.statFor(from).tradesCompleted++;
     this.statFor(to).tradesCompleted++;
     this.say(`${from.name} and ${to.name} completed a trade`, 'trade');
-    this.settleDebtIfPossible();
     this.push();
     return { ok: true };
   }
@@ -2025,8 +2137,9 @@ export class GameRoom {
     const t = this.turn;
 
     if (t.phase === 'debt') {
-      const d = t.debt;
-      if (p.money >= this.debtDue(d)) return this.payDebt(p.id);
+      // Raise cash one piece at a time — the pause reads like a person doing
+      // it. The stream forwards each piece and closes the debt on its own;
+      // out of road means out of the game.
       if (this.autoLiquidate(p)) {
         this.push();
         return this.scheduleBot(500);

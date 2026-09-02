@@ -15,8 +15,13 @@ const fail = (msg) => {
 const ok = (msg) => console.log('  ✓', msg);
 
 function checkInvariants(room, where) {
+  const debt = room.turn?.debt || null;
   for (const p of room.players) {
-    if (p.money < 0) fail(`${where}: ${p.name} has negative cash (${p.money})`);
+    // The red is legal for exactly one player: the live debtor named on the
+    // open debt. Money streams to the creditors as it arrives, so a negative
+    // balance IS the ledger of what is still owed — anywhere else it's a bug.
+    const inTheRed = room.status === 'playing' && debt?.debtor === p.id && !p.bankrupt;
+    if (p.money < 0 && !inTheRed) fail(`${where}: ${p.name} has negative cash (${p.money})`);
     if (!Number.isFinite(p.money)) fail(`${where}: ${p.name} has non-numeric cash`);
     if (p.pos < 0 || p.pos >= room.map.size) fail(`${where}: ${p.name} is off the board (${p.pos})`);
     if (p.bankrupt && room.tilesOf(p.id).length) fail(`${where}: bankrupt ${p.name} still owns property`);
@@ -43,6 +48,25 @@ function checkInvariants(room, where) {
   if (room.status === 'playing' && !['roll', 'action', 'auction', 'debt', 'end'].includes(phase)) {
     fail(`${where}: unknown phase "${phase}"`);
   }
+  if (debt && room.status === 'playing') {
+    const debtor = room.player(debt.debtor);
+    if (!debtor) fail(`${where}: debt owed by a ghost`);
+    else {
+      if (debtor.money >= 0) fail(`${where}: a cleared debt is still open (balance ${debtor.money})`);
+      if (debt.amount !== Math.max(0, -debtor.money)) {
+        fail(`${where}: debt ledger out of sync (shows ${debt.amount}, balance says ${-debtor.money})`);
+      }
+      if (debt.owedTo) {
+        const split = debt.owedLeft.reduce((s, n) => s + n, 0);
+        if (split !== debt.amount) fail(`${where}: pro-rata split leaks coins (${split} vs ${debt.amount})`);
+      }
+    }
+    // A debt can only stall the turn it was charged on — the active player's.
+    if (debt.debtor !== room.turn.playerId) fail(`${where}: debt owed by ${debt.debtor} on ${room.turn.playerId}'s turn`);
+    if (phase !== 'debt') fail(`${where}: open debt but phase "${phase}"`);
+  }
+  // The contract is an iff: the phase without the object would strand clients.
+  if (!debt && room.status === 'playing' && phase === 'debt') fail(`${where}: debt phase with nothing owed`);
 }
 
 /** Runs one bot game with the timer-driven bot loop replaced by direct calls. */
@@ -427,14 +451,17 @@ console.log('\n▶ targeted rules');
   if (a.money !== 400) fail(`payEach should cost $100, cash is ${a.money}`);
   if (room.player('b').money !== 2550 || room.player('c').money !== 2550) fail('payEach should credit each opponent');
 
-  // …including when it has to go through the debt phase.
+  // …including when it lands short: the cash on hand splits pro rata right
+  // now, and every later gain streams the same way — never into the pot.
   a.money = 20;
   room.applyCard(a, { kind: 'payEach', amount: 50 });
   if (room.turn.phase !== 'debt') fail('unaffordable payEach should open a debt');
-  a.money = 200;
-  room.payDebt('a');
-  if (room.vacationPot !== 0) fail('debt-settled payEach must not feed the pot');
-  if (room.player('b').money !== 2600 || room.player('c').money !== 2600) fail('debt-settled payEach should credit opponents');
+  if (a.money !== -80) fail(`the shortfall should show as a negative balance (${a.money})`);
+  if (room.player('b').money !== 2560 || room.player('c').money !== 2560) fail('the $20 on hand should split $10/$10 immediately');
+  room.receive(a, 200);
+  if (room.vacationPot !== 0) fail('debt-streamed payEach must not feed the pot');
+  if (room.player('b').money !== 2600 || room.player('c').money !== 2600) fail('the stream should top both up to their $50');
+  if (a.money !== 120 || room.turn.debt) fail(`the debt should close with the rest in hand (${a.money})`);
   ok('payEach pays the players, not the pot');
 }
 
@@ -455,9 +482,10 @@ console.log('\n▶ targeted rules');
   room.roll('a', [2, 3]);             // third failed attempt → fine → debt
   if (room.turn.phase !== 'debt') fail('unpayable fine should open a debt');
   if (!room.turn.debt?.jailRelease) fail('the fine debt should remember the rolled move');
-  a.money = 400;
-  room.payDebt('a');
-  if (a.jail) fail('paying the fine debt must release the player');
+  if (a.money !== -40) fail(`the $10 on hand should sink into the fine first (${a.money})`);
+  room.receive(a, 400);               // raises cash — the last $40 streams to the bank
+  if (a.jail) fail('paying off the fine debt must release the player');
+  if (a.money !== 360) fail(`the player should keep what the fine did not eat (${a.money})`);
   if (a.pos !== room.cornerIndex('prison') + 5) fail(`released player should have walked 5 tiles, at ${a.pos}`);
   ok('prison fine via debt releases and moves');
 }
@@ -912,14 +940,13 @@ console.log('\n▶ targeted rules');
     fail('biggest rent should remember the amount and the street');
   }
 
-  // …and rent settled late through the debt phase both count.
+  // …and rent streamed late through the debt phase both count.
   a.money = 0;
   room.landOn(a, s);
   if (room.turn.phase !== 'debt') fail('broke tenant should open a debt');
-  a.money = 500;
-  room.payDebt('a');
-  if (room.stats.a.rentPaid !== rent * 2) fail('debt-settled rent should still count as rent paid');
-  if (room.stats.b.rentCollected !== rent * 2) fail('debt-settled rent should still count as rent collected');
+  room.receive(a, 500);
+  if (room.stats.a.rentPaid !== rent * 2) fail('debt-streamed rent should still count as rent paid');
+  if (room.stats.b.rentCollected !== rent * 2) fail('debt-streamed rent should still count as rent collected');
 
   // A lap past START and a street bought at asking price.
   a.money = 500;
@@ -984,6 +1011,28 @@ console.log('\n▶ targeted rules');
   else if (room.status !== 'ended') fail('two-hander should end when one concedes');
   else ok('a player can concede at any moment, ending a two-hander');
 }
+
+{
+  // A vacation starts now: even a double buys no second roll from the deck
+  // chair, and the next turn is skipped as before.
+  const room = new GameRoom('vac', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const vac = room.map.tiles.find((t) => t.type === 'vacation').index;
+  const a = room.player('a');
+  const size = room.map.size;
+  a.pos = (vac - 4 + size) % size;
+  room.roll('a', [2, 2]);
+  if (room.turn.phase === 'roll' && room.turn.playerId === 'a') fail('vacation must cancel the double encore');
+  else if (a.pos !== vac) fail(`expected Ava on vacation tile ${vac}, got ${a.pos}`);
+  else ok('vacation cancels the rest of the turn, doubles included');
+  room.dispose();
+}
+
 
 
 console.log('\n▶ cards through START');
@@ -1110,15 +1159,23 @@ console.log('\n▶ debts and departures');
   a.money = 20;
   room.applyCard(a, { kind: 'payEach', amount: 50 });
   if (room.turn.phase !== 'debt') fail('an unaffordable payEach should open a debt');
+  // The $20 on hand splits pro rata over $50/$50/$50, floor-and-carry: 6/7/7.
+  if (room.player('b').money !== 2506 || room.player('c').money !== 2507 || room.player('d').money !== 2507) {
+    fail(`the immediate split should be integer-exact 6/7/7, got ${['b', 'c', 'd'].map((x) => room.player(x).money - 2500).join('/')}`);
+  }
+  if (a.money !== -130) fail(`the debtor should carry the $130 remainder (${a.money})`);
+  // D walks out mid-stream: their unpaid $43 is forgiven, not paid to a ghost.
   room.removeFromPlay(room.player('d'), 'quit');
-  a.money = 500;
-  room.payDebt('a');
-  if (a.money !== 400) fail(`the bill should shrink to the survivors ($100), debtor paid ${500 - a.money}`);
-  if (room.player('b').money !== 2550 || room.player('c').money !== 2550) fail('each survivor should get their $50');
-  if (room.player('d').money !== 0) fail('a leaver must not be paid');
+  if (a.money !== -87) fail(`the leaver's share should be forgiven, balance ${a.money}`);
+  if (room.turn.debt?.amount !== 87) fail(`the ledger should shrink with the leaver (${room.turn.debt?.amount})`);
+  room.receive(a, 500);
+  if (a.money !== 413) fail(`the debtor keeps what the survivors were not owed (${a.money})`);
+  if (room.player('b').money !== 2550 || room.player('c').money !== 2550) fail('each survivor should end on exactly their $50');
+  if (room.player('d').money !== 0) fail('a leaver must not keep accruing');
   if (room.vacationPot !== 0) fail('the shrunken debt must not leak into the pot');
+  if (room.turn.debt) fail('the debt should be closed');
   room.dispose();
-  ok('payEach settled late pays only the recipients still in the game');
+  ok('payEach streams pro rata, forgives a leaver, and stays integer-exact');
 }
 
 {
@@ -1137,9 +1194,8 @@ console.log('\n▶ debts and departures');
   a.money = 0;
   room.roll('a', [1, 1]);
   if (room.turn.phase !== 'debt') fail('unpayable rent should stall in the debt phase');
-  a.money = 500;
-  room.payDebt('a');
-  if (room.turn.phase !== 'roll') fail(`settling the debt should hand the double back its re-roll (got ${room.turn.phase})`);
+  room.receive(a, 500);
+  if (room.turn.phase !== 'roll') fail(`clearing the debt should hand the double back its re-roll (got ${room.turn.phase})`);
 
   // …and a plain roll still ends the turn once the debt clears.
   room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
@@ -1147,11 +1203,239 @@ console.log('\n▶ debts and departures');
   a.money = 0;
   room.roll('a', [1, 2]);
   if (room.turn.phase !== 'debt') fail('setup: the plain roll should open a debt too');
-  a.money = 500;
-  room.payDebt('a');
+  room.receive(a, 500);
   if (room.turn.phase !== 'end') fail('a plain roll must not gain a re-roll from the debt');
   room.dispose();
   ok('doubles survive a debt settlement, plain rolls do not');
+}
+
+console.log('\n▶ the debt stream (money is never minted)');
+{
+  const room = new GameRoom('ds', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.addPlayer({ id: 'c', name: 'Cy' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a'), b = room.player('b'), c = room.player('c');
+  a.money = 1000; b.money = 500; c.money = 2000;
+
+  // Bo owns a full colour with one house, plus a lone street to sell later.
+  const [g1, g2] = Object.values(room.map.groups);
+  g1.forEach((i) => { room.ownership[i] = { owner: 'b', houses: 0, mortgaged: false }; });
+  room.ownership[g1[0]].houses = 1;
+  const lone = g2[0];
+  room.ownership[lone] = { owner: 'b', houses: 0, mortgaged: false };
+
+  // (a) Bo lands on Ava's hotel: $1,800 due against $500 in hand. Ava banks
+  // the $500 that exists right now; the rest is Bo's balance, in the red.
+  room.turn = { playerId: 'b', phase: 'roll', dice: [4, 4], doubles: 1, pending: null, debt: null, rolledThisTurn: true };
+  room.charge(b, 1800, a, 'for the Grand Hotel');
+  if (a.money !== 1500) fail(`(a) the creditor banks the $500 that exists (has ${a.money})`);
+  if (b.money !== -1300) fail(`(a) the debtor sits at -1300 (${b.money})`);
+  if (room.turn.phase !== 'debt' || room.turn.debt?.amount !== 1300) fail('(a) the debt phase opens at the remainder');
+  room.push();
+  if (room.turn.debt.amount !== 1300) fail('(a) push must keep the ledger synced for old clients');
+
+  // While in the red: no buying, no building, no bidding, no ending the turn.
+  if (!room.build('b', g1[1]).error) fail('a negative purse must fail the build check');
+  room.turn.pending = { type: 'buy', tile: lone, price: room.tile(lone).price };
+  if (!room.buy('b').error) fail('a negative purse must fail the buy check');
+  room.turn.pending = null;
+  if (!room.endTurn('b').error) fail('the turn must not move past an open debt');
+  room.auction = { tile: lone, bid: 0, leader: null, inRace: ['b', 'c'], endsAt: Date.now() + 60000 };
+  if (!room.bid('b', 50).error) fail('(h) an auction bid from the red must be refused');
+  room.auction = null;
+
+  // (b) Selling the house flows straight through — Bo's balance climbs.
+  const R = Math.floor(room.tile(g1[0]).houseCost / 2);
+  room.sellHouse('b', g1[0]);
+  if (a.money !== 1500 + R) fail(`(b) the sale price flows straight to the creditor (${a.money})`);
+  if (b.money !== -1300 + R) fail(`(b) the debtor climbs by the sale (${b.money})`);
+  if (room.turn.debt?.amount !== 1300 - R) fail(`(b) the ledger follows the balance (${room.turn.debt?.amount})`);
+
+  // (c) A trade's cash clears the rest to the rupee: debt closed, and the
+  // (e) doubles roll that opened it keeps its re-roll.
+  const owed = 1300 - R;
+  const offer = room.proposeTrade('b', { to: 'c', give: { money: 0, tiles: [lone], cards: 0 }, get: { money: owed, tiles: [], cards: 0 } });
+  if (offer.error) fail(`(c) a debtor must still be able to trade (${offer.error})`);
+  else room.respondTrade('c', offer.trade.id, true);
+  if (b.money !== 0) fail(`(c) the debt closes at exactly zero (${b.money})`);
+  if (a.money !== 2800) fail(`(c/d) the creditor's total is exactly the $1,800 billed (${a.money})`);
+  if (c.money !== 2000 - owed) fail(`(c) the buyer paid exactly the asking cash (${c.money})`);
+  if (room.own(lone)?.owner !== 'c') fail('(c) the traded street should change hands');
+  if (room.turn.debt) fail('(c) a zeroed balance closes the debt');
+  if (room.turn.phase !== 'roll') fail(`(e) the doubles re-roll survives the red (got ${room.turn.phase})`);
+  // (f) Conservation across the whole lifecycle: the table's total moved by
+  // exactly the one bank-minted house refund — nothing else appeared.
+  if (a.money + b.money + c.money !== 3500 + R) {
+    fail(`(f) the table total drifted (${a.money + b.money + c.money} vs ${3500 + R})`);
+  }
+
+  // (d) A windfall bigger than the bill: the creditor gets the bill, the
+  // debtor pockets every rupee past it — never a double payment.
+  room.turn = { playerId: 'b', phase: 'end', dice: [2, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.charge(b, 100, a, 'for a kiosk');
+  room.receive(b, 500);
+  if (a.money !== 2900) fail(`(d) the creditor never sees more than the charge (${a.money})`);
+  if (b.money !== 400) fail(`(d) the debtor pockets the overshoot (${b.money})`);
+  if (room.turn.debt) fail('(d) the closed debt should be gone');
+  room.dispose();
+  ok('a debt streams every gain to the creditor, to the rupee, and closes itself');
+}
+
+{
+  // (g) A hopeless debtor: the creditor collects only what actually existed —
+  // cash on hand, then what liquidation raises, then the estate. The phantom
+  // remainder dies unprinted.
+  const room = new GameRoom('ds2', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a'), b = room.player('b');
+  a.money = 100; b.money = 300;
+  const s = room.map.tiles.find((t) => t.type === 'property').index;
+  room.ownership[s] = { owner: 'b', houses: 0, mortgaged: false };
+  room.turn = { playerId: 'b', phase: 'end', dice: [2, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.charge(b, 5000, a, 'for the whole promenade');
+  if (a.money !== 400) fail(`(g) the creditor banks the $300 on hand (${a.money})`);
+  const V = Math.floor(room.tile(s).price / 2);
+  room.mortgage('b', s);
+  if (a.money !== 400 + V) fail(`(g) the mortgage value flows straight through (${a.money})`);
+  if (b.money !== -4700 + V) fail(`(g) the balance climbs but stays deep red (${b.money})`);
+  room.declareBankrupt('b');
+  if (!b.bankrupt) fail('(g) a hopeless debtor goes bankrupt');
+  if (b.money !== 0) fail(`(g) the debtor leaves at zero — the remainder never existed (${b.money})`);
+  if (a.money !== 400 + V) fail(`(g) the creditor total is what existed, not the $5,000 billed (${a.money})`);
+  // The owner's rule: streets never follow the debt — the estate returns to
+  // the bank, mortgage cleared, for whoever lands there next.
+  if (room.own(s)) fail('(g) the estate returns to the bank, not the creditor');
+  if (room.status !== 'ended' || room.winner?.id !== 'a') fail('(g) the two-hander ends for the creditor');
+  room.dispose();
+  ok('a hopeless debtor pays out only the money that ever existed');
+}
+
+{
+  // A creditor who leaves forgives the remainder — nobody pays a ghost.
+  const room = new GameRoom('ds3', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const b = room.player('b');
+  b.money = 100;
+  room.turn = { playerId: 'b', phase: 'end', dice: [2, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.charge(b, 500, room.player('a'), 'for Main Street');
+  if (b.money !== -400) fail(`setup: the debtor should owe $400 (${b.money})`);
+  room.removeFromPlay(room.player('a'), 'quit');
+  if (b.money !== 0) fail(`a leaving creditor forgives the remainder (${b.money})`);
+  if (room.turn?.debt) fail('the forgiven debt should be closed');
+  room.dispose();
+  ok('a creditor who leaves takes their claim with them');
+}
+
+{
+  // A payEach debtor who goes bankrupt mid-stream: the recipients keep only
+  // the slices that actually landed, and the unpaid remainder dies unprinted.
+  // A recipient going bankrupt first is forgiven exactly like a quitter.
+  const room = new GameRoom('ds4', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c', 'd'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a');
+  ['a', 'b', 'c', 'd'].forEach((id) => { room.player(id).money = id === 'a' ? 0 : 2500; });
+  room.turn = { playerId: 'a', phase: 'end', dice: [2, 1], doubles: 0, pending: null, debt: null, rolledThisTurn: true };
+  room.applyCard(a, { kind: 'payEach', amount: 100 });
+  room.receive(a, 90);                          // $30 lands on each of the three
+  room.bankrupt(room.player('d'), null);        // d's unpaid $70 is forgiven
+  if (a.money !== -140) fail(`a bankrupt recipient is forgiven like a quitter (${a.money})`);
+  const bBefore = room.player('b').money, cBefore = room.player('c').money;
+  room.declareBankrupt('a');
+  if (!a.bankrupt || a.money !== 0) fail(`the debtor leaves at zero (${a.money})`);
+  if (room.player('b').money !== bBefore || room.player('c').money !== cBefore) {
+    fail('a payEach bankruptcy must not conjure the unpaid remainder');
+  }
+  if (room.turn?.debt) fail('the debt should leave with the debtor');
+  room.dispose();
+  ok('a payEach debtor going bankrupt pays out only what landed');
+}
+
+{
+  // A debt born INSIDE the jail-release walk: the fine debt settles, the
+  // stored roll plays out, and the landing's unpayable rent must open a
+  // second debt that stands — and then streams like any other.
+  const room = new GameRoom('ds5', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const a = room.player('a'), b = room.player('b');
+  const prison = room.cornerIndex('prison');
+  // A street a non-double walk from prison, dressed up with a hotel.
+  let s = -1, dice = null;
+  for (let k = 3; k <= 11 && s < 0; k++) {
+    const d1 = Math.min(6, k - 1), d2 = k - d1;
+    if (room.tile(prison + k)?.type === 'property' && d1 !== d2 && d2 >= 1) { s = prison + k; dice = [d1, d2]; }
+  }
+  if (s < 0) fail('setup: classic should have a street within a walk of prison');
+  const t = room.tile(s);
+  room.map.groups[t.group].forEach((i) => { room.ownership[i] = { owner: 'b', houses: 0, mortgaged: false }; });
+  room.ownership[s].houses = 5;
+  const rent = room.rentFor(s);
+  a.jail = true; a.jailTurns = 2; a.pos = prison; a.money = 10; b.money = 1000;
+  room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
+  room.roll('a', dice);                         // third failed attempt → fine → debt
+  if (room.turn.phase !== 'debt' || !room.turn.debt?.jailRelease) fail('setup: the fine should stall with a stored walk');
+  room.receive(a, 60);                          // fine paid ($40) + $20 spare → the walk plays
+  if (a.jail || a.pos !== s) fail(`the release walk should land on the hotel (at ${a.pos}, wanted ${s})`);
+  if (room.turn.phase !== 'debt') fail(`the walk's rent debt must stand (${room.turn.phase})`);
+  if (room.turn.debt?.creditor !== 'b') fail('the second debt is owed to the landlord');
+  if (a.money !== 20 - rent) fail(`red by exactly the shortfall (${a.money} vs ${20 - rent})`);
+  room.receive(a, rent);                        // clears it — landlord gets rent to the rupee
+  if (a.money !== 20 || b.money !== 1000 + rent) fail(`the landlord ends on exactly the rent (${b.money - 1000})`);
+  if (room.turn.debt) fail('the second debt should close itself');
+  room.dispose();
+  ok('a debt born inside the jail-release walk stands and streams');
+}
+
+{
+  // The pro-rata splitter, hammered: every slice lands whole, nobody is paid
+  // past what they are owed, and the remainders never go negative.
+  const room = new GameRoom('ds6', () => {});
+  room.map = MAPS.classic;
+  ['a', 'b', 'c', 'd'].forEach((id) => room.addPlayer({ id, name: id.toUpperCase() }));
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const rec = ['b', 'c', 'd'];
+  let bad = 0;
+  for (let n = 0; n < 500 && !bad; n++) {
+    const owed = rec.map(() => 1 + Math.floor(Math.random() * 997));
+    const total = owed.reduce((x, y) => x + y, 0);
+    const d = { debtor: 'a', creditor: null, amount: total, reason: 'x', each: 1, owedTo: [...rec], owedLeft: [...owed] };
+    const slice = 1 + Math.floor(Math.random() * total);
+    const before = rec.map((id) => room.player(id).money);
+    room.splitAmongOwed(d, slice);
+    const given = rec.reduce((sum, id, i) => sum + room.player(id).money - before[i], 0);
+    if (given !== slice) { fail(`split ${slice} of [${owed}] delivered ${given}`); bad++; }
+    if (d.owedLeft.some((x) => x < 0)) { fail(`negative remainder splitting ${slice} of [${owed}]`); bad++; }
+    if (d.owedLeft.reduce((x, y) => x + y, 0) !== total - slice) { fail(`remainder drift splitting ${slice} of [${owed}]`); bad++; }
+    rec.forEach((id, i) => {
+      if (room.player(id).money - before[i] > owed[i]) { fail(`recipient overpaid splitting ${slice} of [${owed}]`); bad++; }
+    });
+  }
+  room.dispose();
+  if (!bad) ok('the pro-rata split is integer-exact over 500 random slices');
 }
 
 console.log('\n▶ rematch');

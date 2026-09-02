@@ -575,9 +575,16 @@ struct TradePickerSheet: View {
                             Circle().fill(Color(css: team.color)).frame(width: 9, height: 9)
                         }
                     }
-                    Text("\(money(p.money))  ·  \(owned) propert\(owned == 1 ? "y" : "ies")")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
+                    // A seat in the red shows it here too — their cash is
+                    // spoken for until the balance climbs back to zero.
+                    HStack(spacing: 0) {
+                        Text(money(p.money))
+                            .foregroundStyle(p.inDebt ? P.bad : P.ink3)
+                            .debtPulse(p.inDebt)
+                        Text("  ·  \(owned) propert\(owned == 1 ? "y" : "ies")")
+                            .foregroundStyle(P.ink3)
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                 }
                 Spacer()
                 Image(systemName: "arrow.left.arrow.right")
