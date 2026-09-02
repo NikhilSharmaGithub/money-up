@@ -2,7 +2,7 @@
 // Every rule lives here; clients only send intents and render what comes back.
 
 import { getMap, GROUPS } from './maps.js';
-import { TREASURE, SURPRISE, shuffled } from './cards.js';
+import { buildDecks, shuffled } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
 
 export const COLORS = [
@@ -103,6 +103,10 @@ export class GameRoom {
     this.turnCount = 0;
     this.lastCard = null;
     this.lastMove = null;
+    // Every position change of the current action, in execution order —
+    // one dice roll can move a piece twice (walk onto Surprise, then the
+    // card sends it elsewhere), and one lastMove can't tell that story.
+    this.actionMoves = [];
     this.timers = {};
     /** Set by the server so the room can report karma-worthy exits. */
     this.hooks = {};
@@ -851,6 +855,7 @@ export class GameRoom {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
     if (this.turn.phase !== 'roll') return { error: 'Cannot roll now' };
     const p = this.current;
+    this.actionMoves = [];
 
     const d1 = forced?.[0] ?? 1 + Math.floor(Math.random() * 6);
     const d2 = forced?.[1] ?? 1 + Math.floor(Math.random() * 6);
@@ -918,7 +923,12 @@ export class GameRoom {
     return { ok: true };
   }
 
-  movePlayer(p, steps, { collectSalary = true, animate = true } = {}) {
+  noteMove(p, from, to, steps, cause) {
+    this.actionMoves.push({ playerId: p.id, from, to, steps, cause, at: Date.now() });
+    if (this.actionMoves.length > 6) this.actionMoves.shift();
+  }
+
+  movePlayer(p, steps, { collectSalary = true, animate = true, cause = 'roll' } = {}) {
     const size = this.map.size;
     const from = p.pos;
     let to = (p.pos + steps) % size;
@@ -928,6 +938,7 @@ export class GameRoom {
     const passedStart = steps > 0 && to < from && !landsOnStart;
     p.pos = to;
     this.lastMove = animate ? { playerId: p.id, from, to, steps, at: Date.now() } : null;
+    if (animate) this.noteMove(p, from, to, steps, cause);
     if (steps > 0 && to < from && collectSalary) this.statFor(p).laps++;
     if (passedStart && collectSalary) {
       p.money += SALARY;
@@ -937,12 +948,13 @@ export class GameRoom {
     this.landOn(p, to);
   }
 
-  teleport(p, to, { collectSalary = true } = {}) {
+  teleport(p, to, { collectSalary = true, cause = 'card' } = {}) {
     const from = p.pos;
     const landsOnStart = this.tile(to)?.type === 'start';
     const passedStart = to < from && !landsOnStart;
     p.pos = to;
     this.lastMove = { playerId: p.id, from, to, steps: 0, at: Date.now() };
+    this.noteMove(p, from, to, 0, cause);
     if (passedStart && collectSalary) {
       p.money += SALARY;
       this.statFor(p).laps++;
@@ -1063,25 +1075,28 @@ export class GameRoom {
   sendToJail(p) {
     this.botSay(p, 'jail');
     this.statFor(p).jailed++;
+    const from = p.pos;
     p.pos = this.cornerIndex('prison');
     p.jail = true;
     p.jailTurns = 0;
     this.turn.doubles = 0;
     this.lastMove = { playerId: p.id, from: p.pos, to: p.pos, steps: 0, at: Date.now() };
+    this.noteMove(p, from, p.pos, 0, 'jail');
   }
 
   // -------------------------------------------------------------------- cards --
   /** The map's own localized deck when it has one, the classic deck otherwise. */
   freshDecks() {
+    const built = buildDecks(this.map);
     return {
-      treasure: shuffled(this.map.deck?.treasure || TREASURE),
-      surprise: shuffled(this.map.deck?.surprise || SURPRISE),
+      treasure: shuffled(built.treasure),
+      surprise: shuffled(built.surprise),
     };
   }
 
   drawCard(p, deckName) {
     const deck = this.decks[deckName];
-    if (!deck.length) this.decks[deckName] = shuffled(this.map.deck?.[deckName] || (deckName === 'treasure' ? TREASURE : SURPRISE));
+    if (!deck.length) this.decks[deckName] = shuffled(buildDecks(this.map)[deckName]);
     const card = this.decks[deckName].shift();
     this.decks[deckName].push(card);
     this.lastCard = { deck: deckName, text: card.text, at: Date.now() };
@@ -1112,10 +1127,12 @@ export class GameRoom {
 
       case 'moveBy': {
         const size = this.map.size;
+        const from = p.pos;
         let to = (p.pos + act.n) % size;
         if (to < 0) to += size;
         p.pos = to;
-        this.lastMove = { playerId: p.id, from: p.pos, to, steps: act.n, at: Date.now() };
+        this.lastMove = { playerId: p.id, from, to, steps: act.n, at: Date.now() };
+        this.noteMove(p, from, to, act.n, 'card');
         this.landOn(p, to);
         break;
       }
@@ -1126,12 +1143,27 @@ export class GameRoom {
           const idx = (p.pos + step) % size;
           if (this.tile(idx).type === act.target) {
             const passedStart = idx < p.pos;
+            const from = p.pos;
             p.pos = idx;
             if (passedStart) { p.money += SALARY; this.statFor(p).laps++; this.say(`${p.name} passed START (+${SALARY})`, 'money'); }
-            this.lastMove = { playerId: p.id, from: p.pos, to: idx, steps: step, at: Date.now() };
+            this.lastMove = { playerId: p.id, from, to: idx, steps: step, at: Date.now() };
+            this.noteMove(p, from, idx, step, 'card');
             this.landOn(p, idx, { payMultiplier: act.payMultiplier });
             break;
           }
+        }
+        break;
+      }
+
+      case 'perProperty': {
+        const owned = this.map.tiles.filter((t) => t.type === 'property' && this.own(t.index)?.owner === p.id).length;
+        const total = owned * Math.abs(act.amount);
+        if (!owned || !total) { this.say(`${p.name} owns no streets — the card fizzles`, 'info'); break; }
+        if (act.amount >= 0) {
+          p.money += total;
+          this.say(`${p.name} collects $${total} across ${owned} street${owned === 1 ? '' : 's'}`, 'money');
+        } else {
+          this.charge(p, total, null, `across ${owned} street${owned === 1 ? '' : 's'}`);
         }
         break;
       }
@@ -1491,10 +1523,12 @@ export class GameRoom {
     const d = this.turn?.debt;
     const p = this.player(id);
     if (!p) return { error: 'No player' };
-    if (!d || d.debtor !== id) {
-      if (!this.isCurrent(id)) return { error: 'Not allowed' };
-    }
-    const creditor = d?.creditor ? this.player(d.creditor) : null;
+    if (p.bankrupt) return { error: 'Already out' };
+    if (this.status !== 'playing') return { error: 'No game to concede' };
+    // Anyone may lay down their tiles at any time — conceding is a right,
+    // not a turn action. A debtor's concession still pays the creditor.
+    const creditor = d?.debtor === id && d?.creditor ? this.player(d.creditor) : null;
+    if (!creditor) this.say(`${p.name} concedes the game`, 'bankrupt');
     this.bankrupt(p, creditor);
     return { ok: true };
   }
@@ -2117,6 +2151,7 @@ export class GameRoom {
       titles: this.status === 'ended' ? this.titles : null,
       lastCard: this.lastCard,
       lastMove: this.lastMove,
+      moves: this.actionMoves,
       version: this.version,
     };
   }

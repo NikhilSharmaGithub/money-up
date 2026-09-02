@@ -945,5 +945,46 @@ console.log('\n▶ targeted rules');
   ok('match stats and end-of-game titles');
 }
 
+{
+  // One roll onto Surprise can move a piece twice; the moves list tells the
+  // whole story in order so a client can pace the theatre.
+  const room = new GameRoom('mv', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ava' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  const surprise = room.map.tiles.find((t) => t.type === 'surprise');
+  // Stack the deck: the top Surprise card walks the piece backwards.
+  room.decks.surprise = [{ id: 0, text: 'Go back three spaces.', act: { kind: 'moveBy', n: -3 } }];
+  const a = room.player('a');
+  a.pos = surprise.index - 4;
+  room.roll('a', [1, 3]);
+  const causes = room.actionMoves.map((m) => m.cause).join(',');
+  if (room.actionMoves.length !== 2) fail(`expected 2 moves, got ${room.actionMoves.length} (${causes})`);
+  else if (causes !== 'roll,card') fail(`move causes out of order: ${causes}`);
+  else if (room.actionMoves[0].to !== surprise.index) fail('first leg should land on Surprise');
+  else if (room.actionMoves[1].from !== surprise.index) fail('card leg should start from Surprise');
+  else ok('the moves list carries both legs of a card walk, in order');
+
+  // perProperty charges by street count.
+  room.map.tiles.forEach((t, i) => { if (t.type === 'property') delete room.ownership[i]; });
+  const streets = room.map.tiles.filter((t) => t.type === 'property').slice(0, 3);
+  streets.forEach((t) => { room.ownership[t.index] = { owner: 'a', houses: 0, mortgaged: false }; });
+  const before = a.money;
+  room.applyCard(a, { kind: 'perProperty', amount: -25 });
+  if (a.money !== before - 75) fail(`perProperty charged ${before - a.money}, expected 75`);
+  else ok('perProperty taxes each owned street');
+
+  // Conceding is allowed off-turn now — Bo gives up while Ava holds the dice.
+  const res = room.declareBankrupt('b');
+  if (res.error) fail(`off-turn concede refused: ${res.error}`);
+  else if (!room.player('b').bankrupt) fail('conceding player is not bankrupt');
+  else if (room.status !== 'ended') fail('two-hander should end when one concedes');
+  else ok('a player can concede at any moment, ending a two-hander');
+}
+
+
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');
 process.exit(failures ? 1 : 0);
