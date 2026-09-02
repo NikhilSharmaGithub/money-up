@@ -977,7 +977,7 @@ final class GameStore: ObservableObject {
 
     func canBuild(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              localIds.contains(own.owner), t.type == "property", !own.isMortgaged,
+              localIds.contains(own.owner), state.turn?.playerId == own.owner, t.type == "property", !own.isMortgaged,
               let group = t.group, let idxs = state.map.groups?[group] else { return false }
         guard ownsFullGroup(own.owner, group: group) else { return false }
         guard !idxs.contains(where: { state.owner(of: $0)?.isMortgaged == true }) else { return false }
@@ -991,7 +991,7 @@ final class GameStore: ObservableObject {
 
     func canSellHouse(_ i: Int) -> Bool {
         guard let state, let t = tile(i), let own = state.owner(of: i),
-              localIds.contains(own.owner), own.houseCount > 0 else { return false }
+              localIds.contains(own.owner), state.turn?.playerId == own.owner, own.houseCount > 0 else { return false }
         if state.settings.evenBuild ?? true, let group = t.group, let idxs = state.map.groups?[group] {
             let maxHouses = idxs.map { state.owner(of: $0)?.houseCount ?? 0 }.max() ?? 0
             if own.houseCount < maxHouses { return false }
@@ -1002,7 +1002,7 @@ final class GameStore: ObservableObject {
     func canMortgage(_ i: Int) -> Bool {
         guard let state, state.settings.mortgage ?? true,
               let t = tile(i), let own = state.owner(of: i),
-              localIds.contains(own.owner), !own.isMortgaged else { return false }
+              localIds.contains(own.owner), state.turn?.playerId == own.owner, !own.isMortgaged else { return false }
         if t.type == "property", let group = t.group, let idxs = state.map.groups?[group] {
             if idxs.contains(where: { (state.owner(of: $0)?.houseCount ?? 0) > 0 }) { return false }
         }

@@ -1649,6 +1649,8 @@ export class GameRoom {
   build(id, index) {
     const p = this.player(id);
     if (!p || this.status !== 'playing') return { error: 'Not available' };
+    // Construction happens on your clock, not between other people's rolls.
+    if (!this.isCurrent(id)) return { error: 'Wait for your turn' };
     if (!this.canBuild(id, index)) return { error: 'Cannot build there' };
     const t = this.tile(index);
     if (p.money < t.houseCost) return { error: 'Not enough money' };
@@ -1665,6 +1667,8 @@ export class GameRoom {
     const p = this.player(id);
     const o = this.own(index);
     if (!p || !o || o.owner !== id || !(o.houses > 0)) return false;
+    // Same clock rule as building — the system (silent) may raze any time.
+    if (!silent && !this.isCurrent(id)) return false;
     const t = this.tile(index);
     if (this.settings.evenBuild) {
       const group = this.map.groups[t.group];
@@ -1684,6 +1688,7 @@ export class GameRoom {
     const p = this.player(id);
     const o = this.own(index);
     if (!p || !o || o.owner !== id || o.mortgaged) return false;
+    if (!silent && !this.isCurrent(id)) return false;
     const t = this.tile(index);
     if (t.type === 'property') {
       const group = this.map.groups[t.group];
@@ -1701,6 +1706,7 @@ export class GameRoom {
     const p = this.player(id);
     const o = this.own(index);
     if (!p || !o || o.owner !== id || !o.mortgaged) return { error: 'Not mortgaged' };
+    if (!this.isCurrent(id)) return { error: 'Wait for your turn' };
     const t = this.tile(index);
     const cost = Math.ceil((t.price / 2) * 1.1);
     if (p.money < cost) return { error: 'Not enough money' };

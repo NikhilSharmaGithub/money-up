@@ -61,6 +61,8 @@ function dismissToast(el) {
 
 // Mirrors the server rules so illegal actions never get offered in the first place.
 export function canBuildOn(state, meId, i) {
+  // Construction and paperwork happen on your clock only.
+  if (state.turn?.playerId !== state.ownership?.[i]?.owner) return false;
   const t = state.map.tiles[i];
   const o = state.ownership[i];
   if (!o || o.owner !== meId || t.type !== 'property' || o.mortgaged) return false;
@@ -76,6 +78,7 @@ export function canBuildOn(state, meId, i) {
 }
 
 export function canSellOn(state, meId, i) {
+  if (state.turn?.playerId !== state.ownership?.[i]?.owner) return false;
   const o = state.ownership[i];
   const t = state.map.tiles[i];
   if (!o || o.owner !== meId || !(o.houses > 0)) return false;
@@ -88,6 +91,8 @@ export function canSellOn(state, meId, i) {
 }
 
 export function canMortgage(state, meId, i) {
+  // Construction and paperwork happen on your clock only.
+  if (state.turn?.playerId !== state.ownership?.[i]?.owner) return false;
   const o = state.ownership[i];
   const t = state.map.tiles[i];
   if (!state.settings.mortgage || !o || o.owner !== meId || o.mortgaged) return false;
@@ -1747,7 +1752,7 @@ function quickBuildBar(state, meId, i) {
   const sellable = canSellOn(state, meId, i);
   const canAfford = cash >= houseCost;
   const mortgageable = canMortgage(state, meId, i);
-  const canLift = own.mortgaged && state.settings.mortgage;
+  const canLift = own.mortgaged && state.settings.mortgage && state.turn?.playerId === own.owner;
 
   const level = own.mortgaged ? `${icon('bank')} Mortgaged`
     : houses === 5 ? `${icon('hotel')} Hotel`

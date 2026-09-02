@@ -326,25 +326,33 @@ struct TileView: View {
                 nameText(P)
                 if houses == 5 {
                     // The hotel gets a marquee, not a dot.
-                    HStack(spacing: 2) {
-                        Art.icon(.hotel, size: 10, tint: .white)
+                    HStack(spacing: 3) {
+                        Art.icon(.hotel, size: 12, tint: .white)
                         Text("HOTEL")
-                            .font(.system(size: 6.5, weight: .black, design: .rounded))
+                            .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(.white)
+                            .kerning(0.5)
                     }
-                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(LinearGradient(colors: [P.red, P.redDeep],
                                                startPoint: .top, endPoint: .bottom),
                                 in: Capsule())
+                    .overlay(Capsule().stroke(.white.opacity(0.55), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                 } else if houses > 0 {
-                    HStack(spacing: 2) {
-                        Art.icon(.house, size: 10, tint: P.good)
+                    // House count as one clean chip, same cloth as the medallion.
+                    HStack(spacing: 2.5) {
+                        Art.icon(.house, size: 13, tint: P.good)
                         if houses > 1 {
                             Text("\(houses)×")
-                                .font(.system(size: 8.5, weight: .black, design: .rounded))
+                                .font(.system(size: 10.5, weight: .black, design: .rounded))
                                 .foregroundStyle(P.good)
                         }
                     }
+                    .padding(.horizontal, 5).padding(.vertical, 1.5)
+                    .background(P.card, in: Capsule())
+                    .overlay(Capsule().stroke(P.rule, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
                 }
                 // The price never leaves — the buildings stack above it.
                 if let price = tile.price {
