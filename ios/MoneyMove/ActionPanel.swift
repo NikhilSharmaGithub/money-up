@@ -22,7 +22,17 @@ struct ActionPanel: View {
             if store.isMyTurn, let turn = store.state?.turn {
                 turnHeader(P)
                 deadlockLine(P)
-                myTurnControls(turn: turn, P: P)
+                // The server answers a roll before the piece has taken a
+                // step, so the buy prompt (and whatever else the landing
+                // decides) arrives while the token is mid-walk. While the
+                // theatre for THIS seat's move is still on stage, the dock
+                // stays neutral; the controls take over when it lands. Other
+                // seats' turns, trades and chat never wait.
+                if store.theatreHolding(for: turn.playerId) {
+                    walkingRow(P)
+                } else {
+                    myTurnControls(turn: turn, P: P)
+                }
             } else if store.state?.isPlaying == true {
                 waitingRow(P)
             } else if store.state?.isEnded == true {
@@ -108,6 +118,22 @@ struct ActionPanel: View {
             .padding(.horizontal, 9)
             .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+    }
+
+    /// The piece is still on its way — same quiet voice as the waiting row,
+    /// gone the moment GameStore's holdUntil clears and the landing's
+    /// controls take the stage.
+    private func walkingRow(_ P: Palette) -> some View {
+        HStack(spacing: 10) {
+            Art.icon(.dice, size: 17, tint: P.ink3)
+            Text("Moving…")
+                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(P.ink2)
+            Spacer()
+            ProgressView().tint(P.red).scaleEffect(0.85)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder

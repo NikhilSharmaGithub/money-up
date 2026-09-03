@@ -28,6 +28,9 @@ struct LandingView: View {
     /// SoundKit's own switch, mirrored so the toggle repaints the moment it
     /// is flipped rather than whenever the next redraw happens along.
     @AppStorage("mm.sound") private var soundOn = true
+    /// Same key RootView reads — flipping a chip here recolours the whole
+    /// app (open sheets included) on the spot.
+    @AppStorage("mm.appearance") private var appearanceID = "system"
     @ObservedObject private var shop = CoinShop.shared
 
     struct PublicRoom: Codable, Identifiable {
@@ -460,6 +463,7 @@ struct LandingView: View {
         pageTitle("Settings", "Make the table yours.", P)
         profileCard(P)
         themeCard(P)
+        appearanceCard(P)
         soundCard(P)
         serverCard(P)
         MMCard {
@@ -889,6 +893,68 @@ struct LandingView: View {
                 PanelTitle("Table style")
                 ThemePicker()
             }
+        }
+    }
+
+    // MARK: - appearance
+
+    /// Light, dark, or follow the phone — which of the table style's two
+    /// palettes the whole app wears. Three chips; the current one rings gold.
+    private func appearanceCard(_ P: Palette) -> some View {
+        let current = MMAppearance(rawValue: appearanceID) ?? .system
+        return MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                PanelTitle("Appearance")
+                HStack(spacing: 8) {
+                    ForEach(MMAppearance.allCases, id: \.rawValue) { mode in
+                        appearanceChip(mode, on: mode == current, P)
+                    }
+                }
+                Text(current.caption)
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .animation(.spring(duration: 0.25), value: appearanceID)
+        }
+    }
+
+    private func appearanceChip(_ mode: MMAppearance, on: Bool, _ P: Palette) -> some View {
+        Button {
+            appearanceID = mode.rawValue
+            Haptics.tap()
+            SoundKit.shared.click()
+        } label: {
+            VStack(spacing: 6) {
+                appearanceGlyph(mode, on: on, P)
+                Text(mode.title)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(on ? P.ink : P.ink2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(on ? AnyShapeStyle(P.goldSoft) : AnyShapeStyle(P.sunken),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(on ? P.gold : P.rule, lineWidth: on ? 1.8 : 1)
+            )
+            .scaleEffect(on ? 1.03 : 1)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Sun and moon keep their own colours (they are the app's drawn set);
+    /// System wears a half-and-half disc — whatever the phone says goes.
+    @ViewBuilder
+    private func appearanceGlyph(_ mode: MMAppearance, on: Bool, _ P: Palette) -> some View {
+        switch mode {
+        case .light: Art.icon(.sun, size: 18)
+        case .dark: Art.icon(.moon, size: 18)
+        case .system:
+            Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(on ? P.gold : P.ink3)
+                .frame(width: 18, height: 18)
         }
     }
 

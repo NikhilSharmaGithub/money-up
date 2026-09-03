@@ -19,6 +19,9 @@ struct RootView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     @AppStorage("mm.theme") private var themeID = "felt"
+    /// System / Light / Dark, chosen on the Settings tab; "system" hands the
+    /// choice back to the phone.
+    @AppStorage("mm.appearance") private var appearanceID = "system"
     /// Cold-launch flourish; shown exactly once per process (the theme
     /// switcher rebuilds this view's identity, which must not replay it).
     static var didSplash = false
@@ -64,7 +67,22 @@ struct RootView: View {
         // The transitions above only play if the animation lives on a view
         // that CONTAINS them — hung any deeper and they simply pop in.
         .animateOverlays(store)
-        .preferredColorScheme(nil) // follow the system; dark is the house default at night
+        // Appearance from Settings: nil hands the choice back to the system.
+        .preferredColorScheme(appearance.scheme)
+        // Sheets are their own presentations and on some iOS versions keep
+        // following the system despite the preference above — the UIKit
+        // override underneath moves every layer, open sheets included.
+        .onAppear { applyAppearance() }
+        .onChange(of: appearanceID) { applyAppearance() }
+    }
+
+    private var appearance: MMAppearance { MMAppearance(rawValue: appearanceID) ?? .system }
+
+    private func applyAppearance() {
+        let style = appearance.uiStyle
+        for scene in UIApplication.shared.connectedScenes {
+            (scene as? UIWindowScene)?.windows.forEach { $0.overrideUserInterfaceStyle = style }
+        }
     }
 
     // MARK: - overlays

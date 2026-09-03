@@ -53,4 +53,17 @@ enum Choreography {
         if cardAt == nil, hasCard { cardAt = t + 0.15 }   // money card: after the walk
         return (starts, cardAt)
     }
+
+    /// When the whole act is off stage: the last leg has landed and, if a card
+    /// rode along, it has had its read. The decision UI born of this action —
+    /// the buy prompt, an auction the landing opened — waits for this moment
+    /// (GameStore turns it into a holdUntil date the dock and the well share).
+    static func curtain(_ legs: [MoveLeg], boardSize: Int, hasCard: Bool) -> Double {
+        let (starts, cardAt) = timeline(legs, boardSize: boardSize, hasCard: hasCard)
+        var end = zip(starts, legs)
+            .map { $0 + legDuration($1, boardSize: boardSize) }
+            .max() ?? 0
+        if let cardAt { end = max(end, cardAt + cardHold) }
+        return end
+    }
 }

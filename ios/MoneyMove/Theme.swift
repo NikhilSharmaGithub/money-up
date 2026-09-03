@@ -211,6 +211,49 @@ enum MMTheme: String, CaseIterable {
     }
 }
 
+/// Light, dark, or follow the phone — the one switch that decides which of a
+/// table style's two palettes the whole app wears. The raw value is what
+/// UserDefaults keeps under "mm.appearance"; the root view applies it.
+enum MMAppearance: String, CaseIterable {
+    case system, light, dark
+
+    var title: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    /// The one-line caption under the picker for the current choice.
+    var caption: String {
+        switch self {
+        case .system: "Follows your phone"
+        case .light: "Always the daytime table"
+        case .dark: "Always the night table"
+        }
+    }
+
+    /// What .preferredColorScheme takes — nil means no preference.
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    /// The same choice in UIKit's words, for the window override that keeps
+    /// already-presented sheets on the new scheme too.
+    var uiStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 /// A row of the seven table-style swatches — used on the landing screen and
 /// in game settings. Changing it restyles the whole app live.
 struct ThemePicker: View {

@@ -262,6 +262,19 @@ final class GameStore: ObservableObject {
     /// their channel on THEIR socket — the main push never carries it.
     @Published private var guestTeamChat: [ChatMessage] = []
     private var lastCardAt: Double = 0
+    /// The theatre's curtain: until this moment the dock and the centre well
+    /// hold back decision UI born of the action still walking — the mover's
+    /// buy prompt, an auction the landing opened. Nil whenever nothing is
+    /// held; its own task clears it, so views re-render exactly on cue.
+    @Published var holdUntil: Date?
+    /// Whose piece the current hold belongs to. Only ever read alongside
+    /// holdUntil, so it changes when the published date does.
+    private var heldMover: String?
+    /// The auction on stage opened while that walk was still going, so it
+    /// waits for the curtain. A pre-existing auction (rebids) never sets it.
+    private var auctionUnderHold = false
+    private var heldActionAt: Double = 0
+    private var holdTask: Task<Void, Never>?
     private var lastTurnPlayer: String?
     private var lastLogAt: Double = 0
     private var bannerTask: Task<Void, Never>?
@@ -377,11 +390,54 @@ final class GameStore: ObservableObject {
             else if remoteChange { SoundKit.shared.cash() }
         }
 
+        // The server resolves the whole roll before the first die settles, so
+        // the push that starts a walk already carries its consequences — a
+        // buy prompt, sometimes a whole auction. Hold those back until the
+        // piece has actually arrived: the same fresh-stamp discipline as the
+        // walker, the same Choreography math as the card popup below.
+        // Reconnects (no old state) and stale stamps show everything at once,
+        // and the hold is cosmetic — the shot clock runs on the server — so
+        // it is never allowed to eat more than 4s.
+        if let legs = new.moves, let newest = legs.last?.at, newest != heldActionAt {
+            heldActionAt = newest
+            holdTask?.cancel()
+            auctionUnderHold = false
+            if old != nil, new.isPlaying {
+                let hasCard = new.lastCard.map { abs($0.at - newest) < 2500 } ?? false
+                // A small beat after the landing thump, capped hard.
+                let run = min(Choreography.curtain(legs, boardSize: new.map.size,
+                                                   hasCard: hasCard) + 0.3, 4.0)
+                heldMover = legs.first?.playerId
+                holdUntil = Date().addingTimeInterval(run)
+                holdTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(run))
+                    guard let self, !Task.isCancelled else { return }
+                    withAnimation { self.holdUntil = nil }
+                    // The gavel waited behind the curtain with its auction.
+                    if self.auctionUnderHold, self.state?.auction != nil {
+                        SoundKit.shared.auction()
+                    }
+                    self.auctionUnderHold = false
+                }
+            } else {
+                heldMover = nil
+                holdUntil = nil
+            }
+        }
+
         // Auction has its own voice: the gavel when it opens, and a rising
         // paddle-tick for every new bid — pitched by how high the bid is.
         if let old {
             if new.auction != nil, old.auction == nil {
-                SoundKit.shared.auction()
+                // Born of a landing whose walk is still on stage: the box
+                // waits for the curtain (auctionCurtained hides it for every
+                // viewer — spectators watch the same walk) and the gavel
+                // waits with it. Auctions already running never hide.
+                if theatreLive {
+                    auctionUnderHold = true
+                } else {
+                    SoundKit.shared.auction()
+                }
             } else if let a = new.auction, let b = old.auction, a.bid > b.bid {
                 SoundKit.shared.bid(a.bid)
                 Haptics.tap()
@@ -538,6 +594,21 @@ final class GameStore: ObservableObject {
             }
         }
     }
+
+    /// A walk is on stage right now. The date check is belt and braces — the
+    /// hold's own task publishes nil the moment the act ends.
+    private var theatreLive: Bool { holdUntil.map { $0 > Date() } ?? false }
+
+    /// The dock's decision controls for this seat wait while its own move is
+    /// still walking — my buy prompt must not beat my piece to the square.
+    /// Unrelated seats, chat and every other control never wait.
+    func theatreHolding(for seat: String?) -> Bool {
+        theatreLive && seat != nil && seat == heldMover
+    }
+
+    /// The auction born of the landing still on stage: every viewer watches
+    /// the walk finish before the box appears. Rebids mid-auction never hide.
+    var auctionCurtained: Bool { theatreLive && auctionUnderHold }
 
     /// How long the token on screen still needs to finish its walk for the
     /// move that caused this event — mirrors TokenWalker's pacing.
@@ -725,6 +796,11 @@ final class GameStore: ObservableObject {
         timedOut = false
         lastTurnPlayer = nil
         lastCardAt = 0
+        holdTask?.cancel()
+        holdUntil = nil
+        heldMover = nil
+        auctionUnderHold = false
+        heldActionAt = 0
         logFloor = 0
         lastRoom = ""
         lastGuests = 0

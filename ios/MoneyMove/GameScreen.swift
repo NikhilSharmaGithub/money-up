@@ -736,7 +736,10 @@ struct CenterWell: View {
         let P = Palette.current(scheme)
         VStack(spacing: 10) {
             if let state = store.state {
-                if let auction = state.auction {
+                // An auction born of a landing waits behind the curtain until
+                // that walk finishes — every viewer watches the same piece
+                // arrive first, and the well shows the dice until it does.
+                if let auction = state.auction, !store.auctionCurtained {
                     AuctionBox(auction: auction)
                         // Room for the turn clock, which now rides above every
                         // phase of the well rather than vanishing under a bid.
