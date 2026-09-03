@@ -117,6 +117,12 @@ struct LobbyPanel: View {
                 Button("⇄") { store.setTeam(((p.team ?? -1) + 1) % teamCount, for: p.id) }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }
+            // The chair travels: a host can hand it to anyone at the table.
+            if store.isHost, p.id != store.meId, !(p.isBot ?? false), p.connected != false,
+               store.state?.quick != true {
+                Button("Host") { store.makeHost(p.id); Haptics.tap() }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+            }
             if canKick {
                 Button("✕") { store.kick(p.id) }
                     .buttonStyle(MMButtonStyle(kind: .ghost))

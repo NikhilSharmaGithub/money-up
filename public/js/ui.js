@@ -395,15 +395,21 @@ export function renderPlayers(state, meId, el, actions) {
     const canTrade = state.status === 'playing' && p.id !== meId && !isOut(p) && !isOut(me || {});
     // Nobody hosts a Quick Play table, so nobody gets to throw strangers off it.
     const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId && !state.quick;
+    // The chair travels: a host can pass it to anyone actually at the table.
+    const canPassHost = state.hostId === meId && p.id !== meId && !p.isBot
+      && p.connected !== false && !state.quick && state.status !== 'playing';
     const canPickTeam = state.status === 'lobby' && state.settings.teams > 0
       && (p.id === meId || (state.hostId === meId && p.isBot));
-    const want = `${canTrade ? 't' : ''}${canKick ? 'k' : ''}${canPickTeam ? 'm' : ''}`;
+    const want = `${canTrade ? 't' : ''}${canKick ? 'k' : ''}${canPickTeam ? 'm' : ''}${canPassHost ? 'h' : ''}`;
     if (acts.dataset.v !== want) {
       acts.dataset.v = want;
       acts.innerHTML = `${canPickTeam ? '<button class="btn tiny" data-team title="Switch team">⇄</button>' : ''}
                         ${canTrade ? '<button class="btn tiny" data-trade>Trade</button>' : ''}
+                        ${canPassHost ? `<button class="btn tiny" data-host title="Hand the host chair to ${escapeHtml(p.name)}">Make host</button>` : ''}
                         ${canKick ? '<button class="icon-btn" data-kick title="Remove">✕</button>' : ''}`;
       const pid = p.id;
+      const hb = acts.querySelector('[data-host]');
+      if (hb) hb.onclick = () => { sfx.click(); actions.makeHost?.(pid); };
       const mb = acts.querySelector('[data-team]');
       if (mb) mb.onclick = () => {
         sfx.click();
@@ -1012,7 +1018,7 @@ function renderMyStuff(state, meId, el, actions) {
     ${state.status === 'ended'
       ? (state.quick
         ? `<button class="btn primary wide wrap" id="againBtn">${icon('replay')} Play again</button>`
-        : `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again with the same players</button>`)
+        : `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again</button>`)
       : ''}
   `;
 
@@ -1179,7 +1185,7 @@ export function renderCenter(state, meId, actions) {
         <button class="btn" id="cStandings">${icon('chart')} Final standings</button>
         <button class="btn ghost" id="cHome">${icon('door')} Back to home</button>
       </div>
-      ${state.hostId === meId ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again with the same players</button>` : ''}`;
+      ${state.hostId === meId ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again</button>` : ''}`;
     statusEl.innerHTML = state.winner
       ? `<div class="win-line" style="color:${state.winner.color}">${icon('trophy')} ${escapeHtml(state.winner.name)} wins!</div>`
       : '<div class="win-line">Game over</div>';
@@ -3020,8 +3026,8 @@ export function showGameOver(state, meId, actions) {
         // would tell the room the seats were never strangers.
         ? `<button class="btn primary big wrap" id="gNewTable">${icon('replay')} Play again</button>
            <div class="dim small go-wait">Finds you a fresh table.</div>`
-        : `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>
-           ${state.hostId === meId ? '' : '<div class="dim small go-wait">First to press it hosts the next one.</div>'}`}
+        : `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again</button>
+           <div class="dim small go-wait">Whoever presses first hosts the next one.</div>`}
       <button class="btn wide wrap" id="gShare">${icon('globe')} Share your result</button>
       <div class="row-2">
         <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>

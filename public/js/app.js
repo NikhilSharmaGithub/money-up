@@ -118,6 +118,7 @@ const actions = {
   grantTime: (id) => socket?.emit('grantTime', { id }),
   chat: emit('chat'),
   rematch: emit('rematch'),
+  makeHost: (id) => socket.emit('makeHost', { id }),
   // A matchmade table breaks up when it ends — going again means finding
   // strangers, not reconvening the ones you just played.
   newTable: () => {

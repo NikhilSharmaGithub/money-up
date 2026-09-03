@@ -754,13 +754,13 @@ struct GameOverSheet: View {
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
             } else {
-                MMIconButton(.replay, "Play again with the same players", kind: .primary, big: true) {
+                MMIconButton(.replay, "Play again", kind: .primary, big: true) {
                     store.rematch()
                     Haptics.tap()
                     dismiss()
                 }
                 if !store.isHost {
-                    Text("First to press it hosts the next one.")
+                    Text("Whoever presses first hosts the next one.")
                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
                 }

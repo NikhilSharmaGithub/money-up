@@ -883,6 +883,8 @@ final class GameStore: ObservableObject {
     func start() { emit("start") }
     func addBot() { emit("addBot") }
     func kick(_ playerId: String) { emit("kick", [playerId]) }
+    /// Hand the host chair to someone else at the table.
+    func makeHost(_ playerId: String) { emit("makeHost", [["id": playerId]]) }
     func updateSettings(_ patch: [String: Any]) { emit("settings", [patch]) }
     func setAppearance(name: String? = nil, color: String? = nil, flag: String? = nil) {
         var d: [String: Any] = [:]

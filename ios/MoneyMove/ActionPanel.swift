@@ -37,11 +37,12 @@ struct ActionPanel: View {
                 waitingRow(P)
             } else if store.state?.isEnded == true {
                 VStack(spacing: 8) {
-                    if store.isHost {
-                        MMIconButton(.replay, "Play again with the same players",
-                                     kind: .primary, big: true) { store.rematch() }
-                    } else {
-                        Text("\(store.state?.player(store.state?.hostId)?.name ?? "The host") can start another game with the same players.")
+                    // Anyone can call the next game — the chair goes to
+                    // whoever asks for it first.
+                    MMIconButton(.replay, "Play again",
+                                 kind: .primary, big: true) { store.rematch() }
+                    if !store.isHost {
+                        Text("Whoever presses first hosts the next one.")
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
                             .foregroundStyle(P.ink3)
                             .multilineTextAlignment(.center)

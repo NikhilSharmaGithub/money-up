@@ -202,11 +202,15 @@ export class GameRoom {
   removePlayer(id) {
     const p = this.player(id);
     if (!p) return;
-    if (this.status === 'lobby') {
+    // A seat is only worth holding while a game still needs it. In the lobby,
+    // or once the result is on the table, someone who closes the window has
+    // left the room — and showing them as still sitting there is a lie the
+    // next lobby inherits.
+    if (this.status === 'lobby' || this.status === 'ended') {
       this.players = this.players.filter((x) => x.id !== id);
       if (this.hostId === id) this.hostId = this.players[0]?.id || null;
       this.say(`${p.name} left the room`, 'leave');
-      if (this.quick) {
+      if (this.quick && this.status === 'lobby') {
         if (!this.players.some((x) => !x.isBot)) {
           // The last person walked out — the house players don't hang around
           // performing for an empty room.
@@ -230,6 +234,19 @@ export class GameRoom {
       this.holdSeat(p, RECONNECT_GRACE_MS);
     }
     this.push();
+  }
+
+  /** The host hands the chair on to someone else at the table. */
+  makeHost(id, targetId) {
+    if (id !== this.hostId) return { error: 'Only the host can pass it on' };
+    const target = this.player(targetId);
+    if (!target || target.isBot) return { error: 'Pick a player at the table' };
+    if (target.connected === false) return { error: 'They are not here right now' };
+    if (target.id === this.hostId) return { ok: true };
+    this.hostId = target.id;
+    this.say(`${target.name} is the host now`, 'system');
+    this.push();
+    return { ok: true };
   }
 
   reconnect(id) {
@@ -361,10 +378,20 @@ export class GameRoom {
         isBot: true,
       });
     }
-    // Bots you invited yourself carry no disguise — short, friendly, familiar.
-    const names = ['Ravi', 'Zoe', 'Kabir', 'Nina', 'Otto', 'Maya', 'Leo', 'Ira'];
+    // Bots you invited yourself carry no disguise — short, friendly, familiar
+    // — but drawn rather than counted off, so the same three don't turn up in
+    // the same order at every table you make.
+    const names = [
+      'Ravi', 'Zoe', 'Kabir', 'Nina', 'Otto', 'Maya', 'Leo', 'Ira',
+      'Priya', 'Dev', 'Sana', 'Arjun', 'Mira', 'Rohan', 'Tara', 'Vik',
+      'Anya', 'Kiran', 'Neel', 'Isha', 'Raj', 'Lila', 'Sam', 'Nia',
+      'Aman', 'Rhea', 'Yash', 'Diya', 'Kabeer', 'Simi', 'Manu', 'Zara',
+    ];
     const used = new Set(this.players.map((p) => p.name));
-    const name = names.find((n) => !used.has(n)) || `Bot${this.players.length}`;
+    const free = names.filter((n) => !used.has(n));
+    const name = free.length
+      ? free[Math.floor(Math.random() * free.length)]
+      : `Player ${this.players.length + 1}`;
     return this.addPlayer({ id: `bot:${name}:${Math.random().toString(36).slice(2, 7)}`, name, isBot: true });
   }
 

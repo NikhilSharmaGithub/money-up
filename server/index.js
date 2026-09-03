@@ -1162,6 +1162,8 @@ io.on('connection', (socket) => {
   socket.on('grantTime', guard(({ id } = {}) => ok(room.grantTime(playerId, room.resolveId(String(id || ''))))));
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));
 
+  socket.on('makeHost', guard(({ id } = {}) => ok(room.makeHost(playerId, room.resolveId(String(id || ''))))));
+
   socket.on('rematch', guard(() => {
     // First one to want another game gets to run it — whoever presses
     // Play again takes the host chair; the departed stay departed.
