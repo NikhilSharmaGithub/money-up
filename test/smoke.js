@@ -85,6 +85,13 @@ function playGame(mapId, settings = {}, maxSteps = 4000) {
   const say = room.say.bind(room);
   room.say = (text, kind) => { if (kind === 'turn') turns++; say(text, kind); };
 
+  // Every hammer raised must fall: the convergence check below audits this.
+  const auctions = { opened: 0, closed: 0 };
+  const startAuction = room.startAuction.bind(room);
+  room.startAuction = (i) => { auctions.opened++; return startAuction(i); };
+  const finishAuction = room.finishAuction.bind(room);
+  room.finishAuction = () => { if (room.auction) auctions.closed++; return finishAuction(); };
+
   for (let i = 0; i < (settings.players || 4); i++) room.addBot();
   room.hostId = room.players[0].id;
   const started = room.start(room.hostId);
@@ -104,7 +111,7 @@ function playGame(mapId, settings = {}, maxSteps = 4000) {
   }
   checkInvariants(room, `${mapId}(final)`);
   room.dispose();
-  return { room, turns, steps };
+  return { room, turns, steps, auctions };
 }
 
 /** Every board — handwritten or generated — must satisfy all of this. */
