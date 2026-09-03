@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		MM00000000000000000GMABF /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = MM00000000000000000PKGPD /* GoogleMobileAds */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -26,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				MM00000000000000000GMABF /* GoogleMobileAds in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -67,6 +69,9 @@
 				MM00000000000000000SRCGP /* MoneyMove */,
 			);
 			name = MoneyMove;
+			packageProductDependencies = (
+				MM00000000000000000PKGPD /* GoogleMobileAds */,
+			);
 			productName = MoneyMove;
 			productReference = MM00000000000000000PRODT /* MoneyMove.app */;
 			productType = "com.apple.product-type.application";
@@ -94,6 +99,9 @@
 				Base,
 			);
 			mainGroup = MM00000000000000000MAING;
+			packageReferences = (
+				MM00000000000000000PKGRF /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
+			);
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = MM00000000000000000PRDGP /* Products */;
@@ -180,10 +188,11 @@
 		MM00000000000000000TDBGC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ADMOB_APP_ID = "ca-app-pub-1179201999959612~5259376124";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MoneyMove/MoneyMove.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = HAK23MQ4FD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -204,10 +213,11 @@
 		MM00000000000000000TRELC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ADMOB_APP_ID = "ca-app-pub-1179201999959612~5259376124";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MoneyMove/MoneyMove.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = HAK23MQ4FD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -248,7 +258,24 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		MM00000000000000000PKGRF /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googleads/swift-package-manager-google-mobile-ads";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 13.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
+/* Begin XCSwiftPackageProductDependency section */
+		MM00000000000000000PKGPD /* GoogleMobileAds */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = MM00000000000000000PKGRF /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
+			productName = GoogleMobileAds;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = MM00000000000000000PROJT /* Project object */;
 }

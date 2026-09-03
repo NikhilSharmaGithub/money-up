@@ -452,7 +452,7 @@ export const adminPageHTML = `<!doctype html>
     <section class="tiles" id="adtiles"></section>
     <section class="card">
       <h2>The switch</h2>
-      <p class="hint">Ads stay dark until this says otherwise, and none of it needs a redeploy — the setting lives on disk beside the wallets, so a restart remembers what you decided. Clients hide every ad affordance while it is off.</p>
+      <p class="hint">One master switch, and a switch per placement. Ads stay off until this says otherwise, and none of it needs a redeploy or an app update — the setting lives on disk beside the wallets, so a restart remembers what you decided. While ads are off no client draws an ad button at all.</p>
       <div id="adswitch"></div>
       <div class="msg" id="adsmsg"></div>
     </section>
@@ -1910,7 +1910,7 @@ export const adminPageHTML = `<!doctype html>
     var serving = (AD_NET_NAME[per.ios] || 'House') + ' / ' + (AD_NET_NAME[per.web] || 'House');
 
     swap('adtiles',
-      tileHtml(s.enabled ? 'LIVE' : 'dark', 'rewarded ads', s.enabled ? 'clients are showing the buttons' : 'every ad affordance is hidden') +
+      tileHtml(s.enabled ? 'ADS ON' : 'ADS OFF', 'rewarded ads', s.enabled ? 'the watch-an-ad buttons are showing' : 'every ad button is hidden in the app and the web') +
       tileHtml(serving, 'serving', s.testMode ? 'TEST ids — no revenue' : 'app / browser') +
       tileHtml(fmtNum(today.views), 'views today', '') +
       tileHtml(fmtNum(today.coins), 'coins paid today', '') +
@@ -1918,9 +1918,9 @@ export const adminPageHTML = `<!doctype html>
       tileHtml(fmtNum(a.tickets && a.tickets.outstanding), 'tickets in flight', 'offers not yet claimed'));
 
     var sw = '<div class="mini-forms" style="gap:26px">' +
-      '<div><div class="field"><label>Rewarded ads</label>' +
-      adSeg('enabled', s.enabled ? '1' : '0', [{ val: '0', text: 'Dark' }, { val: '1', text: 'Live' }]) +
-      '</div></div>';
+      '<div><div class="field"><label>Ads master switch</label>' +
+      adSeg('enabled', s.enabled ? '1' : '0', [{ val: '0', text: 'Ads OFF' }, { val: '1', text: 'Ads ON' }]) +
+      '</div><div class="caption" style="max-width:260px">One switch for the lot. Off, and no player on any platform sees an ad button at all — not "Watch an ad — double your winnings" on the game-over sheet, not the free-coins card on the home screen. They do not grey out; they are not drawn.</div></div>';
     AD_SLOTS.forEach(function (slot) {
       var spec = slots[slot.id] || {};
       sw += '<div><div class="field"><label>' + esc(slot.label) + '</label>' +
@@ -1929,7 +1929,7 @@ export const adminPageHTML = `<!doctype html>
     });
     sw += '</div>';
     if (!s.enabled) {
-      sw += '<div class="caption" style="margin-top:12px">Nothing pays out while this is dark: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> so old clients keep their ad buttons hidden.</div>';
+      sw += '<div class="caption" style="margin-top:12px">Nothing pays out while ads are off: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> — so every client, including one already installed on a phone, draws no ad button until you switch it back on. It takes effect on the next screen a player opens; no redeploy, no app update.</div>';
     } else if (!pv.ok) {
       sw += '<div class="alert amber" style="margin-top:12px"><b>Ads are live on the house adapter.</b> ' + esc(pv.line) + '</div>';
     }
