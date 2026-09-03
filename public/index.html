@@ -170,7 +170,9 @@
     </div>
 
     <div class="panel chat-panel">
-      <div class="panel-title">Chat</div>
+      <div class="panel-title">Chat
+        <button id="chatDockClose" class="sheet-x inline" type="button" aria-label="Close chat" data-ico="close"></button>
+      </div>
       <div id="chatChannels" class="chat-channels hidden">
         <button type="button" data-ch="all" class="on"><span data-ico="globe"></span> Everyone</button>
         <button type="button" data-ch="team"><span data-ico="shield"></span> Team only</button>
@@ -221,6 +223,11 @@
 </div>
 
 <!-- ───────────────────────────── overlays ───────────────────────────── -->
+<!-- The chat's own two pieces: the round button that lives at thumb height on
+     a phone, and the scrim the panel opens over. The panel itself stays in the
+     rail where it was written — this only changes where it is shown. -->
+<button id="chatBubble" class="chat-bubble" type="button" aria-label="Open chat" data-ico="chat"></button>
+<div id="chatScrim" class="chat-scrim"></div>
 <div id="modalRoot" class="modal-root hidden"></div>
 <div id="cardPopup" class="card-popup hidden"></div>
 <div id="toastRoot" class="toast-root"></div>

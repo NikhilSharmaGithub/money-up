@@ -10,7 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
-  openAchievementsModal, leaderRowsHTML,
+  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -796,6 +796,9 @@ function boot() {
   }
 
   roomId = match[1].toLowerCase();
+  // Offer ids start again at 1 in a new room, so what has already been shown
+  // has to be forgotten with the room it belonged to.
+  offersShown.clear();
   // Nothing on the landing is on screen any more — stop polling for it.
   clearInterval(roomsTimer);
   stopDailyClock();
@@ -905,6 +908,8 @@ function render() {
   });
   safe('chatChannels', () => syncChatChannels(state));
   safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
+  safe('chatDock', () => syncChatDock(state));
+  safe('offer', () => showNewOffers(state));
 
   $('#shareCard').classList.toggle('hidden', state.status !== 'lobby');
   document.body.classList.toggle('my-turn', state.turn?.playerId === meId && state.status === 'playing');
@@ -1308,6 +1313,9 @@ function goHome() {
   if (socket) { socket.close(); socket = null; }
   state = null;
   roomId = null;
+  offersShown.clear();
+  if (document.body.classList.contains('chat-open')) closeChatDock();
+  chatSeen = 0;
   resetBoard();
   showLanding();
 }
@@ -1365,6 +1373,91 @@ $('#chatForm').addEventListener('submit', (e) => {
   actions.chat(text, chatChannel);
   input.value = '';
 });
+
+// ---- an offer arrives ----------------------------------------------------
+// Every offer is put in front of its reader exactly once. Answering it, or
+// closing the sheet, retires the id — a state push a second later must not
+// throw the same deal back up, and neither must a reconnect, so the set is
+// only ever added to while this table is open.
+const offersShown = new Set();
+
+function showNewOffers(s) {
+  if (s.status !== 'playing') return;
+  const live = new Set(s.trades.map((t) => t.id));
+  // Deals that are over stop taking up room in the set.
+  for (const id of offersShown) if (!live.has(id)) offersShown.delete(id);
+  // One at a time, oldest first: two sheets stacked on each other would bury
+  // the first, and a sheet already open (a deed, the composer, the report
+  // card) is not something an offer gets to interrupt.
+  if (isModalOpen()) return;
+  const next = s.trades
+    .filter((t) => t.to === meId && !t.ignored && !offersShown.has(t.id))
+    .sort((a, b) => a.id - b.id)[0];
+  if (!next) return;
+  offersShown.add(next.id);
+  sfx.trade();
+  openTradeOfferModal(s, next, meId, actions, (id) => offersShown.add(id));
+}
+
+// ---- the chat dock -------------------------------------------------------
+// On a phone the chat used to be a panel below the board, below the log, in a
+// column you had to scroll to — so it was both in the way and easy to miss.
+// It moves to where the app puts it: a round button at thumb height that
+// opens the same panel over the board. The panel itself is untouched, so the
+// channel chips, the emotes and the input keep working exactly as they did.
+const chatDockBtn = $('#chatBubble');
+const chatPanel = document.querySelector('.chat-panel');
+let chatSeen = 0;
+
+function chatCount(s) {
+  return (s?.chat || []).length;
+}
+
+function openChatDock() {
+  document.body.classList.add('chat-open');
+  chatSeen = chatCount(state);
+  paintChatBadge();
+  // The keyboard should land in the message box, but not on a phone where
+  // that would throw the keyboard up over the panel before it is even read.
+  if (window.matchMedia('(min-width: 700px)').matches) $('#chatInput')?.focus();
+  const list = $('#chatList');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+function closeChatDock() {
+  document.body.classList.remove('chat-open');
+  chatSeen = chatCount(state);
+  paintChatBadge();
+}
+
+function paintChatBadge() {
+  if (!chatDockBtn) return;
+  const unread = Math.max(0, chatCount(state) - chatSeen);
+  const open = document.body.classList.contains('chat-open');
+  chatDockBtn.classList.toggle('has-unread', unread > 0 && !open);
+  chatDockBtn.dataset.unread = unread > 99 ? '99+' : String(unread);
+}
+
+if (chatDockBtn) {
+  chatDockBtn.onclick = () => {
+    sfx.click();
+    if (document.body.classList.contains('chat-open')) closeChatDock();
+    else openChatDock();
+  };
+}
+document.querySelector('#chatDockClose')?.addEventListener('click', () => {
+  sfx.click();
+  closeChatDock();
+});
+// The scrim behind the panel is a target too — tapping the board to get back
+// to the game is the obvious thing to try.
+document.querySelector('#chatScrim')?.addEventListener('click', closeChatDock);
+
+/** Keep the unread count honest, and never leave the dock open in a lobby. */
+function syncChatDock(s) {
+  if (document.body.classList.contains('chat-open')) chatSeen = chatCount(s);
+  paintChatBadge();
+}
 
 // ---- chat channels (everyone / team) ------------------------------------
 let chatChannel = 'all';
@@ -1572,7 +1665,11 @@ window.addEventListener('resize', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closeModal(); $('#cardPopup').classList.add('hidden'); }
+  if (e.key === 'Escape') {
+    closeModal();
+    $('#cardPopup').classList.add('hidden');
+    if (document.body.classList.contains('chat-open')) closeChatDock();
+  }
   if (document.activeElement?.tagName === 'INPUT') return;
   // A sheet on top owns the keyboard: Space must not reach through a trade
   // composer or a "declare bankruptcy?" prompt and fire the board behind it.

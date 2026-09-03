@@ -1391,10 +1391,32 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .map-card .md { font-size: 11px; color: var(--ink-3); line-height: 1.35; }
 .map-card .mt { font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .6px; }
 
-.trade-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
-.trade-arrow { align-self: center; font-size: 22px; color: var(--ink-3); }
+.trade-grid {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px; align-items: start;
+}
+/* The same medallion the offer sheet uses, so the two sheets read as one
+   thing seen twice: what leaves, what arrives, and the swap between them. */
+.trade-arrow {
+  align-self: center; width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--rule-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
 .trade-side { background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r); padding: 12px; }
-.trade-who { display: flex; align-items: center; gap: 7px; font-weight: 750; font-size: 13.5px; margin-bottom: 9px; }
+.trade-side.good { border-color: color-mix(in srgb, var(--good) 40%, var(--rule)); }
+.trade-side.bad { border-color: color-mix(in srgb, var(--bad) 32%, var(--rule)); }
+.trade-who {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; margin-bottom: 9px;
+}
+.ts-label { font-size: 10.5px; font-weight: 850; letter-spacing: .8px; text-transform: uppercase; }
+.trade-side.good .ts-label { color: var(--good); }
+.trade-side.bad .ts-label { color: var(--bad); }
+.ts-who { display: flex; align-items: center; gap: 6px; font-weight: 750; font-size: 12.5px; color: var(--ink-2); }
+.cr-flag { display: grid; place-items: center; flex: none; }
+.cr-flag .ico { width: 16px; height: 16px; }
 .trade-list { display: flex; flex-direction: column; gap: 2px; max-height: 210px; overflow-y: auto; margin-bottom: 10px; }
 .check-row {
   display: flex; align-items: center; gap: 7px; font-size: 12.5px;
@@ -1719,8 +1741,6 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
      second one hung a full inch off the right edge of the screen. */
   .center-action .row-2 { grid-template-columns: 1fr; }
   .btn.big { padding: 12px 16px; font-size: 14.5px; }
-  .trade-grid { grid-template-columns: 1fr; }
-  .trade-arrow { transform: rotate(90deg); }
   .landing-feats { gap: 20px; }
 }
 
@@ -2299,3 +2319,199 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 /* The side panel keeps the full story on a desktop; on a phone the felt
    already carries it, so the duplicate below the board steps aside. */
 @media (max-width: 1024px) { .log-panel { display: none; } }
+
+/* ─────────────────────────────────────────────────────── the chat dock ──
+   On a desktop the chat is a panel in the left rail and stays there. Below
+   1024px that rail is unstacked into the page, and the chat panel ended up a
+   full-width box under the board — in the way of the players' list and easy
+   to miss when someone actually spoke. So on those widths it becomes what the
+   app has always had: a round button at thumb height that opens the same
+   panel over the board.
+
+   Nothing about the panel's contents changes. It is the same #chatList, the
+   same Everyone/Team chips, the same emotes and input — only where it sits. */
+.chat-bubble {
+  display: none;
+  position: fixed; right: 14px; bottom: 18px; z-index: 60;
+  width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(135deg, var(--gold), var(--red));
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .34);
+  align-items: center; justify-content: center;
+  transition: transform .16s var(--pop), box-shadow .16s;
+}
+.chat-bubble:active { transform: scale(.94); }
+.chat-bubble .ico { width: 22px; height: 22px; }
+/* An unread mark rather than a number: the count matters less than knowing
+   somebody said something while you were looking at the board. */
+.chat-bubble.has-unread::after {
+  content: attr(data-unread);
+  position: absolute; top: -2px; right: -2px; min-width: 19px; height: 19px;
+  padding: 0 5px; border-radius: 999px;
+  background: var(--red); color: #fff;
+  font-size: 11px; font-weight: 800; line-height: 19px; text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.chat-scrim {
+  display: none; position: fixed; inset: 0; z-index: 55;
+  background: rgba(0, 0, 0, .45);
+  animation: fadeIn .18s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } }
+/* The close cross the panel only wears while it is a sheet. */
+.sheet-x {
+  border: none; background: none; cursor: pointer; color: var(--ink-3);
+  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+}
+.sheet-x:hover { color: var(--ink); background: var(--paper-2); }
+.sheet-x .ico { width: 15px; height: 15px; }
+.sheet-x.inline { display: none; margin-left: auto; }
+
+@media (max-width: 1024px) {
+  .chat-bubble { display: flex; }
+  .sheet-x.inline { display: grid; }
+  /* Out of the page flow entirely — it is the dock's now. */
+  .chat-panel { display: none; }
+  body.chat-open .chat-scrim { display: block; }
+  body.chat-open .chat-panel {
+    display: flex; position: fixed; z-index: 58;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
+    right: 14px; bottom: 82px; width: min(380px, calc(100vw - 28px));
+    max-height: min(62vh, 520px);
+    animation: dockIn .2s var(--pop);
+  }
+  body.chat-open .chat-list { flex: 1 1 auto; }
+}
+@keyframes dockIn { from { transform: translateY(12px) scale(.97); opacity: 0; } }
+
+/* On a phone the same panel is worth the whole width, and the message box
+   wants to sit above the button that opened it rather than under the thumb. */
+@media (max-width: 560px) {
+  .chat-bubble { width: 50px; height: 50px; right: 12px; bottom: 14px; }
+  body.chat-open .chat-panel {
+    right: 8px; left: 8px; bottom: 74px; width: auto;
+    max-height: 68vh;
+  }
+}
+
+/* ──────────────────────────────────────────────────── an offer arrives ──
+   A deal is two piles of things and a question. So the sheet shows the piles
+   as things — a coin, a street in its own colour with its own flag, a card —
+   with a swap medallion between them and a meter underneath that weighs the
+   two by the price on the deeds and admits that is all it is doing. */
+.modal.offer-sheet {
+  width: min(460px, 94vw); padding: 0; overflow: hidden;
+  border-color: var(--rule-2);
+}
+
+.offer-top {
+  display: flex; gap: 13px; align-items: center;
+  padding: 20px 20px 18px;
+  background: linear-gradient(180deg, var(--paper-2), transparent);
+  border-bottom: 1px solid var(--rule);
+}
+.offer-avatar {
+  flex: none; width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--c); color: #fff; font-weight: 900; font-size: 18px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 22%, transparent);
+}
+.offer-title { min-width: 0; flex: 1; }
+.offer-title h2 { font-size: 18px; font-weight: 850; line-height: 1.2; }
+.offer-title .sub { margin: 3px 0 0; font-size: 12.5px; }
+.offer-top .sheet-x { flex: none; align-self: flex-start; margin: -4px -6px 0 0; }
+
+/* the two piles */
+.deal-table { position: relative; padding: 18px 18px 4px; display: grid; gap: 10px; }
+.deal-side {
+  border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--paper-2); padding: 12px 13px 11px;
+}
+.deal-side.good { border-color: color-mix(in srgb, var(--good) 42%, var(--rule)); }
+.deal-side.bad  { border-color: color-mix(in srgb, var(--bad) 34%, var(--rule)); }
+.ds-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ds-label {
+  font-size: 10.5px; font-weight: 850; letter-spacing: .8px; text-transform: uppercase;
+}
+.deal-side.good .ds-label { color: var(--good); }
+.deal-side.bad .ds-label { color: var(--bad); }
+.ds-total { font-size: 13px; font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ds-items { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 8px; }
+.ds-who {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 700; color: var(--ink-3);
+}
+.avatar.xs { width: 18px; height: 18px; font-size: 10px; }
+
+/* one thing on the table */
+.deal-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px 5px 6px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--rule);
+  font-size: 12.5px; max-width: 100%;
+}
+.deal-chip b { font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deal-chip em { font-style: normal; color: var(--ink-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.deal-chip.cash { border-color: color-mix(in srgb, var(--gold) 55%, var(--rule)); background: var(--gold-soft); color: var(--ink); }
+.deal-chip.cash .ico { color: var(--gold-deep, #a97c14); }
+.deal-chip.street { border-left: 4px solid var(--c); padding-left: 7px; }
+.deal-chip.street .dc-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.deal-chip.street .dc-flag { display: grid; place-items: center; }
+.deal-chip.street .dc-flag .ico { width: 16px; height: 16px; }
+.deal-chip.card { border-color: color-mix(in srgb, var(--ink-3) 40%, var(--rule)); }
+.deal-chip.empty { color: var(--ink-3); font-style: italic; border-style: dashed; }
+
+/* the medallion that straddles the gap */
+.deal-swap {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center; z-index: 2;
+  background: var(--card); border: 1px solid var(--rule-2);
+  color: var(--ink-2); box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+
+/* which way it leans */
+.deal-meter { padding: 12px 18px 4px; }
+.dm-track {
+  position: relative; height: 6px; border-radius: 99px;
+  background: var(--paper-2); border: 1px solid var(--rule); overflow: hidden;
+}
+.dm-fill {
+  position: absolute; top: 0; bottom: 0; left: 50%;
+  width: calc(abs(var(--lean)) * 50%);
+  transform: translateX(min(0px, calc(var(--lean) * 100%)));
+  background: var(--ink-3); border-radius: 99px;
+  transition: width .3s var(--ease);
+}
+.deal-meter.good .dm-fill { background: var(--good); }
+.deal-meter.bad .dm-fill { background: var(--bad); }
+.dm-notch { position: absolute; left: 50%; top: -1px; bottom: -1px; width: 2px; background: var(--rule-2); }
+.dm-line { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 13px; }
+.dm-line b { font-weight: 800; }
+.deal-meter.good .dm-line b { color: var(--good); }
+.deal-meter.bad .dm-line b { color: var(--bad); }
+.dm-line .dim { font-size: 11.5px; }
+
+.offer-actions {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px; padding: 14px 18px 0;
+}
+.offer-actions .btn.big { grid-column: 1 / -1; padding: 13px 16px; font-size: 15px; }
+.btn.ghost.danger { color: var(--bad); }
+.btn.ghost.danger:hover:not(:disabled) { color: #fff; background: var(--bad); border-color: var(--bad); }
+.offer-foot { margin: 12px 18px 18px; text-align: center; font-size: 11.5px; }
+
+@media (max-width: 560px) {
+  .trade-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .trade-grid .trade-side:first-of-type { margin-bottom: 10px; }
+  .trade-grid .trade-side:last-of-type { margin-top: 10px; }
+  .trade-arrow { justify-self: center; margin: -27px 0; z-index: 2; }
+  .modal.offer-sheet { width: 94vw; max-height: 92vh; }
+  .offer-top { padding: 16px 16px 14px; }
+  .deal-table { padding: 14px 14px 4px; }
+  .deal-meter { padding: 10px 14px 4px; }
+  .offer-actions { padding: 12px 14px 0; }
+  .offer-foot { margin: 10px 14px 16px; }
+  /* Negotiating from here opens the composer, and that wants the screen. */
+  .modal.wide, .modal:has(.trade-grid) { width: 96vw; max-height: 92vh; }
+}

@@ -386,6 +386,23 @@ const BODY = {
       d="${rr(2.4, 4.6, 27.2, 18.6, 5)}${dot(10, 13.9, 2)}${dot(16, 13.9, 2)}${dot(22, 13.9, 2)}"/>
     <path d="M9.6 21.4h6.6l-4 7.4z" fill="currentColor"/>`,
 
+  /** Two arrows passing each other: one pile goes up, the other comes down.
+      The handshake glyph reads as "trading" but not as "these two swap", and
+      turned on its side it read as neither. */
+  swap: `
+    <path d="M11.4 26.4V9.2" stroke="currentColor" stroke-width="2.9" stroke-linecap="round"/>
+    <path d="M6.3 14 11.4 8.2 16.5 14" stroke="currentColor" stroke-width="2.9"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20.6 5.6v17.2" stroke="currentColor" stroke-width="2.9" stroke-linecap="round"/>
+    <path d="M15.5 18 20.6 23.8 25.7 18" stroke="currentColor" stroke-width="2.9"
+      stroke-linecap="round" stroke-linejoin="round"/>`,
+
+  /** Two strokes, drawn rather than typed — the multiplication sign is not
+      a glyph this app owns, and an emoji cross is not one either. */
+  close: `
+    <path d="M8.6 8.6 23.4 23.4M23.4 8.6 8.6 23.4" stroke="currentColor"
+      stroke-width="3.1" stroke-linecap="round"/>`,
+
   /** A utility, and a hint — the same bulb serves both. */
   bulb: `
     <path d="M16 2.8c-5.3 0-9.4 4-9.4 9 0 3.4 1.9 5.7 3.5 7.4 1 1.1 1.6 2 1.8 3.2h8.2c.2-1.2.8-2.1 1.8-3.2 1.6-1.7 3.5-4 3.5-7.4 0-5-4.1-9-9.4-9z" fill="#f5c542"/>

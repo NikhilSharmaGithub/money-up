@@ -1110,6 +1110,120 @@ function tradeCard(state, t, meId) {
   </div>`;
 }
 
+/**
+ * An offer, put in front of you instead of down the page.
+ *
+ * The rail card below the board says all of this too, and on a desktop that is
+ * where a deal is read. On a phone the rail is a scroll away past the chat, so
+ * an offer could sit there for a whole turn without the person it was sent to
+ * ever knowing — the sender waiting on an answer that was never seen.
+ *
+ * What is on the table is the thing worth showing, so it is shown as things:
+ * a coin for cash, a street with its own colour and flag, a card for a card.
+ * A line of text saying "$350 · Venice · 1× prison card" is a receipt; this is
+ * an offer. The meter underneath weighs the two sides by the price printed on
+ * the deeds — which is not what a street is worth to the person who needs it,
+ * and says so rather than pretending to advise.
+ *
+ * The cross closes it without touching the deal: it stays live on the rail,
+ * and this sheet will not reopen for the same offer.
+ */
+export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
+  const from = state.players.find((p) => p.id === t.from);
+  if (!from) return;
+
+  /** One thing on the table, drawn as itself. */
+  const chips = (side) => {
+    const out = [];
+    if (side.money) {
+      out.push(`<span class="deal-chip cash">${icon('coin', 15)}<b>${money(side.money)}</b></span>`);
+    }
+    (side.tiles || []).forEach((i) => {
+      const tile = state.map.tiles[i];
+      if (!tile) return;
+      const g = tile.group ? state.groups[tile.group] : null;
+      const mark = g?.flag
+        ? `<span class="dc-flag">${circleFlag(g.flag, g.color, 16)}</span>`
+        : `<i class="dc-dot" style="background:${g?.color || 'var(--ink-3)'}"></i>`;
+      out.push(`<span class="deal-chip street" style="--c:${g?.color || 'var(--ink-3)'}">
+        ${mark}<b>${escapeHtml(tile.name)}</b><em>$${tile.price}</em></span>`);
+    });
+    if (side.cards) {
+      out.push(`<span class="deal-chip card">${icon('key', 14)}<b>${side.cards}× out of prison</b></span>`);
+    }
+    return out.length ? out.join('') : '<span class="deal-chip empty">nothing</span>';
+  };
+
+  // Face value only — the price on the deed, not what it is worth to whoever
+  // needs that last street. The meter says as much underneath itself.
+  const worth = (side) => (side.money || 0) + (side.cards || 0) * 50
+    + (side.tiles || []).reduce((sum, i) => sum + (state.map.tiles[i]?.price || 0), 0);
+  const mine = worth(t.give);
+  const theirs = worth(t.get);
+  const diff = mine - theirs;
+  const span = Math.max(mine, theirs, 1);
+  // Half the track is neutral; the needle leans as far as the gap is wide.
+  const lean = Math.max(-1, Math.min(1, diff / span));
+  const verdict = Math.abs(diff) < 25 ? 'An even deal'
+    : diff > 0 ? `${money(diff)} your way` : `${money(-diff)} their way`;
+  const mood = Math.abs(diff) < 25 ? 'even' : diff > 0 ? 'good' : 'bad';
+
+  const seat = (player, label, cls, total, side) => `
+    <div class="deal-side ${cls}">
+      <div class="ds-head">
+        <span class="ds-label">${label}</span>
+        <span class="ds-total">${money(total)}</span>
+      </div>
+      <div class="ds-items">${chips(side)}</div>
+      <div class="ds-who">
+        <span class="avatar xs" style="background:${player.color}">${escapeHtml((player.name[0] || '?').toUpperCase())}</span>
+        from ${player.id === meId ? 'you' : escapeHtml(player.name)}
+      </div>
+    </div>`;
+
+  const me = state.players.find((p) => p.id === meId) || { name: 'You', color: 'var(--ink-3)' };
+
+  openModal(`
+    <div class="offer-top">
+      <span class="offer-avatar" style="--c:${from.color}">${escapeHtml((from.name[0] || '?').toUpperCase())}</span>
+      <div class="offer-title">
+        <h2>${escapeHtml(from.name)} wants to trade</h2>
+        <p class="sub">Their offer is on the table.</p>
+      </div>
+      <button class="sheet-x" id="toClose" aria-label="Close">${icon('close')}</button>
+    </div>
+
+    <div class="deal-table">
+      ${seat(from, 'You get', 'good', mine, t.give)}
+      <span class="deal-swap">${icon('swap', 18)}</span>
+      ${seat(me, 'You give', 'bad', theirs, t.get)}
+    </div>
+
+    <div class="deal-meter ${mood}">
+      <div class="dm-track"><i class="dm-fill" style="--lean:${lean}"></i><i class="dm-notch"></i></div>
+      <div class="dm-line"><b>${escapeHtml(verdict)}</b><span class="dim">by the price on the deeds</span></div>
+    </div>
+
+    <div class="offer-actions">
+      <button class="btn good wide big" id="toAccept">Accept the deal</button>
+      <button class="btn" id="toNegotiate">${icon('swap', 15)} Negotiate</button>
+      <button class="btn ghost danger" id="toDecline">Decline</button>
+    </div>
+    <p class="offer-foot dim small">Closing this leaves the offer on the table — your properties panel keeps it.</p>`,
+  (root) => {
+    const retire = () => onDismiss?.(t.id);
+    $('#toClose', root).onclick = () => { sfx.click(); retire(); closeModal(); };
+    $('#toAccept', root).onclick = () => { sfx.trade(); retire(); closeModal(); actions.respondTrade(t.id, true); };
+    $('#toDecline', root).onclick = () => { sfx.click(); retire(); closeModal(); actions.respondTrade(t.id, false); };
+    $('#toNegotiate', root).onclick = () => {
+      sfx.click();
+      retire();
+      // Their deal, seen from this side of the table, ready to be nudged.
+      openTradeModal(state, meId, t.from, actions, { give: t.get, get: t.give, counterOf: t.id });
+    };
+  }, 'offer-sheet');
+}
+
 // ─────────────────────────────────────────────────────────── board centre ──
 export function renderCenter(state, meId, actions) {
   const actionEl = $('#centerAction');
@@ -1816,6 +1930,11 @@ export function syncOpenModals(state) {
   deedRepaint?.(state);
 }
 
+/** Is a sheet already holding the screen? An offer waits its turn. */
+export function isModalOpen() {
+  return !$('#modalRoot')?.classList.contains('hidden');
+}
+
 export function closeModal() {
   const root = $('#modalRoot');
   deedRepaint = null;
@@ -2139,18 +2258,23 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
     .map(([i, o]) => ({ i: Number(i), ...o }))
     .sort((a, b) => a.i - b.i);
 
-  const side = (player, list, prefix) => `
-    <div class="trade-side">
-      <div class="trade-who"><span class="avatar sm" style="background:${player.color}">${escapeHtml((player.name[0] || '?').toUpperCase())}</span>
-        ${escapeHtml(player.name)}</div>
+  const side = (player, list, prefix, label, tone) => `
+    <div class="trade-side ${tone}">
+      <div class="trade-who">
+        <span class="ts-label">${label}</span>
+        <span class="ts-who"><span class="avatar xs" style="background:${player.color}">${escapeHtml((player.name[0] || '?').toUpperCase())}</span>${escapeHtml(player.name)}</span>
+      </div>
       <div class="trade-list">
         ${list.length ? list.map((m) => {
           const t = state.map.tiles[m.i];
           const g = t.group ? state.groups[t.group] : null;
           const blocked = (m.houses || 0) > 0;
+          const mark = g?.flag
+            ? `<span class="cr-flag">${circleFlag(g.flag, g.color, 16)}</span>`
+            : `<span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>`;
           return `<label class="check-row ${blocked ? 'blocked' : ''}" title="${blocked ? 'Sell the buildings first' : ''}">
             <input type="checkbox" data-side="${prefix}" value="${m.i}" ${blocked ? 'disabled' : ''} />
-            <span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>
+            ${mark}
             <span class="cr-name">${escapeHtml(t.name)}${m.mortgaged ? ' <i>mortgaged</i>' : ''}${blocked ? ` ${icon('house', 12)}` : ''}</span>
             <span class="dim">$${t.price}</span>
           </label>`;
@@ -2176,9 +2300,9 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
       ? 'Their offer is on the table — nudge it your way and send it back.'
       : "Tick what each side puts on the table. Streets with buildings can't move."}</p>
     <div class="trade-grid">
-      ${side(me, listFor(meId), 'give')}
-      <div class="trade-arrow">⇄</div>
-      ${side(them, listFor(targetId), 'get')}
+      ${side(me, listFor(meId), 'give', 'You give', 'bad')}
+      <span class="trade-arrow">${icon('swap', 18)}</span>
+      ${side(them, listFor(targetId), 'get', 'You get', 'good')}
     </div>
     <div class="trade-totals">
       <span>You give <b id="giveTotal">$0</b></span>
