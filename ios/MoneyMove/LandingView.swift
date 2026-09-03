@@ -119,7 +119,7 @@ struct LandingView: View {
         accountCard(P)
         // Coins first, then the table: collecting is a two-second errand and
         // the reward reads as part of who you are, right under the account.
-        DailyRewardCard()
+        DailyRewardCard(onSignIn: { Task { await googleSignInTapped() } }, signingIn: signingIn)
         // The other way to a couple of coins, and a much quieter one: it draws
         // nothing until the server turns ads on, and nothing again once the
         // day's views are spent. It never plays by itself.

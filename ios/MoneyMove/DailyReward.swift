@@ -10,6 +10,10 @@ import SwiftUI
 /// GET /api/daily, and the shape a claim answers with too — one decoder covers
 /// the peek, the payout, and the 409 an eager second tap earns.
 struct DailyState: Decodable, Equatable {
+    /// Whether this device's identity is attached to a real account. The
+    /// daily coin is the one thing here that pays for nothing but turning
+    /// up, so it is the one thing worth farming with a fresh install.
+    var signedIn: Bool?
     var claimable: Bool?
     var streak: Int?
     var amount: Int?
@@ -33,6 +37,11 @@ struct DailyState: Decodable, Equatable {
 /// answered — a reward you may not even be owed shouldn't flash a spinner at
 /// the top of the screen.
 struct DailyRewardCard: View {
+    /// Starting the sign-in belongs to the landing screen, which owns the
+    /// flow and its spinner; the card only asks.
+    var onSignIn: (() -> Void)? = nil
+    var signingIn: Bool = false
+
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
 
@@ -58,6 +67,8 @@ struct DailyRewardCard: View {
             if let daily {
                 if let amount = celebrating {
                     celebration(amount, daily, P)
+                } else if daily.signedIn == false {
+                    lockedFace(P)
                 } else if daily.claimable == true {
                     claimFace(daily, P)
                 } else {
@@ -77,6 +88,45 @@ struct DailyRewardCard: View {
     }
 
     // MARK: - faces
+
+    /// Signed out. The coin has not gone anywhere — it is behind an account,
+    /// and the card says which rather than simply going quiet, because a
+    /// reward that vanishes without explanation reads as a bug.
+    private func lockedFace(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(spacing: 10) {
+                    Art.icon(.coin, size: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Daily reward")
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(P.ink)
+                        Text("Sign in and it is yours every day")
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
+                    Spacer(minLength: 6)
+                }
+                ladderStrip(0, P)
+                Button {
+                    onSignIn?()
+                } label: {
+                    HStack(spacing: 8) {
+                        if signingIn { ProgressView().tint(P.accentInk) }
+                        else { Art.icon(.key, size: 18) }
+                        Text(signingIn ? "Signing in…" : "Sign in to collect")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(MMButtonStyle(kind: .gold, big: true))
+                .disabled(signingIn || onSignIn == nil)
+
+                Text("Your coins, your streak and your friends then follow you to any device.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+        }
+    }
 
     /// Coins on the table. The button is the loudest thing on the tab for as
     /// long as it takes to tap it, and never a second longer.

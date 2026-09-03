@@ -383,16 +383,23 @@ const dailyAmount = (streak) => Math.min(DAILY_CAP, DAILY_BASE + (streak - 1) * 
  */
 export function dailyView(token) {
   const p = token ? profiles.get(token) : null;
+  // The daily coin is the one thing here that pays out for nothing but
+  // turning up, which makes it the one thing worth farming: a fresh device
+  // identity costs a private window. Tying it to a real account is what
+  // stops one person collecting it eight times a morning — and it is why the
+  // card says so rather than simply going quiet.
+  const signedIn = !!p?.login;
   const d = p?.daily;
   const today = dayKey();
-  if (!d?.last) return { claimable: !!token, streak: 0, amount: DAILY_BASE, nextAt: null };
+  if (!d?.last) return { signedIn, claimable: signedIn, streak: 0, amount: DAILY_BASE, nextAt: null };
   if (d.last === today) {
     // Claimed already; the amount shown is what tomorrow's claim will pay.
-    return { claimable: false, streak: d.streak, amount: dailyAmount(d.streak + 1), nextAt: nextMidnight() };
+    return { signedIn, claimable: false, streak: d.streak, amount: dailyAmount(d.streak + 1), nextAt: nextMidnight() };
   }
   const streakAlive = d.last === yesterdayKey();
   return {
-    claimable: true,
+    signedIn,
+    claimable: signedIn,
     streak: streakAlive ? d.streak : 0,
     amount: dailyAmount(streakAlive ? d.streak + 1 : 1),
     nextAt: null,
@@ -405,6 +412,11 @@ export function dailyView(token) {
  * the same ledger money does: provider 'daily', zero dollars, streak noted.
  */
 export function claimDaily(token) {
+  // Checked before profileFor, so a token that has never signed in cannot
+  // even mint a profile by asking for the coin.
+  if (!profiles.get(token)?.login) {
+    return { error: 'Sign in to collect your daily coins', needsLogin: true };
+  }
   const p = profileFor(token);
   if (!p) return { error: 'Missing identity' };
   const today = dayKey();

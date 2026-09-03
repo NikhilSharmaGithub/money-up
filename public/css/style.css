@@ -2588,3 +2588,16 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   /* Negotiating from here opens the composer, and that wants the screen. */
   .modal.wide, .modal:has(.trade-grid) { width: 96vw; max-height: 92vh; }
 }
+
+/* The sign-in button the daily card points at. Google renders its own button
+   and owns every pixel of it, so the nudge is a ring around the outside
+   rather than anything applied to the button itself. */
+.nudge {
+  animation: nudgeRing 1.6s ease-out 1;
+  border-radius: 999px;
+}
+@keyframes nudgeRing {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--gold) 70%, transparent); }
+  70%  { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}

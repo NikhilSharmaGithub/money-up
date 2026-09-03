@@ -349,7 +349,8 @@ struct ActionPanel: View {
                 tradeLine(label: "You get", side: trade.give, color: P.good)
                 tradeLine(label: "You give", side: trade.get, color: P.bad)
                 if let watching = viewerNames(trade) {
-                    ViewingLine(text: "\(watching) is viewing…", color: P.gold)
+                    ViewingLine(text: "\(watching) is reading this",
+                                color: P.gold, faces: viewerColours(trade))
                 }
                 // Accepting a deal you can't fund just bounces off the server
                 // with a toast; say so before the tap instead.
@@ -425,7 +426,8 @@ struct ActionPanel: View {
                         .foregroundStyle(P.ink3)
                         .lineLimit(2)
                     if let watching = viewerNames(trade) {
-                        ViewingLine(text: "\(watching) is viewing…", color: P.gold)
+                        ViewingLine(text: "\(watching) is reading this",
+                                    color: P.gold, faces: viewerColours(trade))
                     } else if trade.ignored == true {
                         HStack(spacing: 5) {
                             Art.icon(.snooze, size: 13, tint: P.ink3)
@@ -440,6 +442,15 @@ struct ActionPanel: View {
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }
         }
+    }
+
+    /// The colours of everyone looking, so the line shows who without having
+    /// to spell out a list of names that would not fit anyway.
+    private func viewerColours(_ trade: TradeOffer) -> [Color] {
+        (trade.viewers ?? [])
+            .filter { !store.isLocal($0) }
+            .compactMap { store.state?.player($0) }
+            .map { Color(css: $0.color) }
     }
 
     /// Everyone looking at the offer right now, minus this device's own seats.
@@ -479,23 +490,59 @@ struct ActionPanel: View {
 }
 
 /// The gently pulsing "… is viewing" presence line, under a drawn eye.
+/// Somebody has your offer open in front of them.
+///
+/// The seconds between sending a deal and hearing back are the only part of a
+/// trade with nothing in them, and they are exactly when a player decides the
+/// other side is ignoring them. A pulsing word says "loading"; an eye that
+/// blinks on its own says a person is looking at this. So the lid closes
+/// twice, quickly, and then holds open for a long moment — a human rhythm
+/// rather than a spinner's — and the watchers' own colours sit beside it.
 struct ViewingLine: View {
     let text: String
     let color: Color
-    @State private var dim = false
+    /// The colours of whoever is looking, in seat order.
+    var faces: [Color] = []
+    @Environment(\.colorScheme) private var scheme
+    @State private var lid: CGFloat = 1
 
     var body: some View {
-        HStack(spacing: 5) {
-            Art.icon(.eye, size: 13, tint: color)
-            Text(text)
-                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(color)
-        }
-        .opacity(dim ? 0.4 : 1)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                dim = true
+        let P = Palette.current(scheme)
+        HStack(spacing: 7) {
+            Art.icon(.eye, size: 14, tint: color)
+                .scaleEffect(y: lid, anchor: .center)
+            if !faces.isEmpty {
+                HStack(spacing: -4) {
+                    ForEach(Array(faces.enumerated()), id: \.offset) { _, c in
+                        Circle()
+                            .fill(c)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(P.card, lineWidth: 1.5))
+                    }
+                }
             }
+            Text(text)
+                .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+                .lineLimit(1)
+        }
+        .padding(.leading, 7).padding(.trailing, 9)
+        .padding(.vertical, 5)
+        .background(color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.34), lineWidth: 1))
+        .task { await blink() }
+    }
+
+    /// Two blinks, then a pause long enough that it never reads as a flicker.
+    private func blink() async {
+        while !Task.isCancelled {
+            for _ in 0..<2 {
+                withAnimation(.easeInOut(duration: 0.07)) { lid = 0.1 }
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation(.easeInOut(duration: 0.09)) { lid = 1 }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+            try? await Task.sleep(for: .milliseconds(3600))
         }
     }
 }

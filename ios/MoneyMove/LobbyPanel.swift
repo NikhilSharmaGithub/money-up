@@ -242,11 +242,21 @@ struct QuickMatchPanel: View {
         let seats = max(players.count, store.state?.settings.maxPlayers ?? players.count)
 
         VStack(spacing: 12) {
-            HStack(spacing: 9) {
-                ProgressView().tint(P.red).scaleEffect(0.9)
-                Text("Finding players…")
-                    .font(.system(size: 18, weight: .heavy, design: .rounded))
-                    .foregroundStyle(P.ink)
+            // The table spends most of its fuse actually looking for people
+            // and only the last few seconds filling the chairs nobody took.
+            // Saying which is happening is the difference between "nobody
+            // came" and a table that quietly padded itself out while claiming
+            // to search.
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                let left = store.state?.quickStartAt.map {
+                    TurnClock.secondsLeft($0, at: context.date)
+                } ?? 99
+                HStack(spacing: 9) {
+                    ProgressView().tint(P.red).scaleEffect(0.9)
+                    Text(left > 5 ? "Finding players…" : "Filling the table…")
+                        .font(.system(size: 18, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink)
+                }
             }
             .padding(.top, 4)
 

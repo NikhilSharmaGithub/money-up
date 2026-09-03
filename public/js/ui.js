@@ -1229,6 +1229,13 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
     </div>
     <p class="offer-foot dim small">Closing this leaves the offer on the table — your properties panel keeps it.</p>`,
   (root) => {
+    // A sheet nobody asked for arrives under whatever finger or cursor was
+    // already on its way somewhere else, and the button it lands on accepts a
+    // trade. Found on a phone: a tap meant for "Start Game" gave away a
+    // street. So the three answers do nothing at all for a moment.
+    const answers = [...root.querySelectorAll('#toAccept, #toDecline, #toNegotiate')];
+    answers.forEach((b) => { b.disabled = true; });
+    setTimeout(() => answers.forEach((b) => { b.disabled = false; }), 450);
     // The sender watches for this: the eye on their card lights while the
     // sheet is open, and goes out however it closes — button, cross, Escape,
     // or another sheet taking its place.

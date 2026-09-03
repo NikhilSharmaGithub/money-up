@@ -249,7 +249,11 @@ function paintDaily(d) {
   if (!card) return;
   stopDailyClock();
   // Nothing collectable and nothing to count down to: stay out of the way.
-  if (!d || (!d.claimable && !d.nextAt)) { card.classList.add('hidden'); dailyLate = 0; return; }
+  // Signed out is not that case — there is something to collect, behind a
+  // door — so it is answered further down.
+  if (!d || (!d.claimable && !d.nextAt && d.signedIn !== false)) {
+    card.classList.add('hidden'); dailyLate = 0; return;
+  }
 
   const streak = Number(d.streak) || 0;
   const amount = Number(d.amount) || 0;
@@ -257,7 +261,36 @@ function paintDaily(d) {
     ? `<span class="dc-streak" title="${streak} day${streak > 1 ? 's' : ''} in a row">${icon('flame', 13)}${streak}</span>`
     : '';
 
-  card.classList.toggle('done', !d.claimable);
+  card.classList.toggle('done', !d.claimable && d.signedIn !== false);
+  // Signed out, the coin is not gone — it is behind an account, and saying
+  // which is the difference between a locked door and a broken one.
+  if (d.signedIn === false) {
+    card.classList.remove('hidden', 'done');
+    card.innerHTML = `<div class="dc-head">
+        <span class="dc-mark">${icon('coin', 22, 'solo')}</span>
+        <div class="dc-body">
+          <div class="dc-title">Daily reward</div>
+          <div class="dc-sub">Sign in and it is yours every day — and your coins
+            follow you to any device.</div>
+        </div>
+      </div>
+      <button class="btn wide wrap" id="dailySignIn">${icon('key', 15)} Sign in to collect</button>`;
+    const go = $('#dailySignIn');
+    if (go) {
+      go.onclick = () => {
+        sfx.click();
+        const row = $('#authRow');
+        row?.classList.remove('hidden');
+        row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Google's own button is the only thing that can start the flow, so
+        // point at it rather than pretending this button is it.
+        const btn = row?.querySelector('#googleSignIn div[role=button], #googleSignIn div');
+        btn?.classList.add('nudge');
+        setTimeout(() => btn?.classList.remove('nudge'), 1600);
+      };
+    }
+    return;
+  }
   card.innerHTML = d.claimable
     ? `<div class="dc-head">
         <span class="dc-mark">${icon('coin', 22, 'solo')}</span>
@@ -336,6 +369,7 @@ async function claimDaily() {
     // than printing the nothing it was handed.
     if (!res.ok || !out.ok) {
       if (res.status === 409) { paintDaily({ claimable: false, streak: out.streak, nextAt: out.nextAt }); refreshDaily(); }
+      else if (res.status === 401) { toast('Sign in first — the daily coin needs an account'); refreshDaily(); }
       else toast(out.error || 'Could not collect today\'s coins', 'error');
       return;
     }

@@ -10,6 +10,7 @@ enum ActiveSheet: Identifiable {
     case trade(from: String, to: String, give: Set<Int>, want: Set<Int>)  // proposing seat → target
     case tradePicker(from: String, give: Set<Int>)        // choose who to trade with first
     case counter(TradeOffer)                              // negotiate an incoming offer
+    case tradeOffer(TradeOffer, seat: String)             // an offer, put in front of you
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
     case gameOver
@@ -21,6 +22,7 @@ enum ActiveSheet: Identifiable {
         case .trade(let f, let t, _, _): "trade-\(f)-\(t)"
         case .tradePicker(let f, _): "tradepicker-\(f)"
         case .counter(let t): "counter-\(t.id)"
+        case .tradeOffer(let t, _): "offer-\(t.id)"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
         case .gameOver: "gameover"
@@ -35,9 +37,29 @@ struct GameScreen: View {
     @State private var sheet: ActiveSheet?
     @State private var confirmLeave = false
     @State private var confirmConcede = false
+    /// Every offer is put in front of its reader exactly once. Answering it,
+    /// or closing the sheet, retires the id — a state push a second later must
+    /// not throw the same deal back up, and neither must a reconnect.
+    @State private var offersShown: Set<Int> = []
+
+    /// An offer lands while you are looking at the board, and the person who
+    /// sent it is waiting on an answer — so it comes to the front once, on its
+    /// own. One at a time, oldest first: a sheet already open (a deed, the
+    /// composer, the result) is not something an offer gets to interrupt.
+    private func presentNewOffer() {
+        guard store.state?.isPlaying == true, sheet == nil else { return }
+        let live = Set((store.state?.trades ?? []).map(\.id))
+        offersShown = offersShown.intersection(live)
+        guard let next = (store.state?.trades ?? [])
+            .filter({ store.isLocal($0.to) && $0.ignored != true && !offersShown.contains($0.id) })
+            .min(by: { $0.id < $1.id }) else { return }
+        offersShown.insert(next.id)
+        SoundKit.shared.trade()
+        sheet = .tradeOffer(next, seat: next.to)
+    }
 
     /// Seats on this device still in the game. More than one means "give up"
-    /// is ambiguous — a pass & play phone has to say WHICH player is done.
+    /// is ambiguous — a pass & play phone has to say WHICH player is done."""
     private var aliveLocalSeats: [PlayerState] {
         (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
     }
@@ -167,6 +189,8 @@ struct GameScreen: View {
                     TradeSheet(fromId: from, targetId: target, preselectedGive: give, preselectedGet: want)
                 case .counter(let trade):
                     TradeSheet(countering: trade)
+                case .tradeOffer(let trade, let seat):
+                    TradeOfferSheet(trade: trade, seat: seat, onNegotiate: { sheet = .counter($0) })
                 case .tradePicker(let from, let give):
                     TradePickerSheet(fromId: from, give: give,
                                      pick: { sheet = .trade(from: from, to: $0, give: give, want: []) })
@@ -177,6 +201,8 @@ struct GameScreen: View {
             }
             .environmentObject(store)
         }
+        .onChange(of: store.state?.trades.map(\.id) ?? []) { _, _ in presentNewOffer() }
+        .onChange(of: store.state?.trades.map { $0.ignored ?? false } ?? []) { _, _ in presentNewOffer() }
         .onChange(of: store.showGameOver) { _, over in
             if over {
                 // Whatever sheet was open when the last player fell, the result

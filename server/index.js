@@ -199,8 +199,9 @@ app.get('/api/daily', (req, res) => {
 
 app.post('/api/daily/claim', (req, res) => {
   const result = claimDaily(String(req.body?.token || '').slice(0, 64));
-  // A double claim is the client being eager, not broken — 409, with the
-  // when-next attached so it can set its own countdown.
+  // A double claim is the client being eager, not broken — 409. Not being
+  // signed in is neither: 401, so the card can offer the way in.
+  if (result.needsLogin) return res.status(401).json(result);
   if (result.error) return res.status(result.claimed ? 409 : 400).json(result);
   res.json(result);
 });

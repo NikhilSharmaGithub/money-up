@@ -544,7 +544,8 @@ struct TokenLayer: View {
             ZStack(alignment: .topLeading) {
                 ForEach(alive) { p in
                     PlacedToken(player: p, alive: alive, walker: walker, geom: geom,
-                                isTurn: state.turn?.playerId == p.id)
+                                isTurn: state.turn?.playerId == p.id,
+                                isMine: store.isLocal(p.id))
                 }
             }
             .onChange(of: state.lastMove?.at) { walker.reconcile(state) }
@@ -564,6 +565,8 @@ private struct PlacedToken: View {
     @ObservedObject var walker: TokenWalker
     let geom: BoardGeometry
     let isTurn: Bool
+    /// This device's own piece — on a pass & play table, any of its seats.
+    let isMine: Bool
 
     private static let slots: [(CGFloat, CGFloat)] = [
         (-0.20, -0.18), (0.20, -0.18), (-0.20, 0.18), (0.20, 0.18),
@@ -592,17 +595,32 @@ private struct PlacedToken: View {
 
     var body: some View {
         let pos = walker.shown[player.id] ?? player.pos
-        TokenDisc(player: player, highlighted: isTurn)
+        TokenDisc(player: player, highlighted: isTurn, mine: isMine)
             .position(position)
             .animation(.spring(duration: 0.26, bounce: 0.42), value: pos)
             .zIndex(isTurn ? 10 : 5)
     }
 }
 
+/// A disc on the board.
+///
+/// `highlighted` is whose turn it is, which on somebody else's turn is not
+/// you — so it cannot double as "which one am I". Eight pieces of the same
+/// size go round the same loop, and finding yourself among them is the whole
+/// job of `mine`: a quiet ring at all times, and on your own turn a gold one
+/// that breathes while the disc gives a small hop.
 struct TokenDisc: View {
     let player: PlayerState
     let highlighted: Bool
+    var mine: Bool = false
     @State private var pulse = false
+    @State private var hop = false
+
+    /// The board draws outside any palette (the felt is its own thing), so
+    /// the mark carries the app's gold directly rather than reaching for a
+    /// theme it was never handed.
+    private static let markGold = Color(hex: 0xE3B24A)
+    private var myRingColour: Color { highlighted ? Self.markGold : .white.opacity(0.62) }
 
     var body: some View {
         Circle()
@@ -621,10 +639,25 @@ struct TokenDisc: View {
                 }
             )
             .overlay(Circle().stroke(.white, lineWidth: highlighted ? 2 : 1.2))
+            // Your own piece, marked outside the white rim so it reads as a
+            // mark on the board rather than a change to the piece.
+            .overlay {
+                if mine {
+                    Circle()
+                        .stroke(myRingColour, lineWidth: highlighted ? 2 : 1.4)
+                        .padding(highlighted ? -3.5 : -2.5)
+                        .shadow(color: highlighted ? Self.markGold.opacity(0.8) : .clear, radius: 4)
+                        .scaleEffect(highlighted && pulse ? 1.1 : 1)
+                }
+            }
             .shadow(color: .black.opacity(0.45), radius: 3, y: 2)
             .scaleEffect(highlighted && pulse ? 1.18 : 1)
+            .offset(y: mine && highlighted && hop ? -3 : 0)
             .animation(highlighted ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default, value: pulse)
-            .onAppear { pulse = true }
+            .animation(mine && highlighted
+                       ? .easeInOut(duration: 0.42).repeatForever(autoreverses: true).delay(0.35)
+                       : .default, value: hop)
+            .onAppear { pulse = true; hop = true }
     }
 }
 
