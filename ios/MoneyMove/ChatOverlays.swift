@@ -618,6 +618,8 @@ struct GameOverSheet: View {
 
                     rematchAction(P)
 
+                    shareAction()
+
                     worthChartCard(P)
 
                     // The same report card History shows later — standings,
@@ -640,6 +642,88 @@ struct GameOverSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .task { await askForSomething() }
+    }
+
+    // MARK: - the two things the app asks for
+
+    /// A win is the one honest moment to ask for a review, and the end of a
+    /// finished game the one honest moment to ask about notifications. Both
+    /// wait for the result to be on screen first — a system sheet that lands
+    /// before the standings do reads as an ambush.
+    private func askForSomething() async {
+        if ReviewPrompt.shouldAsk(won: iWon) {
+            try? await Task.sleep(for: .milliseconds(700))
+            ReviewPrompt.ask()
+            return
+        }
+        // A table we only watched is nobody's good moment — the ask is a
+        // reward for finishing a game, and this device didn't play one.
+        guard iPlayed else { return }
+        // Never in the same breath as the review prompt — and by construction
+        // it can't be: the second win is at least the second finished game,
+        // and this ask is spent on the first.
+        try? await Task.sleep(for: .milliseconds(1200))
+        await PushRegistrar.shared.askAfterFirstGame()
+    }
+
+    // MARK: - sharing the result
+
+    /// A seat this device actually played took the game — on a team table,
+    /// the team taking it counts, because that seat won too. The same rule
+    /// GameStore counts lifetime wins by, asked once and answered once.
+    private var iWon: Bool {
+        store.state.map(store.localSeatWon) ?? false
+    }
+
+    /// Was this device at the table at all, or only in the stands?
+    private var iPlayed: Bool {
+        store.state?.players.contains { store.localIds.contains($0.id) } ?? false
+    }
+
+    /// What the win was worth: the best seat this device actually held. Only
+    /// ever read on a win, where that seat is a winning one — and on a team
+    /// table it quotes your own fortune rather than your partner's, because
+    /// "I won" is a sentence about you.
+    private var winningWorth: Int {
+        guard let state = store.state else { return 0 }
+        return state.players.filter { store.localIds.contains($0.id) }
+            .compactMap(\.netWorth).max() ?? 0
+    }
+
+    /// Whoever it was that took it, named the way the headline above names
+    /// them — a team by its team name, anyone else by theirs.
+    private var winnerLabel: String {
+        if let idx = store.state?.winningTeam,
+           let team = store.state?.teamInfo?[safe: idx] { return "Team \(team.name)" }
+        return store.state?.winner?.name ?? "Somebody"
+    }
+
+    /// The same link the web client reads `?room=` off, so a friend who taps
+    /// it lands at this table in a browser with no install in the way. The
+    /// room code is public by design; no token ever rides along.
+    private var shareText: String {
+        let room = store.roomId ?? ""
+        let link = "https://www.moneymove.live/?room=\(room)"
+        guard iWon else {
+            // Losing is worth sharing too — but never as a win we didn't take.
+            return "\(winnerLabel) just took me down on MoneyMove — get me back: \(link)"
+        }
+        return "I won \(money(winningWorth)) on MoneyMove — beat me: \(link)"
+    }
+
+    /// One tap out of the app with the room code attached — the fastest way a
+    /// finished game turns into the next one.
+    private func shareAction() -> some View {
+        ShareLink(item: shareText) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 15, weight: .bold))
+                Text(iWon ? "Brag about it" : "Share the table")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
     }
 
     /// The table is already assembled — running it back is one tap, and it
@@ -655,15 +739,29 @@ struct GameOverSheet: View {
                     store.showToast("Rewarded ads are not live yet")
                 }
             }
-            MMIconButton(.replay, "Play again with the same players", kind: .primary, big: true) {
-                store.rematch()
-                Haptics.tap()
-                dismiss()
-            }
-            if !store.isHost {
-                Text("First to press it hosts the next one.")
+            if store.state?.quick == true {
+                // A matchmade table doesn't reconvene: offering "the same
+                // players" would tell the room the seats were never strangers.
+                MMIconButton(.replay, "Play again", kind: .primary, big: true) {
+                    Haptics.tap()
+                    dismiss()
+                    store.leaveRoom()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.quickPlay() }
+                }
+                Text("Finds you a fresh table.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
+            } else {
+                MMIconButton(.replay, "Play again with the same players", kind: .primary, big: true) {
+                    store.rematch()
+                    Haptics.tap()
+                    dismiss()
+                }
+                if !store.isHost {
+                    Text("First to press it hosts the next one.")
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
             }
         }
     }

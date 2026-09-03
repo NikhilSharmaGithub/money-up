@@ -2,7 +2,7 @@
 // chat, toasts and the celebratory bits.
 
 import { escapeHtml, deedMarkup, deckMarkup } from './board.js';
-import { icon, groupBanner, groupFlag } from './icons.js';
+import { icon, groupBanner, groupFlag, circleFlag } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
 
@@ -115,14 +115,45 @@ const LOG_ICON = {
   warn: 'warning', turn: 'replay',
 };
 
+/** Street names by board, so a line that names a city can fly its flag. */
+let flagIndexFor = null;
+let flagIndex = new Map();
+function cityFlags(state) {
+  if (flagIndexFor !== state.map?.id) {
+    flagIndexFor = state.map?.id;
+    flagIndex = new Map();
+    for (const t of state.map?.tiles || []) {
+      const mark = t.group ? state.groups?.[t.group]?.flag : null;
+      if (t.name && mark) flagIndex.set(t.name, mark);
+    }
+  }
+  return flagIndex;
+}
+
+/** The first street a line names, longest name first so "New York" beats "York". */
+function cityIn(text, flags) {
+  let best = null;
+  for (const [name, mark] of flags) {
+    if (text.includes(name) && (!best || name.length > best.name.length)) best = { name, mark };
+  }
+  return best;
+}
+
 export function renderLog(state, el) {
   const sig = `${state.log.length}:${state.log[state.log.length - 1]?.at || 0}`;
   if (el.dataset.sig === sig) return;
   const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60 || !el.dataset.sig;
   el.dataset.sig = sig;
-  el.innerHTML = state.log.map((l) => `<div class="log-line ${l.kind}">
-      <span class="log-ico">${icon(LOG_ICON[l.kind]) || '·'}</span><span>${escapeHtml(l.text)}</span>
-    </div>`).join('');
+  const flags = cityFlags(state);
+  el.innerHTML = state.log.map((l) => {
+    // A line about a street wears that street's flag, the same coin the
+    // board wears — you can read the log by colour alone.
+    const city = cityIn(l.text, flags);
+    const mark = city ? `<span class="log-flag">${circleFlag(city.mark, '#888', 15)}</span>` : '';
+    return `<div class="log-line ${l.kind}">
+      <span class="log-ico">${icon(LOG_ICON[l.kind]) || '·'}</span>${mark}<span>${escapeHtml(l.text)}</span>
+    </div>`;
+  }).join('');
   if (wasAtBottom) el.scrollTop = el.scrollHeight;
 }
 
@@ -517,6 +548,16 @@ function renderQuickLobby(state, meId, el, actions) {
   wireLookPanel(state, meId, el, actions);
 }
 
+// The turn clock, in the lengths a table actually picks. The iOS sheet offers
+// a 3-minute setting too, so a room set from a phone keeps whatever it was
+// given rather than silently reading back as the first option in this list.
+const TURN_CLOCKS = [0, 30, 60, 90, 120];
+const clockOptionLabel = (n) => (n === 0 ? 'Off' : n >= 120 ? `${n / 60} min` : `${n}s`);
+const turnClockOptions = (current) => {
+  const n = Math.floor(Number(current) || 0);
+  return TURN_CLOCKS.includes(n) ? TURN_CLOCKS : [...TURN_CLOCKS, n].sort((a, b) => a - b);
+};
+
 function renderSettings(state, meId, el, actions) {
   const isHost = state.hostId === meId;
   const dis = isHost ? '' : 'disabled';
@@ -578,6 +619,15 @@ function renderSettings(state, meId, el, actions) {
           ${[500, 1000, 1500, 2000, 2500, 3000, 5000].map((n) => `<option value="${n}" ${state.settings.startingCash === n ? 'selected' : ''}>$${n}</option>`).join('')}
         </select>
       </div>
+      <div class="setting">
+        <span class="s-icon">${icon('snooze')}</span>
+        <div class="s-body"><div class="s-name">Turn timer</div>
+          <div class="s-desc">Run out of time and the table moves on without you</div></div>
+        <select data-set="turnSeconds" ${dis}>
+          ${turnClockOptions(state.settings.turnSeconds).map((n) =>
+            `<option value="${n}" ${Number(state.settings.turnSeconds) === n ? 'selected' : ''}>${clockOptionLabel(n)}</option>`).join('')}
+        </select>
+      </div>
     </div>
 
     <div class="panel">
@@ -597,7 +647,7 @@ function renderSettings(state, meId, el, actions) {
     input.onchange = () => {
       const key = input.dataset.set;
       let value = input.type === 'checkbox' ? input.checked : input.value;
-      if (['maxPlayers', 'startingCash'].includes(key)) value = Number(value);
+      if (['maxPlayers', 'startingCash', 'turnSeconds'].includes(key)) value = Number(value);
       sfx.click();
       actions.settings({ [key]: value });
     };
@@ -820,7 +870,9 @@ function renderMyStuff(state, meId, el, actions) {
     </div>` : ''}
 
     ${state.status === 'ended'
-      ? `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again with the same players</button>`
+      ? (state.quick
+        ? `<button class="btn primary wide wrap" id="againBtn">${icon('replay')} Play again</button>`
+        : `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again with the same players</button>`)
       : ''}
   `;
 
@@ -864,6 +916,8 @@ function renderMyStuff(state, meId, el, actions) {
   });
   const rb = $('#rematchBtn', el);
   if (rb) rb.onclick = () => actions.rematch();
+  const ab = $('#againBtn', el);
+  if (ab) ab.onclick = () => actions.newTable?.();
 }
 
 /** "Ravi is viewing…" — everyone on the offer except yourself. */
@@ -2210,6 +2264,79 @@ export function openReportCard(record) {
   (root) => { $('#rcClose', root).onclick = closeModal; });
 }
 
+// ─────────────────────────────────────────────────────────── leaderboard ──
+// The same rows on the landing card and in the sheet behind it, so the top
+// five you tapped are the top five you land on. `winnings` is a purse of
+// coins, not table money — it wears the coin, not a dollar sign.
+const MEDALS = ['medalGold', 'medalSilver', 'medalBronze'];
+
+export function leaderRowsHTML(rows, myCode = '') {
+  return (rows || []).map((r, i) => {
+    const wins = Number(r.wins) || 0;
+    return `<div class="lb-row ${myCode && r.code === myCode ? 'me' : ''}">
+      <span class="lb-rank">${MEDALS[i] ? icon(MEDALS[i], 18) : i + 1}</span>
+      <span class="lb-flag">${escapeHtml(r.flag || '')}</span>
+      <span class="lb-name">${escapeHtml(r.name || 'Player')}${
+        myCode && r.code === myCode ? '<i class="tag you">YOU</i>' : ''}</span>
+      <span class="lb-wins">${wins}<i>${wins === 1 ? 'win' : 'wins'}</i></span>
+      <span class="lb-cash">${icon('coin', 12)}${(Number(r.winnings) || 0).toLocaleString('en-US')}</span>
+    </div>`;
+  }).join('');
+}
+
+/** The whole table — fifty deep, and it scrolls rather than growing. */
+export function openLeaderboardModal(rows, myCode = '') {
+  openModal(`
+    <h2>${icon('trophy')} Leaderboard</h2>
+    <p class="sub">Every player who has taken a table, most wins first. The purse
+      is the coins those wins paid out.</p>
+    <div class="lb-list tall">${rows?.length
+      ? leaderRowsHTML(rows, myCode)
+      : '<div class="empty small">Nobody has won a game yet.</div>'}</div>
+    <div class="modal-actions"><button class="btn ghost" id="lbClose">Close</button></div>`,
+  (root) => {
+    $('#lbClose', root).onclick = closeModal;
+    // Your own row is the one you came to find — put it on screen.
+    root.querySelector('.lb-row.me')?.scrollIntoView({ block: 'center' });
+  });
+}
+
+// ────────────────────────────────────────────────────────── the shelf ──
+/**
+ * Titles collected across every game, with the lifetime numbers under them.
+ * They wear the same drawings the report card hands them out with, so a
+ * "Landlord" on the shelf is the "Landlord" you remember winning.
+ */
+export function openAchievementsModal(token) {
+  fetch(api(`/api/achievements?token=${encodeURIComponent(token)}`))
+    .then((r) => r.json())
+    .then((d) => {
+      const titles = Object.entries(d?.titles || {}).sort((a, b) => b[1] - a[1]);
+      const tiles = [
+        ['Wins', Number(d?.wins) || 0],
+        ['Coins won', (Number(d?.winnings) || 0).toLocaleString('en-US')],
+        ['Turns played', (Number(d?.turnsPlayed) || 0).toLocaleString('en-US')],
+      ];
+      openModal(`
+        <h2>Your shelf</h2>
+        <p class="sub">Every title this seat has been handed, and what they add up to.</p>
+        <div class="ach-tiles">
+          ${tiles.map(([label, value]) => `<div class="ach-tile"><b>${value}</b><span>${label}</span></div>`).join('')}
+        </div>
+        ${titles.length ? `<p class="sub">Titles</p>
+          <div class="ach-list">${titles.map(([name, n]) => `<div class="ach-row">
+            <span class="ach-ico">${icon(TITLE_ART[name] || 'sparkle', 20, 'solo')}</span>
+            <b>${escapeHtml(name)}</b>
+            ${n > 1 ? `<i class="ach-n">×${n}</i>` : ''}
+          </div>`).join('')}</div>`
+        : `<div class="empty small">No titles yet — one is handed out per player at
+            the end of every game. Finish one and this fills up.</div>`}
+        <div class="modal-actions"><button class="btn ghost" id="acClose">Close</button></div>`,
+      (root) => { $('#acClose', root).onclick = closeModal; });
+    })
+    .catch(() => toast('Could not reach the server — try again in a moment', 'error'));
+}
+
 /** richup-style stepped net-worth chart, drawn straight into SVG. */
 function worthChartSVG(state) {
   const history = state.history || [];
@@ -2274,6 +2401,44 @@ function worthChartSVG(state) {
 let adsConfig = null;
 export const setAdsConfig = (c) => { adsConfig = c; };
 
+// ---- telling people about it --------------------------------------------
+/** The invite link for the table this sheet belongs to. */
+function roomInviteLink() {
+  const m = location.pathname.match(/^\/room\/([a-z0-9]+)/i);
+  return m ? `${location.origin}/?room=${m[1].toLowerCase()}` : location.origin;
+}
+
+/** One line worth pasting: the number, the game, and a way to come and take it. */
+function resultLine(state, meId) {
+  const link = roomInviteLink();
+  const winner = state.players?.find((p) => p.id === state.winner?.id);
+  if (winner && winner.id === meId) return `I won ${money(winner.netWorth)} on MoneyMove — beat me: ${link}`;
+  if (winner) return `${winner.name} won ${money(winner.netWorth)} off us on MoneyMove — come and take it back: ${link}`;
+  return `Nobody walked away with it on MoneyMove — try your luck: ${link}`;
+}
+
+/**
+ * The phone's own share sheet where there is one; the clipboard everywhere
+ * else. A share the player backed out of is not a failure, so it is not
+ * quietly turned into a copy behind their back.
+ */
+async function shareResult(text) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'MoneyMove', text });
+      return;
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Result copied — paste it wherever your friends are');
+  } catch {
+    toast(`Copy this: ${roomInviteLink()}`);
+  }
+}
+
 export function showGameOver(state, meId, actions) {
   openModal(`
     <div class="go-crown">${icon('trophy')}</div>
@@ -2284,8 +2449,14 @@ export function showGameOver(state, meId, actions) {
       ${adsConfig?.enabled && state.winner?.id === meId
         ? `<button class="btn primary big wrap" id="gDouble">${icon('coin')} Watch an ad — double your winnings</button>`
         : ''}
-      <button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>
-      ${state.hostId === meId ? '' : '<div class="dim small go-wait">First to press it hosts the next one.</div>'}
+      ${state.quick
+        // A matchmade table doesn't reconvene — offering "the same players"
+        // would tell the room the seats were never strangers.
+        ? `<button class="btn primary big wrap" id="gNewTable">${icon('replay')} Play again</button>
+           <div class="dim small go-wait">Finds you a fresh table.</div>`
+        : `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again with the same players</button>
+           ${state.hostId === meId ? '' : '<div class="dim small go-wait">First to press it hosts the next one.</div>'}`}
+      <button class="btn wide wrap" id="gShare">${icon('globe')} Share your result</button>
       <div class="row-2">
         <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>
         <button class="btn ghost" id="gClose">Stay on this board</button>
@@ -2296,6 +2467,10 @@ export function showGameOver(state, meId, actions) {
     $('#gHome', root).onclick = () => { sfx.click(); closeModal(); actions.goHome?.(); };
     const again = $('#gAgain', root);
     if (again) again.onclick = () => { closeModal(); actions.rematch(); };
+    const fresh = $('#gNewTable', root);
+    if (fresh) fresh.onclick = () => { sfx.click(); closeModal(); actions.newTable?.(); };
+    const share = $('#gShare', root);
+    if (share) share.onclick = () => { sfx.click(); shareResult(resultLine(state, meId)); };
     const dbl = $('#gDouble', root);
     if (dbl) dbl.onclick = () => actions.watchAd?.('doubleWin');
   });

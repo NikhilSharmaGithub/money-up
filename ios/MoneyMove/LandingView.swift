@@ -112,8 +112,14 @@ struct LandingView: View {
         header(P)
         continueCard(P)
         accountCard(P)
+        // Coins first, then the table: collecting is a two-second errand and
+        // the reward reads as part of who you are, right under the account.
+        DailyRewardCard()
         quickPlayCard(P)
         playCard(P, busy: busy)
+        // Below the ways in, where the browsing starts — who is winning, then
+        // whose table you can walk into.
+        LeaderboardCard(myCode: me?.code)
         publicRoomsCard(P)
     }
 
@@ -370,6 +376,9 @@ struct LandingView: View {
     @ViewBuilder private func historyTab(_ P: Palette) -> some View {
         pageTitle("History", "Games you can still finish, and the ones already played.", P)
         unfinishedSection(P)
+        // A table still running is the only thing here worth acting on, so it
+        // keeps the top; everything the player has ever won sits under it.
+        AchievementsShelf()
         if store.matchHistory.isEmpty {
             if store.unfinishedGames.isEmpty {
                 MMCard(padding: 22) {
@@ -465,6 +474,9 @@ struct LandingView: View {
         themeCard(P)
         appearanceCard(P)
         soundCard(P)
+        // After the preferences, before the plumbing — the same rules the web
+        // client's help modal reads out.
+        HowToPlayCard()
         serverCard(P)
         MMCard {
             Text("An original implementation of the classic property-trading board game. Not affiliated with any trademark holder.")

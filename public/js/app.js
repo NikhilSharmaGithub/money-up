@@ -9,7 +9,8 @@ import {
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
-  renderAwaiting, openReportCard, setAdsConfig,
+  renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
+  openAchievementsModal, leaderRowsHTML,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -115,6 +116,13 @@ const actions = {
   grantTime: (id) => socket?.emit('grantTime', { id }),
   chat: emit('chat'),
   rematch: emit('rematch'),
+  // A matchmade table breaks up when it ends — going again means finding
+  // strangers, not reconvening the ones you just played.
+  newTable: () => {
+    forgetGame(roomId);
+    goHome();
+    setTimeout(() => $('#quickBtn')?.click(), 120);
+  },
   // A finished board is a dead end without a way off it, so the result sheet
   // and the well can both send you home.
   goHome: () => {
@@ -140,6 +148,8 @@ function showLanding() {
   // Rewarded-ads switchboard — dark today, one env var away from live.
   fetch(api('/api/ads/config')).then((r) => r.json()).then(setAdsConfig).catch(() => {});
   refreshProfileChip();
+  refreshDaily();
+  refreshLeaderboard();
   watchPublicRooms();
   initGoogleSignIn();
   initSocial({
@@ -183,6 +193,170 @@ $('#storeBtn').addEventListener('click', () => {
   });
 });
 
+/**
+ * Coins landing in your hand, rather than a number that was one thing and is
+ * now another. A repaint reads as the page reloading; a count-up reads as pay.
+ */
+function countCoinChip(from, to) {
+  const chip = $('#coinChip');
+  if (!chip) return;
+  const paint = (n) => { chip.innerHTML = `${icon('coin')} ${n}`; };
+  // Someone who asked for less motion gets the number, not the ride.
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || from === to) return paint(to);
+  chip.classList.add('minted');
+  setTimeout(() => chip.classList.remove('minted'), 900);
+  const started = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - started) / 700);
+    paint(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  return requestAnimationFrame(step);
+}
+
+// ---- the daily reward ----------------------------------------------------
+// A card that only ever speaks when it has something to say: coins waiting, or
+// a countdown to the next lot. An unknown player and a sleeping server both
+// leave the landing exactly as they found it — this is a gift, not a nag.
+let dailyClock = null;
+
+function stopDailyClock() {
+  clearInterval(dailyClock);
+  dailyClock = null;
+}
+
+/** "07:12:44" — hours first, because the wait is always most of a day. */
+function untilText(at) {
+  const ms = Math.max(0, at - Date.now());
+  const s = Math.floor(ms / 1000);
+  return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60]
+    .map((n) => String(n).padStart(2, '0')).join(':');
+}
+
+function paintDaily(d) {
+  const card = $('#dailyCard');
+  if (!card) return;
+  stopDailyClock();
+  // Nothing collectable and nothing to count down to: stay out of the way.
+  if (!d || (!d.claimable && !d.nextAt)) { card.classList.add('hidden'); return; }
+
+  const streak = Number(d.streak) || 0;
+  const amount = Number(d.amount) || 0;
+  const streakChip = streak > 0
+    ? `<span class="dc-streak" title="${streak} day${streak > 1 ? 's' : ''} in a row">${icon('flame', 13)}${streak}</span>`
+    : '';
+
+  card.classList.toggle('done', !d.claimable);
+  card.innerHTML = d.claimable
+    ? `<div class="dc-head">
+        <span class="dc-mark">${icon('coin', 22, 'solo')}</span>
+        <div class="dc-body">
+          <div class="dc-title">Daily reward</div>
+          <div class="dc-sub">${streak > 0
+            ? `Day ${streak + 1} of your streak — miss a day and it starts again`
+            : 'Free coins, every day you turn up'}</div>
+        </div>
+        ${streakChip}
+      </div>
+      <button class="btn gold wide wrap" id="dailyBtn">
+        <span class="btn-ico">${icon('coin')}</span> Collect your daily ${amount} coins
+      </button>`
+    : `<div class="dc-head">
+        <span class="dc-mark quiet">${icon('snooze', 22, 'solo')}</span>
+        <div class="dc-body">
+          <div class="dc-title">Back tomorrow</div>
+          <div class="dc-sub">${amount} more coins in <b id="dailyClock">${untilText(d.nextAt)}</b></div>
+        </div>
+        ${streakChip}
+      </div>`;
+  card.classList.remove('hidden');
+
+  if (d.claimable) {
+    $('#dailyBtn').onclick = claimDaily;
+    return;
+  }
+  // Midnight is a real deadline, so the card counts down to it rather than
+  // showing whatever the gap happened to be when the page loaded.
+  dailyClock = setInterval(() => {
+    const el = $('#dailyClock');
+    if (!el) return stopDailyClock();
+    if (d.nextAt - Date.now() <= 0) { stopDailyClock(); return refreshDaily(); }
+    el.textContent = untilText(d.nextAt);
+    return undefined;
+  }, 1000);
+}
+
+function refreshDaily() {
+  fetch(api(`/api/daily?token=${encodeURIComponent(token)}`))
+    .then((r) => r.json())
+    .then(paintDaily)
+    .catch(() => paintDaily(null));
+}
+
+async function claimDaily() {
+  const btn = $('#dailyBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(api('/api/daily/claim'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const out = await res.json();
+    // 409 is an eager client, not a broken one — the card just catches up.
+    if (!res.ok || !out.ok) {
+      if (res.status === 409) paintDaily({ claimable: false, streak: out.streak, amount: 0, nextAt: out.nextAt });
+      else toast(out.error || 'Could not collect today\'s coins', 'error');
+      return;
+    }
+    sfx.gain();
+    countCoinChip(knownCoins ?? Math.max(0, out.coins - out.amount), out.coins);
+    knownCoins = out.coins;
+    toast(out.streak > 1
+      ? `+${out.amount} coins — ${out.streak} days in a row`
+      : `+${out.amount} coins collected`);
+    // The card flips the moment the coins land, carrying today's figure — the
+    // streak makes tomorrow's payout bigger, and only the server knows by how
+    // much, so the read behind the count-up corrects it. Same trip refreshes
+    // the wallet, since the claim moved the karma chip's neighbour.
+    paintDaily({ claimable: false, streak: out.streak, amount: out.amount, nextAt: out.nextAt });
+    setTimeout(() => { refreshWallet(); refreshDaily(); }, 900);
+  } catch {
+    toast('Could not reach the server — try again in a moment', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---- the leaderboard -----------------------------------------------------
+// Public by construction on the server's side: friend codes and lifetime
+// totals. Five rows here, all fifty behind "See all".
+let myCode = '';
+
+function refreshLeaderboard() {
+  const card = $('#leaderCard');
+  if (!card) return;
+  Promise.all([
+    fetch(api('/api/leaderboard')).then((r) => r.json()),
+    fetchMe(),
+  ]).then(([data, me]) => {
+    const top = Array.isArray(data?.top) ? data.top : [];
+    myCode = me?.code || '';
+    card.innerHTML = `
+      <div class="fc-head">
+        <span class="panel-title" style="margin:0">${icon('trophy')} Leaderboard</span>
+        ${top.length > 5 ? '<button class="btn tiny" id="lbAll" type="button">See all</button>' : ''}
+      </div>
+      ${top.length
+        ? `<div class="lb-list">${leaderRowsHTML(top.slice(0, 5), myCode)}</div>`
+        : `<div class="empty small">Nobody has won a game yet — the first table to
+            finish opens this list.</div>`}`;
+    card.classList.remove('hidden');
+    const all = $('#lbAll');
+    if (all) all.onclick = () => { sfx.click(); openLeaderboardModal(top, myCode); };
+  }).catch(() => { /* server nap — the landing keeps its other cards */ });
+}
+
 // ---- sign in with Google (only when the server has a client id) ----------
 let googleInitDone = false;
 /**
@@ -190,15 +364,25 @@ let googleInitDone = false;
  * the account behind it one tap away. Signing in used to change almost
  * nothing on screen, which read as the button not working.
  */
+// One read of /api/me per visit to the landing, shared by everything that
+// needs to know who this browser is — the chip, and the leaderboard row that
+// has to be picked out as yours.
+let mePromise = null;
+function fetchMe(fresh = false) {
+  if (fresh || !mePromise) {
+    mePromise = fetch(api(`/api/me?token=${encodeURIComponent(token)}`))
+      .then((r) => r.json()).catch(() => null);
+  }
+  return mePromise;
+}
+
 async function refreshProfileChip() {
   const chip = $('#profileChip');
   const menu = $('#profileMenu');
   if (!chip) return;
-  let me = null;
-  try {
-    me = await fetch(api(`/api/me?token=${encodeURIComponent(token)}`)).then((r) => r.json());
-  } catch { return; }
-  if (!me?.provider) {
+  const me = await fetchMe(true);
+  if (!me) return;
+  if (!me.provider) {
     chip.classList.add('hidden');
     menu.classList.add('hidden');
     return;
@@ -227,9 +411,19 @@ async function refreshProfileChip() {
       <div class="pm-row"><span>Karma</span><b>${Number(me.karma) || 0}</b></div>
       <div class="pm-row"><span>Signed in with</span><b>${me.provider === 'apple' ? 'Apple' : 'Google'}</b></div>
       <div class="pm-actions">
+        <button class="btn small wide" id="pmShelf">${icon('trophy')} Your shelf</button>
+      </div>
+      <div class="pm-actions">
         <button class="btn small wide" id="pmSignOut">Sign out</button>
       </div>`;
     menu.classList.remove('hidden');
+    // Titles are collected across games and kept for good, so they live with
+    // the account rather than with any one table's report card.
+    $('#pmShelf').onclick = () => {
+      sfx.click();
+      menu.classList.add('hidden');
+      openAchievementsModal(token);
+    };
     $('#pmSignOut').onclick = async () => {
       try {
         await fetch(api('/api/auth/logout'), {
@@ -573,6 +767,7 @@ function boot() {
   roomId = match[1].toLowerCase();
   // Nothing on the landing is on screen any more — stop polling for it.
   clearInterval(roomsTimer);
+  stopDailyClock();
   stopSocial();
   $('#landing').classList.add('hidden');
   $('#app').classList.remove('hidden');
@@ -665,7 +860,12 @@ function render() {
   safe('dice', () => renderDice(state));
   safe('clock', () => syncTurnClock(state, meId));
   safe('modals', () => syncOpenModals(state));
-  safe('log', () => renderLog(state, $('#logList')));
+  safe('log', () => {
+    renderLog(state, $('#logList'));
+    // The board's own quiet feed — same lines, ghosted under the dice.
+    const centre = $('#centerLog');
+    if (centre) renderLog(state, centre);
+  });
   safe('chatChannels', () => syncChatChannels(state));
   safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
 
@@ -822,7 +1022,11 @@ $('#copyBtn').addEventListener('click', async () => {
   }
 });
 
-$('#helpBtn').addEventListener('click', () => { sfx.click(); openHelpModal(); });
+// The same sheet from the toolbar in game and from the landing header, where
+// someone who has never played is the one who actually needs it.
+document.querySelectorAll('#helpBtn, #helpBtnLanding').forEach((b) => {
+  b.addEventListener('click', () => { sfx.click(); openHelpModal(); });
+});
 
 // Pass-and-play: opens a second window with its own identity in the same room.
 $('#addLocalBtn').addEventListener('click', () => {

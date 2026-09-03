@@ -6,12 +6,29 @@ import SwiftUI
 @main
 struct MoneyMoveApp: App {
     @StateObject private var store = GameStore()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
         }
+    }
+}
+
+/// SwiftUI has no hook for the APNs callbacks, so the app keeps a delegate for
+/// exactly one job: catching the device token and handing it on. Nothing sends
+/// notifications yet — this only collects.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in PushRegistrar.shared.received(deviceToken: deviceToken) }
+    }
+
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        // Nothing is waiting on this token, so a failure is not the player's
+        // problem to hear about — the next launch simply asks again.
     }
 }
 
@@ -57,6 +74,9 @@ struct RootView: View {
             // A coin pack approved after the app closed still has to pay out —
             // the listener lives up here so it outlasts every screen.
             CoinShop.shared.watchTransactions(store)
+            // Gives the APNs callback somewhere to deliver a device token, and
+            // refreshes it for anyone who has already granted permission.
+            PushRegistrar.shared.adopt(store)
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay(alignment: .bottom) { toastOverlay }

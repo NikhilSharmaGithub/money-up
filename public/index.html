@@ -3,8 +3,31 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#0d0819" />
+<!-- The browser chrome takes the table's own colour: ivory linen by day, felt
+     after dark. The single purple value here predated both palettes. -->
+<meta name="theme-color" content="#efe9dc" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0c1310" media="(prefers-color-scheme: dark)" />
 <title>MoneyMove — online property trading game</title>
+<meta name="description" content="Buy streets, build hotels and bankrupt your friends. Free, no sign-up, up to 8 players across 19 boards." />
+
+<!-- Social preview. og.png is the 1200×630 render of og.svg sitting next to it:
+     the SVG is the source of truth, the PNG is what every scraper can actually
+     read. Change one, re-render the other. -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="MoneyMove" />
+<meta property="og:url" content="https://moneymove-csk9.onrender.com/" />
+<meta property="og:title" content="MoneyMove — online property trading game" />
+<meta property="og:description" content="Buy streets, build hotels and bankrupt your friends. Free, no sign-up, up to 8 players across 19 boards." />
+<meta property="og:image" content="https://moneymove-csk9.onrender.com/og.png" />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="MoneyMove — buy streets, build hotels, bankrupt your friends" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="MoneyMove — online property trading game" />
+<meta name="twitter:description" content="Buy streets, build hotels and bankrupt your friends. Free, no sign-up, up to 8 players across 19 boards." />
+<meta name="twitter:image" content="https://moneymove-csk9.onrender.com/og.png" />
+<meta name="twitter:image:alt" content="MoneyMove — buy streets, build hotels, bankrupt your friends" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -40,8 +63,15 @@
     <div id="profileMenu" class="profile-menu hidden"></div>
     <button id="themeBtnLanding" class="icon-btn theme-float" title="Switch between light and dark"></button>
     <button id="paletteBtnLanding" class="icon-btn palette-float" title="Table style" aria-label="Table style" data-ico="palette"></button>
+    <!-- The rules were only ever a tap away once you were already at a table.
+         Someone deciding whether to sit down needs them more than a player does. -->
+    <button id="helpBtnLanding" class="icon-btn help-float" title="How to play" aria-label="How to play" data-ico="question"></button>
     <h1 class="logo xl">MONEY<span>MOVE</span></h1>
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
+
+    <!-- Today's coins, above the table: app.js fills it in and keeps it hidden
+         until the server has actually said there is something to collect. -->
+    <div class="landing-card daily-card hidden" id="dailyCard"></div>
 
     <div class="landing-card">
       <button id="continueBtn" class="btn wide continue-btn wrap hidden">Continue game</button>
@@ -91,6 +121,9 @@
       </form>
       <div id="friendList" class="friend-list"></div>
     </div>
+
+    <!-- The lifetime table, top five here and all fifty behind "See all". -->
+    <div class="landing-card leader-card hidden" id="leaderCard"></div>
 
     <div class="landing-feats">
       <div><b>19</b><span>boards</span></div>
@@ -157,6 +190,9 @@
       <div id="boardCenter" class="board-center">
         <div class="center-felt"></div>
         <div class="center-logo">MONEY<span>MOVE</span></div>
+        <!-- The table's murmur, ghosted across the felt the way the app
+             carries it: the dice and the buttons sit on top of it. -->
+        <div id="centerLog" class="center-log"></div>
         <div class="center-panel">
           <div id="diceRow" class="dice-row">
             <div class="die" data-die="0"></div>

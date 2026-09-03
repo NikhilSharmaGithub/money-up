@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="Outfit, 'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <!--
+    The social preview card, 1200x630. This SVG is the source of truth; og.png
+    beside it is this file rendered, because no scraper reads SVG. Edit here,
+    then re-render the PNG.
+
+    It is the midnight-felt table with brass ink — the same palette the dark
+    theme wears — and the art is drawn here rather than borrowed, same rule as
+    the rest of the app's glyphs.
+  -->
+  <defs>
+    <linearGradient id="felt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12201a"/>
+      <stop offset="0.55" stop-color="#0c1310"/>
+      <stop offset="1" stop-color="#070b09"/>
+    </linearGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8c069"/>
+      <stop offset="1" stop-color="#b58223"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2e7d5b" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#2e7d5b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#b58223" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#b58223" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#felt)"/>
+  <circle cx="185" cy="115" r="300" fill="url(#glowA)"/>
+  <circle cx="1015" cy="545" r="320" fill="url(#glowB)"/>
+
+  <!-- ── left: the wordmark and what the game is ── -->
+  <g transform="translate(84, 168)">
+    <text x="0" y="0" font-size="86" font-weight="900" letter-spacing="-2.6" fill="#efede2">MONEY<tspan fill="url(#brass)">MOVE</tspan></text>
+    <text x="0" y="66" font-size="34" font-weight="500" fill="#adb6ac">Buy streets. Build hotels.</text>
+    <text x="0" y="112" font-size="34" font-weight="500" fill="#adb6ac">Bankrupt your friends.</text>
+
+    <!-- the three numbers the landing page leads with -->
+    <g transform="translate(0, 190)">
+      <text x="0"   y="0" font-size="44" font-weight="800" fill="url(#brass)">19</text>
+      <text x="0"   y="30" font-size="17" font-weight="700" letter-spacing="1.4" fill="#78827a">BOARDS</text>
+      <text x="150" y="0" font-size="44" font-weight="800" fill="url(#brass)">8</text>
+      <text x="150" y="30" font-size="17" font-weight="700" letter-spacing="1.4" fill="#78827a">PLAYERS</text>
+      <text x="290" y="0" font-size="44" font-weight="800" fill="url(#brass)">∞</text>
+      <text x="290" y="30" font-size="17" font-weight="700" letter-spacing="1.4" fill="#78827a">BANKRUPTCIES</text>
+    </g>
+
+    <!-- "free, no sign-up" as a pill, the way the app tags things -->
+    <g transform="translate(0, 262)">
+      <rect x="0" y="0" width="332" height="46" rx="23" fill="#16211c" stroke="#b58223" stroke-width="2"/>
+      <text x="166" y="30" font-size="20" font-weight="750" letter-spacing="0.6" text-anchor="middle" fill="#e8c069">Free · no sign-up · play in a tap</text>
+    </g>
+  </g>
+
+  <!-- ── right: a corner of the board, tilted like a table seen from a chair ── -->
+  <g transform="translate(712, 106) rotate(-8) scale(0.92)">
+    <rect x="0" y="0" width="420" height="420" rx="34" fill="#0f1a15" stroke="#31453c" stroke-width="3"/>
+
+    <!-- the group colour strips along the top and left edges -->
+    <g>
+      <rect x="26" y="26" width="86" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="26" y="26" width="86" height="20" rx="10" fill="#8b5cf6"/>
+      <rect x="26" y="36" width="86" height="10" fill="#8b5cf6"/>
+
+      <rect x="124" y="26" width="86" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="124" y="26" width="86" height="20" rx="10" fill="#38bdf8"/>
+      <rect x="124" y="36" width="86" height="10" fill="#38bdf8"/>
+
+      <rect x="222" y="26" width="86" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="222" y="26" width="86" height="20" rx="10" fill="#d92037"/>
+      <rect x="222" y="36" width="86" height="10" fill="#d92037"/>
+
+      <rect x="320" y="26" width="74" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="320" y="26" width="74" height="20" rx="10" fill="#f59e0b"/>
+      <rect x="320" y="36" width="74" height="10" fill="#f59e0b"/>
+
+      <rect x="26" y="124" width="86" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="26" y="124" width="20" height="86" rx="10" fill="#2e7d5b"/>
+      <rect x="36" y="124" width="10" height="86" fill="#2e7d5b"/>
+
+      <rect x="26" y="222" width="86" height="86" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="26" y="222" width="20" height="86" rx="10" fill="#f472b6"/>
+      <rect x="36" y="222" width="10" height="86" fill="#f472b6"/>
+
+      <rect x="26" y="320" width="86" height="74" rx="10" fill="#16211c" stroke="#24332c" stroke-width="2"/>
+      <rect x="26" y="320" width="20" height="74" rx="10" fill="#c9a86a"/>
+      <rect x="36" y="320" width="10" height="74" fill="#c9a86a"/>
+    </g>
+
+    <!-- houses on the purple street: three little roofs, the app's own shape -->
+    <g fill="#2e7d5b" stroke="#0f1a15" stroke-width="2">
+      <path d="M40 96 L52 84 L64 96 L64 106 L40 106 Z"/>
+      <path d="M62 96 L74 84 L86 96 L86 106 L62 106 Z"/>
+      <path d="M84 96 L96 84 L108 96 L108 106 L84 106 Z"/>
+    </g>
+
+    <!-- the felt middle, with a pair of dice on it -->
+    <rect x="124" y="124" width="270" height="270" rx="26" fill="#0b120e" stroke="#24332c" stroke-width="2"/>
+    <g transform="translate(168, 196) rotate(-9)">
+      <rect x="0" y="0" width="86" height="86" rx="18" fill="#f4f1e4"/>
+      <g fill="#0c1310">
+        <circle cx="26" cy="26" r="8"/>
+        <circle cx="60" cy="26" r="8"/>
+        <circle cx="26" cy="60" r="8"/>
+        <circle cx="60" cy="60" r="8"/>
+      </g>
+    </g>
+    <g transform="translate(268, 214) rotate(12)">
+      <rect x="0" y="0" width="86" height="86" rx="18" fill="#f4f1e4"/>
+      <g fill="#0c1310">
+        <circle cx="24" cy="24" r="8"/>
+        <circle cx="43" cy="43" r="8"/>
+        <circle cx="62" cy="62" r="8"/>
+      </g>
+    </g>
+
+    <!-- a token on the corner, mid-lap -->
+    <circle cx="357" cy="357" r="26" fill="#e0435c" stroke="#f4f1e4" stroke-width="4"/>
+  </g>
+
+  <!-- ── the small print, bottom left ── -->
+  <text x="84" y="566" font-size="19" font-weight="600" letter-spacing="0.4" fill="#5d6a60">An original property-trading board game · moneymove</text>
+</svg>

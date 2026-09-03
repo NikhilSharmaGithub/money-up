@@ -567,6 +567,15 @@ final class GameStore: ObservableObject {
             showGameOver = true
             SoundKit.shared.win()
             recordMatch(new)
+            // Two quiet counters, kept here because this is the one place a
+            // game is certain to have actually ended with this device at the
+            // table. They decide when the app has earned the right to ask for
+            // a review, and for permission to notify — the result sheet does
+            // the asking, this only keeps the score.
+            if localSeatWon(new) { ReviewPrompt.noteWin() }
+            if new.players.contains(where: { localIds.contains($0.id) }) {
+                PushRegistrar.noteFinishedGame()
+            }
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(1))
                 self?.refreshWallet(celebrate: true)
@@ -943,6 +952,17 @@ final class GameStore: ObservableObject {
 
     /// Every seat controlled from this device: the main player plus local guests.
     var localIds: Set<String> { Set([meId] + guests.map(\.token)) }
+
+    /// Did a seat this device played take the game? On a team table the team
+    /// taking it counts — that seat won too, and the phone that held it has
+    /// every right to feel like it. Takes the state rather than reading the
+    /// published one so the socket can ask about a result it hasn't stored yet.
+    func localSeatWon(_ state: GameState) -> Bool {
+        if let team = state.winningTeam {
+            return state.players.contains { localIds.contains($0.id) && $0.team == team }
+        }
+        return state.winner.map { localIds.contains($0.id) } ?? false
+    }
 
     /// Whose seat the controls act for right now: the local player whose turn
     /// it is, falling back to the main player. This is what makes pass & play

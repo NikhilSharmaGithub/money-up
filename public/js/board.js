@@ -126,10 +126,12 @@ function tileMarkup(tile, groups) {
   // it can be the drawn bank instead of an emoji the stylesheet has to spell.
   const stamp = isOwnable(tile) ? `<div class="tile-stamp">${icon('bank')}</div>` : '';
 
+  // Buildings live INSIDE the body, the way the app draws them: on the narrow
+  // side rails a chip riding the outer edge hung off the tile and over its
+  // neighbour. The medallion keeps the edge to itself.
   return `<div class="tile-wash"></div>
-    <div class="tile-body">${body}</div>
+    <div class="tile-body">${body}<div class="tile-houses"></div></div>
     ${medal}
-    <div class="tile-houses"></div>
     ${stamp}
     <div class="tile-owner"></div>`;
 }
