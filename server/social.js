@@ -243,6 +243,14 @@ export function awardWin(token, amount, note) {
   const coins = Math.floor(Number(amount) || 0);
   const balance = awardCoins(token, coins);
   if (balance == null) return null;
+  // The lifetime tally the leaderboard reads: every win routed through here
+  // bumps the count and banks the purse. awardCoins just minted the profile
+  // if it somehow didn't exist, so the get can't miss.
+  const p = profiles.get(token);
+  if (p) {
+    p.wins = (p.wins || 0) + 1;
+    p.winnings = (p.winnings || 0) + coins;
+  }
   appendLedger({
     at: Date.now(),
     provider: 'win',
@@ -323,6 +331,176 @@ export function equipItem(token, slot, itemId) {
   save();
   return { ok: true, equipped: p.equipped };
 }
+
+// ------------------------------------------------------------ daily reward --
+// Showing up pays. Day one is 20 coins; every consecutive day adds 5 until
+// the purse flattens at 50, and a missed day starts the ladder over — the
+// reward is for the habit, not the backlog. Dates are the server's calendar.
+const DAILY_BASE = 20;
+const DAILY_STEP = 5;
+const DAILY_CAP = 50;
+
+/** Server-local calendar date as a key: same day, same string. */
+function dayKey(when = Date.now()) {
+  const d = new Date(when);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Yesterday by calendar arithmetic, so a DST hour can't skip a day. */
+function yesterdayKey() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dayKey(d);
+}
+
+/** When the next claim opens — the coming server-local midnight. */
+function nextMidnight() {
+  const d = new Date();
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
+/** What a claim pays once the streak stands at `streak` days. */
+const dailyAmount = (streak) => Math.min(DAILY_CAP, DAILY_BASE + (streak - 1) * DAILY_STEP);
+
+/**
+ * Read-only peek — the same rule as walletOf: the home screen asks on every
+ * load, and asking must not mint a profile. An unknown token simply sees day
+ * one waiting for it; a lapsed streak already reads as zero.
+ */
+export function dailyView(token) {
+  const p = token ? profiles.get(token) : null;
+  const d = p?.daily;
+  const today = dayKey();
+  if (!d?.last) return { claimable: !!token, streak: 0, amount: DAILY_BASE, nextAt: null };
+  if (d.last === today) {
+    // Claimed already; the amount shown is what tomorrow's claim will pay.
+    return { claimable: false, streak: d.streak, amount: dailyAmount(d.streak + 1), nextAt: nextMidnight() };
+  }
+  const streakAlive = d.last === yesterdayKey();
+  return {
+    claimable: true,
+    streak: streakAlive ? d.streak : 0,
+    amount: dailyAmount(streakAlive ? d.streak + 1 : 1),
+    nextAt: null,
+  };
+}
+
+/**
+ * The claim itself. This is a real action, so profileFor applies — a fresh
+ * token earns its profile the moment it collects day one. Coins move through
+ * the same ledger money does: provider 'daily', zero dollars, streak noted.
+ */
+export function claimDaily(token) {
+  const p = profileFor(token);
+  if (!p) return { error: 'Missing identity' };
+  const today = dayKey();
+  const d = p.daily ?? (p.daily = { last: null, streak: 0 });
+  if (d.last === today) {
+    return { error: 'Already claimed today', claimed: true, streak: d.streak, nextAt: nextMidnight() };
+  }
+  d.streak = d.last === yesterdayKey() ? d.streak + 1 : 1;
+  d.last = today;
+  const amount = dailyAmount(d.streak);
+  p.coins += amount;
+  appendLedger({
+    at: Date.now(),
+    provider: 'daily',
+    packId: null,
+    usd: 0,
+    coins: amount,
+    token,
+    txn: `daily:${today}:${p.code}`,
+    note: `day ${d.streak} of the streak`,
+  });
+  save();
+  return { ok: true, amount, coins: p.coins, streak: d.streak, nextAt: nextMidnight() };
+}
+
+// ------------------------------------------------------------- leaderboard --
+/**
+ * The lifetime table, top of the pile first. Strictly public fields — codes
+ * and totals, never tokens or emails — and only people who have actually won
+ * something. House players can't appear by construction: they never touch
+ * profileFor, so there is no profile to rank.
+ */
+export function leaderboardView(limit = 50) {
+  return [...profiles.values()]
+    .filter((p) => (p.wins || 0) > 0)
+    .sort((a, b) => (b.wins || 0) - (a.wins || 0) || (b.winnings || 0) - (a.winnings || 0))
+    .slice(0, limit)
+    .map((p) => ({
+      code: p.code,
+      name: p.name || 'Player',
+      flag: p.flag || '',
+      wins: p.wins || 0,
+      winnings: p.winnings || 0,
+    }));
+}
+
+// ------------------------------------------------------------ achievements --
+/**
+ * End-of-game badges, kept for good. The room hands out at most one title per
+ * player per game; the shelf just counts how often each one lands. Only an
+ * existing profile collects — a title was earned in a game the human joined,
+ * so the profile is already there, and a bot id resolves to nothing.
+ */
+export function recordTitle(token, title) {
+  const p = profiles.get(token);
+  const name = String(title || '').slice(0, 60);
+  if (!p || !name) return;
+  p.titleCounts ??= {};
+  p.titleCounts[name] = (p.titleCounts[name] || 0) + 1;
+  save();
+}
+
+/** Lifetime turns, bumped once per finished game for everyone still seated. */
+export function noteTurns(token, turns) {
+  const p = profiles.get(token);
+  const n = Math.floor(Number(turns) || 0);
+  if (!p || n <= 0) return;
+  p.turnsPlayed = (p.turnsPlayed || 0) + n;
+  save();
+}
+
+/** The caller's own shelf — read-only, same no-minting rule as walletOf. */
+export function achievementsView(token) {
+  const p = token ? profiles.get(token) : null;
+  if (!p) return { titles: {}, wins: 0, winnings: 0, turnsPlayed: 0 };
+  return {
+    titles: p.titleCounts || {},
+    wins: p.wins || 0,
+    winnings: p.winnings || 0,
+    turnsPlayed: p.turnsPlayed || 0,
+  };
+}
+
+// -------------------------------------------------------------------- push --
+// Device tokens for turn notifications, stored per profile. Capped at five —
+// a household of devices, not a botnet — and deduped, because clients
+// re-register on every launch and the list must not grow for it.
+const PUSH_MAX_DEVICES = 5;
+const PUSH_PLATFORMS = ['ios', 'android'];
+
+export function registerPushDevice(token, deviceToken, platform) {
+  const device = String(deviceToken || '').trim().slice(0, 200);
+  const plat = String(platform || '').trim().toLowerCase();
+  if (!device) return { error: 'Missing device token' };
+  if (!PUSH_PLATFORMS.includes(plat)) return { error: 'Unknown platform' };
+  const p = profileFor(token);
+  if (!p) return { error: 'Missing identity' };
+  p.push ??= [];
+  // Re-registering moves the device to the back of the line, freshly stamped.
+  p.push = p.push.filter((d) => d.device !== device);
+  p.push.push({ device, platform: plat, at: Date.now() });
+  if (p.push.length > PUSH_MAX_DEVICES) p.push.splice(0, p.push.length - PUSH_MAX_DEVICES);
+  save();
+  return { ok: true, devices: p.push.length };
+}
+
+/** The sender's read — push.js needs the devices, never the whole profile. */
+export const pushDevicesOf = (token) => profiles.get(token)?.push || [];
 
 // -------------------------------------------------------------------- bans --
 // A ban sticks to the device token, not the name on it — renaming doesn't

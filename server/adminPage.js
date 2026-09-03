@@ -205,6 +205,7 @@ export const adminPageHTML = `<!doctype html>
   .field label { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 4px; }
   .btn { background: #e3a93c; color: #171207; border: none; border-radius: 10px; padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer; }
   .btn:hover { filter: brightness(1.08); }
+  a.btn { text-decoration: none; display: inline-block; }
   .btn.ghost { background: transparent; color: #e3a93c; border: 1px solid rgba(227, 169, 60, .4); font-weight: 600; }
   .btn.ghost:hover { background: rgba(227, 169, 60, .08); filter: none; }
   .danger { background: #3a1f1b; color: #f0b9ae; border: 1px solid #6b3a31; border-radius: 10px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
@@ -420,6 +421,16 @@ export const adminPageHTML = `<!doctype html>
     <section class="card">
       <h2>Persistence</h2>
       <div id="persist"></div>
+    </section>
+    <section class="card">
+      <h2>Stripe webhook</h2>
+      <div id="webhookT"></div>
+    </section>
+    <section class="card">
+      <h2>Backups</h2>
+      <div id="backupT"></div>
+      <div style="margin-top:10px"><a class="btn sm" id="backup-dl" href="#" download>Download backup</a></div>
+      <div class="caption" style="margin-top:8px">A copy of every data file lands in backup/ daily, kept a week — same disk as the originals, so it survives accidents, not outages. The button downloads the live files to somewhere that does.</div>
     </section>
     <section class="card">
       <h2>Configuration</h2>
@@ -729,7 +740,14 @@ export const adminPageHTML = `<!doctype html>
 
   function renderAlerts() {
     var c = state.data.config || {};
+    var wh = (state.data.system || {}).webhook || {};
     var html = '';
+    if (wh.failing) {
+      html += '<div class="alert red"><b>The Stripe webhook is failing.</b> The most recent delivery was rejected' +
+        (wh.lastFailure ? ' ' + fmtAgo(wh.lastFailure.at) + ' (' + esc(wh.lastFailure.reason || 'no reason recorded') + ')' : '') +
+        (wh.lastSuccess ? '; the last good one landed ' + fmtAgo(wh.lastSuccess) + '.' : ' and none has ever succeeded.') +
+        ' Card payments are completing at Stripe without crediting coins here.</div>';
+    }
     if (!c.dataDirEnv) {
       html += '<div class="alert red"><b>DATA_DIR is not set.</b> Wallets, the ledger, bans, stats and the audit log live in the repo folder and are wiped on the next deploy. Point DATA_DIR at a persistent disk.</div>';
     }
@@ -1351,8 +1369,28 @@ export const adminPageHTML = `<!doctype html>
       fileRow('bans.json — banned devices', d.bans) +
       fileRow('stats.json — game counters', d.stats) +
       fileRow('audit.json — admin actions', d.audit) +
+      fileRow('webhook-health.json — stripe deliveries', d.webhook) +
       '</table></div>';
     document.getElementById('persist').innerHTML = html;
+
+    // Stripe delivery record: two timestamps and the verdict between them.
+    var wh = s.webhook || {};
+    swap('webhookT',
+      '<div class="scroll"><table><tr><th>delivery</th><th>when</th><th>detail</th></tr>' +
+      '<tr><td>last success</td><td>' + (wh.lastSuccess ? fmtWhen(wh.lastSuccess) : '<span class="dim">never</span>') +
+        '</td><td class="dim">Signature verified, event handled.</td></tr>' +
+      '<tr><td>last failure</td><td>' + (wh.lastFailure ? fmtWhen(wh.lastFailure.at) : '<span class="dim">never</span>') +
+        '</td><td class="dim">' + (wh.lastFailure ? esc(wh.lastFailure.reason || 'no reason recorded') : '—') + '</td></tr>' +
+      '</table></div>' +
+      (wh.failing
+        ? '<div class="alert red" style="margin-top:10px"><b>Failing.</b> The rejection is newer than the last success — see the Overview strip.</div>'
+        : (wh.lastSuccess ? '' : '<div class="caption" style="margin-top:8px">No delivery recorded yet — Stripe has not knocked since this record began.</div>')));
+
+    var b = s.backup || null;
+    swap('backupT', b
+      ? '<div style="font-size:13px">Last snapshot ' + fmtWhen(b.at) + ' — ' + fmtNum(b.copied) + ' file(s) copied' +
+        '<div class="mono dim" style="margin-top:6px;word-break:break-all">' + esc(b.dir || '') + '</div></div>'
+      : '<div class="dim" style="font-size:13px">No snapshot yet this boot — check the server log.</div>');
 
     var flag = function (on, okText, badText, badCls) {
       return on ? '<span class="pill ok">' + okText + '</span>' : '<span class="pill ' + (badCls || 'bad') + '">' + badText + '</span>';
@@ -1663,6 +1701,9 @@ export const adminPageHTML = `<!doctype html>
     document.body.innerHTML = '<p style="padding:40px">Append ?key=YOUR_ADMIN_KEY to the URL to open the dashboard.</p>';
   } else {
     applySection();
+    // The backup download is a plain link so the browser handles the file;
+    // it carries the key the same way opening this page did.
+    document.getElementById('backup-dl').href = '/api/admin/backup?key=' + encodeURIComponent(KEY);
     refresh();
     setInterval(refresh, 5000);
     // The quick-match fuse is the one number on the page that lies within

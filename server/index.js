@@ -12,7 +12,13 @@ import {
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
   ownedTally, dataFiles,
+  dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
+  registerPushDevice,
 } from './social.js';
+import {
+  startBackups, backupInfo, streamDataBackup,
+  initWebhookHealth, noteWebhook, webhookHealth,
+} from './ops.js';
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
@@ -45,6 +51,9 @@ app.use('/api', (req, res, next) => {
 // JSON parser gets a chance to rewrite the body.
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {
   const result = handleWebhook(req.body, req.headers['stripe-signature']);
+  // Health, not crypto: stripe.js already decided; this just remembers how
+  // it went, so the dashboard can notice a run of rejections.
+  noteWebhook(!result.error, result.error);
   if (result.error) return res.status(400).json(result);
   res.json({ received: true });
 });
@@ -180,6 +189,41 @@ app.get('/api/wallet', (req, res) => {
   res.json(w);
 });
 
+// ---- daily reward --------------------------------------------------------
+// The GET is a read-only peek (the home screen polls it, and reads must not
+// mint profiles); the claim is the action, and it lands in the same ledger
+// every other credit does — provider 'daily', zero dollars.
+app.get('/api/daily', (req, res) => {
+  res.json(dailyView(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/daily/claim', (req, res) => {
+  const result = claimDaily(String(req.body?.token || '').slice(0, 64));
+  // A double claim is the client being eager, not broken — 409, with the
+  // when-next attached so it can set its own countdown.
+  if (result.error) return res.status(result.claimed ? 409 : 400).json(result);
+  res.json(result);
+});
+
+// ---- leaderboard & shelf -------------------------------------------------
+/** Public by construction: friend codes and lifetime totals, nothing else. */
+app.get('/api/leaderboard', (_req, res) => res.json({ top: leaderboardView() }));
+
+/** Only ever your own shelf — the token is a secret, so that's all it opens. */
+app.get('/api/achievements', (req, res) => {
+  res.json(achievementsView(String(req.query.token || '').slice(0, 64)));
+});
+
+// ---- push (scaffolding) --------------------------------------------------
+// Registration is live so shipped clients can start handing over device
+// tokens; nothing sends until APNs credentials exist — see server/push.js.
+app.post('/api/push/register', (req, res) => {
+  const { token, deviceToken, platform } = req.body || {};
+  const result = registerPushDevice(String(token || '').slice(0, 64), deviceToken, platform);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
 app.post('/api/store/buy', (req, res) => {
   const { token, itemId } = req.body || {};
   const item = itemById(String(itemId || ''));
@@ -288,6 +332,13 @@ app.post('/api/auth/apple', (req, res) => {
 const ADMIN_KEY = process.env.ADMIN_KEY || 'moneymove-admin';
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
+const WEBHOOK_HEALTH_FILE = path.join(DATA_DIR, 'webhook-health.json');
+
+// Boot-time ops: remember how Stripe deliveries have been going, and take
+// the first daily snapshot now — yesterday's data is worth having the day
+// something breaks, and "the day something breaks" is not announced.
+initWebhookHealth(DATA_DIR);
+startBackups(DATA_DIR);
 
 // Every admin POST leaves a line here. The dashboard shows the tail; the file
 // is the memory — an operator action that isn't written down didn't happen.
@@ -349,6 +400,16 @@ function recordTransitions(room) {
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
     for (const w of winners) awardWin(w.id, payout, `won ${room.id} on ${room.map.name}`);
+    // The same moment feeds the trophy shelf and the lifetime tallies: one
+    // title per human — winners and losers alike — and the game's turn count
+    // for everyone who saw it end. House players fall through both filters:
+    // no profile ever existed for a bot id, so there is nothing to bump.
+    for (const [pid, t] of Object.entries(room.titles || {})) {
+      if (!room.player(pid)?.isBot) recordTitle(pid, t.title);
+    }
+    for (const p of room.players) {
+      if (!p.isBot) noteTurns(p.id, turns);
+    }
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
@@ -496,10 +557,13 @@ app.get('/api/admin/data', (req, res) => {
       node: process.version,
       sockets: io.engine?.clientsCount ?? 0,
       roomsByStatus,
+      webhook: webhookHealth(),
+      backup: backupInfo(),
       data: {
         ...dataFiles(),
         stats: fileInfo(STATS_FILE),
         audit: fileInfo(AUDIT_FILE),
+        webhook: fileInfo(WEBHOOK_HEALTH_FILE),
       },
     },
     config: {
@@ -514,6 +578,17 @@ app.get('/api/admin/data', (req, res) => {
 app.get('/admin', (req, res) => {
   if (!adminGuard(req, res)) return;
   res.type('html').send(adminPageHTML);
+});
+
+/**
+ * The whole data dir as one download — tar.gz where the box has tar (Render
+ * does), a JSON bundle where it doesn't. A GET, like the dashboard itself:
+ * it changes nothing, but taking a copy is still worth an audit line.
+ */
+app.get('/api/admin/backup', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  audit('backup', 'data-dir', 'downloaded a copy');
+  streamDataBackup(res, DATA_DIR);
 });
 
 // Admin actions arrive as POSTs carrying the key in the body, so a mutating
