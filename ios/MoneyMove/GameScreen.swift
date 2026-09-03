@@ -246,6 +246,23 @@ struct GameScreen: View {
         }
     }
 
+    /// How many lines have been said since anyone looked. A number rather than
+    /// a dot: "3" is an invitation to go and read three things, a dot is just
+    /// a smudge on a button.
+    @ViewBuilder private func unreadBadge(_ P: Palette) -> some View {
+        if store.unreadChat > 0 {
+            Text(store.unreadChat > 99 ? "99+" : "\(store.unreadChat)")
+                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.horizontal, store.unreadChat > 9 ? 5 : 0)
+                .frame(minWidth: 19, minHeight: 19)
+                .background(P.red, in: Capsule())
+                .overlay(Capsule().stroke(P.page, lineWidth: 2))
+                .transition(.scale.combined(with: .opacity))
+                .animation(.spring(duration: 0.28, bounce: 0.5), value: store.unreadChat)
+        }
+    }
+
     // MARK: - chat bubble
 
     /// The round chat button, floated bottom-right at thumb height — the
@@ -265,6 +282,7 @@ struct GameScreen: View {
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(P.accentInk)
             }
+            .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: 4, y: -3) }
         }
         .buttonStyle(.plain)
         .padding(.trailing, 14)
@@ -361,6 +379,7 @@ struct GameScreen: View {
 
             SoundToggle()
             iconButton("bubble.left.and.bubble.right.fill", P) { sheet = .chatLog(0) }
+                .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: 5, y: -4) }
             if store.state?.isPlaying == true {
                 iconButton("arrow.left.arrow.right", P) { sheet = .tradePicker(from: store.activeId, give: []) }
                 iconButton("building.columns.fill", P) { sheet = .properties }

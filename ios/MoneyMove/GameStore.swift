@@ -42,6 +42,20 @@ final class GameStore: ObservableObject {
     // MARK: - published state
 
     @Published var state: GameState?
+    /// Lines said since the chat was last looked at. The badge reads it, and
+    /// it is the whole point of the badge: a game where nobody notices the
+    /// chat is a game where nobody uses it.
+    @Published private(set) var unreadChat = 0
+    /// The last line this device has already heard. A push that redelivers the
+    /// same window — a reconnect, a resync — must not pop again for lines it
+    /// already sounded.
+    private var heardChatId: String?
+    /// Whether the first state of this table has been seen. Without it the
+    /// very first line said at a table is swallowed: an empty feed leaves
+    /// nothing to anchor on, so the line that breaks the silence looks like
+    /// the anchor rather than news. Caught on a simulator — three lines sent,
+    /// two counted.
+    private var chatPrimed = false
     @Published var meId: String = ""
     @Published var roomId: String?
     @Published var connection: SocketIOClient.Status = .disconnected
@@ -387,6 +401,8 @@ final class GameStore: ObservableObject {
                 return
             }
         }
+
+        noteChat()
 
         // Keep History's list of tables still waiting for this device honest.
         noteUnfinished(new)
@@ -822,6 +838,43 @@ final class GameStore: ObservableObject {
         guestTeamChat.append(contentsOf: fresh)
         // The server itself keeps 100 lines; there is nothing older to show.
         guestTeamChat = Array(guestTeamChat.suffix(100))
+        // Team lines reach a guest seat on its own socket rather than the main
+        // push, so they would otherwise arrive without a sound or a count.
+        noteChat()
+    }
+
+    /// A new line arrived, or several. Sound the ones this device did not say
+    /// and count them until somebody opens the chat.
+    ///
+    /// A chat line carries a name, not a player id, and a table cannot hold
+    /// two of the same name — so the name is what distinguishes your own voice
+    /// from everyone else's, pass & play seats included.
+    private func noteChat() {
+        let feed = chatFeed
+        guard chatPrimed else {
+            // First state of this table: whatever was already said is history,
+            // including nothing at all.
+            chatPrimed = true
+            heardChatId = feed.last?.id
+            return
+        }
+        guard let last = feed.last, last.id != heardChatId else { return }
+        // No anchor, or an anchor that has scrolled off the server's window:
+        // everything in hand is news.
+        let from = heardChatId.flatMap { h in feed.firstIndex { $0.id == h } }
+        let fresh = from.map { Array(feed[($0 + 1)...]) } ?? feed
+        heardChatId = last.id
+        let ownVoices = Set((state?.players ?? []).filter { isLocal($0.id) }.map(\.name))
+        let fromOthers = fresh.filter { !ownVoices.contains($0.name) }
+        guard !fromOthers.isEmpty else { return }
+        SoundKit.shared.pop()
+        unreadChat += fromOthers.count
+    }
+
+    /// The chat is on screen — everything in it counts as read.
+    func markChatRead() {
+        heardChatId = chatFeed.last?.id ?? heardChatId
+        if unreadChat != 0 { unreadChat = 0 }
     }
 
     /// Every chat line this device is entitled to read: the main push plus the
@@ -847,6 +900,9 @@ final class GameStore: ObservableObject {
         guests.forEach { $0.socket.close() }
         guests = []
         guestTeamChat = []
+        chatPrimed = false
+        heardChatId = nil
+        unreadChat = 0
         socket.close()
         mirror.forget()
         quickTask?.cancel()

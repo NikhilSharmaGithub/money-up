@@ -1351,6 +1351,7 @@ function goHome() {
   offersShown.clear();
   if (document.body.classList.contains('chat-open')) closeChatDock();
   chatSeen = 0;
+  heardChatId = null;
   resetBoard();
   showLanding();
 }
@@ -1488,10 +1489,40 @@ document.querySelector('#chatDockClose')?.addEventListener('click', () => {
 // to the game is the obvious thing to try.
 document.querySelector('#chatScrim')?.addEventListener('click', closeChatDock);
 
-/** Keep the unread count honest, and never leave the dock open in a lobby. */
+// The id of the last line this device has heard, so a push that carries the
+// same tail twice does not pop twice — and so a reconnect, which redelivers
+// the whole window, is silent.
+let heardChatId = null;
+
+/** Keep the unread count honest, and sound the ones that just arrived. */
 function syncChatDock(s) {
+  const feed = s?.chat || [];
+  const last = feed[feed.length - 1];
+  if (heardChatId === null) {
+    // First state of this table: whatever was already said is history, and
+    // none of it is unread either.
+    heardChatId = last?.id ?? '';
+    chatSeen = feed.length;
+  } else if (last && last.id !== heardChatId) {
+    const from = feed.findIndex((m) => m.id === heardChatId);
+    // No anchor, or one that has scrolled off the server's window: everything
+    // in hand is news.
+    const fresh = from >= 0 ? feed.slice(from + 1) : feed;
+    heardChatId = last.id;
+    // Your own line is not news to you. A chat line carries a name and not an
+    // id, and a table cannot hold two of the same name, so the name is enough.
+    // Pass & play on the web is a second window with its own identity, so
+    // this window has exactly one voice of its own to ignore.
+    const mine = myName();
+    if (fresh.some((m) => m.name !== mine)) sfx.pop();
+  }
   if (document.body.classList.contains('chat-open')) chatSeen = chatCount(s);
   paintChatBadge();
+}
+
+/** This window's own seat name. */
+function myName() {
+  return state?.players?.find((p) => p.id === meId)?.name || '';
 }
 
 // ---- chat channels (everyone / team) ------------------------------------

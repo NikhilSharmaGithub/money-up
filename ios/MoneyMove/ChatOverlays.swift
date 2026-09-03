@@ -84,6 +84,14 @@ struct ChatLogSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        // Open on the chat and it is read; open on the log and it is not, so
+        // the badge survives a trip to look at what happened last turn.
+        .onAppear { if tab == 0 { store.markChatRead() } }
+        .onChange(of: tab) { _, now in if now == 0 { store.markChatRead() } }
+        // Lines arriving while it is open are read as they land.
+        .onChange(of: store.unreadChat) { _, count in
+            if tab == 0, count > 0 { store.markChatRead() }
+        }
     }
 
     // MARK: chat

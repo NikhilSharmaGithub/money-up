@@ -112,6 +112,15 @@ final class SoundKit {
         tone(jitter(700), dur: 0.05, wave: .triangle, vol: 0.04, after: 0.004)
     }
 
+    /// Somebody spoke. A bubble, not a notification: a short round rise with a
+    /// breath of air on top and nothing metallic in it, quiet enough to hear
+    /// twenty times a game and still not mind.
+    func pop() {
+        tone(jitter(430, 0.03), to: 880, dur: 0.06, wave: .sine, vol: 0.11)
+        tone(jitter(1320, 0.02), dur: 0.035, wave: .sine, vol: 0.045, after: 0.028)
+        noise(dur: 0.02, vol: 0.03, bright: 0.8, after: 0.006)
+    }
+
     /// Real dice: a handful of sharp little clacks with irregular gaps and a
     /// soft settle at the end — not three even whooshes.
     func dice() {

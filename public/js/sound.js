@@ -83,6 +83,15 @@ export const sfx = {
   },
   hover: () => tone({ freq: jit(900), dur: 0.03, type: 'sine', vol: 0.035 }),
 
+  // Somebody spoke. A bubble, not a notification: a short round rise with a
+  // breath of air on top and nothing metallic in it, quiet enough to hear
+  // twenty times a game and still not mind.
+  pop: () => {
+    tone({ freq: jit(430, 0.03), to: 880, dur: 0.06, type: 'sine', vol: 0.11 });
+    tone({ freq: jit(1320, 0.02), dur: 0.035, at: 0.028, type: 'sine', vol: 0.045 });
+    noise({ dur: 0.02, from: 2600, to: 1400, q: 3, vol: 0.03, at: 0.006 });
+  },
+
   // Real dice: a handful of sharp clacks with irregular gaps, then a settle.
   dice: () => {
     let t = 0;
