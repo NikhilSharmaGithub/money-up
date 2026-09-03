@@ -6,6 +6,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
+import { sendTurnPush } from './push.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
@@ -775,6 +776,26 @@ function getRoom(id) {
   const room = new GameRoom(id, broadcast);
   // Walking out on a live table, or letting the clock run out, costs karma.
   room.hooks.karma = (token, delta) => bumpKarma(token, delta);
+  // "Your turn", for somebody who is not looking at the game.
+  //
+  // Only when every tab and every phone of theirs has gone: a player staring
+  // at the board does not need to be told whose turn it is, and a buzz for
+  // something already on screen is the fastest way to have notifications
+  // switched off for good. Bots and seats a bot is covering are nobody to
+  // notify. The sender is dark until APNs credentials exist — until then it
+  // says what it would have sent, in the log, which is how this call site can
+  // be watched working long before Apple is involved.
+  room.hooks.turn = (playerId, live) => {
+    const p = live.player(playerId);
+    // Not a house player, and not somebody who is out of the game. Being
+    // bot-covered is NOT a reason to stay quiet — that flag is set the moment
+    // a turn lands on someone who is away, which is the exact person this
+    // exists for. Guarding on it meant the nudge only ever fired for people
+    // already looking at the board, which is to say never.
+    if (!p || p.isBot || p.bankrupt) return;
+    if (seatsOf.get(id)?.get(playerId)?.size) return;
+    sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`);
+  };
   rooms.set(id, room);
   socketsOf.set(id, new Set());
   return room;

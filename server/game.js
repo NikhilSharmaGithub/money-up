@@ -767,6 +767,11 @@ export class GameRoom {
     clearTimeout(this.timers.turn);
     this.timers.turn = null;
     if (!this.turn) return;
+    // A turn has just begun. Whether anybody needs telling is not this file's
+    // business — the server knows which seats have a tab or a phone still
+    // attached, and this one only knows whose turn it is. Both places a turn
+    // starts come through here, which is why the hook hangs on this door.
+    if (this.status === 'playing') this.hooks.turn?.(this.turn.playerId, this);
     const seconds = Math.max(0, Math.floor(Number(this.settings.turnSeconds) || 0));
     const p = this.player(this.turn.playerId);
     if (this.status !== 'playing' || !seconds || !p) {
