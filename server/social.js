@@ -801,7 +801,11 @@ export function sendDM(token, rawCode, text) {
 }
 
 export function dmsWith(token, rawCode) {
-  const me = profileFor(token);
+  // Reading a thread must not mint a profile — the same rule walletOf and
+  // meView follow. This route was the hole in it: any GET with any token in
+  // the query string created a permanent player, so a crawler could write
+  // itself into the roster the owner reads as "new players today".
+  const me = token ? profiles.get(token) : null;
   const code = String(rawCode || '').trim().toUpperCase();
   if (!me) return { error: 'Unknown player' };
   if (!me.friends.includes(code)) return { error: 'You can only message friends' };

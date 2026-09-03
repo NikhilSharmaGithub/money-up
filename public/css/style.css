@@ -315,7 +315,7 @@ body::before {
 .mt { margin-top: 8px; }
 .empty { color: var(--ink-3); font-size: 13px; text-align: center; padding: 14px 6px; }
 .empty.small { padding: 8px; font-size: 12px; }
-.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+.row-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
 
 button, input, select, textarea { font-family: inherit; color: inherit; font-size: inherit; }
@@ -1676,7 +1676,17 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   .right-panel { overflow: visible; }
 }
 @media (max-width: 700px) {
-  .tile-name { font-size: 6.6px; -webkit-line-clamp: 3; line-height: 1.06; overflow-wrap: anywhere; }
+  /* A phone tile is about 26px across and 42px along, and three things are
+     stacked in it: the price, the name, the little drawing. Measured, the
+     name was being handed ten of those pixels and needed twenty-one, so
+     every two-line street came out cut mid-word — "Salvado", "Jerusale",
+     "Power Compa". Nothing here shrinks the name; it takes back the room
+     the padding, the gap, the price chip and the drawing were holding, and
+     then the name fits its three lines whole. */
+  .tile-name { font-size: 6.3px; -webkit-line-clamp: 3; line-height: 1.03; overflow-wrap: anywhere; }
+  .tile-body { gap: 2%; padding: 3% 2%; }
+  .tile-art { width: clamp(9px, 1.4vw, 29px); height: clamp(9px, 1.4vw, 29px); }
+  .tile-price { padding: 0 3px; }
   .tile-sub { display: none; }
   /* …except the pot, which is a live number worth the room it takes. */
   .tile-sub.has-pot { display: block; font-size: 7px; letter-spacing: 0; }
@@ -1690,7 +1700,7 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
      table there pushed the very Buy button it belongs to down over the tiles,
      and clipped the name of the street off the top — so the well keeps the
      name and the price, and the table stays one tap away on the tile. */
-  .center-panel { gap: 10px; }
+  .center-panel { gap: 10px; max-height: 100%; min-height: 0; overflow-y: auto; }
   .center-card .deed-rows { display: none; }
   .turn-banner-fly { top: 8%; }
   .tb-avatar { width: 25px; height: 25px; font-size: 12px; }
@@ -1704,6 +1714,10 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   .die { width: 48px; height: 48px; border-radius: 12px; padding: 7px; }
   .pip { width: 8px; height: 8px; }
   .center-action { width: 90%; }
+  /* The well in the middle of a phone board is about 225px wide. "Final
+     standings" and "Back to home" side by side needed three hundred, and the
+     second one hung a full inch off the right edge of the screen. */
+  .center-action .row-2 { grid-template-columns: 1fr; }
   .btn.big { padding: 12px 16px; font-size: 14.5px; }
   .trade-grid { grid-template-columns: 1fr; }
   .trade-arrow { transform: rotate(90deg); }
@@ -1719,8 +1733,30 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    and corner labels needed the clamp loosened rather than tightened. */
 
 .corner .tile-name { -webkit-line-clamp: 2; line-height: 1.22; }
+/* Two lines is right where a corner is wide; on a phone "Go to prison" needs
+   three, and the corner is the one tile with the height to spare. */
+@media (max-width: 700px) {
+  .corner .tile-name { -webkit-line-clamp: 3; line-height: 1.1; }
+}
 /* The corner art was crowding out the label underneath it. */
 .tile-art.huge { width: clamp(24px, 3.1vw, 52px); height: clamp(24px, 3.1vw, 52px); }
+/* The corner drawing was taking 24 of the tile's 40 pixels and leaving the
+   label twelve — one line short of "Go to prison". */
+@media (max-width: 700px) {
+  .tile-art.huge { width: clamp(18px, 3.1vw, 52px); height: clamp(18px, 3.1vw, 52px); }
+}
+
+/* The smallest phones still in the wild (a 320px SE) leave a tile barely 22px
+   across. The two utilities and the prison corner were the last three names
+   that would not fit; a hair off the type and the drawings gives them their
+   last line. Kept down here so it lands after the rules it has to beat. */
+@media (max-width: 560px) {
+  .tile-name { font-size: 5.9px; line-height: 1; }
+  .tile-art { width: clamp(6px, 1.2vw, 29px); height: clamp(6px, 1.2vw, 29px); }
+  .tile-art.huge { width: clamp(14px, 3.1vw, 52px); height: clamp(14px, 3.1vw, 52px); }
+  .tile-body { gap: 0; padding: 1% 2%; }
+  .tile-price { font-size: 5.4px; padding: 0 2px; }
+}
 .corner .tile-body { gap: 2%; padding: 4% 3%; }
 
 /* lobby centre */
@@ -2253,7 +2289,13 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 }
 .center-log .log-line { font-size: clamp(9px, .85vw, 12px); padding: 1px 0; background: none; }
 .center-log .log-line.turn { background: none; font-weight: 800; }
-.center-panel, .center-logo { position: relative; z-index: 1; }
+/* Both of these sit above the log written across the felt behind them. The
+   logo asked for that in the same breath as `position: relative`, which quietly
+   cancelled the `top: 2%` it was given up at .center-logo — so the watermark
+   stopped sitting at the top of the felt and fell into the middle of the
+   stack. It only needs the layer, not the positioning. */
+.center-panel { position: relative; z-index: 1; }
+.center-logo { z-index: 1; }
 /* The side panel keeps the full story on a desktop; on a phone the felt
    already carries it, so the duplicate below the board steps aside. */
 @media (max-width: 1024px) { .log-panel { display: none; } }

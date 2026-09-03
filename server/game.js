@@ -50,8 +50,17 @@ const SALARY = 200;
 /** Landing dead on START pays this instead of the passing salary. */
 const START_BONUS = 300;
 const MAX_JAIL_TURNS = 3;
-/** How long a disconnected player keeps their seat before a bot steps in. */
-const RECONNECT_GRACE_MS = 30000;
+/**
+ * How long a disconnected player keeps their seat. A bot covers their turns
+ * from the moment they drop, so this is not the table's patience — the table
+ * is already being played for. It is only how long before the chair is given
+ * up for good, and the things that take a player away for half a minute are
+ * ordinary: a phone locking, a tab going to sleep, wifi handing over to the
+ * mobile network. Thirty seconds of that used to cost somebody the whole
+ * game. Three minutes matches how long the room itself waits before it stops
+ * playing to an empty theatre.
+ */
+const RECONNECT_GRACE_MS = 3 * 60 * 1000;
 
 const moneyText = (n) => `$${Number(n).toLocaleString('en-US')}`;
 
@@ -259,6 +268,8 @@ export class GameRoom {
     p.botControlled = false;
     this.say(wasBot ? `${p.name} is back and takes over from the bot` : `${p.name} reconnected`, 'join');
     this.push();
+    // A table that froze when the last human left picks up where it stopped.
+    this.maybeBot();
     return true;
   }
 
@@ -481,9 +492,19 @@ export class GameRoom {
   holdSeat(p, ms) {
     this.awaiting ??= {};
     const seat = this.awaiting[p.id] ??= { grants: 0, granted: [] };
-    seat.until = Date.now() + ms;
     seat.granted = [];
     clearTimeout(this.timers[`grace:${p.id}`]);
+    // The clock exists so nobody is left waiting on an empty chair. With
+    // nobody else at the table there is no one to keep waiting — the same
+    // courtesy the shot clock already extends to a player alone with their
+    // own bots — so the seat simply stays theirs, and the room's own idle
+    // reaper decides when the table is over.
+    if (!this.votersFor(p.id).length) {
+      seat.until = null;
+      this.push();
+      return;
+    }
+    seat.until = Date.now() + ms;
     this.timers[`grace:${p.id}`] = setTimeout(() => this.seatRanOut(p.id), ms + 200);
     this.timers[`grace:${p.id}`].unref?.();
     this.push();
@@ -528,6 +549,10 @@ export class GameRoom {
   seatRanOut(id) {
     const p = this.player(id);
     if (!p || p.connected || p.bankrupt || this.status !== 'playing') return;
+    // A seat held without a deadline is one nobody is waiting on — it does not
+    // run out. Checked here as well as at the timer, so no other caller can
+    // take a game off somebody by walking in through this door.
+    if (this.awaiting?.[id] && !this.awaiting[id].until) return;
     delete this.awaiting?.[id];
     this.say(`${p.name} never came back`, 'leave');
     this.removeFromPlay(p, 'timeout');
@@ -2154,9 +2179,18 @@ export class GameRoom {
     this.timers.bot = setTimeout(() => this.runBot(), delay);
   }
 
+  /** Is there a human here to see any of this? */
+  get watched() {
+    return this.players.some((p) => !p.isBot && !p.bankrupt && p.connected);
+  }
+
   maybeBot() {
     const p = this.current;
     if (!p) return;
+    // With every human gone the game holds still. Playing on would burn a
+    // timer a second for an empty room, and worse, it would bankrupt the
+    // people who are trying to come back. Reconnecting starts it again.
+    if (!this.watched) return;
     if (this.autoPlayed(p)) this.scheduleBot(900);
   }
 
@@ -2177,6 +2211,8 @@ export class GameRoom {
 
   runBot() {
     if (this.status !== 'playing') return;
+    // Scheduled while somebody was still here; they have since gone.
+    if (!this.watched) return;
     const p = this.current;
     if (!this.autoPlayed(p)) return;
     const t = this.turn;

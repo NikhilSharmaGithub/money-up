@@ -1514,6 +1514,53 @@ console.log('\n▶ rematch');
   ok('rematch drops the departed and cleans the survivors');
 }
 
+console.log('\n▶ a seat somebody walked away from');
+{
+  // A player alone with the bots they added themselves has nobody waiting on
+  // them, so nothing should ever take their game away — half a minute of a
+  // locked screen used to cost them the lot.
+  const room = new GameRoom('solo', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'solo', name: 'Solo' });
+  room.addBot();
+  room.hostId = 'solo';
+  room.settings.randomizeOrder = false;
+  room.start('solo');
+  room.removePlayer('solo');
+  const seat = room.awaiting?.solo;
+  if (!seat) fail('a dropped player should still have their seat held');
+  else if (seat.until) fail('with nobody else at the table there should be no deadline at all');
+  if (room.timers['grace:solo']) fail('and no timer counting down to taking the seat away');
+  room.seatRanOut('solo');           // the old path, called outright
+  const p = room.player('solo');
+  if (!p || p.bankrupt || p.timedOut) fail('the seat must survive');
+  room.dispose();
+  ok('alone with your own bots, a dropped connection costs nothing');
+}
+{
+  // With somebody actually waiting, the clock still runs — and it is now long
+  // enough to survive a tunnel rather than a sneeze.
+  const room = new GameRoom('pair', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'a', name: 'Ana' });
+  room.addPlayer({ id: 'b', name: 'Bo' });
+  room.hostId = 'a';
+  room.settings.randomizeOrder = false;
+  room.start('a');
+  room.removePlayer('b');
+  const seat = room.awaiting?.b;
+  if (!seat?.until) fail('a table with someone left waiting still needs a deadline');
+  else {
+    const left = seat.until - Date.now();
+    if (left < 150000) fail(`the grace is back to a sneeze: ${Math.round(left / 1000)}s`);
+  }
+  // …and the table holds still rather than playing itself out to an empty room.
+  room.removePlayer('a');
+  if (room.watched) fail('nobody is here, so nothing should count as watching');
+  room.dispose();
+  ok('with someone waiting the clock runs, and an empty table stops playing');
+}
+
 console.log('\n▶ identity aliasing');
 {
   // The player id is the wallet key on the HTTP API, so the state a viewer

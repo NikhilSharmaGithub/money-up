@@ -1525,8 +1525,13 @@ function awaitCard(a, meId) {
 
 function paintAwaiting() {
   document.querySelectorAll('.aw-left').forEach((el) => {
-    const secs = Math.max(0, Math.ceil((Number(el.dataset.until) - Date.now()) / 1000));
-    el.textContent = secs ? `Seat goes back to the board in ${clockText(secs)}` : 'Letting the seat go…';
+    const until = Number(el.dataset.until) || 0;
+    const secs = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    // No deadline at all means the table is waiting as long as it takes —
+    // there is nobody here being kept waiting by the empty chair.
+    el.textContent = !until ? 'Their seat is being held'
+      : secs ? `Seat goes back to the board in ${clockText(secs)}`
+      : 'Letting the seat go…';
     el.classList.toggle('urgent', secs > 0 && secs <= 10);
   });
 }
