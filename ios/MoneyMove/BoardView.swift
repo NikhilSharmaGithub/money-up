@@ -384,6 +384,14 @@ struct TileView: View {
                 Text("PRISON").font(.system(size: 8.5, weight: .heavy)).foregroundStyle(P.ink3)
             case "vacation":
                 Art.icon(.island, size: 21)
+                // What is waiting there, on the tile that pays it out.
+                if store.state?.settings.vacationCash == true,
+                   let pot = store.state?.vacationPot, pot > 0 {
+                    Text(money(pot))
+                        .font(.system(size: 8.5, weight: .black, design: .rounded))
+                        .foregroundStyle(P.good)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
             case "gotoprison":
                 // The sentence, not the cell — the cell is the prison corner,
                 // and two police caps on one board would read as the same tile.

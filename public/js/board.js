@@ -113,7 +113,7 @@ function tileMarkup(tile, groups) {
       break;
     case 'vacation':
       body = `${art(ART.vacation, 'huge')}<span class="tile-name">Vacation</span>
-              <span class="tile-sub">skip a turn</span>`;
+              <span class="tile-sub vac-sub">skip a turn</span>`;
       break;
     case 'gotoprison':
       body = `${art(ART.gotoprison, 'huge')}<span class="tile-name">Go to prison</span>`;
@@ -145,6 +145,19 @@ export function resetSetTracking() { completedSets.clear(); setsSeeded = false; 
 export function patchBoard(state) {
   const { ownership, players } = state;
   const owners = new Map(players.map((p) => [p.id, p]));
+
+  // The pot rides on the tile it pays out from — you should be able to see
+  // what landing there is worth without hunting for a panel.
+  const vacIdx = state.map.tiles.findIndex((t) => t.type === 'vacation');
+  const vacSub = vacIdx >= 0 ? tileEls[vacIdx]?.querySelector('.vac-sub') : null;
+  if (vacSub) {
+    const pot = state.settings?.vacationCash ? (state.vacationPot || 0) : 0;
+    const text = pot > 0 ? `$${pot.toLocaleString('en-US')} on hold` : 'skip a turn';
+    if (vacSub.textContent !== text) {
+      vacSub.textContent = text;
+      vacSub.classList.toggle('has-pot', pot > 0);
+    }
+  }
 
   // which colour groups are fully owned right now, and by whom
   const nowComplete = new Map();

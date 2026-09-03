@@ -1403,9 +1403,20 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 @media (max-width: 1024px) {
   html, body { overflow: auto; }
   .app { grid-template-columns: 1fr; height: auto; }
+  /* One column phone reading order: the brand and its controls at the top
+     where a header belongs, the board, then the table's talk — log and chat
+     sit under the board the way the app keeps them near the felt — and the
+     seats, settings and invite below. `display: contents` lets the left
+     column's children take their own places in the page instead of riding
+     to the bottom as one block. */
+  .col.left { display: contents; }
+  .brand { order: 0; padding: 2px 6px 0; }
   .col.center { order: 1; }
-  .col.right  { order: 2; }
-  .col.left   { order: 3; }
+  /* Inviting is the whole point of a lobby, so the link sits with the board. */
+  .share      { order: 2; }
+  .log-panel  { order: 3; }
+  .chat-panel { order: 4; }
+  .col.right  { order: 5; }
   .board-wrap { width: min(96vw, 640px); margin: 0 auto; }
   .log-panel, .chat-panel { max-height: 250px; }
   .right-panel { overflow: visible; }
@@ -1413,6 +1424,8 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 @media (max-width: 700px) {
   .tile-name { font-size: 6.6px; -webkit-line-clamp: 3; line-height: 1.06; overflow-wrap: anywhere; }
   .tile-sub { display: none; }
+  /* …except the pot, which is a live number worth the room it takes. */
+  .tile-sub.has-pot { display: block; font-size: 7px; letter-spacing: 0; }
   .corner .tile-name { font-size: 7.5px; }
   .board { gap: 2px; padding: 3px; border-radius: 12px; }
   .tile { --tile-r: 5px; }
@@ -1575,7 +1588,11 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 
 @media (max-width: 1024px) {
   body.focus-board .app { grid-template-columns: 1fr; }
-  body.focus-board .col.left { display: none; }
+  /* Focus mode hides the talk, but never the header it is toggled from. */
+  body.focus-board .col.left { display: contents; }
+  body.focus-board .log-panel,
+  body.focus-board .chat-panel,
+  body.focus-board .share { display: none; }
 }
 
 /* ── landing: wallet row, karma and the name dice ── */
@@ -1955,3 +1972,6 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .help-ico { flex: none; margin-top: 1px; color: var(--red-ink); }
 .help-row > div b { display: block; font-size: 13.5px; font-weight: 850; margin-bottom: 2px; }
 .help-row > div span { font-size: 12px; color: var(--ink-2); line-height: 1.5; }
+
+/* The vacation pot, worn on the tile that pays it. */
+.tile-sub.has-pot { color: var(--good); font-weight: 800; letter-spacing: 0; }

@@ -392,10 +392,11 @@ function recordTransitions(room) {
   }
   if (room.status === 'ended' && prev === 'playing') {
     stats.gamesEnded++;
-    // Winning pays: 50 coins for a quick game, 100 once it went the distance.
+    // Winning pays two coins — a token, not a wage. The store is stocked
+    // from the daily visit and the shop; a win is bragging rights.
     // Team games pay every human on the winning side.
     const turns = room.turnCount || 0;
-    const payout = turns >= 40 ? 100 : 50;
+    const payout = turns >= 40 ? 3 : 2;
     const winners = room.winningTeam != null
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
