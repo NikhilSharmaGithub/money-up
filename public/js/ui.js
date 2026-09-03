@@ -1286,7 +1286,7 @@ export function renderCenter(state, meId, actions) {
       actionEl.dataset.mode = waitMode;
       if (wasMode !== waitMode) {
         actionEl.innerHTML = `${deckMarkup('idle')}
-          <div class="quick-search"><span class="pulse-dot"></span> Finding players…</div>
+          <div class="quick-search"><span class="pulse-dot"></span> <b id="quickPhase">Finding players…</b></div>
           <div class="quick-count">Starting in <b id="quickCount">…</b></div>
           ${tableTalkHTML()}`;
       }
@@ -1520,6 +1520,14 @@ function paintQuickCountdown() {
   if (!el) return; // the searching state isn't on screen
   const secs = quickEndsAt ? Math.max(0, Math.ceil((quickEndsAt - Date.now()) / 1000)) : 0;
   el.textContent = secs ? `${secs}s` : 'a moment';
+  // The table spends most of the fuse actually looking for people, and only
+  // the last few seconds filling the chairs nobody took. Saying which is
+  // happening is the difference between "nobody came" and "it lied to me".
+  const phase = document.getElementById('quickPhase');
+  if (phase) {
+    const next = secs > 5 ? 'Finding players…' : 'Filling the table…';
+    if (phase.textContent !== next) phase.textContent = next;
+  }
 }
 
 function syncQuickCountdown(endsAt) {

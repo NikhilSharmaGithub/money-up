@@ -201,7 +201,7 @@ export class GameRoom {
     if (this.quick && !isBot && this.status === 'lobby') {
       // A person sat down: relight a burnt-out fuse if need be, and replan
       // the house arrivals around the seats that are actually left.
-      if (!this.quickStartAt) this.armQuickStart(20);
+      if (!this.quickStartAt) this.armQuickStart(GameRoom.QUICK_FUSE_SECONDS);
       else this.planQuickFill();
     }
     this.push();
@@ -672,7 +672,18 @@ export class GameRoom {
    * fuse. Whoever is queueing right now plays together; the fuse is what stops
    * a lone player staring at an empty lobby.
    */
-  makeQuickMatch(seconds = 20) {
+  /**
+   * How long a quick table looks for people before it stops looking.
+   * Fifteen seconds of that is the search itself, and only the last five are
+   * spent filling the empty chairs with house players — a person who arrives
+   * on second nine should find a table of people, not one already padded out.
+   */
+  static get QUICK_FUSE_SECONDS() { return 15; }
+
+  /** The stretch at the end of the fuse in which house players may arrive. */
+  static get QUICK_BOT_WINDOW_MS() { return 5000; }
+
+  makeQuickMatch(seconds = GameRoom.QUICK_FUSE_SECONDS) {
     this.quick = true;
     this.settings.isPrivate = false;
     this.settings.allowBots = true;
@@ -691,11 +702,15 @@ export class GameRoom {
   }
 
   /**
-   * Seat the house players one at a time, the way a real lobby fills: each
-   * arrival lands 1.5–7 seconds after the last, squeezed tighter when the
-   * fuse is nearly burnt, and always ahead of kick-off. Called whenever the
-   * picture changes — fuse armed, person in, person out — and reschedules
-   * every pending arrival from scratch.
+   * Seat the house players one at a time, the way a real lobby fills — but
+   * not before the search has had its run. The first ten seconds of the fuse
+   * belong to whoever else is queueing; only in the last five does the house
+   * start taking the chairs nobody claimed, spread across that window with
+   * enough jitter that they don't arrive on a metronome.
+   *
+   * Called whenever the picture changes — fuse armed, person in, person out —
+   * and reschedules every pending arrival from scratch, so a real player
+   * landing at second nine pushes the house back out of the way.
    */
   planQuickFill() {
     for (const k of Object.keys(this.timers)) {
@@ -709,12 +724,19 @@ export class GameRoom {
     const seats = this.settings.maxPlayers - this.players.length;
     if (seats <= 0) return;
     // The table is guaranteed full by kick-off regardless — start() tops up
-    // any seat still empty — the margin just keeps the joins visibly ahead.
-    const window = Math.max(0, this.quickStartAt - Date.now() - 1200);
-    let at = 0;
+    // any seat still empty — so this is only about the last few seconds being
+    // visibly a table filling up rather than a table that was always full.
+    const untilStart = this.quickStartAt - Date.now();
+    const opens = Math.max(0, untilStart - GameRoom.QUICK_BOT_WINDOW_MS);
+    // …and the last arrival still has to land before the deal.
+    const closes = Math.max(opens, untilStart - 900);
+    const span = closes - opens;
     for (let i = 0; i < seats; i++) {
-      const cap = Math.min(7000, Math.max(1500, (window - at) / (seats - i)));
-      at = Math.min(at + 1500 + Math.random() * Math.max(0, cap - 1500), window);
+      // Evenly through the window, nudged either way so two seats never fill
+      // on the same beat.
+      const slot = span * ((i + 0.5) / seats);
+      const jitter = (Math.random() - 0.5) * (span / seats) * 0.7;
+      const at = opens + Math.max(0, Math.min(span, slot + jitter));
       const key = `quickSeat:${i}`;
       this.timers[key] = setTimeout(() => {
         delete this.timers[key];

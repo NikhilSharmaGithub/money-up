@@ -799,7 +799,7 @@ function quickMatchRoom() {
     return room;
   }
   const room = getRoom(newRoomId());
-  room.makeQuickMatch(20);
+  room.makeQuickMatch();
   return room;
 }
 
