@@ -233,8 +233,20 @@ struct DailyRewardCard: View {
     /// left awake past midnight would otherwise sit on a countdown that has
     /// run out — the coins are waiting and the card is the last to know.
     private func watch() async {
+        var misses = 0
         while !Task.isCancelled {
-            await load()
+            guard await load() else {
+                // Launch fires half a dozen requests at once and one of them
+                // losing is ordinary. Staying silent is right; staying silent
+                // all evening over a single dropped read is not — so ask again
+                // a few times, then stop rather than pester a server that is
+                // plainly down. Coming back from the background asks afresh.
+                misses += 1
+                guard misses <= 4 else { return }
+                try? await Task.sleep(for: .seconds(Double(misses) * 5))
+                continue
+            }
+            misses = 0
             // Only a spent day has a deadline. A claimable one has a button on
             // it already and nothing left to wait for.
             guard daily?.claimable == false, let next = daily?.nextDate else { return }
@@ -248,15 +260,19 @@ struct DailyRewardCard: View {
         }
     }
 
-    private func load() async {
+    /// Answers whether the server actually said anything, so the caller above
+    /// can tell "nothing to show" from "nobody picked up".
+    @discardableResult
+    private func load() async -> Bool {
         // The GET carries a query string, and fetchJSON's normal path builder
         // percent-encodes the "?" — raw mode glues it on instead.
         let fresh: DailyState? = try? await store.fetchJSON(
             "/api/daily?token=\(store.token)", raw: true)
-        guard let fresh else { return }
+        guard let fresh else { return false }
         // A celebration on screen owns the card until it has finished playing;
         // a background refresh must not yank it away mid-count.
         if celebrating == nil { daily = fresh }
+        return true
     }
 
     private func claim() async {

@@ -219,8 +219,12 @@ function countCoinChip(from, to) {
 // a countdown to the next lot. An unknown player and a sleeping server both
 // leave the landing exactly as they found it — this is a gift, not a nag.
 let dailyClock = null;
+// How many times running the countdown has run out while the server still says
+// "claimed today" — a device whose clock leads the server's, not a new day.
+let dailyLate = 0;
 
 function stopDailyClock() {
+  clearTimeout(dailyClock);
   clearInterval(dailyClock);
   dailyClock = null;
 }
@@ -238,7 +242,7 @@ function paintDaily(d) {
   if (!card) return;
   stopDailyClock();
   // Nothing collectable and nothing to count down to: stay out of the way.
-  if (!d || (!d.claimable && !d.nextAt)) { card.classList.add('hidden'); return; }
+  if (!d || (!d.claimable && !d.nextAt)) { card.classList.add('hidden'); dailyLate = 0; return; }
 
   const streak = Number(d.streak) || 0;
   const amount = Number(d.amount) || 0;
@@ -265,25 +269,41 @@ function paintDaily(d) {
         <span class="dc-mark quiet">${icon('snooze', 22, 'solo')}</span>
         <div class="dc-body">
           <div class="dc-title">Back tomorrow</div>
-          <div class="dc-sub">${amount} more coins in <b id="dailyClock">${untilText(d.nextAt)}</b></div>
+          <!-- Tomorrow's payout climbs with the streak, and only the server
+               knows by how much. Until it has said, the line promises coins
+               without naming a figure rather than naming the wrong one. -->
+          <div class="dc-sub">${amount > 0 ? `${amount} more` : 'More'} coins in
+            <b id="dailyClock">${untilText(d.nextAt)}</b></div>
         </div>
         ${streakChip}
       </div>`;
   card.classList.remove('hidden');
 
   if (d.claimable) {
+    dailyLate = 0;
     $('#dailyBtn').onclick = claimDaily;
     return;
   }
   // Midnight is a real deadline, so the card counts down to it rather than
   // showing whatever the gap happened to be when the page loaded.
-  dailyClock = setInterval(() => {
-    const el = $('#dailyClock');
-    if (!el) return stopDailyClock();
-    if (d.nextAt - Date.now() <= 0) { stopDailyClock(); return refreshDaily(); }
-    el.textContent = untilText(d.nextAt);
-    return undefined;
-  }, 1000);
+  if (d.nextAt - Date.now() > 0) {
+    dailyLate = 0;
+    dailyClock = setInterval(() => {
+      const el = $('#dailyClock');
+      if (!el) return stopDailyClock();
+      if (d.nextAt - Date.now() <= 0) { stopDailyClock(); return refreshDaily(); }
+      el.textContent = untilText(d.nextAt);
+      return undefined;
+    }, 1000);
+    return;
+  }
+  // The clock has run out and the server still says today: this device is
+  // ahead of it, not into tomorrow. Asking again on the second would poll for
+  // as long as the two disagree, so each attempt waits twice as long as the
+  // last — a minute at worst, and no clock a phone actually carries is
+  // anywhere near that far out.
+  dailyLate = Math.min(dailyLate + 1, 6);
+  dailyClock = setTimeout(refreshDaily, 1000 * 2 ** dailyLate);
 }
 
 function refreshDaily() {
@@ -303,9 +323,11 @@ async function claimDaily() {
       body: JSON.stringify({ token }),
     });
     const out = await res.json();
-    // 409 is an eager client, not a broken one — the card just catches up.
+    // 409 is an eager client, not a broken one — the card just catches up. The
+    // refusal carries no figure for tomorrow, so the card asks for one rather
+    // than printing the nothing it was handed.
     if (!res.ok || !out.ok) {
-      if (res.status === 409) paintDaily({ claimable: false, streak: out.streak, amount: 0, nextAt: out.nextAt });
+      if (res.status === 409) { paintDaily({ claimable: false, streak: out.streak, nextAt: out.nextAt }); refreshDaily(); }
       else toast(out.error || 'Could not collect today\'s coins', 'error');
       return;
     }
@@ -315,11 +337,12 @@ async function claimDaily() {
     toast(out.streak > 1
       ? `+${out.amount} coins — ${out.streak} days in a row`
       : `+${out.amount} coins collected`);
-    // The card flips the moment the coins land, carrying today's figure — the
-    // streak makes tomorrow's payout bigger, and only the server knows by how
-    // much, so the read behind the count-up corrects it. Same trip refreshes
-    // the wallet, since the claim moved the karma chip's neighbour.
-    paintDaily({ claimable: false, streak: out.streak, amount: out.amount, nextAt: out.nextAt });
+    // The card flips the moment the coins land, but without a figure on it:
+    // the claim only reports what today paid, and today's streak has already
+    // made tomorrow worth more. The read behind the count-up fills the number
+    // in. Same trip refreshes the wallet, since the claim moved the karma
+    // chip's neighbour.
+    paintDaily({ claimable: false, streak: out.streak, nextAt: out.nextAt });
     setTimeout(() => { refreshWallet(); refreshDaily(); }, 900);
   } catch {
     toast('Could not reach the server — try again in a moment', 'error');
@@ -1393,6 +1416,17 @@ paintFocus();
 const THEME_KEY = 'moneymove:theme';
 const readTheme = () => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
 
+/**
+ * The browser's own chrome — the status bar on a phone, the tab strip on a
+ * desktop — wearing the table the player picked. Theme and palette both move
+ * it, so it is read back off the page rather than kept in a second list here.
+ */
+function paintThemeColour() {
+  const tag = $('#themeColor');
+  const page = getComputedStyle(document.documentElement).getPropertyValue('--page').trim();
+  if (tag && page) tag.setAttribute('content', page);
+}
+
 function paintThemeButtons() {
   const dark = readTheme() === 'dark';
   document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => {
@@ -1407,11 +1441,13 @@ function toggleTheme() {
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode */ }
   paintThemeButtons();
+  paintThemeColour();
   sfx.click();
 }
 
 document.querySelectorAll('#themeBtn, #themeBtnLanding').forEach((b) => { b.onclick = toggleTheme; });
 paintThemeButtons();
+paintThemeColour();
 
 // ---- table styles (7 palettes, each with its own light + dark) ----------
 const PALETTE_KEY = 'moneymove:palette';
@@ -1444,6 +1480,7 @@ paletteBar.querySelectorAll('.pswatch').forEach((b) => {
     else document.documentElement.dataset.palette = id;
     try { localStorage.setItem(PALETTE_KEY, id); } catch { /* private mode */ }
     paintPaletteBar();
+    paintThemeColour();
     sfx.click();
   };
 });
@@ -1470,6 +1507,7 @@ window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change',
   if (saved) return;
   document.documentElement.dataset.theme = e.matches ? 'dark' : 'light'; // e is the dark query
   paintThemeButtons();
+  paintThemeColour();
 });
 
 const soundBtn = $('#soundBtn');

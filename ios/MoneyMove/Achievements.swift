@@ -145,10 +145,16 @@ struct AchievementsShelf: View {
     }
 
     private func load() async {
-        // The query string means raw mode — fetchJSON's normal path builder
-        // percent-encodes the "?".
-        let fresh: AchievementsInfo? = try? await store.fetchJSON(
-            "/api/achievements?token=\(store.token)", raw: true)
-        if let fresh { info = fresh }
+        // Asked more than once on purpose: this is the only read the shelf ever
+        // makes, so one dropped request would empty it until the app restarts.
+        for attempt in 1...4 {
+            // The query string means raw mode — fetchJSON's normal path builder
+            // percent-encodes the "?".
+            let fresh: AchievementsInfo? = try? await store.fetchJSON(
+                "/api/achievements?token=\(store.token)", raw: true)
+            if let fresh { info = fresh; return }
+            if Task.isCancelled { return }
+            try? await Task.sleep(for: .seconds(Double(attempt) * 5))
+        }
     }
 }

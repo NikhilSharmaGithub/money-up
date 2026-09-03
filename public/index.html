@@ -3,10 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<!-- The browser chrome takes the table's own colour: ivory linen by day, felt
-     after dark. The single purple value here predated both palettes. -->
-<meta name="theme-color" content="#efe9dc" media="(prefers-color-scheme: light)" />
-<meta name="theme-color" content="#0c1310" media="(prefers-color-scheme: dark)" />
+<!-- The browser chrome takes the table's own colour. There are fourteen of them
+     — seven palettes, each with a light and a dark — and which one is on is a
+     choice kept in this browser's storage, so a media query here could only
+     ever guess at two. app.js keeps this tag on whatever --page currently is;
+     the value below is just what shows in the moment before it runs, and
+     matches the dark table the pre-paint script below defaults to. -->
+<meta name="theme-color" id="themeColor" content="#0c1310" />
 <title>MoneyMove — online property trading game</title>
 <meta name="description" content="Buy streets, build hotels and bankrupt your friends. Free, no sign-up, up to 8 players across 19 boards." />
 

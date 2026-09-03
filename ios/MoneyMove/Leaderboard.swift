@@ -89,10 +89,17 @@ struct LeaderboardCard: View {
 
     private func load() async {
         struct Board: Decodable { var top: [LeaderboardEntry]? }
-        let board: Board? = try? await store.fetchJSON("/api/leaderboard")
-        // A failed read keeps whatever is on screen — blanking the board on a
-        // blip reads as everybody's wins having been wiped.
-        if let fresh = board?.top { top = fresh }
+        // Asked more than once on purpose. This is the only read the card ever
+        // makes, and a launch fires half a dozen at once — one of them losing
+        // would otherwise hide the whole board until the app is restarted.
+        for attempt in 1...4 {
+            let board: Board? = try? await store.fetchJSON("/api/leaderboard")
+            // A failed read keeps whatever is on screen — blanking the board on
+            // a blip reads as everybody's wins having been wiped.
+            if let fresh = board?.top { top = fresh; return }
+            if Task.isCancelled { return }
+            try? await Task.sleep(for: .seconds(Double(attempt) * 5))
+        }
     }
 }
 
