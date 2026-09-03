@@ -10,3 +10,11 @@ ios/DerivedData/
 xcuserdata/
 design/moneymove-ios.html
 data/stats.json
+
+# Runtime state, beside the server rather than in it: the wallets, the ledger
+# every payout is written in, and the key that signs rewarded-ad tickets.
+# social.json and stats.json were already named one at a time; the day ads.json
+# arrived, a list of filenames stopped being the safe way to write this.
+data/*
+!data/*.md
+!data/*.mjs

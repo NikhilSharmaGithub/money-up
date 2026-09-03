@@ -3,8 +3,9 @@
 // Run with `npm test`.
 
 import { GameRoom } from '../server/game.js';
-import { MAPS, generateRandomMap } from '../server/maps.js';
+import { MAPS, generateRandomMap, GROUPS } from '../server/maps.js';
 import { TEAMS } from '../server/game.js';
+import { diff, applyPatch, snapshot, feedTail, applyFeed, RESYNC } from '../server/delta.js';
 
 let failures = 0;
 const seen = new Set();
@@ -1611,6 +1612,342 @@ console.log('\n▶ identity aliasing');
   if (guestView.players.some((p) => p.id === 'tok-rival')) fail('a rival token must still be aliased for the family');
   room.dispose();
   ok('a pass & play family sees itself, and only itself, unmasked');
+}
+
+console.log('\n▶ state deltas');
+
+// Key order is nobody's promise, and JSON drops an undefined on the way out,
+// so "the same state" is judged canonically here rather than by stringify.
+const canon = (v) => {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  const ks = Object.keys(v).filter((k) => v[k] !== undefined).sort();
+  return `{${ks.map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;
+};
+
+// An independent deep comparison for the hot path, deliberately not
+// delta.js's own equal() — that is the thing under test. Identical references
+// are identical values, which is what makes checking every push affordable:
+// the branches a patch never touched are shared, not copied.
+const same = (a, b) => {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((x, i) => same(x, b[i]));
+  const ka = Object.keys(a).filter((k) => a[k] !== undefined);
+  const kb = Object.keys(b).filter((k) => b[k] !== undefined);
+  return ka.length === kb.length && ka.every((k) => same(a[k], b[k]));
+};
+
+// The keys index.js lets ride by reference — module constants and the two
+// write-once feeds. Everything else gets frozen before it is diffed against.
+const SHARED = new Set(['map', 'groups', 'teamInfo', 'log', 'chat']);
+
+/** The per-viewer cut a socket actually receives, team-chat filter and all. */
+const viewOf = (room, held, base) => {
+  const s = room.serializeFor(held, base);
+  if (!s.chat.some((m) => m.channel === 'team')) return s;
+  const teams = new Set();
+  for (const id of held) {
+    const t = room.player(id)?.team;
+    if (t != null) teams.add(t);
+  }
+  return { ...s, chat: s.chat.filter((m) => m.channel !== 'team' || teams.has(m.team)) };
+};
+
+{
+  const trip = (label, prev, next) => {
+    const patch = diff(prev, next);
+    if (canon(applyPatch(prev, patch)) !== canon(next)) fail(`delta: ${label} lost something on the round trip`);
+    return patch;
+  };
+
+  trip('a scalar moves', { money: 1500 }, { money: 1300 });
+  trip('a nested object', { turn: { phase: 'roll', dice: null } }, { turn: { phase: 'action', dice: [3, 4] } });
+  trip('a key vanishes', { turn: { a: 1, b: 2 } }, { turn: { a: 1 } });
+  trip('a key arrives', { turn: { a: 1 } }, { turn: { a: 1, b: 2 } });
+  trip('an object becomes null', { turn: { phase: 'end' } }, { turn: null });
+  trip('null becomes an object', { auction: null }, { auction: { tile: 5, bid: 10, inRace: ['a'] } });
+  trip('an array is replaced whole', { order: [1, 2, 3] }, { order: [3, 2, 1] });
+  trip('an array empties', { trades: [{ id: 'a' }] }, { trades: [] });
+  trip('an array of objects grows', { moves: [] }, { moves: [{ playerId: 'a', to: 3 }] });
+  trip('an object becomes an array', { x: { 0: 'a' } }, { x: ['a'] });
+  trip('a number becomes a string', { v: 1 }, { v: '1' });
+  trip('a map key is deleted', { ownership: { 1: { o: 'a' }, 5: { o: 'b' } } }, { ownership: { 5: { o: 'b' } } });
+  trip('a map key is added', { ownership: {} }, { ownership: { 3: { o: 'a', houses: 0 } } });
+  trip('undefined counts as absent', { a: 1, b: undefined }, { a: 1 });
+  trip('going undefined is going away', { a: 1, b: 2 }, { a: 1, b: undefined });
+  trip('deep nesting', { a: { b: { c: { d: 1 } } } }, { a: { b: { c: { d: 2 } } } });
+  trip('the root is replaced', { a: 1 }, null);
+  trip('the root arrives', null, { a: 1 });
+  trip('an empty object', {}, {});
+
+  if (diff({ a: 1, b: [1, 2, { c: 3 }] }, { a: 1, b: [1, 2, { c: 3 }] })) {
+    fail('delta: a state that did not move should produce no patch at all');
+  }
+  const dropped = diff({ a: 1, b: 2 }, { a: 1 });
+  if (!dropped?.d?.includes('b')) fail('delta: a deletion has to be spelled out in the patch');
+  const gone = diff({ a: 1, b: 2 }, { a: 1, b: undefined });
+  if (!gone?.d?.includes('b')) fail('delta: a key going undefined has to read as a deletion');
+
+  // The whole point: the furniture must not be in the envelope. One coin
+  // moving on a state carrying a board should cost a few dozen bytes, not
+  // the board again.
+  const board = { tiles: Array.from({ length: 40 }, (_, i) => ({ i, name: `Tile ${i}`, rent: [1, 2, 3, 4, 5, 6] })) };
+  const before = { map: board, groups: { a: [1, 2] }, players: [{ id: 'p', money: 1500 }] };
+  const after = { ...before, players: [{ id: 'p', money: 1300 }] };
+  const small = JSON.stringify(diff(before, after)).length;
+  if (small > 80) fail(`delta: a one-field change dragged ${small} bytes along with it`);
+  if (JSON.stringify(before).length < 1000) fail('setup: that board was meant to be bulky');
+
+  ok(`round trips hold across 19 shapes, and a coin moving costs ${small} bytes on a ${JSON.stringify(before).length}-byte state`);
+}
+
+{
+  // The freeze earns its keep here. The room edits its own settings object in
+  // place, so a remembered state that shared the reference would show the new
+  // value on both sides of the diff — and the change would never ship.
+  const room = new GameRoom('freeze', () => {});
+  room.map = MAPS.classic;
+  room.addPlayer({ id: 'host-token', name: 'H' });
+  room.hostId = 'host-token';
+  const live = room.serialize();
+  const frozen = snapshot(room.serialize(), SHARED);
+  room.updateSettings('host-token', { startingCash: 999 });
+  if (live.settings.startingCash !== 999) fail('delta: settings were meant to be shared by reference');
+  if (frozen.settings.startingCash === 999) fail('delta: the frozen base followed the room into the future');
+  if (diff(frozen, snapshot(room.serialize(), SHARED))?.p?.settings?.s?.startingCash !== 999) {
+    fail('delta: an in-place settings edit never reached a patch');
+  }
+
+  // The board rides by reference because it never changes — except when it
+  // does, and then it has to show.
+  const ids = Object.keys(MAPS);
+  const beforeMap = snapshot(room.serialize(), SHARED);
+  if (diff(beforeMap, snapshot(room.serialize(), SHARED))) fail('delta: a still room should produce no patch');
+  room.map = MAPS[ids[0]] === room.map ? MAPS[ids[1]] : MAPS[ids[0]];
+  if (!diff(beforeMap, snapshot(room.serialize(), SHARED))?.p?.map) fail('delta: swapping boards must still show up');
+  room.dispose();
+
+  // The group table rides by reference too, which only holds while it is
+  // finished being written at import time — generating boards must not add to it.
+  const groupsBefore = Object.keys(GROUPS).length;
+  for (let i = 0; i < 5; i++) generateRandomMap();
+  if (Object.keys(GROUPS).length !== groupsBefore) {
+    fail('delta: the group table grew after load — it can no longer ride by reference');
+  }
+  ok('the frozen base catches in-place edits, and shares only what truly never moves');
+}
+
+{
+  // Now the real thing: a full game, every push, three viewpoints — two
+  // seats and a spectator — with the client half rebuilt from patches alone
+  // and checked against the state a full push would have delivered.
+  const seen = {
+    turnNull: 0, auctionEnd: 0, bankrupt: 0, tradeOpen: 0, tradeClear: 0,
+    tileFreed: 0, reveal: 0, logTail: 0, chatTail: 0, resync: 0, trimmed: 0,
+  };
+  let fullBytes = 0; let patchBytes = 0; let pushes = 0; let patches = 0; let fulls = 0;
+
+  const makeViewer = (name, held) => ({ name, held, server: null, client: null, cv: -1 });
+
+  // Tally the awkward moments, so a green run can prove it saw them. Only
+  // the first viewpoint counts, or every moment would be counted three times.
+  let watched = null;
+  const note = (v, state, patch) => {
+    if (v !== watched) return;
+    if (state.turn === null) seen.turnNull++;
+    if (patch?.s && 'auction' in patch.s && patch.s.auction === null) seen.auctionEnd++;
+    if (patch?.p?.ownership?.d?.length) seen.tileFreed++;
+    if (state.players.some((p) => p.bankrupt)) seen.bankrupt++;
+    if (patch?.s?.trades?.length) seen.tradeOpen++;
+    if (patch?.s?.trades && patch.s.trades.length === 0) seen.tradeClear++;
+    if (state.history.length) seen.reveal++;
+  };
+
+  function deliver(room, viewers) {
+    watched ??= viewers[0];
+    pushes++;
+    const base = snapshot(room.serialize(), SHARED);
+    for (const v of viewers) {
+      const state = viewOf(room, v.held, base);
+      // What today costs: the whole state, to every viewer, every push.
+      fullBytes += JSON.stringify(state).length;
+      const { log, chat, ...lean } = state;
+      const wholeThing = (why) => {
+        patchBytes += JSON.stringify(state).length;
+        fulls++;
+        if (why) seen.resync++;
+        v.client = { lean, log: log.slice(), chat: chat.slice() };
+        v.cv = state.version;
+        v.server = { lean, log, chat, v: state.version };
+      };
+      if (!v.server) { wholeThing(false); note(v, state, null); continue; }
+
+      const logTail = feedTail(v.server.log, log, 'at');
+      const chatTail = feedTail(v.server.chat, chat, 'id');
+      if (logTail === RESYNC || chatTail === RESYNC) { wholeThing(true); note(v, state, null); continue; }
+      const patch = diff(v.server.lean, lean);
+      if (!patch && !logTail && !chatTail) continue;
+      const msg = { v: state.version, from: v.server.v };
+      if (patch) msg.patch = patch;
+      if (logTail) msg.log = logTail;
+      if (chatTail) msg.chat = chatTail;
+      patchBytes += JSON.stringify(msg).length;
+      patches++;
+      v.server = { lean, log, chat, v: state.version };
+
+      // ---- and now the client, which has only ever seen patches ----
+      if (msg.from !== v.cv) fail(`delta: ${v.name} got a patch off v${msg.from} while holding v${v.cv}`);
+      for (const [feed, key] of [['log', 'at'], ['chat', 'id']]) {
+        const tail = msg[feed];
+        if (!tail) continue;
+        const held = v.client[feed];
+        const last = held.length ? held[held.length - 1][key] : null;
+        if (last !== tail.after) fail(`delta: ${v.name}'s ${feed} anchor did not match (${last} vs ${tail.after})`);
+        if (tail.keep > held.length) fail(`delta: ${v.name} was told to keep more ${feed} than it holds`);
+        if (tail.keep < held.length) seen.trimmed++;
+        seen[feed === 'log' ? 'logTail' : 'chatTail']++;
+      }
+      v.client = {
+        lean: msg.patch ? applyPatch(v.client.lean, msg.patch) : v.client.lean,
+        log: applyFeed(v.client.log, msg.log),
+        chat: applyFeed(v.client.chat, msg.chat),
+      };
+      v.cv = msg.v;
+
+      const rebuilt = { ...v.client.lean, log: v.client.log, chat: v.client.chat };
+      if (!same(rebuilt, state)) fail(`delta: ${v.name}'s patched state drifted from the real one`);
+      if (v.cv !== state.version) fail(`delta: ${v.name} landed on version ${v.cv}, not ${state.version}`);
+
+      note(v, state, patch);
+    }
+  }
+
+  const room = new GameRoom('delta', () => {});
+  room.scheduleBot = () => {};
+  room.maybeBot = () => {};
+  room.maybeBotAuction = () => {};
+  room.armAuctionTimer = () => {};
+  const pending = [];
+  room.scheduleBotTrade = (id) => pending.push(id);
+  room.map = MAPS.classic;
+  room.settings.randomizeOrder = false;
+  const tokens = ['tok-alpha-secret', 'tok-beta-secret'];
+  tokens.forEach((t, i) => room.addPlayer({ id: t, name: `P${i + 1}` }));
+  room.addBot();
+  room.addBot();
+  room.hostId = tokens[0];
+  // Real tokens, played by the house: the aliasing is the part that makes a
+  // per-viewer diff necessary, so the game has to run over ids worth hiding.
+  const autopilot = () => room.players.forEach((p) => { if (!p.isBot) p.botControlled = true; });
+  autopilot();
+
+  const viewers = [
+    makeViewer('alpha', new Set([tokens[0]])),
+    makeViewer('beta', new Set([tokens[1]])),
+    makeViewer('the spectator', new Set()),
+  ];
+  room.onUpdate = () => deliver(room, viewers);
+
+  const step = () => {
+    room.runBot();
+    if (room.auction) room.runBotAuction();
+    while (pending.length) room.botTradeReply(pending.shift());
+  };
+  const started = room.start(room.hostId);
+  if (started?.error) fail(`delta: could not start (${started.error})`);
+
+  // Three moments too important to leave to the dice: an auction opening and
+  // closing, a trade appearing and clearing, and a deed on each seat so the
+  // eliminations to come are certain to take keys back out of the ownership
+  // map — the deletion a patch has to be able to say out loud.
+  const streets = room.map.tiles.reduce((acc, t, i) => (t.type === 'property' ? acc.concat(i) : acc), []);
+  tokens.forEach((t, i) => { room.ownership[streets[i]] = { owner: t, houses: 0, mortgaged: false }; });
+  room.push();
+  room.startAuction(streets[2]);
+  for (let i = 0; i < 60 && room.auction; i++) room.runBotAuction();
+  if (room.auction) room.finishAuction();
+  const offer = room.proposeTrade(tokens[0], { to: tokens[1], give: { money: 25 }, get: {} });
+  if (offer?.error) fail(`delta: could not stage a trade (${offer.error})`);
+  else room.respondTrade(tokens[1], offer.trade.id, false);
+  let steps = 0;
+  while (room.status === 'playing' && steps++ < 4000) {
+    step();
+    // A little table talk, so the chat feed slides under the diff too.
+    if (steps % 12 === 0 && room.active.length) {
+      room.sendChat(room.active[steps % room.active.length].id, `steady on, step ${steps}`, 'all');
+    }
+  }
+  // Not every table converges inside four thousand steps, and the reveal and
+  // the rematch still have to be watched go past. Call it.
+  while (room.status === 'playing' && room.active.length > 1) {
+    room.bankrupt(room.active[room.active.length - 1], room.active[0]);
+  }
+  if (room.status !== 'ended') fail('delta: the game never reached an ending');
+
+  // Back to the lobby: the turn goes null, the reveal falls away, and the
+  // whole shape of the state changes under the diff.
+  // The presser has to be a seat, not a house player — and a rematch wipes
+  // the log, which is exactly the gap a viewer cannot patch across.
+  const presser = room.player(tokens[0]) ? tokens[0] : room.players.find((p) => !p.isBot)?.id;
+  const again = room.rematch(presser);
+  if (again?.error) fail(`delta: rematch refused (${again.error})`);
+  autopilot();
+  room.start(room.hostId);
+  for (let i = 0; i < 200 && room.status === 'playing'; i++) step();
+  room.dispose();
+
+  const missing = Object.entries(seen).filter(([, n]) => !n).map(([k]) => k);
+  if (missing.length) fail(`delta: the run never exercised ${missing.join(', ')}`);
+  const ratio = fullBytes / patchBytes;
+  ok(`${pushes} pushes × ${viewers.length} viewers: ${patches} patches, ${fulls} full states, every one rebuilt exactly`);
+  ok(`saw turn→null, an auction closing, a bankruptcy, tiles freed, trades opening and clearing, and the reveal`);
+  ok(`${(fullBytes / 1024 / 1024).toFixed(2)} MB of full pushes became ${(patchBytes / 1024 / 1024).toFixed(2)} MB — ${ratio.toFixed(1)}× smaller`);
+  if (ratio < 5) fail(`delta: only ${ratio.toFixed(1)}× smaller — the diff is not earning its keep`);
+}
+
+{
+  // Team chat is cut per viewer, so the tail has to be too: what a client
+  // stitches together must match the array a full state would have handed
+  // that viewer, not the room's own longer window.
+  const room = new GameRoom('teamchat', () => {});
+  room.map = MAPS.classic;
+  room.settings.teams = 2;
+  room.settings.randomizeOrder = false;
+  const ids = ['t-a', 't-b', 't-c', 't-d'];
+  ids.forEach((id, i) => { room.addPlayer({ id, name: id.toUpperCase() }); room.setTeam(id, i % 2); });
+  room.hostId = 't-a';
+  room.start('t-a');
+
+  const viewers = [new Set(['t-a']), new Set(['t-b']), new Set()].map((held) => ({ held, server: null, client: null }));
+  let checked = 0; let trimmed = 0;
+  const deliver = () => {
+    const base = snapshot(room.serialize(), SHARED);
+    for (const v of viewers) {
+      const state = viewOf(room, v.held, base);
+      if (!v.server) { v.server = state.chat; v.client = state.chat.slice(); continue; }
+      const tail = feedTail(v.server, state.chat, 'id');
+      if (tail === RESYNC) { v.server = state.chat; v.client = state.chat.slice(); continue; }
+      if (tail) {
+        if (tail.keep < v.client.length) trimmed++;
+        v.client = applyFeed(v.client, tail);
+      }
+      v.server = state.chat;
+      if (canon(v.client) !== canon(state.chat)) fail('delta: a filtered chat tail did not rebuild the viewer\'s own window');
+      checked++;
+    }
+  };
+  deliver();
+  // Well past the 50-line window the wire carries, so it slides properly.
+  for (let i = 0; i < 90; i++) {
+    const who = ids[i % ids.length];
+    room.sendChat(who, `line ${i}`, i % 3 === 0 ? 'team' : 'all');
+    deliver();
+  }
+  room.dispose();
+  if (!trimmed) fail('delta: the chat window never slid, so the keep count went untested');
+  ok(`${checked} filtered chat tails rebuilt their viewer's window exactly, window sliding included`);
 }
 
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');

@@ -842,7 +842,7 @@ function seatsHeldBy(roomId, socketId) {
  * socket reading it, so a patch cut against somebody else's copy would hand
  * out the wrong disguises.
  */
-const deltaOf = new Map(); // socket.id -> { roomId, seats, v, lean, log, chat, resyncAt }
+const deltaOf = new Map(); // socket.id -> { roomId, seats, v, lean, log, chat }
 
 // One remembered state per socket is cheap, but not free, and a leak here
 // would be a slow one. Past this many tracked sockets — far more than this box
@@ -862,7 +862,10 @@ const seatKey = (held) => [...held].sort().join(',');
 /** A base that will not move under the diff — only needed by delta viewers. */
 const frozenBase = (room, track) => (track ? snapshot(room.serialize(), SHARED_KEYS) : room.serialize());
 
-function rememberState(track, room, held, state) {
+/** The whole thing — and, for a delta viewer, the point their next diff
+ *  will be measured from. Old clients pass no tracker and nothing is kept. */
+function sendFullState(sid, room, held, state, track) {
+  io.to(sid).emit('state', state);
   if (!track) return;
   const { log, chat, ...lean } = state;
   track.roomId = room.id;
@@ -873,37 +876,35 @@ function rememberState(track, room, held, state) {
   track.chat = chat;
 }
 
-/** The whole thing, and the point this viewer's next diff starts from. */
-function sendFullState(sid, room, held, state, track) {
-  io.to(sid).emit('state', state);
-  rememberState(track, room, held, state);
-}
-
 /**
- * One push, to one socket: a patch if we can honestly cut one against what
- * that socket was last sent, the whole state if we cannot.
+ * One push, to one delta socket: a patch if we can honestly cut one against
+ * what that socket was last sent, the whole state if we cannot.
  */
-function sendState(sid, room, held, track, base) {
-  const state = stateFor(room.serializeFor(held, base || frozenBase(room, track)), room, held);
-  if (!track) return io.to(sid).emit('state', state);
+function sendPatch(sid, room, held, track, frozen) {
+  const state = stateFor(room.serializeFor(held, frozen), room, held);
   // Nothing to diff against, or the ids in this state no longer mean what
   // they did: claiming or releasing a seat re-cuts who is aliased, and a room
   // switch is a different story entirely.
   if (!track.lean || track.roomId !== room.id || track.seats !== seatKey(held)) {
-    return sendFullState(sid, room, held, state, track);
+    sendFullState(sid, room, held, state, track);
+    return;
   }
+  // The two feeds ride as tails rather than through the diff — they only ever
+  // grow, and re-sending sixty log lines for the sake of one is the single
+  // biggest thing wrong with a full push.
   const { log, chat, ...lean } = state;
   const logTail = feedTail(track.log, log, 'at');
   const chatTail = feedTail(track.chat, chat, 'id');
-  // Fallen out of the window: they would be stitching a hole into their
-  // scrollback, so hand them the feed whole instead.
+  // Fallen out of the window: they would be stitching a hole into their own
+  // scrollback, so hand them the whole state instead.
   if (logTail === RESYNC || chatTail === RESYNC) {
-    return sendFullState(sid, room, held, state, track);
+    sendFullState(sid, room, held, state, track);
+    return;
   }
   const patch = diff(track.lean, lean);
-  // A push that changed nothing this viewer can see costs them nothing, and
+  // A push that moved nothing this viewer can see costs them nothing, and
   // leaves their version where it was — so the next patch still lines up.
-  if (!patch && !logTail && !chatTail) return undefined;
+  if (!patch && !logTail && !chatTail) return;
   const msg = { v: state.version, from: track.v };
   if (patch) msg.patch = patch;
   if (logTail) msg.log = logTail;
@@ -913,7 +914,6 @@ function sendState(sid, room, held, track, base) {
   track.lean = lean;
   track.log = log;
   track.chat = chat;
-  return undefined;
 }
 
 function broadcast(room) {
@@ -933,7 +933,7 @@ function broadcast(room) {
     // Frozen once for the whole room, not once per viewer: what serializeFor
     // rebuilds per viewer is already fresh, and the rest is what needs pinning.
     frozen ??= snapshot(base, SHARED_KEYS);
-    sendState(sid, room, held, track, frozen);
+    sendPatch(sid, room, held, track, frozen);
   }
   // Keep each seated player's presence in step with what the room is doing,
   // so a friends list can say "in a lobby" vs "in a game".
@@ -1075,12 +1075,13 @@ io.on('connection', (socket) => {
    * whole state, but only so often: a confused client shouldn't be able to
    * bill the server for a hundred of them a second.
    */
+  let lastResync = 0;
   socket.on('resync', safely('resync', () => {
     if (!room) return;
-    const track = deltaOf.get(socket.id);
     const now = Date.now();
-    if (track && now - (track.resyncAt || 0) < 250) return;
-    if (track) track.resyncAt = now;
+    if (now - lastResync < 250) return;
+    lastResync = now;
+    const track = deltaOf.get(socket.id);
     room.lastSeen = now;
     const held = seatsHeldBy(room.id, socket.id);
     sendFullState(socket.id, room, held,

@@ -14,7 +14,9 @@ import {
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
-import { api, connect, isSplitDeploy, SERVER, useServer, forgetServer } from './net.js';
+import {
+  api, connect, isSplitDeploy, SERVER, useServer, forgetServer, PROTO, onState,
+} from './net.js';
 import { initSocial, stopSocial } from './social.js';
 
 const $ = (s) => document.querySelector(s);
@@ -229,6 +231,10 @@ function stopDailyClock() {
   dailyClock = null;
 }
 
+// The purse starts at a single coin and climbs a coin a day, so every line
+// that prints it has to be able to say "coin" as well as "coins".
+const coinWord = (n) => `${n} coin${n === 1 ? '' : 's'}`;
+
 /** "07:12:44" — hours first, because the wait is always most of a day. */
 function untilText(at) {
   const ms = Math.max(0, at - Date.now());
@@ -263,7 +269,7 @@ function paintDaily(d) {
         ${streakChip}
       </div>
       <button class="btn gold wide wrap" id="dailyBtn">
-        <span class="btn-ico">${icon('coin')}</span> Collect your daily ${amount} coins
+        <span class="btn-ico">${icon('coin')}</span> Collect your daily ${coinWord(amount)}
       </button>`
     : `<div class="dc-head">
         <span class="dc-mark quiet">${icon('snooze', 22, 'solo')}</span>
@@ -272,8 +278,9 @@ function paintDaily(d) {
           <!-- Tomorrow's payout climbs with the streak, and only the server
                knows by how much. Until it has said, the line promises coins
                without naming a figure rather than naming the wrong one. -->
-          <div class="dc-sub">${amount > 0 ? `${amount} more` : 'More'} coins in
-            <b id="dailyClock">${untilText(d.nextAt)}</b></div>
+          <div class="dc-sub">${amount > 0
+            ? `${amount} more coin${amount === 1 ? '' : 's'}`
+            : 'More coins'} in <b id="dailyClock">${untilText(d.nextAt)}</b></div>
         </div>
         ${streakChip}
       </div>`;
@@ -335,8 +342,8 @@ async function claimDaily() {
     countCoinChip(knownCoins ?? Math.max(0, out.coins - out.amount), out.coins);
     knownCoins = out.coins;
     toast(out.streak > 1
-      ? `+${out.amount} coins — ${out.streak} days in a row`
-      : `+${out.amount} coins collected`);
+      ? `+${coinWord(out.amount)} — ${out.streak} days in a row`
+      : `+${coinWord(out.amount)} collected`);
     // The card flips the moment the coins land, but without a figure on it:
     // the claim only reports what today paid, and today's streak has already
     // made tomorrow worth more. The read behind the count-up fills the number
@@ -804,9 +811,15 @@ function boot() {
   if (socket) socket.close();
   socket = connect();
 
-  socket.on('connect', () => socket.emit('join', { roomId, token, name: nickname || 'Player', flag: myFlag }));
+  // `proto` is the whole handshake: it rides every join, reconnects included,
+  // and asks for patches instead of a fresh 13.5 KB board per action. A server
+  // that has never heard of it ignores the field and keeps sending whole
+  // states, which is what onState is handed either way.
+  socket.on('connect', () => socket.emit('join', {
+    roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO,
+  }));
   socket.on('you', (d) => { meId = d.playerId; });
-  socket.on('state', (s) => {
+  onState(socket, (s) => {
     // First state after a (re)join is history, not news: seed the one-shot
     // trackers so the last card doesn't pop again and old log lines and the
     // opening balance don't play sounds.

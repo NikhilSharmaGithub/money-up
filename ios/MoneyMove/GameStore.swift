@@ -247,6 +247,11 @@ final class GameStore: ObservableObject {
 
     private let socket = SocketIOClient()
 
+    /// What the server believes it has sent this connection, kept as raw JSON
+    /// so a `statePatch` has something to be applied to. Untouched — and
+    /// unused — by a server that only ever speaks in whole states.
+    private let mirror = StateMirror()
+
     /// Extra seats played from this same device (pass & play). Each guest keeps
     /// its own socket because the server binds a seat to the connection that
     /// joined it — intents must come from the right one.
@@ -296,12 +301,18 @@ final class GameStore: ObservableObject {
         // After any (re)connect, reclaim the seat — the server holds it during
         // the grace period, so a flaky network doesn't cost the player a turn.
         if s == .connected, let roomId {
+            // A reconnect is a new socket as far as the server is concerned, so
+            // whatever it remembered sending us died with the old one.
+            mirror.forget()
             socket.emit("join", [[
                 "roomId": roomId,
                 "token": token,
                 "name": nickname.isEmpty ? "Player" : nickname,
                 "flag": flag,
-            ]])
+                // Say we can stitch diffs and the table stops re-sending the
+                // board thirty times a minute. Silence keeps the old contract.
+                "proto": StateMirror.protocolVersion,
+            ] as [String: Any]])
         }
     }
 
@@ -312,14 +323,18 @@ final class GameStore: ObservableObject {
                 meId = pid
             }
         case "state":
-            guard let dict = args.first as? [String: Any],
-                  let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
-            do {
-                let decoded = try JSONDecoder().decode(GameState.self, from: data)
-                apply(decoded)
-            } catch {
-                // One malformed push must not kill the session; keep the last state.
-                print("state decode failed:", error)
+            guard let dict = args.first as? NSDictionary else { return }
+            mirror.adopt(dict)
+            decodeState(dict)
+        case "statePatch":
+            // Only what moved. Rebuilt against the last state this socket was
+            // sent, and handed on as if the server had spelled the whole thing
+            // out — nothing downstream can tell the difference.
+            guard let message = args.first as? NSDictionary else { return }
+            switch mirror.apply(message) {
+            case .state(let dict): decodeState(dict)
+            case .feeds: break
+            case .resync: socket.emit("resync")
             }
         case "toast":
             if let dict = args.first as? [String: Any], let msg = dict["message"] as? String {
@@ -338,6 +353,20 @@ final class GameStore: ObservableObject {
             }
         default:
             break
+        }
+    }
+
+    /// The one way a state becomes a GameState, whether the server spelled it
+    /// out or we rebuilt it from a patch.
+    private func decodeState(_ dict: NSDictionary) {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
+        do {
+            apply(try JSONDecoder().decode(GameState.self, from: data))
+        } catch {
+            // One malformed push must not kill the session; keep the last
+            // state. The mirror keeps the raw dictionary either way, so the
+            // next patch still has something true to sit on.
+            print("state decode failed:", error)
         }
     }
 
@@ -703,6 +732,9 @@ final class GameStore: ObservableObject {
         // reads the old count before calling in, so it keeps its guests.
         lastGuests = 0
         state = nil
+        // Versions count per room, so the copy we hold of the old table must
+        // not be left lying around for a patch from it to line up against.
+        mirror.forget()
         guestTeamChat = []
         lastTurnPlayer = nil
         if connection == .connected {
@@ -739,19 +771,24 @@ final class GameStore: ObservableObject {
     /// arrives here — the main socket cannot hear it for them.
     private func makeGuestSocket(token guestToken: String, number: Int, roomId: String) -> SocketIOClient {
         let s = SocketIOClient()
+        // A guest reads nothing but the chat off its push, so its mirror keeps
+        // the feeds and the version and lets the rest of every patch go by.
+        let mirror = StateMirror(feedsOnly: true)
         s.onStatus = { status in
             Task { @MainActor in
                 guard status == .connected else { return }
+                mirror.forget()
                 s.emit("join", [[
                     "roomId": roomId,
                     "token": guestToken,
                     "name": "Player \(number)",
                     "flag": "",
-                ]])
+                    "proto": StateMirror.protocolVersion,
+                ] as [String: Any]])
             }
         }
         s.onEvent = { [weak self] name, args in
-            Task { @MainActor in self?.onGuestSocketEvent(name, args) }
+            Task { @MainActor in self?.onGuestSocketEvent(name, args, mirror: mirror, socket: s) }
         }
         return s
     }
@@ -759,10 +796,24 @@ final class GameStore: ObservableObject {
     /// Only the chat is worth reading off a guest's push — the main socket
     /// already applies the full state — and only the team channel of it: the
     /// public channel arrives on the main connection for everyone.
-    private func onGuestSocketEvent(_ name: String, _ args: [Any]) {
-        guard name == "state", let dict = args.first as? [String: Any],
-              let rawChat = dict["chat"] as? [[String: Any]],
-              let data = try? JSONSerialization.data(withJSONObject: rawChat),
+    private func onGuestSocketEvent(_ name: String, _ args: [Any],
+                                    mirror: StateMirror, socket s: SocketIOClient) {
+        switch name {
+        case "state":
+            guard let dict = args.first as? NSDictionary else { return }
+            mirror.adopt(dict)
+        case "statePatch":
+            guard let message = args.first as? NSDictionary else { return }
+            if case .resync = mirror.apply(message) { s.emit("resync"); return }
+        default:
+            return
+        }
+        // Only the lines this push actually brought: after a patch that is the
+        // tail alone, so a guest seat stops decoding fifty unchanged messages
+        // to find the one that is news.
+        let arrivals = mirror.chatArrivals
+        guard arrivals.count > 0,
+              let data = try? JSONSerialization.data(withJSONObject: arrivals),
               let chat = try? JSONDecoder().decode([ChatMessage].self, from: data) else { return }
         let fresh = chat.filter { msg in
             msg.isTeam && !guestTeamChat.contains(where: { $0.id == msg.id })
@@ -797,6 +848,7 @@ final class GameStore: ObservableObject {
         guests = []
         guestTeamChat = []
         socket.close()
+        mirror.forget()
         quickTask?.cancel()
         quickSearching = false
         roomId = nil
