@@ -531,7 +531,10 @@ function initGoogleSignIn() {
             const out = await fetch(api('/api/auth/google'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, credential: resp.credential }),
+              // What this browser already calls itself, so signing in never
+              // renames somebody who had just typed a name in the box.
+              body: JSON.stringify({ token, credential: resp.credential,
+                                     nickname: ($('#nickInput')?.value || '').trim() }),
             }).then((r) => r.json());
             if (out.ok) {
               if (out.name) { $('#nickInput').value = out.name; storeName(out.name); }

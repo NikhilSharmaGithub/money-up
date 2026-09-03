@@ -301,9 +301,16 @@ app.post('/api/auth/google', async (req, res) => {
     const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
       .then((r) => r.json());
     if (!GOOGLE_AUDIENCES.has(info.aud)) return res.status(401).json({ error: 'Token was not issued for this app' });
-    const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, info.name || info.email,
+    // info.name is deliberately unused: the play name comes from the player,
+    // not from their Google account. The address and photo are kept — the
+    // profile card is the only place they appear, and only to their owner.
+    const linked = attachLogin(String(token).slice(0, 64), 'google', info.sub, req.body?.nickname,
       { email: info.email, picture: info.picture });
-    res.json({ ok: true, name: linked?.name || info.name || '', code: linked?.code, picture: linked?.picture || '' });
+    // The name that goes back is the PLAY name — theirs if they had one, a
+    // fresh one off the dice list if they did not. Never info.name: falling
+    // back to Google's would put the real name on the board the one time it
+    // matters, which is a new player's very first game.
+    res.json({ ok: true, name: linked?.name || '', code: linked?.code, picture: linked?.picture || '' });
   } catch {
     res.status(401).json({ error: 'Could not verify the Google token' });
   }
@@ -323,10 +330,12 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.post('/api/auth/apple', (req, res) => {
-  const { token, userId, name } = req.body || {};
+  // `name` still arrives from older apps — it is Apple's copy of the player's
+  // real name, and it is ignored. `nickname` is what they call themselves.
+  const { token, userId } = req.body || {};
   if (!token || !userId) return res.status(400).json({ error: 'Missing token or userId' });
-  const linked = attachLogin(String(token).slice(0, 64), 'apple', String(userId).slice(0, 128), name);
-  res.json({ ok: true, name: linked?.name || name || '', code: linked?.code });
+  const linked = attachLogin(String(token).slice(0, 64), 'apple', String(userId).slice(0, 128), req.body?.nickname);
+  res.json({ ok: true, name: linked?.name || '', code: linked?.code });
 });
 
 // ---- master admin ---------------------------------------------------------

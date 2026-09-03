@@ -1069,13 +1069,14 @@ struct LandingView: View {
                     switch result {
                     case .success(let auth):
                         guard let cred = auth.credential as? ASAuthorizationAppleIDCredential else { return }
-                        let name = [cred.fullName?.givenName, cred.fullName?.familyName]
-                            .compactMap { $0 }.joined(separator: " ")
+                        // Apple offers the real name on a first sign-in. It is
+                        // not asked for and not sent: the play name comes from
+                        // the player, never from the account behind them.
                         Task {
                             struct Reply: Decodable { var ok: Bool?; var name: String?; var code: String? }
                             let reply: Reply? = try? await store.fetchJSON(
                                 "/api/auth/apple", method: "POST",
-                                body: ["token": store.token, "userId": cred.user, "name": name])
+                                body: ["token": store.token, "userId": cred.user, "nickname": store.nickname])
                             if reply?.ok == true {
                                 if let n = reply?.name, !n.isEmpty { store.nickname = n }
                                 store.showToast("Signed in with Apple")
@@ -1302,9 +1303,7 @@ struct LandingView: View {
                     } onCompletion: { result in
                         if case .success(let auth) = result,
                            let cred = auth.credential as? ASAuthorizationAppleIDCredential {
-                            let name = [cred.fullName?.givenName, cred.fullName?.familyName]
-                                .compactMap { $0 }.joined(separator: " ")
-                            Task { await appleLinked(userId: cred.user, name: name) }
+Task { await appleLinked(userId: cred.user) }
                         }
                     }
                     .signInWithAppleButtonStyle(scheme == .light ? .black : .white)
@@ -1353,7 +1352,10 @@ struct LandingView: View {
             struct Reply: Decodable { var ok: Bool?; var name: String?; var code: String? }
             let reply: Reply? = try? await store.fetchJSON(
                 "/api/auth/google", method: "POST",
-                body: ["token": store.token, "credential": credential])
+                // What this device already calls itself. The server never
+                // takes the name off the Google account — see attachLogin.
+                body: ["token": store.token, "credential": credential,
+                       "nickname": store.nickname])
             if reply?.ok == true {
                 if let n = reply?.name, !n.isEmpty { store.nickname = n }
                 store.showToast("Signed in with Google")
@@ -1368,11 +1370,11 @@ struct LandingView: View {
         }
     }
 
-    private func appleLinked(userId: String, name: String) async {
+    private func appleLinked(userId: String) async {
         struct Reply: Decodable { var ok: Bool?; var name: String? }
         let reply: Reply? = try? await store.fetchJSON(
             "/api/auth/apple", method: "POST",
-            body: ["token": store.token, "userId": userId, "name": name])
+            body: ["token": store.token, "userId": userId, "nickname": store.nickname])
         if reply?.ok == true {
             if let n = reply?.name, !n.isEmpty { store.nickname = n }
             store.showToast("Signed in with Apple")

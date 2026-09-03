@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomName } from './names.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Render's filesystem is wiped on every deploy — point DATA_DIR at a
@@ -889,13 +890,26 @@ export function allProfiles() {
   });
 }
 
-/** Records an external login (google/apple) against the identity token. */
-export function attachLogin(token, provider, subject, name, { email, picture } = {}) {
-  const p = profileFor(token, { name });
+/**
+ * Records an external login (google/apple) against the identity token.
+ *
+ * The name Google hands over is the player's real one, and that is the last
+ * thing most people want floating over a token on a board other people can
+ * see. So it is not taken. Somebody who already picked a nickname keeps it —
+ * signing in is not a reason to be renamed — and somebody arriving with none
+ * is given a name off the same list the dice button uses. The real name is
+ * not stored anywhere: the profile card shows the photo and the address,
+ * which only its owner ever sees.
+ */
+export function attachLogin(token, provider, subject, preferred, { email, picture } = {}) {
+  const p = profileFor(token);
   if (!p) return null;
   const stored = profiles.get(token);
   stored.login = { provider, subject, at: Date.now() };
-  if (name) stored.name = name;
+  // `preferred` is what the PLAYER is already calling themselves on this
+  // device — never what Google or Apple call them. Somebody who typed a
+  // nickname and then signed in keeps it; anyone else gets a game name.
+  if (!stored.name) stored.name = String(preferred || '').trim().slice(0, 16) || randomName();
   // The photo and address are display-only — they make the signed-in state
   // visible, they are never used to look anything up.
   if (email) stored.email = String(email).slice(0, 120);
