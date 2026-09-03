@@ -1,7 +1,15 @@
 // Sign in with Google, done by hand: an ASWebAuthenticationSession pointed at
-// Google's OAuth endpoint with response_type=id_token, no SDK. The server
-// verifies the returned ID token (/api/auth/google) exactly as it does for the
-// web client, so this file only has to get the token and hand it over.
+// Google's OAuth endpoint, no SDK. The server verifies the returned ID token
+// (/api/auth/google) exactly as it does for the web client, so this file only
+// has to get the token and hand it over.
+//
+// It asks for a code, not a token. The obvious shape for a native app is the
+// implicit flow — response_type=id_token, one round trip, nothing to exchange
+// — and it is the shape this file had until Google answered a real sign-in
+// with "Error 400: unsupported_response_type". Google closed the implicit
+// flow to installed apps; the supported shape is an authorization code with
+// PKCE, which is two round trips and a verifier but needs no client secret,
+// which is exactly why it is the one they kept.
 //
 // The button that drives this lives on the Play tab and is gated behind
 // GET /api/auth/config — a server with no Google client id shows no button,
@@ -10,6 +18,7 @@
 // refuses custom-scheme redirects at Google's door.
 
 import AuthenticationServices
+import CryptoKit
 import SwiftUI
 import UIKit
 
@@ -109,6 +118,12 @@ final class GoogleSignInFlow: NSObject, ASWebAuthenticationPresentationContextPr
     /// closes the sheet.
     func signIn(clientId: String) async throws -> String {
         guard let scheme = Self.callbackScheme(for: clientId) else { throw Failure.badClientId }
+        let redirect = scheme + ":/oauth2redirect"
+        // The proof this app is the one that asked. The verifier stays here;
+        // only its hash goes to Google, so a code stolen out of the callback
+        // is worth nothing without this process.
+        let verifier = Self.randomVerifier()
+        let challenge = Self.challenge(for: verifier)
         // The nonce rides into the signed token; generating a fresh one per
         // attempt keeps a replayed token from ever looking new.
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -116,18 +131,20 @@ final class GoogleSignInFlow: NSObject, ASWebAuthenticationPresentationContextPr
         var comps = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         comps.queryItems = [
             URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "redirect_uri", value: scheme + ":/oauth2redirect"),
-            URLQueryItem(name: "response_type", value: "id_token"),
+            URLQueryItem(name: "redirect_uri", value: redirect),
+            URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: "openid email profile"),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "nonce", value: nonce),
             URLQueryItem(name: "prompt", value: "select_account"),
         ]
         guard let url = comps.url else { throw Failure.badClientId }
 
-        return try await withCheckedThrowingContinuation { cont in
+        let code: String = try await withCheckedThrowingContinuation { cont in
             let session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme) { callback, error in
-                if let callback, let token = Self.tokenValue(in: callback) {
-                    cont.resume(returning: token)
+                if let callback, let code = Self.value("code", in: callback) {
+                    cont.resume(returning: code)
                 } else if let error, (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
                     cont.resume(throwing: Failure.cancelled)
                 } else {
@@ -141,16 +158,62 @@ final class GoogleSignInFlow: NSObject, ASWebAuthenticationPresentationContextPr
                 cont.resume(throwing: Failure.cancelled)
             }
         }
+        return try await Self.exchange(code: code, verifier: verifier, clientId: clientId, redirect: redirect)
     }
 
-    /// The implicit flow returns the token in the URL fragment
-    /// ("scheme:/oauth2redirect#id_token=…"); tolerate the query too.
-    private static func tokenValue(in url: URL) -> String? {
+    /// Trade the code for the tokens. An installed app has no client secret —
+    /// the verifier is what stands in for one, which is the whole point of
+    /// PKCE — so this call carries no credential worth stealing.
+    private static func exchange(code: String, verifier: String,
+                                 clientId: String, redirect: String) async throws -> String {
+        var req = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var form = URLComponents()
+        form.queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "code_verifier", value: verifier),
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "redirect_uri", value: redirect),
+        ]
+        req.httpBody = form.percentEncodedQuery?.data(using: .utf8)
+
+        let (data, _) = try await URLSession.shared.data(for: req)
+        struct Reply: Decodable { var id_token: String? }
+        guard let token = (try? JSONDecoder().decode(Reply.self, from: data))?.id_token, !token.isEmpty else {
+            throw Failure.noToken
+        }
+        return token
+    }
+
+    /// 64 random bytes, base64url — comfortably inside the 43–128 characters
+    /// the spec allows, and nothing in it needs escaping in a form body.
+    private static func randomVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return base64url(Data(bytes))
+    }
+
+    private static func challenge(for verifier: String) -> String {
+        base64url(Data(SHA256.hash(data: Data(verifier.utf8))))
+    }
+
+    private static func base64url(_ d: Data) -> String {
+        d.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    /// The code comes back in the query ("scheme:/oauth2redirect?code=…");
+    /// the fragment is read too, since it cost nothing to keep.
+    private static func value(_ name: String, in url: URL) -> String? {
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        for raw in [comps?.fragment, comps?.query].compactMap({ $0 }) {
+        for raw in [comps?.query, comps?.fragment].compactMap({ $0 }) {
             for pair in raw.split(separator: "&") {
                 let parts = pair.split(separator: "=", maxSplits: 1)
-                if parts.count == 2, parts[0] == "id_token" {
+                if parts.count == 2, parts[0] == name {
                     return String(parts[1]).removingPercentEncoding ?? String(parts[1])
                 }
             }
