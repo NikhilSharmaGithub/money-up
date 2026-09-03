@@ -15,6 +15,9 @@ data/stats.json
 # every payout is written in, and the key that signs rewarded-ad tickets.
 # social.json and stats.json were already named one at a time; the day ads.json
 # arrived, a list of filenames stopped being the safe way to write this.
+# Everything under data/ stays on this machine. It is the operator's corner:
+# wallets and the ledger (never shareable), and the App Store scripts and
+# runbooks, which name the API key id and issuer — useless without the .p8,
+# which lives in ~/.appstoreconnect and has never been in here, but there is
+# no reason for a public repo to carry them either.
 data/*
-!data/*.md
-!data/*.mjs
