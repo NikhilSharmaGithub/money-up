@@ -1067,13 +1067,28 @@ function renderMyStuff(state, meId, el, actions) {
   if (ab) ab.onclick = () => actions.newTable?.();
 }
 
-/** "Ravi is viewing…" — everyone on the offer except yourself. */
+/**
+ * Somebody has your offer open in front of them.
+ *
+ * The seconds between sending a deal and hearing back are the only part of a
+ * trade with nothing in them, and they are exactly when a player decides the
+ * other side is ignoring them. This is the answer to that: their piece,
+ * their name, and an eye that blinks on its own — the one signal that reads
+ * as a person rather than a spinner. It goes when they close the sheet,
+ * whichever way they close it.
+ */
 function tradeViewerLine(state, t, meId) {
-  const names = (t.viewers || []).filter((v) => v !== meId)
-    .map((v) => state.players.find((p) => p.id === v)?.name)
+  const watching = (t.viewers || [])
+    .filter((v) => v !== meId)
+    .map((v) => state.players.find((p) => p.id === v))
     .filter(Boolean);
-  if (!names.length) return '';
-  return `<div class="trade-viewing">${icon('eye')} ${names.map(escapeHtml).join(', ')} ${names.length > 1 ? 'are' : 'is'} viewing…</div>`;
+  if (!watching.length) return '';
+  const names = watching.map((p) => escapeHtml(p.name)).join(', ');
+  return `<div class="trade-viewing">
+    <span class="tv-eye">${icon('eye', 15)}</span>
+    <span class="tv-faces">${watching.map((p) => `<i style="background:${p.color}"></i>`).join('')}</span>
+    <span class="tv-text">${names} ${watching.length > 1 ? 'are' : 'is'} reading this</span>
+  </div>`;
 }
 
 function tradeCard(state, t, meId) {
@@ -1086,11 +1101,14 @@ function tradeCard(state, t, meId) {
     return bits.length ? bits.map(escapeHtml).join(' · ') : 'nothing';
   };
 
-  // Set aside: stays in the list as a quiet one-liner until you pick it back up.
+  // Set aside: folded down to a single quiet line. It is still a live offer —
+  // the sender is still waiting on it — so it keeps a face, a name and a way
+  // back in, and nothing else.
   if (t.ignored) {
-    return `<div class="panel trade-offer ignored">
-      <div class="trade-line"><span>${icon('trade')} From ${escapeHtml(from?.name || '')}</span><b class="dim">${icon('snooze')} set aside</b></div>
-      <button class="btn small wide" data-unignore="${t.id}">Review offer</button>
+    return `<div class="trade-mini">
+      <span class="avatar xs" style="background:${from?.color || 'var(--ink-3)'}">${escapeHtml((from?.name?.[0] || '?').toUpperCase())}</span>
+      <span class="tm-text">${escapeHtml(from?.name || '')}<i>${icon('snooze', 12)} set aside</i></span>
+      <button class="btn tiny" data-unignore="${t.id}">Open</button>
     </div>`;
   }
 
@@ -1211,6 +1229,13 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
     </div>
     <p class="offer-foot dim small">Closing this leaves the offer on the table — your properties panel keeps it.</p>`,
   (root) => {
+    // The sender watches for this: the eye on their card lights while the
+    // sheet is open, and goes out however it closes — button, cross, Escape,
+    // or another sheet taking its place.
+    actions.tradeViewing?.(t.id, true);
+    onModalClose(() => {
+      if (livePlayersState?.trades?.some((x) => x.id === t.id)) actions.tradeViewing?.(t.id, false);
+    });
     const retire = () => onDismiss?.(t.id);
     $('#toClose', root).onclick = () => { sfx.click(); retire(); closeModal(); };
     $('#toAccept', root).onclick = () => { sfx.trade(); retire(); closeModal(); actions.respondTrade(t.id, true); };

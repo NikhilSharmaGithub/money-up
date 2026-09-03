@@ -877,6 +877,7 @@ function render() {
   safe('ownership', () => patchBoard(state));
   safe('highlight', () => highlightTiles(state));
   safe('tokens', () => syncTokens(state, {
+    meId,
     onStep: () => sfx.step(),
     onArrive: () => highlightTiles(state),
   }));

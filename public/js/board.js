@@ -293,7 +293,7 @@ function place(state, playerId, tileIndex, ms = 0) {
  * Reconciles the token layer with server state. Tokens hop tile by tile when a
  * player rolled, and glide directly when they were teleported by a card.
  */
-export function syncTokens(state, { onStep, onArrive } = {}) {
+export function syncTokens(state, { onStep, onArrive, meId } = {}) {
   layerEl = document.getElementById('tokenLayer');
   if (!layerEl) return;
 
@@ -323,6 +323,10 @@ export function syncTokens(state, { onStep, onArrive } = {}) {
       rec.el.innerHTML = `<span class="token-face${p.tokenSkin ? ' skin' : ''}">${escapeHtml(face)}</span>`;
     }
     rec.el.classList.toggle('is-turn', state.turn?.playerId === p.id && state.status === 'playing');
+    // Eight discs of similar size, and one of them is yours. Marking it — a
+    // quiet ring always, a lit one on your own turn — is the difference
+    // between reading the board and hunting for yourself on it.
+    rec.el.classList.toggle('is-mine', !!meId && p.id === meId);
     rec.el.title = p.name;
   }
 

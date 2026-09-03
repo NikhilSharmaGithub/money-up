@@ -1026,6 +1026,40 @@ select { cursor: pointer; }
 }
 @keyframes ping { 0% { transform: scale(.85); opacity: .6; } 100% { transform: scale(1.5); opacity: 0; } }
 
+/* Your own piece.
+   The ping already says whose turn it is, which is not the same as saying
+   which disc is you — on a full table of eight it is easy to watch the wrong
+   one walk. So your token wears a quiet ring at all times, and on your own
+   turn that ring lights up and the face gives a small hop: enough to catch
+   the eye across the board, small enough not to be a party trick every turn.
+   The hop lives on the face because the token's own transform is its position
+   on the board and is written on every step of a walk. */
+.token.is-mine::before {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, .55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .25);
+  pointer-events: none;
+}
+.token.is-mine.is-turn::before {
+  inset: -4px; border-color: var(--gold);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 70%, transparent);
+  animation: mineRing 1.15s ease-in-out infinite;
+}
+@keyframes mineRing {
+  0%, 100% { opacity: .95; transform: scale(1); }
+  50% { opacity: .6; transform: scale(1.12); }
+}
+.token.is-mine.is-turn .token-face { animation: mineHop .95s ease-in-out infinite; }
+@keyframes mineHop {
+  0%, 62%, 100% { transform: translateY(0); }
+  78% { transform: translateY(-2.5px); }
+  90% { transform: translateY(-1px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .token.is-mine.is-turn::before,
+  .token.is-mine.is-turn .token-face { animation: none; }
+}
+
 /* ─────────────────────────────────────────────────────── board centre ── */
 .board-center {
   position: absolute; inset: 13.5%;
@@ -1323,11 +1357,50 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .trade-line.bad b { color: var(--bad); }
 .trade-offer .row-2 { margin-top: 9px; }
 .trade-offer.ignored { border-color: var(--rule); opacity: 0.8; }
+/* Someone has your offer open. An eye that blinks on its own carries "a
+   person is looking at this" in a way a pulsing word never does — so the
+   glyph blinks on a human rhythm, twice, with a long pause between. */
 .trade-viewing {
-  font-size: 11.5px; font-weight: 650; color: var(--gold);
-  padding: 3px 0 1px; animation: viewingPulse 1.6s ease-in-out infinite;
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 8px; padding: 5px 9px 5px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 34%, transparent);
+  font-size: 11.5px; font-weight: 700; color: var(--gold);
 }
-@keyframes viewingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.tv-eye { display: grid; place-items: center; flex: none; }
+.tv-eye .ico { transform-origin: 50% 55%; animation: eyeBlink 4.2s infinite; }
+@keyframes eyeBlink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  90%, 92% { transform: scaleY(.12); }
+  94% { transform: scaleY(1); }
+  96%, 97% { transform: scaleY(.12); }
+  98% { transform: scaleY(1); }
+}
+.tv-faces { display: flex; flex: none; }
+.tv-faces i {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid var(--card); margin-left: -4px;
+}
+.tv-faces i:first-child { margin-left: 0; }
+.tv-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .tv-eye .ico { animation: none; } }
+
+/* A deal you put off. It is still live and the sender is still waiting, so it
+   keeps a face and a way back in — and gives up the rest of the panel. */
+.trade-mini {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 7px 9px; margin-bottom: 8px;
+  background: var(--card); border: 1px dashed var(--rule-2); border-radius: 999px;
+}
+.tm-text {
+  flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tm-text i {
+  font-style: normal; font-weight: 650; color: var(--ink-3); margin-left: 7px;
+}
+.tm-text i .ico { width: 12px; height: 12px; vertical-align: -2px; margin-right: 2px; }
+.trade-mini .btn.tiny { flex: none; }
 
 /* ────────────────────────────────────────────────────────────── modals ── */
 .modal-root {
