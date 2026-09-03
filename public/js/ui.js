@@ -484,12 +484,150 @@ export function renderRightPanel(state, meId, el, actions) {
 
 const LOOK_COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
 
-/** Name, colour and flag — the one part of any lobby every player owns. */
+// ────────────────────────────────────────────────────────── piece picker ──
+// The shop already sells pieces; this is the same shelf carried to the seat
+// you actually choose from. Sitting down and picking your token is one motion
+// now — the plain disc is everyone's, the skins are whatever the wallet has
+// paid for, and a locked one is a door into the store rather than a dead chip.
+//
+// Catalogue and wallet are read once and kept here: the panel repaints on every
+// colour change and player join, and none of those are news about your wallet.
+let pieceShelf = null;      // { items, owned, equipped } once it has loaded
+let pieceLoading = null;    // the flight in progress, so two renders share one
+let pieceColor = '#888';    // the disc wears your colour, same as the board
+
+function loadPieceShelf(token, force = false) {
+  if (pieceShelf && !force) return Promise.resolve(pieceShelf);
+  if (pieceLoading && !force) return pieceLoading;
+  pieceLoading = Promise.all([
+    fetch(api('/api/store')).then((r) => r.json()),
+    fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json()),
+  ]).then(([store, wallet]) => {
+    pieceShelf = {
+      items: (store.items || []).filter((i) => i.kind === 'token'),
+      owned: wallet.owned || [],
+      equipped: wallet.equipped?.token || '',
+    };
+    return pieceShelf;
+  }).catch(() => null).finally(() => { pieceLoading = null; });
+  return pieceLoading;
+}
+
+function pieceRowHTML() {
+  if (!pieceShelf) return '';   // still in the air — paintPieces fills it in
+  // A skin this catalogue doesn't sell — an id from an older shelf, or a
+  // newer client's — comes out of the server as no emoji at all, which is a
+  // plain disc on the board. So the disc is what wears the ring, and one
+  // chip is always the answer to "which one am I?".
+  const worn = pieceShelf.items.some((i) => i.id === pieceShelf.equipped) ? pieceShelf.equipped : '';
+  const chip = (i) => {
+    const owned = pieceShelf.owned.includes(i.id);
+    return `<button class="piece-chip ${owned ? '' : 'locked'} ${worn === i.id ? 'sel' : ''}"
+        data-piece="${i.id}" data-owned="${owned ? 1 : 0}"
+        title="${escapeHtml(i.name)}${owned ? '' : ` — ${i.price} coins`}">
+        <span class="pc-face">${i.emoji}</span>
+        ${owned ? '' : `<span class="pc-price">${icon('coin', 10)}${i.price}</span>`}
+      </button>`;
+  };
+  return `<div class="look-label">Piece</div>
+    <div class="piece-row">
+      <button class="piece-chip ${worn ? '' : 'sel'}" data-piece="" data-owned="1" title="Plain disc">
+        <span class="pc-disc" style="background:${pieceColor}"></span>
+      </button>
+      ${pieceShelf.items.map(chip).join('')}
+    </div>`;
+}
+
+/**
+ * The shop opens at its top, and on a phone that leaves the piece you tapped
+ * a scroll below the fold — a door onto the wrong shelf. Nudge the card into
+ * view by the smallest amount that does it, so on a laptop, where it is
+ * already there, the coin balance in the shop's head stays on screen.
+ */
+function showPieceInStore(itemId) {
+  const sheet = $('#modalRoot .modal');
+  const card = sheet?.querySelector(`.store-card[data-item="${itemId}"]`);
+  if (!card) return;
+  const s = sheet.getBoundingClientRect();
+  const c = card.getBoundingClientRect();
+  if (c.bottom > s.bottom) sheet.scrollTop += c.bottom - s.bottom + 16;
+  else if (c.top < s.top) sheet.scrollTop += c.top - s.top - 16;
+}
+
+/** Draw the strip into whatever panel is on screen and wire its chips. */
+function paintPieces(el, token) {
+  const strip = $('#pieceStrip', el);
+  if (!strip) return;
+  if (!pieceShelf) {
+    // First lobby of the session: fetch, then come back and paint. A panel
+    // that has been replaced in the meantime is simply no longer here.
+    loadPieceShelf(token).then((shelf) => { if (shelf) paintPieces(el, token); });
+    return;
+  }
+  strip.innerHTML = pieceRowHTML();
+
+  // Once the shelf is longer than the three rows the strip shows, the piece
+  // you are wearing can be sitting below them — and "which one am I?" is the
+  // first thing this strip has to answer. Scroll it up into the rows, by the
+  // least that does it; a shelf that fits never moves.
+  const row = $('.piece-row', strip);
+  const ring = $('.piece-chip.sel', strip);
+  if (row && ring) {
+    const r = row.getBoundingClientRect();
+    const w = ring.getBoundingClientRect();
+    if (w.bottom > r.bottom) row.scrollTop += w.bottom - r.bottom + 4;
+    else if (w.top < r.top) row.scrollTop += w.top - r.top - 4;
+  }
+
+  strip.querySelectorAll('[data-piece]').forEach((b) => {
+    b.onclick = async () => {
+      sfx.click();
+      const id = b.dataset.piece;
+      if (b.dataset.owned !== '1') {
+        // Not bought yet. The shop re-reads the wallet every time it repaints,
+        // so its callback is also the moment a just-bought piece exists here.
+        openStoreModal(token, (coins) => {
+          const chip = document.querySelector('#coinChip');
+          if (chip) chip.innerHTML = `${icon('coin')} ${coins}`;
+          showPieceInStore(id);
+          loadPieceShelf(token, true).then(() => paintPieces(el, token));
+        });
+        return;
+      }
+      if (pieceShelf.equipped === id) return;   // already the one you're wearing
+
+      // Ring it gold now — the choice is made here, not when the network
+      // agrees. The board wears the piece the next time the server dresses
+      // it: today that is the join handler, because the equip route looks for
+      // a roomId on the profile and presence keeps that in a map of its own.
+      const worn = pieceShelf.equipped;
+      pieceShelf.equipped = id;
+      paintPieces(el, token);
+      try {
+        const res = await fetch(api('/api/store/equip'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, slot: 'token', itemId: id || null }),
+        }).then((r) => r.json());
+        if (res.error) throw new Error(res.error);
+      } catch {
+        pieceShelf.equipped = worn;             // put the ring back where it was
+        paintPieces(el, token);
+        toast('Could not change your piece', 'error');
+      }
+    };
+  });
+}
+
+/** Name, piece, colour and flag — the one part of any lobby every player owns. */
 function lookPanel(state, meId) {
   const me = state.players.find((p) => p.id === meId);
+  pieceColor = me?.color || '#888';
   return `<div class="panel">
       <div class="panel-title">Your look</div>
       <input id="nameField" class="name-field" value="${escapeHtml(me?.name || '')}" maxlength="16" placeholder="Nickname" />
+      <div id="pieceStrip">${pieceRowHTML()}</div>
+      <div class="look-label">Colour</div>
       <div class="swatches">
         ${LOOK_COLORS.map((c) => {
           const taken = state.players.some((p) => p.color === c && p.id !== meId);
@@ -517,6 +655,8 @@ function wireLookPanel(state, meId, el, actions) {
   });
   const nameField = $('#nameField', el);
   if (nameField) nameField.onchange = () => actions.appearance({ name: nameField.value.trim() || 'Player' });
+  // The seat's own id IS the wallet token — the server hands both out as one.
+  paintPieces(el, meId);
 }
 
 /**
@@ -2396,10 +2536,343 @@ function worthChartSVG(state) {
     </div>`;
 }
 
-// Rewarded-ads config, set once by app.js. Ships dark; when the server
-// flips it on, the win sheet grows its double-up button and nothing else.
+// ══════════════════════════════════════════════════════ rewarded ads ══
+// Everything in this block is dead weight until the server says otherwise.
+// GET /api/ads/config is the whole switch: while it answers `enabled: false`
+// no button is drawn, no card is mounted and no countdown exists, so a player
+// on a dark server sees the app exactly as it was yesterday. Flipping the env
+// var on the server is the only step to going live.
+//
+// Coins are scarce here on purpose — the daily ladder starts at one and tops
+// out at seven, a win pays two, and the cheapest piece in the shop is 300. A
+// view is therefore worth real money, so this client never mints anything: it
+// asks for a ticket, plays the ad, and hands the ticket back. What that was
+// worth, how many are left today and whether this one counts at all are the
+// server's business, and its refusals are printed rather than swallowed.
 let adsConfig = null;
-export const setAdsConfig = (c) => { adsConfig = c; };
+
+export function setAdsConfig(c) {
+  adsConfig = c?.enabled ? c : null;
+  // app.js asks for the config before it has anything to say about who is
+  // asking, and the per-device counts ("3 left today") only exist once the
+  // server knows. So the tokenless answer is used for the one thing it can
+  // answer — on or off — and the real numbers are fetched behind it. Nothing
+  // is requested at all on a dark server.
+  if (adsConfig) refreshAdsConfig();
+  else mountFreeCoins();
+}
+
+/** Re-reads the config as this device, then repaints whatever it changes. */
+async function refreshAdsConfig() {
+  const token = walletToken();
+  if (!token) return mountFreeCoins();
+  try {
+    const fresh = await fetch(api(`/api/ads/config?token=${encodeURIComponent(token)}`))
+      .then((r) => r.json());
+    adsConfig = fresh?.enabled ? fresh : null;
+  } catch { /* the switch we already have stands; the counts stay coarse */ }
+  mountFreeCoins();
+}
+
+/**
+ * The placement's terms, or null when it must not be offered at all: ads off,
+ * this slot off, or nothing left in it today. Every call site starts here, so
+ * "don't render it" and "don't let them press it" are the same question.
+ */
+function placement(name) {
+  const p = adsConfig?.placements?.[name];
+  if (!p || p.enabled === false) return null;
+  // `remaining` is the server's count of views this device may still be paid
+  // for today. Absent means it hasn't said; zero means the faucet is shut.
+  if (typeof p.remaining === 'number' && p.remaining <= 0) return null;
+  return p;
+}
+
+/** Folds a fresh `remaining` map from an offer or a claim back into the config. */
+function noteRemaining(remaining) {
+  if (!remaining || !adsConfig?.placements) return;
+  for (const [slot, n] of Object.entries(remaining)) {
+    if (adsConfig.placements[slot]) adsConfig.placements[slot].remaining = n;
+  }
+}
+
+// app.js owns the device token and this module is never handed it. Both read
+// the same two keys in the same order — session first, so a second tab that
+// took a fresh identity spends its own coins and not the stored one's.
+const WALLET_KEY = 'moneymove:token';
+function walletToken() {
+  const read = (store) => { try { return store.getItem(WALLET_KEY) || ''; } catch { return ''; } };
+  return read(sessionStorage) || read(localStorage);
+}
+
+// The purse is small enough that "1 coin" happens often; every line
+// that prints a payout has to be able to say it in the singular.
+const coinWord = (n) => `${n} coin${n === 1 ? '' : 's'}`;
+
+// ---- the house ad --------------------------------------------------------
+// What runs today, and what runs forever whenever a network has nothing to
+// fill the slot with. An unfilled break is still five seconds somebody was
+// promised a reward for, so it is never allowed to be a blank screen.
+
+// One is picked per view. They are honest about what the screen is, because a
+// house ad pretending to be a real one is just a worse real one.
+const HOUSE_LINES = [
+  'Nobody has bought this slot yet, so the house took it.',
+  'This break is brought to you by the table you are already at.',
+  'Five seconds of nothing, and then some coins. Fair trade.',
+  'An advert for the game you are currently playing. We know.',
+];
+
+/** The mark: an ivory die on a brass ring, the same one the app opens with. */
+function houseAdMark() {
+  const pip = (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="5.6" fill="#1B5E3F"/>`;
+  return `<svg class="ad-mark" viewBox="0 0 120 120" fill="none" aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg">
+    <circle cx="60" cy="61" r="52" stroke="var(--gold)" stroke-opacity=".55" stroke-width="2.4"/>
+    <g transform="rotate(-11 60 60)">
+      <rect x="18" y="18" width="84" height="84" rx="16" fill="#FBF6E9" stroke="rgba(0,0,0,.12)"/>
+      ${pip(41, 41)}${pip(79, 41)}${pip(60, 60)}${pip(41, 79)}${pip(79, 79)}
+    </g>
+  </svg>`;
+}
+
+/** A drawn cross — the app has no × glyph, and an emoji one is not an option. */
+const CROSS = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5 5 19 19M19 5 5 19" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>`;
+
+/**
+ * Plays one ad break and answers whether it was watched all the way through.
+ * `true` means the button lit and they pressed it; `false` means they closed
+ * it early, which is always allowed and never pays.
+ *
+ * The countdown is the contract: nothing is claimable before it runs out, and
+ * the caller only gets a truthy answer when it did.
+ */
+function playHouseAd({ label = 'Claim your reward', seconds = 5 } = {}) {
+  return new Promise((resolve) => {
+    const root = document.createElement('div');
+    root.className = 'ad-root';
+    const R = 20;                       // countdown ring radius
+    const C = 2 * Math.PI * R;
+    root.innerHTML = `
+      <div class="ad-sheet" role="dialog" aria-modal="true" aria-label="Advertisement">
+        <span class="ad-flag">Advert</span>
+        <button class="ad-x" id="adX" type="button"
+          title="Close — you get nothing for a break you walked out of"
+          aria-label="Close without the reward">${CROSS}</button>
+        ${houseAdMark()}
+        <h2 class="logo ad-word">MONEY<span>MOVE</span></h2>
+        <p class="ad-copy">${escapeHtml(HOUSE_LINES[Math.floor(Math.random() * HOUSE_LINES.length)])}</p>
+        <div class="ad-timer" id="adTimer">
+          <svg viewBox="0 0 46 46">
+            <circle class="ring-bg" cx="23" cy="23" r="${R}" fill="none" stroke-width="3.5"/>
+            <circle class="ring-on" id="adRing" cx="23" cy="23" r="${R}" fill="none" stroke-width="3.5"
+              stroke-linecap="round" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="0"/>
+          </svg>
+          <b id="adCount">${seconds}</b>
+        </div>
+        <button class="btn primary big wrap ad-go" id="adGo" type="button" disabled>${escapeHtml(label)}</button>
+        <p class="ad-note">Close it early and the reward does not count.</p>
+      </div>`;
+    document.body.appendChild(root);
+
+    let done = false;
+    const finish = (watched) => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', onKey);
+      root.remove();
+      resolve(watched);
+    };
+    // Escape is the keyboard's close button, so it forfeits exactly as the
+    // cross does. It must not be able to skip the wait.
+    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+    document.addEventListener('keydown', onKey);
+
+    const timer = $('#adTimer', root);
+    const ring = $('#adRing', root);
+    const count = $('#adCount', root);
+    const go = $('#adGo', root);
+    $('#adX', root).onclick = () => { sfx.click(); finish(false); };
+
+    const started = performance.now();
+    let frame = 0;
+    const tick = (now) => {
+      const t = Math.min(1, (now - started) / (seconds * 1000));
+      ring.style.strokeDashoffset = String(C * t);
+      count.textContent = String(Math.ceil(seconds * (1 - t)) || 1);
+      if (t < 1) { frame = requestAnimationFrame(tick); return; }
+      timer.classList.add('done');
+      go.disabled = false;
+      go.classList.add('lit');
+      go.focus();
+      sfx.click();
+    };
+    frame = requestAnimationFrame(tick);
+
+    go.onclick = () => { if (!go.disabled) { sfx.click(); finish(true); } };
+  });
+}
+
+/**
+ * The one place an ad gets on screen. When a network is wired up it goes in
+ * front of the house ad here — and the house ad stays as the no-fill answer,
+ * because a slot nobody bought still owes the player their five seconds.
+ */
+const presentAd = (opts) => playHouseAd(opts);
+
+// ---- the gateway ---------------------------------------------------------
+// The only place in the client that knows the server's endpoint names, and the
+// only place coins can come from. A ticket is opened before the ad runs and
+// redeemed after it, so a claim that never had a ticket — or has one twice —
+// is refused server-side rather than argued about here.
+
+/** POSTs JSON and always answers an object, so no caller has to try/catch. */
+async function adPost(path, body) {
+  try {
+    const res = await fetch(api(path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data.error || 'That did not go through — try again.' };
+    return data;
+  } catch {
+    return { error: 'Could not reach the server — try again in a moment.' };
+  }
+}
+
+/** A refusal, with the server's own wording and its "try again in" attached. */
+function refusalLine(out) {
+  const wait = Number(out.retryInSec) || 0;
+  if (!wait) return out.error;
+  return wait >= 60
+    ? `${out.error} — try again in about a minute.`
+    : `${out.error} — try again in ${wait}s.`;
+}
+
+/**
+ * Offer, ad, reward — the whole rewarded loop, and the only route a coin takes
+ * from a view into a wallet. The offer is asked for BEFORE the ad plays, so
+ * nobody is ever shown five seconds of promo against a cap they had already
+ * hit; the reward is claimed after, with the ticket the offer issued.
+ *
+ * Every outcome is said out loud. A refusal is printed in the server's own
+ * words (cap reached, too soon, ticket expired), an early close says what it
+ * cost, and `busy` is always handed back false — a spinner left running would
+ * read as coins on the way that are never coming.
+ *
+ * Resolves { coins, paid } when the server actually paid, else null.
+ */
+async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {}) {
+  const spec = placement(name);
+  if (!token || !spec) return null;
+
+  busy(true);
+  const offer = await adPost('/api/ads/offer', { token, placement: name });
+  if (offer.error) {
+    busy(false);
+    noteRemaining(offer.remaining);
+    toast(refusalLine(offer), 'error');
+    return null;
+  }
+  noteRemaining(offer.remaining);
+
+  // What this break is being watched FOR, in the words the button will wear
+  // once the countdown lets it be pressed. Only the server knows the figure —
+  // a doubled win pays whatever that win paid.
+  const worth = Number(offer.reward?.coins ?? spec.coins ?? 0);
+  const watched = await presentAd({
+    label: worth > 0 ? `Claim your ${coinWord(worth)}` : 'Claim your reward',
+  });
+  if (!watched) {
+    busy(false);
+    toast('Closed early — nothing was paid for that one.');
+    return null;
+  }
+
+  const claim = await adPost('/api/ads/reward', { token, ticket: offer.ticket });
+  busy(false);
+  if (claim.error) { noteRemaining(claim.remaining); toast(refusalLine(claim), 'error'); return null; }
+
+  noteRemaining(claim.remaining);
+  // The server is the authority on the size of the payout: an offer quoting a
+  // figure the claim then disagrees with pays what the claim says.
+  return { coins: Number(claim.coins ?? 0), paid: Number(claim.awarded ?? worth ?? 0) };
+}
+
+/** The landing's wallet chip, counting up rather than snapping to the total. */
+function countCoinChip(to) {
+  const chip = $('#coinChip');
+  if (!chip || typeof to !== 'number') return;
+  const paint = (n) => { chip.innerHTML = `${icon('coin')} ${n}`; };
+  const from = Number(String(chip.textContent).replace(/\D+/g, '')) || 0;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || from >= to) return paint(to);
+  chip.classList.add('minted');
+  setTimeout(() => chip.classList.remove('minted'), 900);
+  const started = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - started) / 700);
+    paint(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ---- freeCoins: the quiet offer on the landing ---------------------------
+// It sits under the daily card and behaves like it: it appears only when there
+// is something to take, it never plays by itself, and once today's views are
+// spent it stops asking. No interstitial, nothing before a game — the player
+// comes to this, it never comes to them.
+
+function mountFreeCoins() {
+  const host = $('#dailyCard');
+  const existing = $('#adOffer');
+  const spec = placement('freeCoins');
+  // Ads off, slot off, or nothing left today: the card does not exist. Not
+  // greyed out, not "come back tomorrow" — gone.
+  if (!spec || !host || !walletToken()) { existing?.remove(); return; }
+
+  const card = existing || document.createElement('div');
+  if (!existing) {
+    card.className = 'landing-card ad-offer';
+    card.id = 'adOffer';
+    host.insertAdjacentElement('afterend', card);
+  }
+  paintFreeCoins(card, spec);
+}
+
+function paintFreeCoins(card, spec) {
+  const worth = Number(spec.coins || 0);
+  const left = typeof spec.remaining === 'number' ? spec.remaining : null;
+  card.innerHTML = `
+    <span class="ao-mark">${icon('ticket', 18, 'solo')}</span>
+    <div class="ao-body">
+      <div class="ao-title">Watch an ad for ${coinWord(worth)}</div>
+      <div class="ao-sub">${left === null ? 'Five seconds, then the coins are yours'
+        : `${left} left today`}</div>
+    </div>
+    <button class="btn small" id="adOfferGo" type="button">Watch</button>`;
+
+  const go = $('#adOfferGo', card);
+  go.onclick = async () => {
+    sfx.click();
+    const out = await watchAdFor('freeCoins', {
+      busy: (on) => {
+        go.disabled = on;
+        go.textContent = on ? 'Loading…' : 'Watch';
+      },
+    });
+    if (!out) { mountFreeCoins(); return; }
+    countCoinChip(out.coins);
+    toast(`+${coinWord(out.paid)} — thanks for watching.`);
+    // The server just said how many views are left; if that was the last one
+    // the card takes itself off the landing rather than offering a fourth.
+    mountFreeCoins();
+  };
+}
 
 // ---- telling people about it --------------------------------------------
 /** The invite link for the table this sheet belongs to. */
@@ -2446,9 +2919,7 @@ export function showGameOver(state, meId, actions) {
     ${worthChartSVG(state)}
     ${reportCardHTML(state, meId)}
     <div class="modal-actions go-actions">
-      ${adsConfig?.enabled && state.winner?.id === meId
-        ? `<button class="btn primary big wrap" id="gDouble">${icon('coin')} Watch an ad — double your winnings</button>`
-        : ''}
+      ${doubleWinHTML(state, meId)}
       ${state.quick
         // A matchmade table doesn't reconvene — offering "the same players"
         // would tell the room the seats were never strangers.
@@ -2471,8 +2942,7 @@ export function showGameOver(state, meId, actions) {
     if (fresh) fresh.onclick = () => { sfx.click(); closeModal(); actions.newTable?.(); };
     const share = $('#gShare', root);
     if (share) share.onclick = () => { sfx.click(); shareResult(resultLine(state, meId)); };
-    const dbl = $('#gDouble', root);
-    if (dbl) dbl.onclick = () => actions.watchAd?.('doubleWin');
+    wireDoubleWin(root, meId);
   });
 }
 

@@ -141,7 +141,11 @@ struct LandingView: View {
         }
         .task { await loadStore() }
 
-        Text("50 coins for winning a quick game, 100 when it goes long. Everything here is pure style — never pay-to-win.")
+        // What the server actually pays: the daily ladder runs 1 coin to 7,
+        // a win is worth 2 and a runner-up 1. Promising fifty a game would
+        // make every price on this page read as a rip-off the first time
+        // somebody won and counted.
+        Text("Collect your daily coins, and take a couple more for every game you win. Everything here is pure style — never pay-to-win.")
             .font(.system(size: 12, weight: .medium, design: .rounded))
             .foregroundStyle(P.ink3)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -323,46 +327,27 @@ struct LandingView: View {
         .buttonStyle(.plain)
     }
 
-    private struct StoreReply: Decodable { var ok: Bool?; var error: String?; var coins: Int? }
-
     /// The cosmetics come from our own server, the coin packs from Apple. The
     /// App Store lookup can sit there for seconds on a cold launch, so fill the
     /// shelves first and let StoreKit catch up — otherwise the whole tab is
     /// blank while a purchase API nobody asked about finishes thinking.
+    ///
+    /// The shelf is shared with the lobby's piece picker: whichever screen
+    /// fetched it last serves both, and the tab opens on it rather than on a
+    /// placeholder.
     private func loadStore() async {
         store.refreshWallet()
         if storeItems.isEmpty {
-            struct Catalog: Decodable { var items: [StoreItem] }
-            let catalog: Catalog? = try? await store.fetchJSON("/api/store")
-            storeItems = catalog?.items ?? []
+            storeItems = PieceCatalog.shared.items
+            await PieceCatalog.shared.load(store)
+            storeItems = PieceCatalog.shared.items
             storeFailed = storeItems.isEmpty
         }
         await shop.load(store)
     }
 
     private func buyOrEquip(_ item: StoreItem, owned: Bool, equipped: Bool) async {
-        SoundKit.shared.click()
-        if !owned {
-            let reply: StoreReply? = try? await store.fetchJSON(
-                "/api/store/buy", method: "POST",
-                body: ["token": store.token, "itemId": item.id])
-            // A request that never landed must not read as a purchase: the
-            // coins only moved if the server said so.
-            guard reply?.ok == true else {
-                store.showToast(reply?.error ?? "Couldn't reach the shop — try again.", isError: true)
-                return
-            }
-            SoundKit.shared.buy()
-            store.showToast("\(item.emoji) \(item.name) is yours!")
-        }
-        // buying auto-equips; tapping an equipped item takes it off
-        var body: [String: Any] = ["token": store.token, "slot": item.kind]
-        if !equipped { body["itemId"] = item.id }
-        let worn: StoreReply? = try? await store.fetchJSON("/api/store/equip", method: "POST", body: body)
-        if worn?.ok != true {
-            store.showToast(worn?.error ?? "Couldn't change your look — try again.", isError: true)
-        }
-        store.refreshWallet()
+        await Cosmetics.buyOrEquip(item, owned: owned, equipped: equipped, store: store)
     }
 
     @ViewBuilder private func friendsTab(_ P: Palette) -> some View {

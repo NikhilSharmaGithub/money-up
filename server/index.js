@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
+import { diff, snapshot, feedTail, RESYNC } from './delta.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
@@ -13,7 +14,7 @@ import {
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
   ownedTally, dataFiles,
   dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
-  registerPushDevice, realCounts,
+  registerPushDevice, realCounts, roomOf,
 } from './social.js';
 import { noteGameDay, daySeries, bucketByDay, lastDayKeys } from './dayStats.js';
 import {
@@ -24,6 +25,7 @@ import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
 import { stripeEnabled, createCheckout, handleWebhook } from './stripe.js';
+import { adsRouter } from './ads.js';
 import { adminPageHTML } from './adminPage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +62,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req,
 });
 
 app.use(express.json({ limit: '8kb' }));
+app.use('/api/ads', adsRouter); // the live gateway — it answers ahead of the dark scaffolding further down, which it supersedes
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
 /**
@@ -262,9 +265,10 @@ app.post('/api/store/equip', (req, res) => {
   const { slot, itemId } = req.body || {};
   const result = equipItem(token, slot, itemId ? String(itemId) : null);
   if (result.error) return res.status(400).json(result);
-  // Already sitting at a table? Restyle the piece live.
-  const profile = profileFor(token);
-  const room = profile?.roomId ? rooms.get(profile.roomId) : null;
+  // Already sitting at a table? Restyle the piece live. Presence is its own
+  // book — the profile never carried a room, so this used to look somewhere
+  // nothing was written and the board only caught up on the next join.
+  const room = rooms.get(roomOf(token) || '');
   if (room?.player(token)) {
     room.setCosmetics(token, {
       tokenSkin: emojiFor(result.equipped.token),
@@ -823,15 +827,113 @@ function seatsHeldBy(roomId, socketId) {
   return held;
 }
 
+// --------------------------------------------------------- state on a diet --
+/**
+ * A full state is around 13.5 KB and most of it is furniture: the same board,
+ * the same group table, the same settings everyone agreed on in the lobby,
+ * re-sent thirty-odd times a minute to every viewer. A socket that says
+ * `proto: 2` when it joins gets one full state and then only what moved.
+ *
+ * Nobody is made to. A client that announces nothing — the build sitting in
+ * App Store review, a browser holding last week's bundle — keeps receiving
+ * full 'state' events, byte for byte as before, for as long as it likes.
+ *
+ * The diff is per viewer and never shared. Ids in a state are aliased to the
+ * socket reading it, so a patch cut against somebody else's copy would hand
+ * out the wrong disguises.
+ */
+const deltaOf = new Map(); // socket.id -> { roomId, seats, v, lean, log, chat, resyncAt }
+
+// One remembered state per socket is cheap, but not free, and a leak here
+// would be a slow one. Past this many tracked sockets — far more than this box
+// can hold games for — newcomers simply keep getting full states.
+const MAX_TRACKED = 4000;
+
+// snapshot() freezes the base a viewer is cut from, because the room edits its
+// own settings and turn objects in place between pushes. These keys are the
+// exception: the board and the group table are module constants, and log and
+// chat entries are written once and never touched again — so they ride along
+// by reference, and they are most of the bytes.
+const SHARED_KEYS = new Set(['map', 'groups', 'teamInfo', 'log', 'chat']);
+
+/** The seats a socket holds, as one comparable string. */
+const seatKey = (held) => [...held].sort().join(',');
+
+/** A base that will not move under the diff — only needed by delta viewers. */
+const frozenBase = (room, track) => (track ? snapshot(room.serialize(), SHARED_KEYS) : room.serialize());
+
+function rememberState(track, room, held, state) {
+  if (!track) return;
+  const { log, chat, ...lean } = state;
+  track.roomId = room.id;
+  track.seats = seatKey(held);
+  track.v = state.version;
+  track.lean = lean;
+  track.log = log;
+  track.chat = chat;
+}
+
+/** The whole thing, and the point this viewer's next diff starts from. */
+function sendFullState(sid, room, held, state, track) {
+  io.to(sid).emit('state', state);
+  rememberState(track, room, held, state);
+}
+
+/**
+ * One push, to one socket: a patch if we can honestly cut one against what
+ * that socket was last sent, the whole state if we cannot.
+ */
+function sendState(sid, room, held, track, base) {
+  const state = stateFor(room.serializeFor(held, base || frozenBase(room, track)), room, held);
+  if (!track) return io.to(sid).emit('state', state);
+  // Nothing to diff against, or the ids in this state no longer mean what
+  // they did: claiming or releasing a seat re-cuts who is aliased, and a room
+  // switch is a different story entirely.
+  if (!track.lean || track.roomId !== room.id || track.seats !== seatKey(held)) {
+    return sendFullState(sid, room, held, state, track);
+  }
+  const { log, chat, ...lean } = state;
+  const logTail = feedTail(track.log, log, 'at');
+  const chatTail = feedTail(track.chat, chat, 'id');
+  // Fallen out of the window: they would be stitching a hole into their
+  // scrollback, so hand them the feed whole instead.
+  if (logTail === RESYNC || chatTail === RESYNC) {
+    return sendFullState(sid, room, held, state, track);
+  }
+  const patch = diff(track.lean, lean);
+  // A push that changed nothing this viewer can see costs them nothing, and
+  // leaves their version where it was — so the next patch still lines up.
+  if (!patch && !logTail && !chatTail) return undefined;
+  const msg = { v: state.version, from: track.v };
+  if (patch) msg.patch = patch;
+  if (logTail) msg.log = logTail;
+  if (chatTail) msg.chat = chatTail;
+  io.to(sid).emit('statePatch', msg);
+  track.v = state.version;
+  track.lean = lean;
+  track.log = log;
+  track.chat = chat;
+  return undefined;
+}
+
 function broadcast(room) {
   recordTransitions(room);
   // Serialized once, then cut per socket: a viewer's own seats keep their
   // real ids (the id is their secret token), everyone else's are aliased —
   // see GameRoom.serializeFor. Spectators hold no seat and get only aliases.
   const base = room.serialize();
+  let frozen = null;
   for (const sid of socketsOf.get(room.id) || []) {
     const held = seatsHeldBy(room.id, sid);
-    io.to(sid).emit('state', stateFor(room.serializeFor(held, base), room, held));
+    const track = deltaOf.get(sid);
+    if (!track) {
+      io.to(sid).emit('state', stateFor(room.serializeFor(held, base), room, held));
+      continue;
+    }
+    // Frozen once for the whole room, not once per viewer: what serializeFor
+    // rebuilds per viewer is already fresh, and the rest is what needs pinning.
+    frozen ??= snapshot(base, SHARED_KEYS);
+    sendState(sid, room, held, track, frozen);
   }
   // Keep each seated player's presence in step with what the room is doing,
   // so a friends list can say "in a lobby" vs "in a game".
@@ -843,6 +945,11 @@ function broadcast(room) {
 // Reap idle rooms every couple of minutes — bots playing to an empty
 // theatre burn a timer a second for nobody.
 setInterval(() => {
+  // A socket that left without a goodbye would otherwise keep its last state
+  // alive forever; io still knows who is actually in the building.
+  for (const sid of deltaOf.keys()) {
+    if (!io.sockets.sockets.has(sid)) deltaOf.delete(sid);
+  }
   for (const [id, room] of rooms) {
     const live = socketsOf.get(id)?.size || 0;
     const idleFor = Date.now() - (room.lastSeen || room.createdAt);
@@ -904,13 +1011,23 @@ io.on('connection', (socket) => {
     else socket.emit('roomCreated', { roomId: room.id });
   }));
 
-  socket.on('join', safely('join', ({ roomId, token, name, flag } = {}) => {
+  socket.on('join', safely('join', ({
+    roomId, token, name, flag, proto,
+  } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     // The banned find out at the door, plainly — no seat, no spectating.
     if (isBanned(String(token).slice(0, 64))) {
       return socket.emit('joinFailed', { message: 'You are banned from MoneyMove', spectate: false });
     }
     roomId = String(roomId).toLowerCase().slice(0, 12);
+    // The one thing a client has to say to get patches instead of whole
+    // states. Said here rather than in a handshake of its own so it rides
+    // every reconnect for free, and so silence keeps its old meaning.
+    if (Number(proto) >= 2 && deltaOf.size < MAX_TRACKED) {
+      deltaOf.set(socket.id, deltaOf.get(socket.id) || {});
+    } else {
+      deltaOf.delete(socket.id);
+    }
     room = getRoom(roomId);
     playerId = String(token).slice(0, 64);
     socket.join(roomId);
@@ -945,7 +1062,29 @@ io.on('connection', (socket) => {
     }
     socket.emit('you', { playerId, roomId });
     const held = seatsHeldBy(roomId, socket.id);
-    socket.emit('state', stateFor(room.serializeFor(held), room, held));
+    const track = deltaOf.get(socket.id);
+    // Always the whole thing at the door, whatever the socket speaks: it is
+    // the fixed point every later patch is measured from.
+    sendFullState(socket.id, room, held,
+      stateFor(room.serializeFor(held, frozenBase(room, track)), room, held), track);
+  }));
+
+  /**
+   * The client's way of saying it lost the thread — a patch arrived for a
+   * version it doesn't hold, or a feed anchor didn't match. Answer with the
+   * whole state, but only so often: a confused client shouldn't be able to
+   * bill the server for a hundred of them a second.
+   */
+  socket.on('resync', safely('resync', () => {
+    if (!room) return;
+    const track = deltaOf.get(socket.id);
+    const now = Date.now();
+    if (track && now - (track.resyncAt || 0) < 250) return;
+    if (track) track.resyncAt = now;
+    room.lastSeen = now;
+    const held = seatsHeldBy(room.id, socket.id);
+    sendFullState(socket.id, room, held,
+      stateFor(room.serializeFor(held, frozenBase(room, track)), room, held), track);
   }));
 
   const guard = (fn) => safely('action', (...args) => {
@@ -1029,6 +1168,8 @@ io.on('connection', (socket) => {
   }));
 
   socket.on('disconnect', () => {
+    // The remembered state goes out with the socket that was reading it.
+    deltaOf.delete(socket.id);
     if (!room) return;
     socketsOf.get(room.id)?.delete(socket.id);
     // Other tabs of the same player keep the seat alive.

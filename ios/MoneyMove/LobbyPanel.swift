@@ -1,6 +1,7 @@
 // The panel under the board while the room sits in the lobby: start/settings
 // controls, the seat list with team + kick actions, empty seats the host can
-// fill with bots, and the player's own appearance (name + colour).
+// fill with bots, and the player's own appearance (name, colour, and the
+// piece they play as).
 
 import SwiftUI
 
@@ -201,6 +202,16 @@ struct LobbyPanel: View {
                 }
             }
             .padding(.top, 2)
+
+            // The colour above is half of what a player sees of themselves on
+            // the board; the piece sitting in it is the other half, so it gets
+            // chosen here rather than two screens away in the Store.
+            Rectangle()
+                .fill(P.rule)
+                .frame(height: 1)
+                .padding(.top, 2)
+
+            PiecePicker()
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

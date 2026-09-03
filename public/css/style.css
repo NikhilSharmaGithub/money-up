@@ -1237,6 +1237,41 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .swatch.sel { border-color: var(--card); box-shadow: 0 0 0 2px var(--c); }
 .swatch:disabled { opacity: .25; cursor: not-allowed; }
 
+/* The piece you play as, chosen where you sit down instead of two screens away
+   in the shop. The chips wrap: this column is a narrow strip on a laptop and
+   the whole width of a phone, and neither may push the page sideways. */
+.look-label {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--ink-3); font-weight: 800; margin: 11px 0 5px;
+}
+/* The shop keeps taking on new pieces, and this strip shows every one of
+   them — so it is capped at three rows with the next one peeking, the way the
+   flags below are, rather than growing until the colours are off the panel.
+   The 2px of padding is room for the gold ring on the top and bottom rows.
+   Whatever you are wearing rides into view on its own — see paintPieces. */
+.piece-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  max-height: 158px; overflow-y: auto; padding: 2px;
+}
+.piece-chip {
+  flex: none; width: 42px; height: 44px; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  background: var(--paper-2); border: 1.5px solid var(--rule); border-radius: 10px;
+  cursor: pointer; line-height: 1; color: inherit;
+  transition: transform .14s var(--pop), border-color .14s, box-shadow .14s, background .14s;
+}
+.piece-chip:hover { transform: translateY(-2px); border-color: var(--gold); }
+.piece-chip.sel { border-color: var(--gold); background: var(--gold-soft); box-shadow: 0 0 0 2px var(--gold); }
+.pc-face { font-size: 20px; }
+/* No skin is a piece too — the same disc, in the colour you picked below. */
+.pc-disc { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .2); }
+/* Locked reads as a price tag, not a broken button: dashed, greyed, and one
+   tap from the shop that sells it. */
+.piece-chip.locked { border-style: dashed; }
+.piece-chip.locked .pc-face { opacity: .45; filter: grayscale(1); }
+.piece-chip.locked:hover .pc-face { opacity: .8; filter: none; }
+.pc-price { display: flex; align-items: center; gap: 2px; font-size: 9px; font-weight: 800; color: var(--ink-3); }
+
 .flag-picker {
   display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px;
   margin-top: 10px; max-height: 116px; overflow-y: auto;
@@ -1480,6 +1515,111 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .tile-tip { position: fixed; z-index: 90; pointer-events: none; animation: fadeIn .12s ease; }
 .tile-tip .deed.compact { width: 215px; }
 .confetti { position: fixed; inset: 0; z-index: 75; pointer-events: none; }
+
+/* ─────────────────────────────────────────────── the rewarded ad break ──
+   The house ad: a full screen that belongs to the brand for five seconds.
+   It sits above the modals because it is shown FROM one — the win sheet is
+   still underneath, waiting to be handed a bigger number.
+
+   Nothing here renders unless the server said ads are on. There is no
+   interstitial, no pre-roll and no auto-play anywhere in this file: every
+   one of these screens is the far side of a button somebody pressed. */
+.ad-root {
+  position: fixed; inset: 0; z-index: 85;
+  background: var(--overlay);
+  display: grid; place-items: center; padding: 18px;
+  backdrop-filter: blur(6px); animation: fadeIn .2s ease;
+}
+.ad-sheet {
+  position: relative;
+  width: min(420px, 100%); max-height: 92vh; overflow: hidden auto;
+  background: linear-gradient(170deg, var(--card), var(--paper-2));
+  border: 1px solid var(--rule-2); border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  padding: 26px 24px 22px; text-align: center;
+  animation: modalIn .3s var(--pop);
+}
+/* The label an ad is legally and morally required to wear. It goes at the
+   top, before the art, so nobody has to work out what they are looking at. */
+.ad-flag {
+  position: absolute; top: 12px; left: 14px;
+  font-size: 9.5px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--ink-3);
+}
+/* Leaving is always allowed — it just isn't paid. The glyph is drawn rather
+   than a "×" so it matches every other close in the app. */
+.ad-x {
+  position: absolute; top: 8px; right: 8px;
+  width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  color: var(--ink-3); cursor: pointer; padding: 0;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.ad-x:hover { color: var(--bad); border-color: var(--bad); }
+.ad-x svg { width: 13px; height: 13px; }
+
+/* The mark: the same die-on-a-gold-ring the iOS splash rolls in, drawn flat. */
+.ad-mark { width: 108px; height: 108px; margin: 10px auto 2px; display: block; }
+/* The wordmark is printed on a card here, not on the page, so it takes the
+   card's ink — .logo's --page-ink is a deep red on the crimson daytime table
+   and would read as a warning rather than a name. */
+.ad-word { font-size: 33px; margin-top: 4px; color: var(--ink); }
+.ad-word span { color: var(--red); }
+.ad-copy {
+  color: var(--ink-2); font-size: 14px; line-height: 1.5;
+  margin: 9px auto 20px; max-width: 30ch;
+}
+
+/* The countdown badge, top-right of the art: a ring that empties while the
+   number inside it falls. Both are drawn — no spinner, no third-party frame. */
+.ad-timer { position: relative; width: 46px; height: 46px; margin: 0 auto 14px; }
+.ad-timer svg { width: 46px; height: 46px; transform: rotate(-90deg); }
+.ad-timer .ring-bg { stroke: var(--rule-2); }
+.ad-timer .ring-on { stroke: var(--gold); transition: stroke-dashoffset .1s linear; }
+.ad-timer b {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 15px; font-weight: 850; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+/* Counted out, the ring gets out of the way of the button that just lit. */
+.ad-timer.done { opacity: 0; height: 0; margin: 0; transition: opacity .2s ease; }
+
+.ad-go[disabled] { opacity: .45; }
+/* The moment it lights is the whole point of having waited. */
+.ad-go.lit { animation: adLight .5s var(--pop); }
+@keyframes adLight { from { transform: scale(.94); } }
+.ad-note { color: var(--ink-3); font-size: 11.5px; margin-top: 11px; line-height: 1.45; }
+
+/* Someone who asked for less motion still gets the five seconds — they just
+   get them as a number, not as a ring sweeping round. */
+@media (prefers-reduced-motion: reduce) {
+  .ad-root, .ad-sheet, .ad-go.lit { animation: none; }
+  .ad-timer .ring-on { transition: none; }
+}
+
+/* ---- the quiet offers that lead here ---- */
+/* Free coins, on the landing under the daily card. It is deliberately the
+   plainest card on the page: a gift you have to work five seconds for should
+   never outshout the one that costs nothing. */
+.ad-offer {
+  margin-bottom: 14px; padding: 13px 15px; text-align: left;
+  display: flex; align-items: center; gap: 11px;
+}
+.ad-offer .ao-mark {
+  flex: none; width: 34px; height: 34px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule);
+}
+.ad-offer .ao-body { flex: 1; min-width: 0; }
+.ad-offer .ao-title { font-size: 13px; font-weight: 750; color: var(--ink); }
+.ad-offer .ao-sub { font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
+.ad-offer .btn { flex: none; }
+/* Mid-view the button says so rather than going blank or spinning. */
+.ad-offer .btn[disabled] { opacity: .5; }
+@media (max-width: 420px) {
+  .ad-offer { flex-wrap: wrap; }
+  .ad-offer .btn { width: 100%; }
+}
 
 /* ────────────────────────────────────────────────────────── responsive ── */
 @media (max-width: 1240px) {

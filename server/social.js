@@ -266,6 +266,11 @@ export function awardWin(token, amount, note, { placing = false } = {}) {
     token,
     txn: `win:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     note: String(note || '').slice(0, 140),
+    // The consolation coin is written down the same way a win is, which
+    // leaves the book unable to tell them apart on its own. It says so here
+    // instead: the rewarded-ad double-up only ever offers itself to an
+    // actual winner, and this flag is how it knows which rows those are.
+    ...(placing ? { placing: true } : {}),
   });
   return balance;
 }
@@ -423,6 +428,126 @@ export function claimDaily(token) {
   });
   save();
   return { ok: true, amount, coins: p.coins, streak: d.streak, nextAt: nextMidnight() };
+}
+
+// ------------------------------------------------------------ rewarded ads --
+// A rewarded view pays real coins, so the counters that stop it being farmed
+// have to live where the wallet lives: on the profile, in social.json, right
+// next to the daily streak. The rules — what a view is worth, how many a day,
+// how long between them — belong to ads.js, which can change them at runtime.
+// This module only remembers what has already been paid out, and refuses to
+// pay for the same view twice.
+
+/**
+ * The reward id for one view. Deliberately derived rather than random: the
+ * double-up's id contains the win it doubled, so the same win can never be
+ * doubled again no matter how many tickets are waved at it.
+ */
+export const adsRewardId = (placement, ref) => `ads:${placement}:${ref}`;
+
+/** The profile's ad book, rolled over the moment the calendar day turns. */
+function adsBook(p) {
+  const today = dayKey();
+  const a = p.ads ?? (p.ads = { day: today, views: {}, coins: 0, lastAt: 0 });
+  if (a.day !== today) { a.day = today; a.views = {}; a.coins = 0; }
+  a.views ??= {};
+  return a;
+}
+
+/**
+ * What this device has already taken from ads today. Read-only, and the same
+ * no-minting rule as walletOf: every config fetch asks, and asking must not
+ * conjure a wallet. A device with no book yet has taken nothing, which is
+ * exactly what a fresh one reads as.
+ */
+export function adsStateOf(token) {
+  const p = token ? profiles.get(token) : null;
+  if (!p || !p.ads) return { views: {}, coins: 0, lastAt: 0 };
+  // The day's tallies reset at midnight; the clock since the last view does
+  // not, or the minute before midnight would be a free-for-all.
+  if (p.ads.day !== dayKey()) return { views: {}, coins: 0, lastAt: p.ads.lastAt || 0 };
+  return { views: { ...p.ads.views }, coins: p.ads.coins || 0, lastAt: p.ads.lastAt || 0 };
+}
+
+/**
+ * Pay for one finished view. This is creditPurchase's discipline borrowed
+ * whole, down to sharing its already-credited list: a replayed claim finds
+ * its own id sitting there and pays nothing the second time. That matters
+ * more here than it does for a receipt, because the spent-ticket set lives in
+ * memory and a restart forgets it — the list on disk does not.
+ */
+export function creditAdReward(token, rewardId, coins, { placement, note } = {}) {
+  const p = profileFor(token);
+  if (!p) return { error: 'Unknown player' };
+  const id = String(rewardId || '');
+  if (!id) return { error: 'Missing reward id' };
+  if (p.purchases.includes(id)) return { error: 'That view was already paid for', duplicate: true };
+  const amount = Math.max(0, Math.floor(Number(coins) || 0));
+  if (!amount) return { error: 'Nothing to credit' };
+  p.purchases.push(id);
+  if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
+  p.coins += amount;
+  const book = adsBook(p);
+  const slot = String(placement || 'unknown');
+  book.views[slot] = (book.views[slot] || 0) + 1;
+  book.coins = (book.coins || 0) + amount;
+  book.lastAt = Date.now();
+  appendLedger({
+    at: Date.now(),
+    provider: 'ads',
+    packId: slot,
+    usd: 0,
+    coins: amount,
+    token,
+    txn: id,
+    note: String(note || '').slice(0, 140),
+  });
+  save();
+  return { ok: true, coins: p.coins, awarded: amount, views: { ...book.views }, adCoins: book.coins };
+}
+
+/**
+ * The win a double-up would be doubling: this device's most recent real win,
+ * still inside the window, not already doubled. Anything else — a runner-up
+ * coin, a win from this morning, a win that has had its ad — comes back null,
+ * and the offer is refused before a single frame of video is served.
+ */
+export function winAwaitingDouble(token, { withinMs = 20 * 60 * 1000, now = Date.now() } = {}) {
+  const p = token ? profiles.get(token) : null;
+  if (!p) return null;
+  for (let i = ledger.length - 1; i >= 0; i--) {
+    const e = ledger[i];
+    // The ledger is written in order, so the first row older than the window
+    // means every row behind it is too.
+    if (now - e.at > withinMs) return null;
+    if (e.token !== token || e.provider !== 'win' || e.placing) continue;
+    if (p.purchases?.includes(adsRewardId('doubleWin', e.txn))) return null;
+    return { txn: e.txn, coins: e.coins || 0, at: e.at, note: e.note || '' };
+  }
+  return null;
+}
+
+/** Today's ad payout, read straight off the ledger — the desk's headline. */
+export function adsDayTotals(now = Date.now()) {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const from = midnight.getTime();
+  const out = { views: 0, coins: 0, players: 0, byPlacement: {} };
+  const seen = new Set();
+  for (let i = ledger.length - 1; i >= 0; i--) {
+    const e = ledger[i];
+    if (e.at < from) break;
+    if (e.provider !== 'ads') continue;
+    out.views++;
+    out.coins += e.coins || 0;
+    const slot = e.packId || 'unknown';
+    const row = out.byPlacement[slot] ?? (out.byPlacement[slot] = { views: 0, coins: 0 });
+    row.views++;
+    row.coins += e.coins || 0;
+    if (e.token) seen.add(e.token);
+  }
+  out.players = seen.size;
+  return out;
 }
 
 // ------------------------------------------------------------- leaderboard --
@@ -785,6 +910,9 @@ export function setPresence(token, roomId, status = 'lobby') {
 }
 
 export const clearPresence = (token) => presence.delete(token);
+
+/** Which room this device is sitting in right now, if any. */
+export const roomOf = (token) => presence.get(token)?.roomId || null;
 
 /** How many of each store item are owned across every wallet — the burn side. */
 export function ownedTally() {
