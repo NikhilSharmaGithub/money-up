@@ -1521,6 +1521,12 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    It sits above the modals because it is shown FROM one — the win sheet is
    still underneath, waiting to be handed a bigger number.
 
+   It is also the answer whenever Google has none. When a network is serving
+   it brings its own frame and none of this is drawn; the moment it has no
+   fill, or is blocked, or was never let onto the page, these rules are what
+   the player gets instead — so they are dressed as the real thing, not as an
+   apology for one.
+
    Nothing here renders unless the server said ads are on. There is no
    interstitial, no pre-roll and no auto-play anywhere in this file: every
    one of these screens is the far side of a button somebody pressed. */

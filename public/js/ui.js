@@ -5,6 +5,7 @@ import { escapeHtml, deedMarkup, deckMarkup } from './board.js';
 import { icon, groupBanner, groupFlag, circleFlag } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
+import { configureAdNetwork, playNetworkAd } from './ads.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -2556,9 +2557,21 @@ function worthChartSVG(state) {
 // worth, how many are left today and whether this one counts at all are the
 // server's business, and its refusals are printed rather than swallowed.
 let adsConfig = null;
+// Whether the server has been asked at all yet. `adsConfig === null` on its own
+// cannot tell "ads are off" from "the answer is still in the air", and the two
+// deserve opposite treatment: the first is final, the second is worth asking
+// about again before giving up on an offer.
+let adsAsked = false;
 
 export function setAdsConfig(c) {
+  adsAsked = true;
   adsConfig = c?.enabled ? c : null;
+  // The one thing the tokenless answer settles for good is which network is
+  // serving, so this is the earliest a third-party script could be loaded —
+  // and it wants to be the earliest, because a rewarded ad has to be fetched
+  // before the button is pressed to be there when it is. On a dark server, or
+  // on the house, nothing is loaded and nothing is contacted.
+  configureAdNetwork(adsConfig);
   // app.js asks for the config before it has anything to say about who is
   // asking, and the per-device counts ("3 left today") only exist once the
   // server knows. So the tokenless answer is used for the one thing it can
@@ -2573,9 +2586,12 @@ async function refreshAdsConfig() {
   const token = walletToken();
   if (!token) return mountFreeCoins();
   try {
-    const fresh = await fetch(api(`/api/ads/config?token=${encodeURIComponent(token)}`))
+    const fresh = await fetch(api(`/api/ads/config?token=${encodeURIComponent(token)}&platform=web`))
       .then((r) => r.json());
     adsConfig = fresh?.enabled ? fresh : null;
+    // The tokenless answer above may have arrived before the desk was touched.
+    // If this one is the first to name a network, it is still early enough.
+    configureAdNetwork(adsConfig);
   } catch { /* the switch we already have stands; the counts stay coarse */ }
   mountFreeCoins();
 }
@@ -2727,11 +2743,33 @@ function playHouseAd({ label = 'Claim your reward', seconds = 5 } = {}) {
 }
 
 /**
- * The one place an ad gets on screen. When a network is wired up it goes in
- * front of the house ad here — and the house ad stays as the no-fill answer,
- * because a slot nobody bought still owes the player their five seconds.
+ * The one place an ad gets on screen, and the only thing the network changed:
+ * everything either side of it — the ticket, the caps, the coins — is the same
+ * as it was when the house was the whole system.
+ *
+ * A network gets first refusal, but only when the offer we are holding said it
+ * is the one serving. 'admob' lands here too and goes straight past, because
+ * AdMob has no browser SDK to go past it with; the iOS app is where that
+ * provider means anything, and on the web it means the house.
+ *
+ * Everything the network cannot do — no fill, no script, a blocker, an outage,
+ * an id nobody has pasted in yet — comes back as the house ad rather than as
+ * an error, because a slot nobody bought still owes the player their five
+ * seconds, and the ticket pays exactly the same either way.
  */
-const presentAd = (opts) => playHouseAd(opts);
+async function presentAd({ provider, slot, ...house }) {
+  if (provider === 'h5' || provider === 'adsense') {
+    // A throw is one more way the network can fail to fill the slot, and it
+    // has to land where all the others land. Without this the exception walks
+    // out through the gateway with `busy` still true, and the button that
+    // started it spins until the page is reloaded.
+    const seen = await playNetworkAd(slot).catch(() => 'unavailable');
+    // Watched through, or walked out of. Both are answers the player gave;
+    // only the first is worth coins, and neither wants a second ad on top.
+    if (seen === 'viewed' || seen === 'dismissed') return seen;
+  }
+  return (await playHouseAd(house)) ? 'viewed' : 'dismissed';
+}
 
 // ---- the gateway ---------------------------------------------------------
 // The only place in the client that knows the server's endpoint names, and the
@@ -2787,7 +2825,9 @@ async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {})
   if (!token || !spec) return null;
 
   busy(true);
-  const offer = await adPost('/api/ads/offer', { token, placement: name });
+  // `platform` says plainly what the User-Agent would otherwise be sniffed for:
+  // this is a browser, so the browser's network is the one to quote.
+  const offer = await adPost('/api/ads/offer', { token, placement: name, platform: 'web' });
   if (offer.error) {
     busy(false);
     noteRemaining(offer.remaining);
@@ -2801,15 +2841,26 @@ async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {})
   // a doubled win pays whatever that win paid.
   const worth = Number(offer.reward?.coins ?? spec.coins ?? 0);
   const watched = await presentAd({
+    // The offer is the freshest word on who is serving — the config this page
+    // booted with can be an hour old and a desk change behind.
+    provider: offer.provider,
+    slot: name,
     label: worth > 0 ? `Claim your ${coinWord(worth)}` : 'Claim your reward',
   });
-  if (!watched) {
+  if (watched !== 'viewed') {
     busy(false);
     toast('Closed early — nothing was paid for that one.');
     return null;
   }
 
-  const claim = await adPost('/api/ads/reward', { token, ticket: offer.ticket });
+  // What the break came to, said out loud. On the web there is no callback
+  // from Google to check this against — H5 has no server-side verification, so
+  // the ticket, the interval and the caps are what bound the faucet, exactly
+  // as they did when the house was the only network. The field is here because
+  // it can only ever narrow the outcome: a break this client reports as
+  // unfinished is refused, and one it reports as finished still has to get
+  // past every rule the server had before it was asked.
+  const claim = await claimTicket(token, offer.ticket, watched);
   busy(false);
   if (claim.error) { noteRemaining(claim.remaining); toast(refusalLine(claim), 'error'); return null; }
 
@@ -2817,6 +2868,42 @@ async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {})
   // The server is the authority on the size of the payout: an offer quoting a
   // figure the claim then disagrees with pays what the claim says.
   return { coins: Number(claim.coins ?? 0), paid: Number(claim.awarded ?? worth ?? 0) };
+}
+
+/**
+ * Redeems one ticket, and waits for a provider that hasn't finished speaking.
+ *
+ * A rewarded view and the network's confirmation of it are two different
+ * journeys, and the client usually wins. The gateway holds the claim at the
+ * door for a few seconds on that account, but a few seconds is a guess about
+ * somebody else's infrastructure, and when the guess is wrong the player has
+ * watched the whole ad and gets a red toast — the one failure a rewarded ad
+ * must never have. So a refusal that says `pending` is not an answer, it is a
+ * "not yet", and the same ticket is offered again until it is one or the
+ * budget runs out. The ticket outlives every one of these attempts: the server
+ * only burns it when it pays.
+ *
+ * Nothing else is retried. A cap, a cooldown, an expired ticket and a bad
+ * outcome are all final answers, and asking again would just be arguing.
+ *
+ * The budget is short on purpose, and the reason is the other failure this
+ * sits on top of. A callback running a few seconds late is the case worth
+ * waiting for; an SSV URL typed with a typo into the AdMob console is a
+ * callback that is never coming, and every view under it would spend the whole
+ * budget before saying so. Fifteen seconds on top of the gateway's own five is
+ * long enough for the first and short enough to survive the second — and the
+ * desk counts what the SSV door has actually seen, which is where a typo is
+ * meant to be noticed.
+ */
+async function claimTicket(token, ticket, outcome, { budgetMs = 15000 } = {}) {
+  const deadline = Date.now() + budgetMs;
+  let claim = await adPost('/api/ads/reward', { token, ticket, outcome });
+  while (claim.pending && Date.now() < deadline) {
+    const wait = Math.min(4000, Math.max(1000, Number(claim.retryInSec || 2) * 1000));
+    await new Promise((r) => setTimeout(r, wait));
+    claim = await adPost('/api/ads/reward', { token, ticket, outcome });
+  }
+  return claim;
 }
 
 /** The landing's wallet chip, counting up rather than snapping to the total. */
@@ -2861,9 +2948,9 @@ function doubleWinHTML(state, meId) {
       factor === 2 ? 'twice' : `${factor} times`}.${left === null ? '' : ` ${left} left today.`}</div>`;
 }
 
-function wireDoubleWin(root, meId) {
+function wireDoubleWin(root, meId, state) {
   const btn = $('#gDouble', root);
-  if (!btn) return;
+  if (!btn) { offerDoubleLate(root, meId, state); return; }
   const sub = $('#gDoubleSub', root);
   const label = btn.innerHTML;
 
@@ -2903,6 +2990,38 @@ function wireDoubleWin(root, meId) {
     sfx.gain();
     countUpTo($('#gdNum', won), from, to);
   };
+}
+
+/**
+ * The offer that could not be drawn in time.
+ *
+ * Two races put a winner in front of a sheet with no offer on it, and between
+ * them they cover nearly everybody.
+ *
+ * A doubleWin view is only worth anything while there is a win sitting there
+ * waiting to be doubled, so the server honestly reports none left until one
+ * exists — and the moment one exists is the moment the game ends, long after
+ * this page asked what was on offer. And a player who walks straight into a
+ * finished table gets the sheet drawn from the socket's first frame, which
+ * routinely beats the config fetch home.
+ *
+ * Either way the answer is the same: ask once more, and put the offer in if
+ * the server has since changed its mind. Nothing is asked for anyone but the
+ * winner, on a server that has already said ads are off, or when the offer was
+ * there and something else took it away.
+ */
+async function offerDoubleLate(root, meId, state) {
+  if (state?.winner?.id !== meId || !walletToken()) return;
+  if (adsAsked && !adsConfig) return;
+  if (placement('doubleWin')) return;
+  await refreshAdsConfig();
+  const html = doubleWinHTML(state, meId);
+  if (!html) return;
+  const actions = $('.go-actions', root);
+  if (!actions) return;
+  // Back where it would have been: first in the row, above Play again.
+  actions.insertAdjacentHTML('afterbegin', html);
+  wireDoubleWin(root, meId, state);
 }
 
 /** A number climbing to what it became — the payout landing, not a repaint. */
@@ -3043,7 +3162,7 @@ export function showGameOver(state, meId, actions) {
     if (fresh) fresh.onclick = () => { sfx.click(); closeModal(); actions.newTable?.(); };
     const share = $('#gShare', root);
     if (share) share.onclick = () => { sfx.click(); shareResult(resultLine(state, meId)); };
-    wireDoubleWin(root, meId);
+    wireDoubleWin(root, meId, state);
   });
 }
 

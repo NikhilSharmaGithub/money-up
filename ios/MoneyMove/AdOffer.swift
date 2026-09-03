@@ -17,6 +17,12 @@
 //
 // The offer is asked for BEFORE the ad plays, so nobody is ever shown five
 // seconds of promo against a cap they had already hit.
+//
+// What plays in between is the gateway's choice, not this file's. When it
+// answers `provider: admob` the offer also carries a unit id and a nonce, and
+// RewardedAdNetwork.swift loads Google's rewarded ad for that unit; every
+// other answer, and every way Google can fail to fill the slot, ends at the
+// house ad below.
 
 import SwiftUI
 
@@ -32,6 +38,15 @@ struct AdOfferReply: Decodable {
     var expiresAt: Double?
     var reward: Reward?
     var remaining: [String: Int]?
+
+    /// Present only when the gateway is serving AdMob: the unit to load, the
+    /// nonce Google's server-side callback has to carry back so /api/ads/ssv
+    /// can tell which ticket it just confirmed, and a short opaque tag it
+    /// cross-checks that confirmation against. None of the three is the wallet
+    /// token — nothing that spends coins is handed to an ad network.
+    var unitId: String?
+    var customData: String?
+    var userId: String?
 
     var error: String?
     /// Seconds until the same request would be allowed, when the refusal was a
@@ -51,6 +66,10 @@ struct AdRewardReply: Decodable {
 
     var error: String?
     var retryInSec: Double?
+    /// Not "no" — "not yet". The gateway sets this when the only thing missing
+    /// is Google's own confirmation of a view that has already happened, and it
+    /// means the ticket was not burnt and the same claim is worth making again.
+    var pending: Bool?
 }
 
 // MARK: - the desk
@@ -97,8 +116,13 @@ final class AdDesk: ObservableObject {
         let token = store.token
         // fetchJSON's normal path builder percent-encodes the "?", so a query
         // string has to be glued on in raw mode.
+        //
+        // `platform` is said out loud rather than left to the server's
+        // User-Agent sniff: the gateway serves a different network to a phone
+        // than to a browser, and a guess is a poor thing to hang that on. An
+        // older server has never heard of the field and ignores it.
         let fresh: AdsConfig? = try? await store.fetchJSON(
-            "/api/ads/config?token=\(token)", raw: true)
+            "/api/ads/config?token=\(token)&platform=ios", raw: true)
         // A read that didn't land leaves whatever we had — and leaves the door
         // open to ask again. A read that landed saying "off" takes every
         // affordance off the screen and closes it.
@@ -111,18 +135,19 @@ final class AdDesk: ObservableObject {
     /// a view into a wallet. Returns what was paid, or nil for every other
     /// outcome; each one of those has already been said out loud.
     ///
-    /// `present` is handed the line the ad's own button should wear and answers
-    /// whether the break was watched to the end. Closing early is always
-    /// allowed and never pays.
+    /// `house` is handed what the break is worth and answers whether it was
+    /// watched to the end. It is the fallback, not the plan: when the gateway
+    /// says AdMob, Google's ad goes in front of it. Closing either one early
+    /// is always allowed and never pays.
     func watch(_ name: String, store: GameStore,
-               present: @escaping (Int) async -> Bool) async -> (paid: Int, coins: Int)? {
+               house: @escaping (Int) async -> Bool) async -> (paid: Int, coins: Int)? {
         guard !busy, slot(name) != nil else { return nil }
         busy = true
         defer { busy = false }
 
         let offer: AdOfferReply? = try? await store.fetchJSON(
             "/api/ads/offer", method: "POST",
-            body: ["token": store.token, "placement": name])
+            body: ["token": store.token, "placement": name, "platform": "ios"])
 
         guard let offer else {
             store.showToast("Couldn't reach the server — try again.", isError: true)
@@ -141,14 +166,43 @@ final class AdDesk: ObservableObject {
         // What this break is being watched FOR. Only the server knows the
         // figure — a doubled win pays whatever that win paid.
         let worth = offer.reward?.coins ?? slot(name)?.coins ?? 0
-        guard await present(worth) else {
+
+        // Google first, but only when the gateway itself said Google. The
+        // server already falls back to the house adapter the moment AdMob
+        // can't serve, so `provider` is the one answer both halves obey.
+        let network = offer.provider == "admob"
+            ? await RewardedAdNetwork.shared.show(unitId: offer.unitId ?? "",
+                                                  customData: offer.customData ?? "",
+                                                  userId: offer.userId ?? "")
+            : NetworkAdOutcome.unavailable
+
+        let watched: Bool
+        switch network {
+        case .earned:
+            watched = true
+        case .dismissed:
+            // A real ad, walked out of. The same answer as walking out of a
+            // house one, for the same reason: the break wasn't watched.
+            watched = false
+        case .unavailable:
+            // No fill, a load that never landed, an id nobody has pasted in
+            // yet. The player was promised a break and a reward, so the house
+            // serves the break and the ticket goes back to the gateway exactly
+            // as it would have — because the ticket is the only thing in this
+            // conversation that authorises a coin. This app has never decided
+            // a payout and does not start now; it carries the one thing the
+            // server signed and lets the server rule on it. Which is also why
+            // the gateway is free to disagree: while the desk has AdMob live
+            // it wants Google's own callback before it pays, and if it refuses
+            // this claim the refusal is printed in the server's own words.
+            watched = await house(worth)
+        }
+        guard watched else {
             store.showToast("Closed early — nothing was paid for that one.")
             return nil
         }
 
-        let claim: AdRewardReply? = try? await store.fetchJSON(
-            "/api/ads/reward", method: "POST",
-            body: ["token": store.token, "ticket": ticket])
+        let claim = await redeem(ticket, store: store)
 
         guard let claim else {
             store.showToast("Couldn't reach the server — try again.", isError: true)
@@ -169,6 +223,40 @@ final class AdDesk: ObservableObject {
         SoundKit.shared.gain()
         Haptics.turn()
         return (paid: paid, coins: claim.coins ?? 0)
+    }
+
+    /// Redeems one ticket, and waits out a provider that hasn't finished
+    /// speaking yet.
+    ///
+    /// On AdMob a coin needs two things to arrive: this claim, and Google's own
+    /// server-side callback confirming the view. They travel separately and the
+    /// phone usually wins the race — the gateway already holds the claim at the
+    /// door for a few seconds because of it, but a few seconds is a guess about
+    /// somebody else's infrastructure, and the cost of guessing low is a player
+    /// who sat through thirty seconds of video and gets a red error for it.
+    ///
+    /// So `pending` is not treated as an answer. The ticket survives a pending
+    /// refusal — the gateway only burns one when it pays — and the same claim
+    /// is made again until it is honoured or the budget runs out. Every other
+    /// refusal is final and is shown as it arrives: a cap, a cooldown or an
+    /// expired ticket does not change its mind because it was asked twice.
+    ///
+    /// The budget is short on purpose, because of the other failure this sits
+    /// on top of. A callback a few seconds late is worth waiting for; an SSV
+    /// URL typed with a typo into the AdMob console is a callback that is
+    /// never coming, and every view under it would spend the whole budget
+    /// before admitting it. Fifteen seconds on top of the gateway's own five
+    /// is long enough for the first and short enough to survive the second.
+    private func redeem(_ ticket: String, store: GameStore) async -> AdRewardReply? {
+        let deadline = Date.now.addingTimeInterval(15)
+        while true {
+            let claim: AdRewardReply? = try? await store.fetchJSON(
+                "/api/ads/reward", method: "POST",
+                body: ["token": store.token, "ticket": ticket])
+            guard let claim, claim.pending == true, Date.now < deadline else { return claim }
+            let wait = min(4, max(1, claim.retryInSec ?? 2))
+            try? await Task.sleep(for: .seconds(wait))
+        }
     }
 
     /// Remembers what a doubled win came to, so the next offer can print it.
@@ -460,9 +548,9 @@ struct DoubleWinOffer: View {
     private func run(factor: Int) async {
         Haptics.tap()
         SoundKit.shared.click()
-        let out = await desk.watch("doubleWin", store: store) { coins in
+        let out = await desk.watch("doubleWin", store: store, house: { coins in
             await AdBreak.play(coins: coins, into: $playing)
-        }
+        })
         guard let out else { return }
         // The claim pays the bonus, so the purse it was added to is the bonus
         // divided by the extra share, and the total is the two together.
@@ -549,9 +637,9 @@ struct FreeCoinsOffer: View {
     private func run() async {
         Haptics.tap()
         SoundKit.shared.click()
-        let out = await desk.watch("freeCoins", store: store) { coins in
+        let out = await desk.watch("freeCoins", store: store, house: { coins in
             await AdBreak.play(coins: coins, into: $playing)
-        }
+        })
         guard let out else { return }
         store.showToast("+\(out.paid) coin\(out.paid == 1 ? "" : "s") — thanks for watching.",
                         glyph: .coin)
@@ -588,8 +676,8 @@ final class AdBreak: Identifiable {
     /// let go of counts as one walked out of.
     deinit { resume?(false) }
 
-    /// Raises the cover and waits for it. When a network is wired up it goes in
-    /// front of the house ad here — and the house ad stays as the no-fill
+    /// Raises the cover and waits for it. Google's ad goes in front of this,
+    /// one level up in AdDesk.watch — and the house ad stays as the no-fill
     /// answer, because a slot nobody bought still owes the player their five
     /// seconds.
     @MainActor

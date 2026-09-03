@@ -466,12 +466,17 @@ export const adminPageHTML = `<!doctype html>
       </div>
       <div class="card">
         <h2>Who is serving</h2>
-        <p class="hint">The house shows the game's own full-screen promo and needs nothing configured. AdMob needs its ids, and falls back to the house without them.</p>
+        <p class="hint">The house shows the game's own full-screen promo and needs nothing configured. Google is one choice serving two networks — AdMob in the app, H5 in the browser — and each falls back to the house on its own until its ids are pasted in below.</p>
         <div id="adprovider"></div>
-        <div style="margin-top:14px"><button class="btn sm" id="ad-mob-save">Save provider</button></div>
+        <div style="margin-top:14px"><button class="btn sm" id="ad-mob-save">Save ids</button></div>
         <div class="msg" id="adprovmsg"></div>
       </div>
     </div>
+    <section class="card">
+      <h2>Verification</h2>
+      <p class="hint">A rewarded view pays only when the ticket and the network's own confirmation both check out. This is that door: what Google has called with, and what has been turned away.</p>
+      <div id="adssv"></div>
+    </section>
     <section class="card">
       <h2>Today</h2>
       <div id="adtoday"></div>
@@ -1003,9 +1008,17 @@ export const adminPageHTML = `<!doctype html>
     // Ads paying out on a provider the owner did not choose is the sort of
     // thing that goes unnoticed for a month unless the front page says it.
     var ads = state.ads;
-    if (ads && ads.settings && ads.settings.enabled && ads.provider && !ads.provider.ok) {
-      html += '<div class="alert amber"><b>Rewarded ads are live on the house adapter.</b> ' +
-        esc(ads.provider.line) + ' Coins are being paid for house promos, not for anything an advertiser has bought.</div>';
+    if (ads && ads.settings && ads.settings.enabled && ads.provider) {
+      if (ads.settings.testMode) {
+        html += '<div class="alert red"><b>Rewarded ads are live on Google\\'s TEST ids.</b> ' +
+          'No impression earns anything and rewards are paid without server-side verification. Turn test mode off in Ads.</div>';
+      } else if (!ads.provider.ok) {
+        html += '<div class="alert amber"><b>Rewarded ads are live on the house adapter.</b> ' +
+          esc(ads.provider.line) + ' Coins are being paid for house promos, not for anything an advertiser has bought.</div>';
+      } else if (ads.ssv && ads.provider.per && ads.provider.per.ios === 'admob' && !ads.ssv.lastOkAt && ads.ssv.rejected) {
+        html += '<div class="alert amber"><b>Every AdMob verification callback so far has been turned away.</b> ' +
+          esc(ads.ssv.lastRejectReason || '') + ' — no reward on the app can be paid until one lands. See Ads → Verification.</div>';
+      }
     }
     document.getElementById('alerts').innerHTML = html;
   }
@@ -1781,8 +1794,17 @@ export const adminPageHTML = `<!doctype html>
     { id: 'freeCoins', label: 'Free coins', line: 'A small grant, for anyone who wants to sit through one.' },
   ];
   var AD_INPUTS = ['ad-dw-factor', 'ad-dw-cap', 'ad-fc-coins', 'ad-fc-cap',
-    'ad-gap', 'ad-ceiling', 'ad-ttl', 'ad-window',
-    'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc'];
+    'ad-gap', 'ad-ceiling', 'ad-ttl', 'ad-window', 'ad-ssvwait',
+    'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc', 'ad-mob-net',
+    'ad-h5-client', 'ad-h5-dw', 'ad-h5-fc'];
+
+  // What each kind of client is told, in the words the desk should use for it.
+  var AD_SURFACES = [
+    { id: 'ios', label: 'iPhone app' },
+    { id: 'android', label: 'Android app' },
+    { id: 'web', label: 'Browser' },
+  ];
+  var AD_NET_NAME = { house: 'House', admob: 'AdMob', h5: 'H5' };
 
   /** The same two-button switch the rest of this page uses. */
   function adSeg(name, val, options) {
@@ -1808,6 +1830,64 @@ export const adminPageHTML = `<!doctype html>
       '</div>';
   }
 
+  /**
+   * The verification door, per network. This card exists because the way this
+   * fails in production is silence: an SSV URL with a typo in it, or pasted
+   * onto one ad unit and not the other, and nothing anywhere says so — the
+   * ads play, the rewards refuse, and the owner hears about it from a player.
+   * So the counts are printed even when they are zero, and the last rejection
+   * is kept in the server's own words.
+   */
+  function renderAdSsv(a, s) {
+    var ssv = a.ssv || {};
+    var pv = a.provider || {};
+    var nets = pv.networks || {};
+    var mobLive = (pv.per || {}).ios === 'admob';
+
+    var html = '<div class="mini-forms" style="gap:26px;margin-bottom:14px">' +
+      '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">callback URL</div>' +
+      '<div class="mono" style="font-size:13px;margin-top:3px">' + esc(ssv.url || '/api/ads/ssv') + '</div></div>' +
+      '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">confirmed</div>' +
+      '<div style="font-size:13px;margin-top:3px"><b>' + fmtNum(ssv.ok) + '</b> since boot</div></div>' +
+      '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">turned away</div>' +
+      '<div style="font-size:13px;margin-top:3px"><b>' + fmtNum(ssv.rejected) + '</b> since boot</div></div>' +
+      '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">verifier keys</div>' +
+      '<div style="font-size:13px;margin-top:3px">' +
+      (ssv.keysAt ? fmtNum(ssv.keyCount) + ' held, fetched ' + fmtWhen(ssv.keysAt) : 'not fetched yet') +
+      '</div></div>' +
+      '</div>';
+
+    var rows = '<tr><th>network</th><th>state</th><th>last word from it</th></tr>';
+    rows += '<tr><td>AdMob <span class="dim">app</span></td>' +
+      '<td>' + (nets.admob && nets.admob.ready
+        ? (mobLive ? '<span class="pill ok">serving</span>' : '<span class="pill dim">configured, not chosen</span>')
+        : '<span class="pill warn">not configured</span>') + '</td>' +
+      '<td>' + (ssv.lastOkAt
+        ? 'confirmed ' + fmtWhen(ssv.lastOkAt) + ' <span class="dim">— unit ' + esc(ssv.lastOkUnit || '?') +
+          ', network ' + esc(ssv.lastOkNetwork || '?') + '</span>'
+        : '<span class="dim">no callback has ever reached this server</span>') + '</td></tr>';
+    rows += '<tr><td>H5 <span class="dim">browser</span></td>' +
+      '<td>' + (nets.h5 && nets.h5.ready
+        ? ((pv.per || {}).web === 'h5' ? '<span class="pill ok">serving</span>' : '<span class="pill dim">configured, not chosen</span>')
+        : '<span class="pill warn">not configured</span>') + '</td>' +
+      '<td class="dim">no server-side verification exists for this product — the ticket and the caps are the whole limit</td></tr>';
+    html += '<div class="scroll"><table>' + rows + '</table></div>';
+
+    if (ssv.lastRejectAt) {
+      html += '<div class="alert amber" style="margin-top:12px"><b>Last rejected callback:</b> ' +
+        esc(ssv.lastRejectReason || 'unknown reason') +
+        ' <span class="dim">— ad unit ' + esc(ssv.lastRejectUnit || 'not named') + ', ' + fmtWhen(ssv.lastRejectAt) + '.</span>' +
+        ' Every rejection is on the server log with its reason and unit.</div>';
+    }
+    if (mobLive && !s.testMode && !ssv.lastOkAt) {
+      html += '<div class="caption" style="margin-top:10px">AdMob is serving and nothing has called yet. Until a callback lands, every claim on the app answers <span class="mono">402</span> — check the SSV URL on <b>each</b> rewarded unit in the console.</div>';
+    }
+    if (ssv.keysError) {
+      html += '<div class="caption" style="margin-top:8px">Last key fetch failed: ' + esc(ssv.keysError) + '. Callbacks are refused rather than trusted while the set cannot be read.</div>';
+    }
+    swap('adssv', html);
+  }
+
   function renderAds() {
     var a = state.ads;
     if (!a) {
@@ -1823,9 +1903,15 @@ export const adminPageHTML = `<!doctype html>
     var dw = slots.doubleWin || {};
     var fc = slots.freeCoins || {};
 
+    // Who is serving is now two answers, because the app and the browser buy
+    // from different Google desks and one of them can be ready before the
+    // other. The tile says both rather than picking a winner.
+    var per = pv.per || {};
+    var serving = (AD_NET_NAME[per.ios] || 'House') + ' / ' + (AD_NET_NAME[per.web] || 'House');
+
     swap('adtiles',
       tileHtml(s.enabled ? 'LIVE' : 'dark', 'rewarded ads', s.enabled ? 'clients are showing the buttons' : 'every ad affordance is hidden') +
-      tileHtml(pv.live === 'admob' ? 'AdMob' : 'House', 'serving', pv.ok ? '' : 'chosen provider is not ready') +
+      tileHtml(serving, 'serving', s.testMode ? 'TEST ids — no revenue' : 'app / browser') +
       tileHtml(fmtNum(today.views), 'views today', '') +
       tileHtml(fmtNum(today.coins), 'coins paid today', '') +
       tileHtml(fmtNum(today.players), 'players reached', 'distinct wallets') +
@@ -1846,6 +1932,14 @@ export const adminPageHTML = `<!doctype html>
       sw += '<div class="caption" style="margin-top:12px">Nothing pays out while this is dark: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> so old clients keep their ad buttons hidden.</div>';
     } else if (!pv.ok) {
       sw += '<div class="alert amber" style="margin-top:12px"><b>Ads are live on the house adapter.</b> ' + esc(pv.line) + '</div>';
+    }
+    // Test mode pays real coins for Google's test inventory and cannot be
+    // verified, so it is the one state on this page that shouts while ads are
+    // live. It is fine on a staging server and never fine on this one.
+    if (s.testMode && s.enabled) {
+      sw += '<div class="alert red" style="margin-top:12px"><b>Test mode is ON while ads are live.</b> ' +
+        'Google test ids are serving, no impression earns anything, and rewards are paid without server-side verification. ' +
+        'Turn it off under "Who is serving" before leaving this server alone.</div>';
     }
     if (s.changedAt) sw += '<div class="caption" style="margin-top:8px">Last changed ' + fmtWhen(s.changedAt) + '.</div>';
     swap('adswitch', sw);
@@ -1877,25 +1971,75 @@ export const adminPageHTML = `<!doctype html>
       adNum('ad-ceiling', 'Coin ceiling a day', caps.dailyCoinCap, 'The hard stop, whatever the caps above say. Zero stops every payout.') +
       adNum('ad-ttl', 'Ticket life (sec)', caps.ticketTtlSec, 'How long an offer stays claimable.') +
       adNum('ad-window', 'Win window (min)', caps.winWindowMin, 'How stale a win may be and still be doubled. Zero: none are.') +
+      adNum('ad-ssvwait', 'Wait for Google (sec)', caps.ssvWaitSec, 'How long a claim holds the door for the verification callback before saying "not yet". Zero: no wait.') +
       '</div>' +
       '<div class="caption" style="margin-top:10px">' + esc(bind) + '</div>');
 
     var mob = s.admob || {};
     var units = mob.units || {};
+    var h5 = s.h5 || {};
+    var h5slots = h5.slots || {};
+    var nets = pv.networks || {};
+
+    // What every kind of client is actually being told right now. One setting
+    // produces three answers, so the desk prints all three rather than leaving
+    // the owner to work out which half of "Google" his phone is getting.
+    var surfaces = '<div class="mini-forms" style="gap:18px;margin:12px 0 14px">';
+    AD_SURFACES.forEach(function (surface) {
+      var net = per[surface.id] || 'house';
+      surfaces += '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">' +
+        esc(surface.label) + '</div><div style="font-size:14px;margin-top:3px">' +
+        '<span class="pill ' + (net === 'house' ? 'dim' : 'ok') + '">' + esc(AD_NET_NAME[net] || net) + '</span>' +
+        '</div></div>';
+    });
+    surfaces += '</div>';
+
+    /** One network's readiness, in a line the owner can act on. The line names
+     *  its own network, so the pill is the only label the row needs. */
+    function netLine(net) {
+      net = net || {};
+      return '<div style="font-size:13px;margin-bottom:8px">' +
+        (net.ready ? '<span class="pill ok">configured</span>' : '<span class="pill warn">not configured</span>') +
+        ' <span class="dim">' + esc(net.line || '') + '</span></div>';
+    }
+
     swap('adprovider',
-      '<div class="field"><label>Adapter</label>' +
-      adSeg('provider', s.provider || 'house', [{ val: 'house', text: 'House' }, { val: 'admob', text: 'AdMob' }]) +
+      '<div class="mini-forms" style="gap:26px">' +
+      '<div><div class="field"><label>Adapter</label>' +
+      adSeg('provider', (s.provider === 'google' ? 'google' : 'house'),
+        [{ val: 'house', text: 'House' }, { val: 'google', text: 'Google' }]) +
+      '</div></div>' +
+      '<div><div class="field"><label>Test ids</label>' +
+      adSeg('testMode', s.testMode ? '1' : '0', [{ val: '0', text: 'Live' }, { val: '1', text: 'Test' }]) +
+      '</div><div class="caption" style="max-width:260px">Google\\'s own published ids. Real ads, no revenue, and no verification — for checking a client is wired up before the account exists.</div></div>' +
       '</div>' +
+      surfaces +
       '<div style="font-size:13px;margin:10px 0 14px">' +
       (pv.ok ? '<span class="pill ok">ready</span>' : '<span class="pill warn">falling back</span>') +
       ' <span class="dim">' + esc(pv.line || '') + '</span></div>' +
+      '<hr class="divider">' +
+      netLine(nets.admob) +
       '<div class="mini-forms" style="gap:16px">' +
       adText('ad-mob-app', 'AdMob app id', mob.appId, 'ca-app-pub-…~…', '') +
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
-      adText('ad-mob-dw', 'Double-win unit', units.doubleWin, 'ca-app-pub-…/…', '') +
-      adText('ad-mob-fc', 'Free-coins unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      adText('ad-mob-dw', 'Double-win rewarded unit', units.doubleWin, 'ca-app-pub-…/…', '') +
+      adText('ad-mob-fc', 'Free-coins rewarded unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-mob-net', 'Pin ad_network (optional)', mob.adNetworkId, '5450213213286189855',
+        'Leave blank unless you have seen what arrives. Under mediation the callback names whoever filled the slot, and pinning the wrong one rejects your own revenue.') +
       '</div>' +
-      '<div class="caption" style="margin-top:10px">On AdMob a reward is paid only once the server-side verification callback from Google reaches <span class="mono">/api/ads/ssv</span> and its signature checks out. Point the SSV URL on each ad unit there.</div>');
+      '<div class="caption" style="margin-top:10px">On AdMob a reward is paid only once the server-side verification callback from Google reaches <span class="mono">/api/ads/ssv</span> and its signature checks out. Paste that path, on this host, into the SSV URL field of <b>each</b> rewarded ad unit in the AdMob console.</div>' +
+      '<hr class="divider">' +
+      netLine(nets.h5) +
+      '<div class="mini-forms" style="gap:16px">' +
+      adText('ad-h5-client', 'AdSense publisher id', h5.clientId, 'ca-pub-…', 'From the approved AdSense account. This alone switches the browser on.') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-h5-dw', 'Double-win slot (optional)', h5slots.doubleWin, '1234567890', '') +
+      adText('ad-h5-fc', 'Free-coins slot (optional)', h5slots.freeCoins, '1234567890', '') +
+      '</div>' +
+      '<div class="caption" style="margin-top:10px">H5 Games Ads has no server-side verification — Google publishes none for it — so a browser reward rests on the ticket, the interval and the caps above, exactly as a house ad does. Keep the browser\\'s numbers where you would be happy to see them all claimed.</div>');
+
+    renderAdSsv(a, s);
 
     var by = today.byPlacement || {};
     var rows = '<tr><th>placement</th><th>views today</th><th>coins paid</th><th>cap each</th></tr>';
@@ -2201,6 +2345,11 @@ export const adminPageHTML = `<!doctype html>
         patch.enabled = val === '1';
       } else if (what === 'provider') {
         patch.provider = val;
+      } else if (what === 'testMode') {
+        if (val === '1' && !confirm('Switch to Google\\'s TEST ids?' + NL + NL +
+          'Real ads from Google\\'s test account, no revenue, and rewards pay without server-side verification. ' +
+          'For proving a client is wired up — never for a server with players on it.')) return;
+        patch.testMode = val === '1';
       } else if (what.indexOf('placement:') === 0) {
         patch.placements = {};
         patch.placements[what.slice(10)] = { enabled: val === '1' };
@@ -2350,15 +2499,24 @@ export const adminPageHTML = `<!doctype html>
         dailyCoinCap: adFieldNum('ad-ceiling'),
         ticketTtlSec: adFieldNum('ad-ttl'),
         winWindowMin: adFieldNum('ad-window'),
+        ssvWaitSec: adFieldNum('ad-ssvwait'),
       },
     }, 'adnummsg');
   });
 
+  // Both networks save together: they are one decision — "here are my Google
+  // ids" — and an owner who pastes four fields and presses one button should
+  // not discover that only two of them went.
   document.getElementById('ad-mob-save').addEventListener('click', function () {
     saveAds({
       admob: {
         appId: adFieldText('ad-mob-app'),
         units: { doubleWin: adFieldText('ad-mob-dw'), freeCoins: adFieldText('ad-mob-fc') },
+        adNetworkId: adFieldText('ad-mob-net'),
+      },
+      h5: {
+        clientId: adFieldText('ad-h5-client'),
+        slots: { doubleWin: adFieldText('ad-h5-dw'), freeCoins: adFieldText('ad-h5-fc') },
       },
     }, 'adprovmsg');
   });

@@ -25,7 +25,7 @@ import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
 import { stripeEnabled, createCheckout, handleWebhook } from './stripe.js';
-import { adsRouter } from './ads.js';
+import { adsRouter, adsTxt, appAdsTxt } from './ads.js';
 import { adminPageHTML } from './adminPage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -63,6 +63,22 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req,
 
 app.use(express.json({ limit: '8kb' }));
 app.use('/api/ads', adsRouter); // the live gateway — it answers ahead of the dark scaffolding further down, which it supersedes
+// The two seller files, ahead of the static handler so a stale copy dropped
+// into public/ can never shadow the ids the desk actually holds. Both are
+// generated from what the owner has pasted in and both 404 until he has —
+// see the block that builds them in ads.js for why they are not behind the
+// ads switch.
+app.get('/ads.txt', (_req, res) => {
+  const body = adsTxt();
+  if (!body) return res.status(404).type('text/plain').send('no AdSense publisher configured\n');
+  res.type('text/plain').send(body);
+});
+app.get('/app-ads.txt', (_req, res) => {
+  const body = appAdsTxt();
+  if (!body) return res.status(404).type('text/plain').send('no AdMob publisher configured\n');
+  res.type('text/plain').send(body);
+});
+
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
 /**
@@ -127,39 +143,19 @@ app.get('/api/dm', (req, res) => {
 });
 
 // ---- store & wallet ------------------------------------------------------
-// ---- rewarded ads (scaffolding) -------------------------------------------
-// The whole system ships dark: ADS_ENABLED=1 turns it on once there are
-// enough players to be worth an advertiser's time. Until then the config
-// says "off", the clients hide every ad button, and the reward endpoint
-// refuses — so nothing exploitable exists while nothing is watchable.
-const ADS_ENABLED = process.env.ADS_ENABLED === '1';
-const AD_PLACEMENTS = {
-  // Win a game, watch one ad, double the purse.
-  doubleWin: { kind: 'multiplier', factor: 2, description: 'Double your win payout' },
-  // A modest faucet for the coinless, capped per day when enabled.
-  freeCoins: { kind: 'grant', coins: 25, dailyCap: 4, description: 'A few coins for a view' },
-};
-
-app.get('/api/ads/config', (_req, res) => {
-  res.json({ enabled: ADS_ENABLED, provider: 'admob', placements: AD_PLACEMENTS });
-});
-
-// The client reports a finished rewarded view. When ads go live this is
-// where AdMob's server-side verification callback gets checked before a
-// single coin moves; while dark it simply refuses.
-app.post('/api/ads/reward', (req, res) => {
-  if (!ADS_ENABLED) return res.status(403).json({ error: 'Ads are not enabled on this server' });
-  const { token, placement, nonce } = req.body || {};
-  const spec = AD_PLACEMENTS[placement];
-  if (!token || !spec || !nonce) return res.status(400).json({ error: 'Bad reward claim' });
-  // TODO(go-live): verify AdMob SSV signature for this nonce before paying.
-  const coins = spec.kind === 'grant' ? spec.coins : 0;
-  if (!coins) return res.status(400).json({ error: 'This placement pays elsewhere' });
-  const out = creditPurchase(String(token).slice(0, 64), `ads:${String(nonce).slice(0, 64)}`, coins,
-    { provider: 'ads', packId: placement, usd: 0 });
-  if (out.error) return res.status(400).json(out);
-  res.json({ ok: true, coins: out.coins });
-});
+// ---- rewarded ads ---------------------------------------------------------
+// The gateway is mounted above, at /api/ads, and it is the whole system: the
+// config, the signed one-shot ticket, AdMob's verification callback and the
+// only path a rewarded coin takes into a wallet.
+//
+// What used to sit here was the scaffolding it grew out of — a /config that
+// answered from an env var and a /reward that paid 25 coins for any nonce a
+// caller cared to invent, with a TODO where the verification was meant to go.
+// It has been dead since the router went in front of it, and dead is not the
+// same as harmless: it was a mint, kept out of reach by nothing but the order
+// two routes happen to be registered in. The router answers both paths for
+// every request, so deleting this changes no behaviour and removes the one
+// version of the reward endpoint that would pay without a ticket.
 
 app.get('/api/store', (_req, res) => res.json({
   items: STORE_ITEMS,
