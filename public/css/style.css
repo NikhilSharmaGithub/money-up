@@ -1597,6 +1597,27 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   .ad-timer .ring-on { transition: none; }
 }
 
+/* What the double-up button turns into once it has been taken. It replaces
+   the button rather than sitting under it — an offer already spent must not
+   still look pressable. */
+.go-doubled {
+  display: flex; align-items: center; gap: 12px; text-align: left;
+  width: 100%; padding: 13px 15px;
+  background: var(--gold-soft);
+  border: 1px solid var(--gold); border-radius: var(--r);
+  animation: modalIn .3s var(--pop);
+}
+.go-doubled .gd-mark {
+  flex: none; width: 40px; height: 40px; border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--card); border: 1px solid var(--gold);
+}
+.go-doubled .gd-num { font-size: 20px; font-weight: 800; color: var(--ink); }
+/* The figure is mid-climb for most of a second — it must not shove the word
+   "coins" along the line as it passes nine. */
+.go-doubled .gd-num b { font-variant-numeric: tabular-nums; color: var(--gold); }
+.go-doubled .gd-sub { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+
 /* ---- the quiet offers that lead here ---- */
 /* Free coins, on the landing under the daily card. It is deliberately the
    plainest card on the page: a gift you have to work five seconds for should

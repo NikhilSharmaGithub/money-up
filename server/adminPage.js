@@ -268,6 +268,7 @@ export const adminPageHTML = `<!doctype html>
   <a href="#tables">Tables</a>
   <a href="#games">Games</a>
   <a href="#economy">Economy</a>
+  <a href="#ads">Ads</a>
   <a href="#moderation">Moderation</a>
   <a href="#system">System</a>
   <div class="spacer"></div>
@@ -447,6 +448,37 @@ export const adminPageHTML = `<!doctype html>
     </div>
   </section>
 
+  <section class="panel" id="sec-ads">
+    <section class="tiles" id="adtiles"></section>
+    <section class="card">
+      <h2>The switch</h2>
+      <p class="hint">Ads stay dark until this says otherwise, and none of it needs a redeploy — the setting lives on disk beside the wallets, so a restart remembers what you decided. Clients hide every ad affordance while it is off.</p>
+      <div id="adswitch"></div>
+      <div class="msg" id="adsmsg"></div>
+    </section>
+    <div class="cards">
+      <div class="card">
+        <h2>What a view pays</h2>
+        <p class="hint">A win pays 2 coins and the day pays 1 to 7, so these numbers are wages. Keep them small enough that the shop is still worth visiting.</p>
+        <div id="adrewards"></div>
+        <div style="margin-top:14px"><button class="btn sm" id="ad-save">Save rewards and caps</button></div>
+        <div class="msg" id="adnummsg"></div>
+      </div>
+      <div class="card">
+        <h2>Who is serving</h2>
+        <p class="hint">The house shows the game's own full-screen promo and needs nothing configured. AdMob needs its ids, and falls back to the house without them.</p>
+        <div id="adprovider"></div>
+        <div style="margin-top:14px"><button class="btn sm" id="ad-mob-save">Save provider</button></div>
+        <div class="msg" id="adprovmsg"></div>
+      </div>
+    </div>
+    <section class="card">
+      <h2>Today</h2>
+      <div id="adtoday"></div>
+      <div class="caption">Read straight off the ledger — every ad payout is a row there, provider <span class="mono">ads</span>, the same book card payments and win purses are written in.</div>
+    </section>
+  </section>
+
   <section class="panel" id="sec-moderation">
     <div class="cards">
       <div class="card">
@@ -510,6 +542,9 @@ export const adminPageHTML = `<!doctype html>
     onlyReal: true, feedTourists: false,
     expanded: null, expandedPlayer: null, drawerMsg: null,
     lastFetch: 0, error: false,
+    // The ads gateway keeps its own books and its own endpoint, so it is
+    // polled beside the main payload rather than folded into it.
+    ads: null, adsError: false,
   };
   var DAY = 86400000;
   var NL = String.fromCharCode(10);
@@ -919,7 +954,7 @@ export const adminPageHTML = `<!doctype html>
   }
 
   // ------------------------------------------------------------ sections --
-  var SECTIONS = ['overview', 'revenue', 'players', 'tables', 'games', 'economy', 'moderation', 'system'];
+  var SECTIONS = ['overview', 'revenue', 'players', 'tables', 'games', 'economy', 'ads', 'moderation', 'system'];
   function applySection() {
     var sec = (location.hash || '').replace('#', '');
     if (SECTIONS.indexOf(sec) < 0) sec = 'overview';
@@ -964,6 +999,13 @@ export const adminPageHTML = `<!doctype html>
       html += '<div class="alert red"><b>STRIPE_WEBHOOK_SECRET is missing.</b> Card checkouts will complete at Stripe and never credit coins here — every web sale becomes a support ticket.</div>';
     } else if (!c.stripe) {
       html += '<div class="alert amber"><b>Stripe is not configured</b> — the web store cannot take card payments. Only App Store purchases can credit coins.</div>';
+    }
+    // Ads paying out on a provider the owner did not choose is the sort of
+    // thing that goes unnoticed for a month unless the front page says it.
+    var ads = state.ads;
+    if (ads && ads.settings && ads.settings.enabled && ads.provider && !ads.provider.ok) {
+      html += '<div class="alert amber"><b>Rewarded ads are live on the house adapter.</b> ' +
+        esc(ads.provider.line) + ' Coins are being paid for house promos, not for anything an advertiser has bought.</div>';
     }
     document.getElementById('alerts').innerHTML = html;
   }
@@ -1729,6 +1771,147 @@ export const adminPageHTML = `<!doctype html>
       '<div><b>' + fmtNum(e.coinsInCirculation) + '</b><span>coins held</span></div>';
   }
 
+  // ---------------------------------------------------------------- ads --
+  // The gateway ships dark and is meant to be switched on years after it was
+  // written, so this card has one job: make it obvious what is live, what a
+  // view pays, and what stops anyone farming it. Every control here writes
+  // through to a file on disk — no redeploy, no env var, no restart.
+  var AD_SLOTS = [
+    { id: 'doubleWin', label: 'Double a win', line: 'After winning, one ad pays the purse a second time.' },
+    { id: 'freeCoins', label: 'Free coins', line: 'A small grant, for anyone who wants to sit through one.' },
+  ];
+  var AD_INPUTS = ['ad-dw-factor', 'ad-dw-cap', 'ad-fc-coins', 'ad-fc-cap',
+    'ad-gap', 'ad-ceiling', 'ad-ttl', 'ad-window',
+    'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc'];
+
+  /** The same two-button switch the rest of this page uses. */
+  function adSeg(name, val, options) {
+    var html = '<span class="seg" role="group">';
+    options.forEach(function (o) {
+      html += '<button type="button" data-ads-set="' + esc(name) + '" data-ads-val="' + esc(o.val) + '"' +
+        ' aria-pressed="' + (String(o.val) === String(val) ? 'true' : 'false') + '">' + esc(o.text) + '</button>';
+    });
+    return html + '</span>';
+  }
+
+  function adNum(id, label, val, hint) {
+    return '<div class="field" style="width:132px"><label for="' + id + '">' + esc(label) + '</label>' +
+      '<input id="' + id + '" type="number" min="0" step="1" value="' + esc(val) + '">' +
+      (hint ? '<div class="caption" style="margin-top:5px;line-height:1.4">' + esc(hint) + '</div>' : '') +
+      '</div>';
+  }
+
+  function adText(id, label, val, placeholder, hint) {
+    return '<div class="field" style="flex:1;min-width:230px"><label for="' + id + '">' + esc(label) + '</label>' +
+      '<input id="' + id + '" type="text" spellcheck="false" value="' + esc(val || '') + '" placeholder="' + esc(placeholder) + '">' +
+      (hint ? '<div class="caption" style="margin-top:5px;line-height:1.4">' + esc(hint) + '</div>' : '') +
+      '</div>';
+  }
+
+  function renderAds() {
+    var a = state.ads;
+    if (!a) {
+      swap('adswitch', '<div class="dim" style="font-size:13px">' +
+        (state.adsError ? 'The ads gateway did not answer. It is mounted at /api/ads — check the server log.' : 'Loading…') + '</div>');
+      return;
+    }
+    var s = a.settings || {};
+    var caps = s.caps || {};
+    var pv = a.provider || {};
+    var today = a.today || {};
+    var slots = s.placements || {};
+    var dw = slots.doubleWin || {};
+    var fc = slots.freeCoins || {};
+
+    swap('adtiles',
+      tileHtml(s.enabled ? 'LIVE' : 'dark', 'rewarded ads', s.enabled ? 'clients are showing the buttons' : 'every ad affordance is hidden') +
+      tileHtml(pv.live === 'admob' ? 'AdMob' : 'House', 'serving', pv.ok ? '' : 'chosen provider is not ready') +
+      tileHtml(fmtNum(today.views), 'views today', '') +
+      tileHtml(fmtNum(today.coins), 'coins paid today', '') +
+      tileHtml(fmtNum(today.players), 'players reached', 'distinct wallets') +
+      tileHtml(fmtNum(a.tickets && a.tickets.outstanding), 'tickets in flight', 'offers not yet claimed'));
+
+    var sw = '<div class="mini-forms" style="gap:26px">' +
+      '<div><div class="field"><label>Rewarded ads</label>' +
+      adSeg('enabled', s.enabled ? '1' : '0', [{ val: '0', text: 'Dark' }, { val: '1', text: 'Live' }]) +
+      '</div></div>';
+    AD_SLOTS.forEach(function (slot) {
+      var spec = slots[slot.id] || {};
+      sw += '<div><div class="field"><label>' + esc(slot.label) + '</label>' +
+        adSeg('placement:' + slot.id, spec.enabled ? '1' : '0', [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
+        '</div><div class="caption" style="max-width:260px">' + esc(slot.line) + '</div></div>';
+    });
+    sw += '</div>';
+    if (!s.enabled) {
+      sw += '<div class="caption" style="margin-top:12px">Nothing pays out while this is dark: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> so old clients keep their ad buttons hidden.</div>';
+    } else if (!pv.ok) {
+      sw += '<div class="alert amber" style="margin-top:12px"><b>Ads are live on the house adapter.</b> ' + esc(pv.line) + '</div>';
+    }
+    if (s.changedAt) sw += '<div class="caption" style="margin-top:8px">Last changed ' + fmtWhen(s.changedAt) + '.</div>';
+    swap('adswitch', sw);
+
+    // What the caps actually add up to, so nobody has to do the arithmetic
+    // in their head. A win pays 2 coins today, which is what the double-up
+    // is worth per view.
+    // Read every number the way the server reads it: a zero is a zero here,
+    // not a missing value that quietly becomes the default.
+    var num = function (v, d) { return isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d; };
+    var perDw = Math.max(0, Math.round((num(dw.factor, 2) - 1) * 2));
+    var reach = num(dw.dailyCap, 0) * perDw + num(fc.dailyCap, 0) * num(fc.coins, 0);
+    var ceiling = num(caps.dailyCoinCap, 0);
+    var bind = ceiling <= 0
+      ? 'The ceiling is zero, so nothing pays out at all: the placements above stay live and every claim is refused. That is the way to shut the faucet without changing anything else.'
+      : ceiling < reach
+        ? 'The ceiling binds first: a player tops out at ' + fmtNum(ceiling) + ' coins a day, not ' + fmtNum(reach) + '.'
+        : 'The per-placement caps bind first: a player tops out at ' + fmtNum(reach) + ' coins a day, under the ' + fmtNum(ceiling) + '-coin ceiling.';
+
+    swap('adrewards',
+      '<div class="mini-forms" style="gap:16px">' +
+      adNum('ad-dw-factor', 'Win × factor', dw.factor, 'A win pays ' + perDw + ' extra coin(s) per view at this factor.') +
+      adNum('ad-dw-cap', 'Double-ups a day', dw.dailyCap, '') +
+      adNum('ad-fc-coins', 'Free coins a view', fc.coins, '') +
+      adNum('ad-fc-cap', 'Free views a day', fc.dailyCap, '') +
+      '</div><hr class="divider">' +
+      '<div class="mini-forms" style="gap:16px">' +
+      adNum('ad-gap', 'Seconds between claims', caps.minIntervalSec, 'Longer than an ad, so hitting it takes effort.') +
+      adNum('ad-ceiling', 'Coin ceiling a day', caps.dailyCoinCap, 'The hard stop, whatever the caps above say. Zero stops every payout.') +
+      adNum('ad-ttl', 'Ticket life (sec)', caps.ticketTtlSec, 'How long an offer stays claimable.') +
+      adNum('ad-window', 'Win window (min)', caps.winWindowMin, 'How stale a win may be and still be doubled. Zero: none are.') +
+      '</div>' +
+      '<div class="caption" style="margin-top:10px">' + esc(bind) + '</div>');
+
+    var mob = s.admob || {};
+    var units = mob.units || {};
+    swap('adprovider',
+      '<div class="field"><label>Adapter</label>' +
+      adSeg('provider', s.provider || 'house', [{ val: 'house', text: 'House' }, { val: 'admob', text: 'AdMob' }]) +
+      '</div>' +
+      '<div style="font-size:13px;margin:10px 0 14px">' +
+      (pv.ok ? '<span class="pill ok">ready</span>' : '<span class="pill warn">falling back</span>') +
+      ' <span class="dim">' + esc(pv.line || '') + '</span></div>' +
+      '<div class="mini-forms" style="gap:16px">' +
+      adText('ad-mob-app', 'AdMob app id', mob.appId, 'ca-app-pub-…~…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-mob-dw', 'Double-win unit', units.doubleWin, 'ca-app-pub-…/…', '') +
+      adText('ad-mob-fc', 'Free-coins unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      '</div>' +
+      '<div class="caption" style="margin-top:10px">On AdMob a reward is paid only once the server-side verification callback from Google reaches <span class="mono">/api/ads/ssv</span> and its signature checks out. Point the SSV URL on each ad unit there.</div>');
+
+    var by = today.byPlacement || {};
+    var rows = '<tr><th>placement</th><th>views today</th><th>coins paid</th><th>cap each</th></tr>';
+    AD_SLOTS.forEach(function (slot) {
+      var row = by[slot.id] || { views: 0, coins: 0 };
+      var spec = slots[slot.id] || {};
+      rows += '<tr><td>' + esc(slot.label) + (spec.enabled ? '' : ' <span class="pill dim">off</span>') + '</td>' +
+        '<td>' + fmtNum(row.views) + '</td><td>' + fmtNum(row.coins) + '</td>' +
+        '<td class="dim">' + fmtNum(spec.dailyCap) + ' a player a day</td></tr>';
+    });
+    rows += '<tr><td><b>total</b></td><td><b>' + fmtNum(today.views) + '</b></td>' +
+      '<td><b>' + fmtNum(today.coins) + '</b></td><td class="dim">across ' + fmtNum(today.players) + ' player(s)</td></tr>';
+    swap('adtoday', '<div class="scroll"><table>' + rows + '</table></div>' +
+      (today.views ? '' : '<div class="caption">Nothing paid out today.</div>'));
+  }
+
   function renderModeration() {
     var mod = state.data.moderation || {};
     var bans = mod.bans || [];
@@ -1842,6 +2025,7 @@ export const adminPageHTML = `<!doctype html>
     renderPlayers();
     renderPlayerMix();
     renderEconomy();
+    keepInputs(AD_INPUTS, renderAds);
     renderModeration();
     renderSystem();
   }
@@ -1884,6 +2068,32 @@ export const adminPageHTML = `<!doctype html>
   function kickSeat(roomId, code, done) {
     if (!confirm('Kick ' + code + ' from room ' + roomId + '? In a live game their deeds go back to the bank, like a timeout.')) return;
     post('/api/admin/kick', { roomId: roomId, code: code }, done);
+  }
+
+  /**
+   * Every ads control writes the same way: a patch of only what changed, so
+   * two tabs open on this page cannot overwrite each other's untouched fields.
+   */
+  function saveAds(patch, msgId) {
+    post('/api/ads/admin', patch, function (r) {
+      if (r && r.ok) {
+        setMsg(msgId, r.changed && r.changed.length ? 'Saved — ' + r.changed.join(', ') + '.' : 'Nothing to change.', true);
+        refreshAds();
+      } else {
+        setMsg(msgId, (r && r.error) || 'Could not save.', false);
+      }
+    });
+  }
+
+  function adFieldNum(id) {
+    var el = document.getElementById(id);
+    if (!el || el.value === '') return undefined;
+    var n = Number(el.value);
+    return isFinite(n) ? n : undefined;
+  }
+  function adFieldText(id) {
+    var el = document.getElementById(id);
+    return el ? el.value.trim() : undefined;
   }
 
   function banDevice(code, reason, done) {
@@ -1974,6 +2184,28 @@ export const adminPageHTML = `<!doctype html>
         if (r && r.ok) { setDrawerMsg('Kicked from ' + r.roomId + '.', true); refresh(); }
         else setDrawerMsg((r && r.error) || 'Kick failed.', false);
       });
+      return;
+    }
+
+    // The ads switches. Turning the system on is the one click on this page
+    // that starts paying strangers, so it asks first.
+    el = t.closest('[data-ads-set]');
+    if (el) {
+      var what = el.getAttribute('data-ads-set');
+      var val = el.getAttribute('data-ads-val');
+      if (el.getAttribute('aria-pressed') === 'true') return;
+      var patch = {};
+      if (what === 'enabled') {
+        if (val === '1' && !confirm('Switch rewarded ads ON?' + NL + NL +
+          'Clients will start showing ad buttons and paying coins for finished views, immediately, on this server.')) return;
+        patch.enabled = val === '1';
+      } else if (what === 'provider') {
+        patch.provider = val;
+      } else if (what.indexOf('placement:') === 0) {
+        patch.placements = {};
+        patch.placements[what.slice(10)] = { enabled: val === '1' };
+      } else return;
+      saveAds(patch, 'adsmsg');
       return;
     }
 
@@ -2107,6 +2339,30 @@ export const adminPageHTML = `<!doctype html>
     });
   });
 
+  document.getElementById('ad-save').addEventListener('click', function () {
+    saveAds({
+      placements: {
+        doubleWin: { factor: adFieldNum('ad-dw-factor'), dailyCap: adFieldNum('ad-dw-cap') },
+        freeCoins: { coins: adFieldNum('ad-fc-coins'), dailyCap: adFieldNum('ad-fc-cap') },
+      },
+      caps: {
+        minIntervalSec: adFieldNum('ad-gap'),
+        dailyCoinCap: adFieldNum('ad-ceiling'),
+        ticketTtlSec: adFieldNum('ad-ttl'),
+        winWindowMin: adFieldNum('ad-window'),
+      },
+    }, 'adnummsg');
+  });
+
+  document.getElementById('ad-mob-save').addEventListener('click', function () {
+    saveAds({
+      admob: {
+        appId: adFieldText('ad-mob-app'),
+        units: { doubleWin: adFieldText('ad-mob-dw'), freeCoins: adFieldText('ad-mob-fc') },
+      },
+    }, 'adprovmsg');
+  });
+
   document.getElementById('m-go').addEventListener('click', function () {
     var code = document.getElementById('m-code').value.trim().toUpperCase();
     var reason = document.getElementById('m-reason').value.trim();
@@ -2154,6 +2410,25 @@ export const adminPageHTML = `<!doctype html>
         renderAll();
       })
       .catch(function () { state.error = true; renderStatus(); });
+    refreshAds();
+  }
+
+  // The ads gateway is its own router with its own books, so it answers on
+  // its own endpoint. A server too old to have it simply leaves the card
+  // saying so, and the rest of the page carries on.
+  function refreshAds() {
+    fetch('/api/ads/admin?key=' + encodeURIComponent(KEY))
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        state.ads = d;
+        state.adsError = false;
+        keepInputs(AD_INPUTS, renderAds);
+        if (state.data) renderAlerts();
+      })
+      .catch(function () {
+        state.adsError = true;
+        if (!state.ads) renderAds();
+      });
   }
 
   if (!KEY) {

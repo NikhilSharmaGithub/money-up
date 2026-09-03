@@ -643,6 +643,10 @@ struct GameOverSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task { await askForSomething() }
+        // The double-up offer draws nothing until this lands, and a view that
+        // draws nothing cannot run a task of its own — so the sheet it sits on
+        // does the asking.
+        .task { await AdDesk.shared.refresh(store) }
     }
 
     // MARK: - the two things the app asks for
@@ -734,11 +738,9 @@ struct GameOverSheet: View {
         // host chair, and the server hands them the lobby.
         VStack(spacing: 5) {
             // Dark until the server turns ads on — then a win can double up.
-            if store.adsConfig?.enabled == true, store.state?.winner?.id == store.meId {
-                MMIconButton(.coin, "Watch an ad — double your winnings", kind: .primary, big: true) {
-                    store.showToast("Rewarded ads are not live yet")
-                }
-            }
+            // The offer draws nothing at all on a dark server, for a loser, or
+            // once today's views are spent; see AdOffer.swift.
+            DoubleWinOffer()
             if store.state?.quick == true {
                 // A matchmade table doesn't reconvene: offering "the same
                 // players" would tell the room the seats were never strangers.

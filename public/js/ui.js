@@ -2540,8 +2540,8 @@ function worthChartSVG(state) {
 // Everything in this block is dead weight until the server says otherwise.
 // GET /api/ads/config is the whole switch: while it answers `enabled: false`
 // no button is drawn, no card is mounted and no countdown exists, so a player
-// on a dark server sees the app exactly as it was yesterday. Flipping the env
-// var on the server is the only step to going live.
+// on a dark server sees the app exactly as it was yesterday. Going live is one
+// toggle on the admin desk — nothing here is built or shipped on that day.
 //
 // Coins are scarce here on purpose — the daily ladder starts at one and tops
 // out at seven, a win pays two, and the cheapest piece in the shop is 300. A
@@ -2626,12 +2626,17 @@ const HOUSE_LINES = [
 /** The mark: an ivory die on a brass ring, the same one the app opens with. */
 function houseAdMark() {
   const pip = (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="5.6" fill="#1B5E3F"/>`;
+  // The die is ivory and the pips are felt green on every table, exactly as
+  // the favicon and the iOS splash draw them — which is why the disc behind it
+  // is a colour rather than a token. An ivory die on the ivory daytime card
+  // has no edges at all; on its own patch of felt it reads on any background.
   return `<svg class="ad-mark" viewBox="0 0 120 120" fill="none" aria-hidden="true"
       xmlns="http://www.w3.org/2000/svg">
-    <circle cx="60" cy="61" r="52" stroke="var(--gold)" stroke-opacity=".55" stroke-width="2.4"/>
+    <circle cx="60" cy="60" r="53" stroke="var(--gold)" stroke-opacity=".7" stroke-width="2.6"/>
+    <circle cx="60" cy="60" r="47" fill="#0F1B16"/>
     <g transform="rotate(-11 60 60)">
-      <rect x="18" y="18" width="84" height="84" rx="16" fill="#FBF6E9" stroke="rgba(0,0,0,.12)"/>
-      ${pip(41, 41)}${pip(79, 41)}${pip(60, 60)}${pip(41, 79)}${pip(79, 79)}
+      <rect x="24" y="24" width="72" height="72" rx="14" fill="#FBF6E9"/>
+      ${pip(43, 43)}${pip(77, 43)}${pip(60, 60)}${pip(43, 77)}${pip(77, 77)}
     </g>
   </svg>`;
 }
@@ -2737,7 +2742,10 @@ async function adPost(path, body) {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || 'That did not go through — try again.' };
+    // A refusal carries more than its sentence — when it is allowed again, and
+    // what is left in each slot — so the whole body comes back, not just the
+    // error line off the front of it.
+    if (!res.ok) return { ...data, error: data.error || 'That did not go through — try again.' };
     return data;
   } catch {
     return { error: 'Could not reach the server — try again in a moment.' };
@@ -2746,11 +2754,13 @@ async function adPost(path, body) {
 
 /** A refusal, with the server's own wording and its "try again in" attached. */
 function refusalLine(out) {
-  const wait = Number(out.retryInSec) || 0;
-  if (!wait) return out.error;
-  return wait >= 60
-    ? `${out.error} — try again in about a minute.`
-    : `${out.error} — try again in ${wait}s.`;
+  const wait = Math.ceil(Number(out.retryInSec) || 0);
+  // Anything longer than an hour is a cap, not a cooldown, and the sentence
+  // the server sent already says so better than a countdown would.
+  if (!wait || wait > 3600) return out.error;
+  if (wait < 60) return `${out.error} — try again in ${wait}s.`;
+  const mins = Math.ceil(wait / 60);
+  return `${out.error} — try again in ${mins} minute${mins === 1 ? '' : 's'}.`;
 }
 
 /**
@@ -2821,6 +2831,90 @@ function countCoinChip(to) {
   requestAnimationFrame(step);
 }
 
+// ---- doubleWin: the offer on the game-over sheet -------------------------
+// The one moment a rewarded ad is worth showing anybody: they have just won,
+// the purse is on screen, and the offer is to make it bigger. It appears for
+// the winner and nobody else, and only while the server still has a view to
+// pay for.
+
+// What a doubled win came to last time this session. Only the server knows
+// what a win is worth — asking would cost a ticket — so the first offer of a
+// session says it in words and every one after it can do the arithmetic.
+let lastDouble = null;
+
+function doubleWinHTML(state, meId) {
+  if (state.winner?.id !== meId) return '';
+  const spec = placement('doubleWin');
+  if (!spec || !walletToken()) return '';
+  const factor = Math.max(2, Number(spec.factor) || 2);
+  const left = typeof spec.remaining === 'number' ? spec.remaining : null;
+  const sum = lastDouble ? ` (${lastDouble.from} → ${lastDouble.to} coins)` : '';
+  return `
+    <button class="btn primary big wrap" id="gDouble">${icon('coin')} Watch an ad — double your winnings${sum}</button>
+    <div class="dim small go-wait" id="gDoubleSub">Five seconds, and the win pays ${
+      factor === 2 ? 'twice' : `${factor} times`}.${left === null ? '' : ` ${left} left today.`}</div>`;
+}
+
+function wireDoubleWin(root, meId) {
+  const btn = $('#gDouble', root);
+  if (!btn) return;
+  const sub = $('#gDoubleSub', root);
+  const label = btn.innerHTML;
+
+  btn.onclick = async () => {
+    sfx.click();
+    const out = await watchAdFor('doubleWin', {
+      // The seat's own id IS the wallet token — the server hands both out as
+      // one — so the sheet pays the player sitting in it.
+      token: meId || walletToken(),
+      busy: (on) => {
+        btn.disabled = on;
+        btn.innerHTML = on ? `${icon('coin')} Loading the ad…` : label;
+      },
+    });
+    if (!out) return;
+
+    // What it came to: the claim pays the bonus, so the purse it was added to
+    // is the bonus divided by the extra share, and the total is the two.
+    const factor = Math.max(2, Number(placement('doubleWin')?.factor) || 2);
+    const from = Math.max(1, Math.round(out.paid / (factor - 1)));
+    const to = from + out.paid;
+    lastDouble = { from, to };
+    countCoinChip(out.coins);
+
+    // The offer has been taken, so it is replaced by what it bought rather
+    // than sitting there inviting a second press it can't honour.
+    sub?.remove();
+    const won = document.createElement('div');
+    won.className = 'go-doubled';
+    won.innerHTML = `
+      <span class="gd-mark">${icon('coin', 24, 'solo')}</span>
+      <div>
+        <div class="gd-num"><b id="gdNum">${from}</b> coins</div>
+        <div class="gd-sub">Doubled — that win paid ${to} instead of ${from}.</div>
+      </div>`;
+    btn.replaceWith(won);
+    sfx.gain();
+    countUpTo($('#gdNum', won), from, to);
+  };
+}
+
+/** A number climbing to what it became — the payout landing, not a repaint. */
+function countUpTo(el, from, to) {
+  if (!el) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || to <= from) {
+    el.textContent = String(to);
+    return;
+  }
+  const started = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - started) / 800);
+    el.textContent = String(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // ---- freeCoins: the quiet offer on the landing ---------------------------
 // It sits under the daily card and behaves like it: it appears only when there
 // is something to take, it never plays by itself, and once today's views are
@@ -2867,6 +2961,7 @@ function paintFreeCoins(card, spec) {
     });
     if (!out) { mountFreeCoins(); return; }
     countCoinChip(out.coins);
+    sfx.gain();
     toast(`+${coinWord(out.paid)} — thanks for watching.`);
     // The server just said how many views are left; if that was the last one
     // the card takes itself off the landing rather than offering a fourth.

@@ -83,6 +83,11 @@ struct LandingView: View {
         }
         .task {
             store.refreshAdsConfig()
+            // The free-coins offer draws nothing until this lands, and a view
+            // that draws nothing cannot run a task of its own — so the tab it
+            // sits on does the asking. It costs one GET, and only until a
+            // server has answered "ads are off" once.
+            await AdDesk.shared.refresh(store)
             await loadAuthConfig()
             await refreshMe()
         }
@@ -115,6 +120,10 @@ struct LandingView: View {
         // Coins first, then the table: collecting is a two-second errand and
         // the reward reads as part of who you are, right under the account.
         DailyRewardCard()
+        // The other way to a couple of coins, and a much quieter one: it draws
+        // nothing until the server turns ads on, and nothing again once the
+        // day's views are spent. It never plays by itself.
+        FreeCoinsOffer()
         quickPlayCard(P)
         playCard(P, busy: busy)
         // Below the ways in, where the browsing starts — who is winning, then

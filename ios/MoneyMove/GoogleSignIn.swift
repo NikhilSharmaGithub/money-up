@@ -27,11 +27,42 @@ struct AuthConfig: Decodable {
 }
 
 /// Who this device is (GET /api/me) — the profile card's whole content.
+/// One rewarded slot's terms, as the server states them. Everything is
+/// optional: a server older than this app answers with fewer fields, and a
+/// missing number must read as "it didn't say", never as zero.
+struct AdPlacement: Decodable, Equatable {
+    var enabled: Bool?
+    /// "grant" pays a flat purse; "multiplier" pays a win again.
+    var kind: String?
+    var coins: Int?
+    var factor: Double?
+    var dailyCap: Int?
+    /// Views this device may still be PAID for today. Zero shuts the slot.
+    var remaining: Int?
+    var unitId: String?
+}
+
 /// Rewarded-ads switchboard, fetched from /api/ads/config. Ships dark —
 /// while `enabled` is false no ad UI exists anywhere in the app.
+///
+/// The first two fields are the ones the first shipped build read, and they
+/// still mean what they meant; the per-slot terms arrived alongside them.
 struct AdsConfig: Decodable, Equatable {
     var enabled: Bool?
     var provider: String?
+    var placements: [String: AdPlacement]?
+    var remaining: [String: Int]?
+
+    var live: Bool { enabled == true }
+
+    /// The slot's terms, or nil when it must not be offered at all: ads off,
+    /// this slot off, or nothing left in it today. Asking here is how a view
+    /// decides both whether to draw a button and whether to let it be pressed.
+    func slot(_ name: String) -> AdPlacement? {
+        guard live, let p = placements?[name], p.enabled != false else { return nil }
+        if let n = p.remaining ?? remaining?[name], n <= 0 { return nil }
+        return p
+    }
 }
 
 struct MeInfo: Decodable, Equatable {

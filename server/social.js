@@ -527,6 +527,25 @@ export function winAwaitingDouble(token, { withinMs = 20 * 60 * 1000, now = Date
   return null;
 }
 
+/**
+ * One specific win, named by its ledger id: the row a ticket was cut against.
+ * The claim asks for this rather than "their latest win" so the coins paid are
+ * the coins the offer promised — a player who wins again mid-ad cannot end up
+ * paid for the bigger purse while the bigger purse stays doubleable.
+ */
+export function winForDouble(token, txn) {
+  const p = token ? profiles.get(token) : null;
+  if (!p || !txn) return null;
+  if (p.purchases?.includes(adsRewardId('doubleWin', txn))) return null;
+  for (let i = ledger.length - 1; i >= 0; i--) {
+    const e = ledger[i];
+    if (e.txn !== txn) continue;
+    if (e.token !== token || e.provider !== 'win' || e.placing) return null;
+    return { txn: e.txn, coins: e.coins || 0, at: e.at, note: e.note || '' };
+  }
+  return null;
+}
+
 /** Today's ad payout, read straight off the ledger — the desk's headline. */
 export function adsDayTotals(now = Date.now()) {
   const midnight = new Date(now);
