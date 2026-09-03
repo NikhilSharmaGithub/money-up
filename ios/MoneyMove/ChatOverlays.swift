@@ -654,7 +654,15 @@ struct GameOverSheet: View {
         // The double-up offer draws nothing until this lands, and a view that
         // draws nothing cannot run a task of its own — so the sheet it sits on
         // does the asking.
-        .task { await AdDesk.shared.refresh(store) }
+        //
+        // Forced, and that is the whole point. What is left in the doubleWin
+        // slot is not a daily allowance, it is "is there a win of yours
+        // waiting to be doubled" — a question whose answer changes the moment
+        // this sheet appears. The landing screen had already fetched a config
+        // saying zero (there was no win yet), and an unforced refresh keeps
+        // it, so the offer never appeared for anybody. Found by winning a game
+        // against a server with ads switched on and watching nothing happen.
+        .task { await AdDesk.shared.refresh(store, force: true) }
     }
 
     // MARK: - the two things the app asks for
