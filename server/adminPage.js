@@ -10,12 +10,16 @@
 // System — each deep-linkable via location.hash, so /admin?key=K#players goes
 // straight to the player table.
 //
-// The Overview is the front desk: a four-card hero row (revenue, players,
-// live-now, games — each with an in-card 14-day sparkline), a subordinate
-// stat strip, two 30-day area charts with real axes, a merged newest-first
-// activity feed (games, ledger credits, sign-ups, admin actions), and the
-// two most-used tools — broadcast and credit-coins — inlined as quick
-// actions that reuse the section forms' endpoints.
+// The Overview is the front desk, and it leads with REAL PLAYERS: a profile
+// is minted the moment any browser joins a lobby, so the profile count is a
+// count of visitors. A real player has finished at least one game, which is
+// what turnsPlayed records. The hero row is four cards (real players,
+// revenue, live-now, games — each with an in-card 14-day sparkline), the
+// strip below it carries the raw profile count labelled honestly, three
+// 30-day area charts read the server's day series (real players per day,
+// games per day, new real players per day), and the activity feed hides
+// visitor lines behind one switch. Broadcast and credit-coins sit alongside
+// as quick actions that reuse the section forms' endpoints.
 //
 // House rules the page follows:
 //   - every user-controlled string (names, flags, emails, reasons, broadcast
@@ -115,15 +119,24 @@ export const adminPageHTML = `<!doctype html>
     70% { box-shadow: 0 0 0 7px rgba(79, 217, 139, 0); }
     100% { box-shadow: 0 0 0 0 rgba(79, 217, 139, 0); }
   }
-  .substrip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
-  .scard { background: #121b15; border: 1px solid #1f2f26; border-radius: 12px; padding: 9px 15px; display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .scard b { font-size: 17px; color: #cfd8cb; font-weight: 700; white-space: nowrap; }
-  .scard span { font-size: 10px; color: #7d8b7f; text-transform: uppercase; letter-spacing: 1px; line-height: 1.35; }
-  .scard .microstack { flex: 1; display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #0d1511; border: 1px solid #1f2f26; min-width: 34px; max-width: 90px; }
+  .substrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  /* The secondary strip: number on top, plain-language label under it. The
+     labels here have to be honest rather than short ("profiles incl.
+     visitors"), so they get their own line instead of fighting the value. */
+  .scard { background: #121b15; border: 1px solid #1f2f26; border-radius: 12px; padding: 10px 14px 11px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+  .scard b { font-size: 19px; color: #cfd8cb; font-weight: 700; white-space: nowrap; line-height: 1.1; }
+  .scard span { font-size: 10px; color: #7d8b7f; text-transform: uppercase; letter-spacing: .9px; line-height: 1.4; }
+  .scard .microstack { width: 100%; display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: #0d1511; border: 1px solid #1f2f26; margin: 3px 0 1px; }
   .scard .microstack i { display: block; height: 100%; }
-  .ovgrid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .ovgrid { display: grid; grid-template-columns: minmax(0, 1.42fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
   .ovcol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .ovcol .card { margin-bottom: 0; }
+  /* The right rail carries less than the chart stack; the feed eats the
+     difference so a 1280-1600 desktop never shows a column of nothing. */
+  .ovcol .card.grow { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  /* Long enough to stand beside the chart stack, capped so a busy feed
+     scrolls inside its card instead of stretching the whole row. */
+  .ovcol .card.grow .feed { flex: 1; min-height: 240px; max-height: 68vh; }
   .feed { max-height: 420px; overflow-y: auto; }
   .feed-row { display: flex; gap: 10px; padding: 8px 4px; border-bottom: 1px solid #16241b; align-items: flex-start; font-size: 12.5px; }
   .feed-row:last-child { border-bottom: none; }
@@ -133,9 +146,26 @@ export const adminPageHTML = `<!doctype html>
   .feed-row .ftext b { color: #efeadd; font-weight: 600; }
   .feed-row .ftime { flex: none; font-size: 11px; color: #7d8b7f; padding-top: 2px; white-space: nowrap; }
   .qa-label { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-  .qa-row { display: flex; gap: 8px; align-items: center; }
-  .qa-row input { min-width: 0; }
+  .qa-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .qa-row input { min-width: 0; flex: 1 1 96px; width: auto; }
   .qa-row .btn { flex: none; }
+
+  /* A two-state switch that reads as one control: real players by default,
+     everyone on request. Both halves are real buttons, so the keyboard gets
+     them for free. */
+  .seg { display: inline-flex; background: #0d1511; border: 1px solid #2a4033; border-radius: 10px; padding: 2px; gap: 2px; }
+  .seg button { background: transparent; border: none; color: #a9b4a6; font: inherit; font-size: 12px; font-weight: 600; padding: 6px 13px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  .seg button:hover { color: #efeadd; }
+  .seg button[aria-pressed="true"] { background: rgba(227, 169, 60, .14); color: #e3a93c; }
+  .seg .tally { color: #7d8b7f; font-weight: 500; margin-left: 5px; }
+  .seg button[aria-pressed="true"] .tally { color: rgba(227, 169, 60, .7); }
+
+  /* One visible focus ring for everything that takes focus, rows included. */
+  a:focus-visible, button:focus-visible, input:focus-visible, tr:focus-visible, th:focus-visible {
+    outline: 2px solid #e3a93c; outline-offset: -2px; border-radius: 8px;
+  }
+  tr:focus-visible td { background: rgba(227, 169, 60, .06); }
+
   @media (max-width: 1150px) {
     .hero, .substrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .ovgrid { grid-template-columns: minmax(0, 1fr); }
@@ -171,6 +201,10 @@ export const adminPageHTML = `<!doctype html>
   .pill.warn { background: rgba(227, 169, 60, .14); color: #e3a93c; }
   .pill.dim { background: rgba(150, 160, 150, .12); color: #93a396; }
   .pill.bad { background: rgba(224, 108, 95, .14); color: #e88a7d; }
+  /* The only distinction on this page that matters twice: a real player who
+     has finished a game, and a browser that looked in. */
+  .pill.player { background: rgba(227, 169, 60, .14); color: #e3a93c; }
+  .pill.visitor { background: rgba(150, 160, 150, .1); color: #8b9a8d; font-weight: 500; }
   .bot { color: #93a396; font-size: 11px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .dim { color: #93a396; }
@@ -185,6 +219,9 @@ export const adminPageHTML = `<!doctype html>
   .idsplit span { font-size: 11px; color: #93a396; text-transform: uppercase; letter-spacing: 1px; }
 
   .chart svg { width: 100%; height: auto; display: block; }
+  /* Ten karma buckets have no business being three feet wide on a big
+     monitor — the histogram keeps its own scale. */
+  #karma svg { max-width: 440px; }
   .axis { fill: #7d8b7f; font-size: 10px; }
   .empty { fill: #7d8b7f; font-size: 13px; }
 
@@ -245,12 +282,19 @@ export const adminPageHTML = `<!doctype html>
     <div class="ovgrid">
       <div class="ovcol">
         <div class="card">
-          <h2>Games per day — last 30</h2>
+          <h2>Real players per day — last 30 <span class="count" id="ov-real-count"></span></h2>
+          <p class="hint">Distinct humans who finished a game that day. Someone who opened a lobby and left is never counted here.</p>
+          <div id="ov-real" class="chart"></div>
+          <div id="ov-real-cap" class="caption"></div>
+        </div>
+        <div class="card">
+          <h2>Games per day — last 30 <span class="count" id="ov-games-count"></span></h2>
           <div id="ov-games" class="chart"></div>
           <div id="ov-games-cap" class="caption"></div>
         </div>
         <div class="card">
-          <h2>New players per day — last 30</h2>
+          <h2>New real players per day — last 30 <span class="count" id="ov-newp-count"></span></h2>
+          <p class="hint">The day a player finished their first game — not the day a browser first said hello.</p>
           <div id="ov-newp" class="chart"></div>
           <div id="ov-newp-cap" class="caption"></div>
         </div>
@@ -267,15 +311,21 @@ export const adminPageHTML = `<!doctype html>
           <hr class="divider" style="margin:10px 0 12px">
           <div class="qa-label">Credit coins to a friend code</div>
           <div class="qa-row">
-            <input id="qa-code" autocomplete="off" spellcheck="false" placeholder="Code" style="width:104px;flex:none">
-            <input id="qa-coins" type="number" min="1" step="1" placeholder="Coins" style="width:86px;flex:none">
-            <input id="qa-reason" autocomplete="off" placeholder="Reason — refund, prize...">
+            <input id="qa-code" autocomplete="off" spellcheck="false" placeholder="Code" style="width:88px;flex:none">
+            <input id="qa-coins" type="number" min="1" step="1" placeholder="Coins" style="width:76px;flex:none">
+            <input id="qa-reason" autocomplete="off" placeholder="Reason — refund, prize">
             <button class="btn sm" id="qa-cgo" type="button">Credit</button>
           </div>
           <div class="msg" id="qa-cres"></div>
         </div>
-        <div class="card">
+        <div class="card grow">
           <h2>Activity <span class="count" id="feedcount"></span></h2>
+          <div class="toolbar" style="margin-bottom:8px">
+            <div class="seg" role="group" aria-label="Whether visitor lines appear in the feed">
+              <button type="button" id="feed-hide" aria-pressed="true">Players only</button>
+              <button type="button" id="feed-all" aria-pressed="false">Include visitors <span class="tally" id="feed-vcount"></span></button>
+            </div>
+          </div>
           <div class="feed" id="feed"></div>
         </div>
       </div>
@@ -314,21 +364,31 @@ export const adminPageHTML = `<!doctype html>
   <section class="panel" id="sec-players">
     <section class="card">
       <h2>Players <span class="count" id="playercount"></span></h2>
-      <p class="hint">Click a player to open their record — wallet, purchases, and the actions that apply to them.</p>
+      <p class="hint">Real players first: a profile that has finished at least one game. Everyone else is a visitor — a browser that opened a lobby, a test tab, a second phone — and stays out of the way until you ask for it. Click a row to open the record.</p>
       <div class="toolbar">
+        <div class="seg" role="group" aria-label="Which players to list">
+          <button type="button" id="pf-real" aria-pressed="true">Real players <span class="tally" id="pf-real-n"></span></button>
+          <button type="button" id="pf-all" aria-pressed="false">Everyone <span class="tally" id="pf-all-n"></span></button>
+        </div>
         <input id="search" type="search" placeholder="Filter by code, name, email or provider" autocomplete="off" spellcheck="false">
         <button class="btn ghost sm" id="csv-players" type="button">Export players CSV</button>
       </div>
       <div class="scroll" style="max-height:520px"><table><tbody id="playersT"></tbody></table></div>
     </section>
-    <section class="card" style="max-width:460px">
-      <h2>Credit coins</h2>
-      <div class="field"><label for="c-code">Friend code</label><input id="c-code" autocomplete="off" spellcheck="false" placeholder="e.g. QK7M2X"></div>
-      <div class="field"><label for="c-coins">Coins</label><input id="c-coins" type="number" min="1" step="1" placeholder="500"></div>
-      <div class="field"><label for="c-reason">Reason</label><input id="c-reason" autocomplete="off" placeholder="Refund, prize, goodwill..."></div>
-      <button class="btn" id="c-go">Credit coins</button>
-      <div class="msg" id="actionmsg"></div>
-    </section>
+    <div class="cards">
+      <section class="card">
+        <h2>Credit coins</h2>
+        <div class="field"><label for="c-code">Friend code</label><input id="c-code" autocomplete="off" spellcheck="false" placeholder="e.g. QK7M2X"></div>
+        <div class="field"><label for="c-coins">Coins</label><input id="c-coins" type="number" min="1" step="1" placeholder="500"></div>
+        <div class="field"><label for="c-reason">Reason</label><input id="c-reason" autocomplete="off" placeholder="Refund, prize, goodwill..."></div>
+        <button class="btn" id="c-go">Credit coins</button>
+        <div class="msg" id="actionmsg"></div>
+      </section>
+      <section class="card">
+        <h2>Real players vs visitors</h2>
+        <div id="playermix"></div>
+      </section>
+    </div>
   </section>
 
   <section class="panel" id="sec-tables">
@@ -444,7 +504,10 @@ export const adminPageHTML = `<!doctype html>
   'use strict';
   var KEY = new URLSearchParams(location.search).get('key') || '';
   var state = {
-    data: null, search: '', sort: null, dir: -1,
+    data: null, search: '', sort: 'games', dir: -1,
+    // The desk opens on people, not browsers: real players only, and a feed
+    // with the visitor noise switched off. Both are one click away.
+    onlyReal: true, feedTourists: false,
     expanded: null, expandedPlayer: null, drawerMsg: null,
     lastFetch: 0, error: false,
   };
@@ -579,6 +642,107 @@ export const adminPageHTML = `<!doctype html>
     return days.map(function (d) { return map[d]; });
   }
   function perDay(items, at) { return perDayOver(last30Days(), items, at); }
+  /**
+   * Every profile the server knows, each row already flagged real (finished
+   * a game) or not. The payload called this list "profiles" before the desk
+   * learned the difference; keep reading that too, so an old tab still renders.
+   */
+  function allPlayers() {
+    return (state.data && (state.data.players || state.data.profiles)) || [];
+  }
+  /** The server's day series, oldest first — the book of who actually played. */
+  function series() { return (state.data && state.data.series) || []; }
+  /**
+   * The days of that series as timestamps, rebuilt from the server's date
+   * key in the reader's own clock. The server stamps each day with its own
+   * local midnight, and a desk open in another timezone — a UTC box read
+   * from India, the normal case — buckets the recent-games fallback into
+   * midnights that no day on this axis has, so the games line goes flat
+   * beside a hero that says six games today. A day's key is its name; the
+   * reader's midnight for that name is where it belongs on this axis.
+   */
+  function seriesDays() {
+    return series().map(function (d) {
+      // Split, not a regex: this whole file is one template literal, and a
+      // backslash inside it never reaches the browser.
+      var p = String((d && d.key) || '').split('-');
+      var y = Number(p[0]), mo = Number(p[1]), day = Number(p[2]);
+      var named = p.length === 3 && y > 1970 && mo >= 1 && mo <= 12 && day >= 1 && day <= 31;
+      return named ? new Date(y, mo - 1, day).getTime() : (d && d.at);
+    });
+  }
+  /** That series keyed by day, so a lookup never depends on array positions. */
+  function seriesByDay() {
+    var s = series(), d = seriesDays(), map = {}, i;
+    for (i = 0; i < s.length; i++) map[d[i]] = s[i];
+    return map;
+  }
+  /** One column of the series over an arbitrary day list — 0 where it is silent. */
+  function seriesPerDay(days, key) {
+    var book = seriesByDay();
+    return days.map(function (d) { return book[d] ? (Number(book[d][key]) || 0) : 0; });
+  }
+  /**
+   * Games per day for a set of days, from whichever book actually knows.
+   * A day the tally recorded is read from the tally; a day it never saw
+   * (anything before this panel shipped) falls back to the recent-games
+   * list, which is capped at a hundred but does remember the past.
+   */
+  function gamesPerDay(days) {
+    var book = seriesByDay();
+    var tail = perDayOver(days, (state.data && state.data.recentGames) || [], function (g) { return g.at; });
+    return days.map(function (d, i) {
+      var row = book[d];
+      return row && row.recorded ? (Number(row.games) || 0) : tail[i];
+    });
+  }
+  /** True once the day book has seen at least one day — the honest cut-off. */
+  function bookHasHistory() {
+    return series().some(function (d) { return d.recorded; });
+  }
+  function sum(list) { return list.reduce(function (a, b) { return a + b; }, 0); }
+  function peak(list) { return list.length ? Math.max.apply(null, list) : 0; }
+  function countNonZero(list) {
+    var n = 0;
+    list.forEach(function (v) { if (v > 0) n++; });
+    return n;
+  }
+  /**
+   * Axis ticks that do not lie. The old scale hung its gridlines at 0, half
+   * and all of the peak, so a peak of 5 drew a line labelled "3" at 2.5.
+   * This rounds the top of the scale up to a 1-2-5 step and puts a label on
+   * every step, which also gives an all-zero series a real 0-1 axis to hang
+   * its baseline on instead of a bare line.
+   */
+  function niceTicks(max, wanted, integer) {
+    var want = wanted > 0 ? wanted : 4;
+    if (!(max > 0) || !isFinite(max)) return { top: 1, step: 1, ticks: [0, 1] };
+    var raw = max / want;
+    var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    if (!(mag > 0) || !isFinite(mag)) mag = 1;
+    var norm = raw / mag;
+    var step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+    if (integer && step < 1) step = 1;
+    var top = Math.ceil(max / step - 1e-9) * step;
+    if (!(top > 0)) top = step;
+    var ticks = [], i;
+    // Multiply rather than accumulate: 0.1 added seven times is not 0.7.
+    for (i = 0; i * step <= top + 1e-9 && i <= 20; i++) ticks.push(i * step);
+    if (ticks[ticks.length - 1] < top) ticks.push(top);
+    return { top: top, step: step, ticks: ticks };
+  }
+  /** Evenly spaced x-label positions, deduped — works for 1 day or 90. */
+  function tickIndexes(n, wanted) {
+    if (n <= 0) return [];
+    if (n === 1) return [0];
+    var want = Math.max(2, Math.min(wanted || 5, n));
+    var out = [], seen = {}, i, idx;
+    for (i = 0; i < want; i++) {
+      idx = Math.round(i * (n - 1) / (want - 1));
+      if (!seen[idx]) { seen[idx] = 1; out.push(idx); }
+    }
+    return out;
+  }
   function gradientDefs(id, color) {
     return '<defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1">' +
       '<stop offset="0" stop-color="' + color + '" stop-opacity=".32"/>' +
@@ -615,46 +779,84 @@ export const adminPageHTML = `<!doctype html>
    * data yet, never a lone flat line.
    */
   function areaChart(days, counts, o) {
-    var W = 640, H = o.h || 190, padL = 46, padR = 12, padT = 12, padB = 24;
+    var W = 640, H = o.h || 190, padL = 48, padR = 12, padT = 12, padB = 26;
     var plotW = W - padL - padR, plotH = H - padT - padB;
-    var max = 0;
-    counts.forEach(function (c) { if (c > max) max = c; });
-    var xFor = function (i) { return padL + (days.length > 1 ? i * plotW / (days.length - 1) : plotW / 2); };
-    var yFor = function (v) { return H - padB - (max > 0 ? v / max * plotH : 0); };
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
+    var n = Math.min(days.length, counts.length);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img"' +
+      (o.title ? ' aria-label="' + esc(o.title) + '"' : '') + '>';
+    if (n <= 0) {
+      // No axis to draw at all — say so rather than render an empty frame.
+      return svg + '<text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle" class="empty">' +
+        esc(o.empty || 'Nothing recorded yet') + '</text></svg>';
+    }
+    var max = peak(counts.slice(0, n));
+    var live = countNonZero(counts.slice(0, n));
+    var sc = niceTicks(max, H > 200 ? 4 : 3, !o.frac);
+    var fmt = o.fmt || function (v) { return String(Math.round(v * 100) / 100); };
+    var xFor = function (i) { return padL + (n > 1 ? i * plotW / (n - 1) : plotW / 2); };
+    var yFor = function (v) { return H - padB - (v / sc.top) * plotH; };
+    var band = n > 1 ? plotW / (n - 1) : plotW;
     var i;
-    for (i = 7; i < days.length; i += 7) {
+
+    // Faint weekly uprights, so the eye can count weeks without labels.
+    for (i = 7; i < n; i += 7) {
       svg += '<line x1="' + xFor(i).toFixed(1) + '" y1="' + padT + '" x2="' + xFor(i).toFixed(1) +
         '" y2="' + (H - padB) + '" stroke="#16251c" stroke-width="1"/>';
     }
-    var ticks = max >= 4 ? [0, 0.5, 1] : [0, 1];
-    ticks.forEach(function (f) {
-      var y = H - padB - f * plotH;
+    sc.ticks.forEach(function (v) {
+      var y = yFor(v);
       svg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) +
-        '" stroke="#1e2f24" stroke-width="1"/>';
-      var lbl = max > 0 ? (o.fmt ? o.fmt(max * f) : String(Math.round(max * f))) : (f === 0 ? '0' : '');
-      if (lbl) svg += '<text x="' + (padL - 7) + '" y="' + (y + 3.5).toFixed(1) + '" text-anchor="end" class="axis">' + lbl + '</text>';
+        '" stroke="' + (v === 0 ? '#28402f' : '#1e2f24') + '" stroke-width="1"/>' +
+        '<text x="' + (padL - 7) + '" y="' + (y + 3.5).toFixed(1) + '" text-anchor="end" class="axis">' + esc(fmt(v)) + '</text>';
     });
-    [0, Math.floor((days.length - 1) / 2), days.length - 1].forEach(function (di) {
-      svg += '<text x="' + xFor(di).toFixed(1) + '" y="' + (H - 7) + '" text-anchor="middle" class="axis">' + dateLabel(days[di]) + '</text>';
+    tickIndexes(n, 5).forEach(function (di) {
+      svg += '<text x="' + xFor(di).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle" class="axis">' + dateLabel(days[di]) + '</text>';
     });
+
     if (max > 0) {
-      var pts = counts.map(function (c, ci) { return xFor(ci).toFixed(1) + ',' + yFor(c).toFixed(1); });
+      var pts = [];
+      for (i = 0; i < n; i++) pts.push(xFor(i).toFixed(1) + ',' + yFor(counts[i]).toFixed(1));
       svg += gradientDefs(o.id, o.color);
-      svg += '<path d="M' + xFor(0).toFixed(1) + ',' + (H - padB) + ' L' + pts.join(' L') + ' L' +
-        xFor(days.length - 1).toFixed(1) + ',' + (H - padB) + ' Z" fill="url(#' + o.id + ')"/>';
-      svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + o.color +
-        '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-      counts.forEach(function (c, ci) {
-        svg += '<circle cx="' + xFor(ci).toFixed(1) + '" cy="' + yFor(c).toFixed(1) + '" r="2.4" fill="' + o.color +
-          '" fill-opacity="' + (c > 0 ? '1' : '.3') + '"><title>' + dateLabel(days[ci]) + ' — ' +
-          (o.tip ? o.tip(c) : c) + '</title></circle>';
-      });
+      // One point has no area to fill; give it a stub so the day still reads
+      // as a column rather than a floating dot.
+      if (n === 1) {
+        svg += '<rect x="' + (xFor(0) - 9).toFixed(1) + '" y="' + yFor(counts[0]).toFixed(1) + '" width="18" height="' +
+          (H - padB - yFor(counts[0])).toFixed(1) + '" fill="url(#' + o.id + ')"/>';
+      } else {
+        svg += '<path d="M' + xFor(0).toFixed(1) + ',' + (H - padB) + ' L' + pts.join(' L') + ' L' +
+          xFor(n - 1).toFixed(1) + ',' + (H - padB) + ' Z" fill="url(#' + o.id + ')"/>';
+        svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + o.color +
+          '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      }
+      for (i = 0; i < n; i++) {
+        var c = counts[i];
+        svg += '<circle cx="' + xFor(i).toFixed(1) + '" cy="' + yFor(c).toFixed(1) + '" r="' +
+          (live <= 2 && c > 0 ? '3.6' : '2.4') + '" fill="' + o.color +
+          '" fill-opacity="' + (c > 0 ? '1' : '.28') + '"/>';
+      }
+      // A lone day of data is a fact, not a trend: label it in place so the
+      // spike cannot be mistaken for a line.
+      if (live === 1) {
+        for (i = 0; i < n; i++) {
+          if (counts[i] <= 0) continue;
+          var lx = Math.min(W - padR - 30, Math.max(padL + 30, xFor(i)));
+          svg += '<text x="' + lx.toFixed(1) + '" y="' + Math.max(padT + 9, yFor(counts[i]) - 8).toFixed(1) +
+            '" text-anchor="middle" class="axis" fill="' + o.color + '">' + esc(fmt(counts[i])) + '</text>';
+        }
+      }
     } else {
       svg += '<line x1="' + padL + '" y1="' + (H - padB) + '" x2="' + (W - padR) + '" y2="' + (H - padB) +
         '" stroke="#2a4033" stroke-width="1.5" stroke-dasharray="3 6" stroke-linecap="round"/>';
       svg += '<text x="' + (padL + plotW / 2).toFixed(1) + '" y="' + (padT + plotH / 2 + 4).toFixed(1) +
-        '" text-anchor="middle" class="empty">' + o.empty + '</text>';
+        '" text-anchor="middle" class="empty">' + esc(o.empty || 'Nothing recorded yet') + '</text>';
+    }
+
+    // Hover targets last, so a whole day-wide column answers the pointer —
+    // a 2px dot is not a target anyone can hit.
+    for (i = 0; i < n; i++) {
+      svg += '<rect x="' + Math.max(padL, xFor(i) - band / 2).toFixed(1) + '" y="' + padT +
+        '" width="' + Math.min(band, W - padR - padL).toFixed(1) + '" height="' + plotH.toFixed(1) +
+        '" fill="transparent"><title>' + esc(dateLabel(days[i]) + ' — ' + (o.tip ? o.tip(counts[i]) : counts[i])) + '</title></rect>';
     }
     return svg + '</svg>';
   }
@@ -705,6 +907,10 @@ export const adminPageHTML = `<!doctype html>
     }
     if (kind === 'join') {
       return s + '#b9c7bd"><circle cx="8" cy="5.4" r="2.5"/><path d="M3.6 13c.7-2.7 2.4-4.1 4.4-4.1s3.7 1.4 4.4 4.1"/></svg>';
+    }
+    if (kind === 'visit') {
+      // A door left ajar: someone looked in, nobody sat down.
+      return s + '#6f7d71"><path d="M4 2.6h5.2v10.8H4z"/><path d="M9.2 4.2 12 3v10l-2.8-1.2"/><circle cx="7.6" cy="8" r=".7"/></svg>';
     }
     if (kind === 'admin') {
       return s + '#e88a7d"><path d="M8 2.2l4.6 1.7v3.3c0 2.9-1.8 4.9-4.6 6.4-2.8-1.5-4.6-3.5-4.6-6.4V3.9z"/></svg>';
@@ -770,26 +976,54 @@ export const adminPageHTML = `<!doctype html>
   function renderHero() {
     var t = state.data.totals || {};
     var r = state.data.revenue || {};
-    var days14 = lastNDays(14);
+    // One fortnight, one axis: the hero's four sparklines share the tail of
+    // the same day list the charts below are drawn on, so "today" means the
+    // same thing in every card even when the server's calendar is a few
+    // hours ahead of the reader's.
+    var sDays = seriesDays();
+    var days14 = sDays.length >= 14 ? sDays.slice(-14) : lastNDays(14);
     var paid = (state.data.ledger || []).filter(function (e) { return e.usd > 0; });
-    var games = state.data.recentGames || [];
-    var profs = state.data.profiles || [];
     var revSpark = perDayOver(days14, paid, function (e) { return e.at; }, function (e) { return e.usd; });
-    var gSpark = perDayOver(days14, games, function (g) { return g.at; });
-    var pSpark = perDayOver(days14, profs, function (p) { return p.created; });
-    var today = dayStart(Date.now());
-    var weekAgo = Date.now() - 7 * DAY;
-    var gToday = 0, g14 = 0, newWeek = 0;
-    games.forEach(function (g) {
-      if (g.at >= today) gToday++;
-      if (g.at >= today - 13 * DAY) g14++;
-    });
-    profs.forEach(function (p) { if (p.created && p.created >= weekAgo) newWeek++; });
+    // Both game numbers come off the same blended day series the chart below
+    // draws. Counting the hero from the recent-games list instead put "2
+    // games today" beside a chart that had recorded one — the same number,
+    // two books, one card apart.
+    var gSpark = gamesPerDay(days14);
+    var realSpark = seriesPerDay(days14, 'players');
+    var gToday = gSpark.length ? gSpark[gSpark.length - 1] : 0;
+    var g14 = sum(gSpark);
 
     var split = { stripe: 0, apple: 0 };
     paid.forEach(function (e) { if (split[e.provider] != null) split[e.provider] += e.usd; });
 
     var html = '';
+
+    // The headline the owner asked for: people who have actually played.
+    // Everything about a browser that opened a lobby lives downstairs in the
+    // secondary strip, labelled for what it is.
+    var playedToday = realSpark.length ? realSpark[realSpark.length - 1] : 0;
+    var played14 = sum(realSpark);
+    var realFoot = t.realPlayers > 0
+      ? (playedToday > 0
+        ? fmtNum(playedToday) + ' finished a game today · ' + fmtNum(played14) + ' player-days over the last 14.'
+        : (played14 > 0
+          ? 'Nobody has finished a game today — ' + fmtNum(played14) + ' player-days over the last 14.'
+          : 'Nobody has finished a game in a fortnight. The line is real players per day.'))
+      : (t.profiles > 0
+        ? 'No profile has finished a game yet, so nobody counts as a real player. ' +
+          fmtNum(t.profiles) + ' profile' + (t.profiles === 1 ? '' : 's') + ' exist' + (t.profiles === 1 ? 's' : '') +
+          ', all of them visitors so far.'
+        : 'Nobody has opened a lobby yet. The first finished game puts the first player on this line.');
+    // The big number is who was *around* today; the line and the footnote
+    // are who *played*. Both belong on this card, but the label has to say
+    // which is which — "5 today" over "1 finished a game today" is the same
+    // overcount the profile row was guilty of, one rung up.
+    html += '<div class="hcard"><div class="hlabel">Real players</div>' +
+      '<div class="hmain"><b class="hbig">' + fmtNum(t.realToday) + '<small> seen today</small></b>' +
+      '<div class="hside"><div><b>' + fmtNum(t.realWeek) + '</b><span>seen this week</span></div>' +
+      '<div><b>' + fmtNum(t.realPlayers) + '</b><span>all-time</span></div></div></div>' +
+      '<div class="hspark">' + miniSpark(realSpark, '#4fd98b', 'hs-real') + '</div>' +
+      '<div class="hfoot">' + realFoot + '</div></div>';
 
     var revFoot = paid.length
       ? fmtUsd(split.stripe) + ' Stripe · ' + fmtUsd(split.apple) + ' Apple'
@@ -800,21 +1034,6 @@ export const adminPageHTML = `<!doctype html>
       '<div><b>' + fmtNum(r.purchases) + '</b><span>purchases</span></div></div></div>' +
       '<div class="hspark">' + miniSpark(revSpark, '#7ba0f2', 'hs-rev') + '</div>' +
       '<div class="hfoot">' + revFoot + '</div></div>';
-
-    var p14 = 0;
-    pSpark.forEach(function (c) { p14 += c; });
-    var pFoot = newWeek > 0
-      ? '+' + fmtNum(newWeek) + ' new profile' + (newWeek === 1 ? '' : 's') + ' this week — the line is sign-ups, last 14 days.'
-      : (p14 > 0
-        ? 'None this week — the line is sign-ups, last 14 days.'
-        : 'The line is sign-ups over 14 days — none since the birthdate field shipped.');
-    html += '<div class="hcard"><div class="hlabel">Players</div>' +
-      '<div class="hmain"><b class="hbig">' + fmtNum(t.dau) + '<small> today</small></b>' +
-      '<div class="hside"><div><b>' + fmtNum(t.wau) + '</b><span>7 days</span></div>' +
-      '<div><b>' + fmtNum(t.mau) + '</b><span>30 days</span></div>' +
-      '<div><b>' + fmtNum(t.profiles) + '</b><span>all-time</span></div></div></div>' +
-      '<div class="hspark">' + miniSpark(pSpark, '#4fd98b', 'hs-newp') + '</div>' +
-      '<div class="hfoot">' + pFoot + '</div></div>';
 
     var rooms = state.data.rooms || [];
     var humans = 0, bots = 0, seats = 0, inGame = 0, lobbies = 0, playing = 0;
@@ -840,12 +1059,14 @@ export const adminPageHTML = `<!doctype html>
       '<div class="hspark">' + seatStrip(humans, bots, Math.max(0, seats - humans - bots)) + '</div>' +
       '<div class="hfoot">' + liveFoot + '</div></div>';
 
+    var finishRate = t.gamesStarted > 0 ? Math.round((t.gamesEnded || 0) / t.gamesStarted * 100) : null;
     html += '<div class="hcard"><div class="hlabel">Games</div>' +
       '<div class="hmain"><b class="hbig">' + fmtNum(gToday) + '<small> today</small></b>' +
       '<div class="hside"><div><b>' + fmtNum(t.gamesEnded) + '</b><span>finished</span></div>' +
       '<div><b>' + fmtNum(t.gamesStarted) + '</b><span>started</span></div></div></div>' +
       '<div class="hspark">' + miniSpark(gSpark, '#e3a93c', 'hs-games') + '</div>' +
-      '<div class="hfoot">' + fmtNum(g14) + ' finished in the last 14 days.</div></div>';
+      '<div class="hfoot">' + fmtNum(g14) + ' finished in the last 14 days' +
+      (finishRate == null ? '.' : ' — ' + finishRate + '% of started games reach an ending.') + '</div></div>';
 
     swap('hero', html);
   }
@@ -861,7 +1082,16 @@ export const adminPageHTML = `<!doctype html>
     var signedPct = t.profiles > 0 ? Math.round((e.signedIn || 0) / t.profiles * 100) : 0;
     var seated = humans + bots;
     var hPct = seated > 0 ? (humans / seated * 100).toFixed(1) : '0';
+    // A profile is minted the moment a browser joins a lobby, so this number
+    // counts visitors and test tabs. It stays on the page — it just stops
+    // pretending to be an audience.
+    var realPct = t.profiles > 0 ? (Number(t.realPlayers || 0) / t.profiles * 100).toFixed(1) : '0';
     swap('substrip',
+      '<div class="scard" title="Every profile ever minted — one is created the moment any browser joins a lobby"><b>' +
+        fmtNum(t.profiles) + '</b>' +
+        (t.profiles > 0 ? '<span class="microstack"><i style="width:' + realPct + '%;background:#e3a93c"></i><i style="flex:1;background:#33473a"></i></span>' : '') +
+        '<span>profiles incl. visitors · ' + fmtNum(t.realPlayers) + ' real</span></div>' +
+      '<div class="scard"><b>' + fmtNum(t.dau) + ' / ' + fmtNum(t.wau) + '</b><span>any profile seen · today / 7d</span></div>' +
       '<div class="scard"><b>' + fmtNum(t.coinsInCirculation) + '</b><span>coins in circulation</span></div>' +
       '<div class="scard"><b>' + (t.avgKarma == null ? '—' : Number(t.avgKarma).toFixed(1)) + '</b><span>average karma</span></div>' +
       '<div class="scard"><b>' + signedPct + '%</b><span>signed in · ' + fmtNum(e.signedIn) + ' of ' + fmtNum(t.profiles) + '</span></div>' +
@@ -882,15 +1112,45 @@ export const adminPageHTML = `<!doctype html>
     (state.data.ledger || []).forEach(function (e) {
       if (!e.at) return;
       var txt;
-      if (e.provider === 'admin') txt = '<b>' + esc(e.code || '?') + '</b> credited ' + fmtNum(e.coins) + ' coins <span class="dim">· admin' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
-      else if (e.provider === 'win') txt = '<b>' + esc(e.code || '?') + '</b> earned ' + fmtNum(e.coins) + ' coins <span class="dim">· win payout</span>';
+      // A one-coin daily reward saying "1 coins" is the busiest line on a
+      // quiet server; count the noun.
+      var coins = fmtNum(e.coins) + ' coin' + (e.coins === 1 ? '' : 's');
+      if (e.provider === 'admin') txt = '<b>' + esc(e.code || '?') + '</b> credited ' + coins + ' <span class="dim">· admin' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
+      // The note says which payout this was — a win or a runner-up placing.
+      // They are not the same thing and the feed should not call them one.
+      else if (e.provider === 'win') txt = '<b>' + esc(e.code || '?') + '</b> earned ' + coins + ' <span class="dim">· ' + esc(e.note || 'game payout') + '</span>';
+      // A streak claim is not a sale, and saying "bought" about it made the
+      // busiest line on a quiet server read like revenue.
+      else if (e.provider === 'daily') txt = '<b>' + esc(e.code || '?') + '</b> claimed ' + coins + ' <span class="dim">· daily reward' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
       else txt = '<b>' + esc(e.code || '?') + '</b> bought ' + esc(e.packId || 'coins') + ' <span class="dim">· ' + esc(e.provider) + (e.usd > 0 ? ' · ' + fmtUsd(e.usd) : '') + '</span>';
       evts.push({ at: e.at, kind: 'coin', html: txt });
     });
+    // Sign-up lines, told honestly. A profile with no finished game is a
+    // browser that looked in — it says so, and it is hidden by default so
+    // the feed reads as a record of play instead of a record of page loads.
     var cutoff = Date.now() - 30 * DAY;
-    (state.data.profiles || []).forEach(function (p) {
+    allPlayers().forEach(function (p) {
       if (!p.created || p.created < cutoff) return;
-      evts.push({ at: p.created, kind: 'join', html: '<b>' + esc(p.name || p.code) + '</b> joined <span class="dim">· new profile · ' + esc(p.code) + '</span>' });
+      if (p.real) {
+        evts.push({
+          at: p.created, kind: 'join',
+          html: '<b>' + esc(p.name || p.code) + '</b> joined <span class="dim">· player · ' + esc(p.code) +
+            ' · ' + fmtNum(p.games) + ' game' + (p.games === 1 ? '' : 's') + ' since</span>',
+        });
+      } else {
+        evts.push({
+          at: p.created, kind: 'visit', tourist: true,
+          html: '<b>' + esc(p.name || p.code) + '</b> opened a lobby <span class="dim">· visitor, no game finished · ' + esc(p.code) + '</span>',
+        });
+      }
+    });
+    // The day a visitor becomes a player is worth a line of its own.
+    allPlayers().forEach(function (p) {
+      if (!p.real || !p.firstPlayedExact || p.firstPlayed < cutoff) return;
+      evts.push({
+        at: p.firstPlayed, kind: 'game',
+        html: '<b>' + esc(p.name || p.code) + '</b> finished their first game <span class="dim">· now a real player · ' + esc(p.code) + '</span>',
+      });
     });
     ((state.data.moderation || {}).audit || []).forEach(function (a) {
       // Credits already surface as their ledger entry — one line per story.
@@ -898,16 +1158,28 @@ export const adminPageHTML = `<!doctype html>
       evts.push({ at: a.at, kind: 'admin', html: '<b>' + esc(a.action) + '</b> ' + esc(a.target || '') + (a.detail ? ' <span class="dim">· ' + esc(a.detail) + '</span>' : '') });
     });
     evts.sort(function (a, b) { return b.at - a.at; });
-    var shown = evts.slice(0, 25);
+    var tourists = 0;
+    evts.forEach(function (ev) { if (ev.tourist) tourists++; });
+    var visible = state.feedTourists ? evts : evts.filter(function (ev) { return !ev.tourist; });
+    var shown = visible.slice(0, 30);
     document.getElementById('feedcount').textContent =
-      shown.length ? (shown.length < evts.length ? shown.length + ' of ' + fmtNum(evts.length) : String(shown.length)) : '';
+      shown.length ? (shown.length < visible.length ? shown.length + ' of ' + fmtNum(visible.length) : String(shown.length)) : '';
+    var vc = document.getElementById('feed-vcount');
+    if (vc) vc.textContent = tourists ? '+' + fmtNum(tourists) : '';
     var html = shown.map(function (ev) {
       return '<div class="feed-row"><span class="glyph">' + glyph(ev.kind) + '</span>' +
         '<div class="ftext">' + ev.html + '</div>' +
         '<span class="ftime" title="' + esc(fmtWhen(ev.at)) + '">' + fmtAgo(ev.at) + '</span></div>';
     }).join('');
     if (!shown.length) {
-      html = '<div class="dim" style="font-size:13px;padding:8px 2px;line-height:1.5">Quiet so far — finished games, sales, sign-ups and admin actions land here as they happen.</div>';
+      html = '<div class="dim" style="font-size:13px;padding:8px 2px;line-height:1.5">' +
+        (tourists && !state.feedTourists
+          ? 'Nothing but visitor traffic in the last 30 days — ' + fmtNum(tourists) +
+            ' browser' + (tourists === 1 ? '' : 's') + ' opened a lobby without finishing a game. Switch to "Include visitors" to see them.'
+          : 'Quiet so far — finished games, sales, sign-ups and admin actions land here as they happen.') + '</div>';
+    } else if (!state.feedTourists && tourists) {
+      html += '<div class="dim" style="font-size:11.5px;padding:9px 4px 2px;line-height:1.5">' +
+        fmtNum(tourists) + ' visitor line' + (tourists === 1 ? '' : 's') + ' hidden — profiles that never finished a game.</div>';
     }
     var el = document.getElementById('feed');
     var top = el.scrollTop;
@@ -915,32 +1187,72 @@ export const adminPageHTML = `<!doctype html>
     el.scrollTop = top;
   }
 
+  /** Set a section header's count chip, or clear it when there is nothing to say. */
+  function setCount(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text || '';
+  }
+
   function renderOverviewCharts() {
-    var days = last30Days();
-    var games = state.data.recentGames || [];
-    var gCounts = perDay(games, function (g) { return g.at; });
-    var gTotal = gCounts.reduce(function (a, b) { return a + b; }, 0);
-    var gPeak = Math.max.apply(null, gCounts.concat([0]));
+    var t = state.data.totals || {};
+    // Every chart on this page rides the server's day series, so all three
+    // share one axis and one definition of "a day".
+    var days = seriesDays();
+    var haveSeries = days.length > 0;
+    if (!haveSeries) days = last30Days();
+
+    // 1. Real players per day — the graph the owner asked for.
+    var rCounts = seriesPerDay(days, 'players');
+    var rTotal = sum(rCounts), rPeak = peak(rCounts), rDays = countNonZero(rCounts);
+    document.getElementById('ov-real').innerHTML = areaChart(days, rCounts, {
+      id: 'ag-real', color: '#4fd98b', h: 200, title: 'Real players per day, last 30 days',
+      empty: 'No finished games in 30 days — the first one draws the first point',
+      tip: function (v) { return v + ' real player' + (v === 1 ? '' : 's'); },
+    });
+    setCount('ov-real-count', rPeak > 0 ? 'peak ' + fmtNum(rPeak) + '/day' : '');
+    document.getElementById('ov-real-cap').textContent = rTotal > 0
+      ? fmtNum(rTotal) + ' player-day' + (rTotal === 1 ? '' : 's') + ' across ' + fmtNum(rDays) + ' active day' +
+        (rDays === 1 ? '' : 's') + ' — the same person on two days counts twice. ' +
+        fmtNum(t.realPlayers) + ' real player' + (t.realPlayers === 1 ? '' : 's') + ' all-time.'
+      : 'This line is drawn from finished games, and it started recording when this panel shipped — a game that ends today puts its players on today.';
+
+    // 2. Games per day. The day book is the better source — it is not capped
+    // at a hundred games — but it only started recording when this panel
+    // shipped, so any day it never saw falls back to the recent-games tail
+    // rather than claiming a quiet day that wasn't.
+    var gCounts = gamesPerDay(days);
+    var gTotal = sum(gCounts), gPeak = peak(gCounts);
     document.getElementById('ov-games').innerHTML = areaChart(days, gCounts, {
-      id: 'ag-games', color: '#e3a93c', h: 208,
+      id: 'ag-games', color: '#e3a93c', h: 200, title: 'Games finished per day, last 30 days',
       empty: 'No finished games yet — the first one draws the first point',
       tip: function (v) { return v + ' game' + (v === 1 ? '' : 's'); },
     });
+    setCount('ov-games-count', gPeak > 0 ? 'peak ' + fmtNum(gPeak) + '/day' : '');
     document.getElementById('ov-games-cap').textContent = gTotal > 0
-      ? gTotal + ' of the ' + games.length + ' most recent finished games fell in the last 30 days (peak ' + gPeak + '/day).'
+      ? fmtNum(gTotal) + ' game' + (gTotal === 1 ? '' : 's') + ' finished in the last 30 days, of ' +
+        fmtNum(t.gamesEnded) + ' all-time.' +
+        (bookHasHistory() ? '' : ' Drawn from the recent-games list until the day tally has a history of its own.')
       : 'Finished games land here as tables wrap up.';
 
-    var profs = state.data.profiles || [];
-    var pCounts = perDay(profs, function (p) { return p.created; });
-    var pTotal = pCounts.reduce(function (a, b) { return a + b; }, 0);
-    document.getElementById('ov-newp').innerHTML = areaChart(days, pCounts, {
-      id: 'ag-newp', color: '#4fd98b', h: 208,
-      empty: 'Sign-ups start counting now — profiles predate the birthdate field',
-      tip: function (v) { return v + ' new player' + (v === 1 ? '' : 's'); },
+    // 3. New real players per day — first finished game, not first page load.
+    var nCounts = seriesPerDay(days, 'newReal');
+    var nTotal = sum(nCounts);
+    var tourists = Math.max(0, Number(t.profiles || 0) - Number(t.realPlayers || 0));
+    var exact = 0;
+    allPlayers().forEach(function (p) { if (p.real && p.firstPlayedExact) exact++; });
+    document.getElementById('ov-newp').innerHTML = areaChart(days, nCounts, {
+      id: 'ag-newp', color: '#7ba0f2', h: 200, title: 'New real players per day, last 30 days',
+      empty: 'Nobody has finished a first game in 30 days',
+      tip: function (v) { return v + ' new real player' + (v === 1 ? '' : 's'); },
     });
-    document.getElementById('ov-newp-cap').textContent = pTotal > 0
-      ? pTotal + ' new player' + (pTotal === 1 ? '' : 's') + ' in the last 30 days, of ' + fmtNum(profs.length) + ' all-time.'
-      : fmtNum(profs.length) + ' profiles all-time — older ones have no birthdate, so the line starts with the next sign-up.';
+    setCount('ov-newp-count', nTotal > 0 ? fmtNum(nTotal) + ' in 30d' : '');
+    document.getElementById('ov-newp-cap').textContent = nTotal > 0
+      ? fmtNum(nTotal) + ' visitor' + (nTotal === 1 ? '' : 's') + ' became real player' + (nTotal === 1 ? '' : 's') +
+        ' in the last 30 days.' + (exact < t.realPlayers ? ' Players who turned real before first-game tracking shipped are dated by their profile birthdate.' : '')
+      : 'A point lands here the day someone finishes their first game.' +
+        (tourists > 0
+          ? ' ' + fmtNum(tourists) + ' profile' + (tourists === 1 ? ' is' : 's are') + ' still waiting to become one.'
+          : '');
   }
 
   function renderRevenue() {
@@ -959,32 +1271,36 @@ export const adminPageHTML = `<!doctype html>
       var t = byDay[d].stripe + byDay[d].apple + byDay[d].other;
       if (t > max) max = t;
     });
-    var W = 860, H = 200, padL = 48, padR = 8, padT = 10, padB = 22;
+    var W = 860, H = 200, padL = 52, padR = 8, padT = 10, padB = 24;
     var plotW = W - padL - padR, plotH = H - padT - padB;
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img">';
-    [0, 0.5, 1].forEach(function (f) {
-      var y = H - padB - f * plotH;
-      svg += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#223428" stroke-width="1"/>';
-      var label = f === 0 ? '$0' : (max > 0 ? fmtUsd(max * f) : '');
-      if (label) svg += '<text x="' + (padL - 6) + '" y="' + (y + 4) + '" text-anchor="end" class="axis">' + label + '</text>';
+    var n = days.length;
+    // Dollars are fractional, so the ticks are too — but they still land on
+    // round steps, and the top of the scale is a number, not the peak bar.
+    var sc = niceTicks(max, 3, false);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Revenue per day, last 30 days">';
+    sc.ticks.forEach(function (v) {
+      var y = H - padB - (v / sc.top) * plotH;
+      svg += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) +
+        '" stroke="' + (v === 0 ? '#28402f' : '#223428') + '" stroke-width="1"/>' +
+        '<text x="' + (padL - 6) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end" class="axis">' + fmtUsd(v) + '</text>';
     });
-    var step = plotW / 30, bw = Math.max(4, step * 0.6);
+    var step = plotW / Math.max(1, n), bw = Math.max(4, step * 0.6);
     days.forEach(function (d, i) {
       var x = padL + i * step + (step - bw) / 2;
       var y = H - padB;
       [['apple', '#b9c7bd'], ['stripe', '#7ba0f2'], ['other', '#e3a93c']].forEach(function (s) {
         var v = byDay[d][s[0]];
         if (v <= 0) return;
-        var h = max > 0 ? Math.max(1.5, v / max * plotH) : 0;
+        var h = Math.max(1.5, v / sc.top * plotH);
         y -= h;
         svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
           '" height="' + h.toFixed(1) + '" rx="1.5" fill="' + s[1] + '"><title>' +
           dateLabel(d) + ' — ' + s[0] + ' ' + fmtUsd(v) + '</title></rect>';
       });
     });
-    [0, 15, 29].forEach(function (i) {
+    tickIndexes(n, 5).forEach(function (i) {
       var x = padL + i * step + step / 2;
-      svg += '<text x="' + x + '" y="' + (H - 6) + '" text-anchor="middle" class="axis">' + dateLabel(days[i]) + '</text>';
+      svg += '<text x="' + x.toFixed(1) + '" y="' + (H - 7) + '" text-anchor="middle" class="axis">' + dateLabel(days[i]) + '</text>';
     });
     if (!entries.length) {
       svg += '<line x1="' + padL + '" y1="' + (H - padB) + '" x2="' + (W - padR) + '" y2="' + (H - padB) +
@@ -1000,7 +1316,9 @@ export const adminPageHTML = `<!doctype html>
   }
 
   function hbar(label, value, max, color, valText) {
-    var pct = max > 0 ? Math.max(0.5, value / max * 100) : 0;
+    // Zero draws nothing: a sliver where there is no value reads as "a
+    // little", which is a different claim from "none".
+    var pct = max > 0 && value > 0 ? Math.max(0.6, value / max * 100) : 0;
     return '<div class="hbar"><span class="lbl">' + esc(label) + '</span>' +
       '<span class="track"><span class="fill" style="width:' + pct.toFixed(1) + '%;background:' + color + '"></span></span>' +
       '<span class="val">' + valText + '</span></div>';
@@ -1056,7 +1374,8 @@ export const adminPageHTML = `<!doctype html>
         return esc(p.name) + (p.isBot ? ' <span class="bot">(bot)</span>' : '');
       }).join(', ') || '<span class="dim">empty</span>';
       var pill = r.status === 'playing' ? 'ok' : (r.status === 'lobby' ? 'warn' : 'dim');
-      html += '<tr class="row room-row' + (state.expanded === r.id ? ' open' : '') + '" data-room="' + esc(r.id) + '">' +
+      html += '<tr class="row room-row' + (state.expanded === r.id ? ' open' : '') + '" data-room="' + esc(r.id) +
+        '" tabindex="0" role="button" aria-expanded="' + (state.expanded === r.id ? 'true' : 'false') + '">' +
         '<td class="mono">' + esc(r.id) + (r.quick ? ' <span class="bot">(quick)</span>' : '') + '</td>' +
         '<td><span class="pill ' + pill + '">' + esc(r.status) + '</span></td>' +
         '<td>' + esc(r.map) + '</td><td>' + names + '</td>' +
@@ -1140,22 +1459,27 @@ export const adminPageHTML = `<!doctype html>
     swap('games', html);
     document.getElementById('gamecount').textContent = games.length || '';
 
-    var days = last30Days();
-    var counts = perDay(games, function (g) { return g.at; });
-    var max = Math.max.apply(null, counts.concat([0]));
+    // The day book, not the 100-game tail: the table below forgets, this
+    // line does not.
+    var haveSeries = series().length > 0;
+    var days = haveSeries ? seriesDays() : last30Days();
+    var counts = gamesPerDay(days);
+    var pCounts = seriesPerDay(days, 'players');
     document.getElementById('gameschart').innerHTML = areaChart(days, counts, {
-      id: 'ag-games2', color: '#e3a93c', h: 180,
+      id: 'ag-games2', color: '#e3a93c', h: 190, title: 'Games finished per day, last 30 days',
       empty: 'No finished games yet — the first one draws the first point',
       tip: function (v) { return v + ' game' + (v === 1 ? '' : 's'); },
     });
-    var total = counts.reduce(function (a, b) { return a + b; }, 0);
+    var total = sum(counts);
     document.getElementById('gamescaption').textContent = total > 0
-      ? total + ' finished in the last 30 days (peak ' + max + '/day). Only the ' + games.length + ' most recent games are kept.'
-      : 'Finished games land here as tables wrap up. Only the most recent 100 are kept.';
+      ? fmtNum(total) + ' finished in the last 30 days (peak ' + fmtNum(peak(counts)) + '/day)' +
+        (bookHasHistory() ? ', with ' + fmtNum(sum(pCounts)) + ' real player-days behind them' : '') +
+        '. The table below keeps only the ' + fmtNum(games.length) + ' most recent.'
+      : 'Finished games land here as tables wrap up. Only the most recent 100 are kept in the table below.';
   }
 
   function playerByCode(code) {
-    var profs = state.data.profiles || [];
+    var profs = allPlayers();
     for (var i = 0; i < profs.length; i++) if (profs[i].code === code) return profs[i];
     return null;
   }
@@ -1164,17 +1488,26 @@ export const adminPageHTML = `<!doctype html>
     return '<div><span>' + esc(label) + '</span><b>' + (raw ? value : esc(value)) + '</b></div>';
   }
 
-  function drawerHtml(p) {
-    var html = '<tr class="pdetail"><td colspan="9"><div class="detail-box">';
+  function drawerHtml(p, cols) {
+    var html = '<tr class="pdetail"><td colspan="' + (cols || 10) + '"><div class="detail-box">';
 
     html += '<div class="facts">' +
       fact('code', p.code) +
       fact('name', (p.name || '—') + (p.flag ? ' ' + p.flag : '')) +
+      fact('kind', p.real
+        ? '<span class="pill player">real player</span>'
+        : '<span class="pill visitor">visitor — no finished game</span>', true) +
+      fact('games', fmtNum(p.games)) +
+      fact('wins', fmtNum(p.wins) + (p.winnings ? ' · ' + fmtNum(p.winnings) + ' coins won' : '')) +
+      fact('turns played', fmtNum(p.turnsPlayed)) +
       fact('coins', fmtNum(p.coins)) +
       fact('karma', fmtNum(p.karma)) +
       fact('friends', fmtNum(p.friends)) +
       fact('sign-in', p.login ? p.login.provider + (p.email ? ' · ' + p.email : '') : 'anonymous') +
-      fact('created', fmtWhen(p.created)) +
+      fact('first game', p.real
+        ? fmtWhen(p.firstPlayed) + (p.firstPlayedExact ? '' : ' (est. from birthdate)')
+        : 'never') +
+      fact('profile created', fmtWhen(p.created)) +
       fact('last seen', fmtWhen(p.seen)) +
       fact('room', p.roomId ? p.roomId + ' (' + p.status + ')' : 'not seated') +
       fact('standing', p.banned ? '<span class="pill bad">banned</span>' : '<span class="pill ok">in good standing</span>', true) +
@@ -1222,49 +1555,133 @@ export const adminPageHTML = `<!doctype html>
   }
 
   function renderPlayers() {
-    var profs = (state.data.profiles || []).slice();
+    var everyone = allPlayers();
+    var realTotal = 0;
+    everyone.forEach(function (p) { if (p.real) realTotal++; });
+    setCount('pf-real-n', realTotal ? fmtNum(realTotal) : '0');
+    setCount('pf-all-n', fmtNum(everyone.length));
+    var btnReal = document.getElementById('pf-real');
+    var btnAll = document.getElementById('pf-all');
+    if (btnReal) btnReal.setAttribute('aria-pressed', state.onlyReal ? 'true' : 'false');
+    if (btnAll) btnAll.setAttribute('aria-pressed', state.onlyReal ? 'false' : 'true');
+
+    var profs = state.onlyReal ? everyone.filter(function (p) { return p.real; }) : everyone.slice();
     var q = state.search.trim().toLowerCase();
     if (q) {
       profs = profs.filter(function (p) {
         var hay = (p.code + ' ' + (p.name || '') + ' ' + (p.email || '') + ' ' +
           ((p.login && p.login.provider) || '') + ' ' + (p.status || '') +
+          (p.real ? ' player real' : ' visitor tourist') +
           (p.banned ? ' banned' : '')).toLowerCase();
         return hay.indexOf(q) >= 0;
       });
     }
-    if (state.sort) {
-      var k = state.sort;
-      profs.sort(function (a, b) { return ((Number(a[k]) || 0) - (Number(b[k]) || 0)) * (state.dir < 0 ? -1 : 1); });
-    }
-    var arrow = function (k) { return state.sort === k ? (state.dir < 0 ? ' ▾' : ' ▴') : ''; };
+    // Busiest first by default: games, then wins, then the wallet. Every
+    // sort falls back to games and then to turns, so a player who was already
+    // playing before the game counter shipped still ranks by the record that
+    // does go back — and two ties never shuffle between refreshes.
+    var k = state.sort || 'games';
+    var dir = state.dir < 0 ? -1 : 1;
+    profs.sort(function (a, b) {
+      var d = ((Number(a[k]) || 0) - (Number(b[k]) || 0)) * dir;
+      if (d) return d;
+      return (Number(b.games) || 0) - (Number(a.games) || 0) ||
+        (Number(b.turnsPlayed) || 0) - (Number(a.turnsPlayed) || 0) ||
+        (a.code < b.code ? -1 : 1);
+    });
+
+    var arrow = function (key) { return state.sort === key ? (state.dir < 0 ? ' ▾' : ' ▴') : ''; };
+    var th = function (key, label) {
+      return '<th class="sortable" data-sort="' + key + '" tabindex="0" role="button" title="Sort by ' + label + '">' +
+        label + arrow(key) + '</th>';
+    };
     var html = '<tr><th>code</th><th>name</th>' +
-      '<th class="sortable" data-sort="coins" title="Click to sort">coins' + arrow('coins') + '</th>' +
-      '<th class="sortable" data-sort="karma" title="Click to sort">karma' + arrow('karma') + '</th>' +
-      '<th>friends</th>' +
-      '<th class="sortable" data-sort="seen" title="Click to sort">last seen' + arrow('seen') + '</th>' +
-      '<th class="sortable" data-sort="created" title="Click to sort">created' + arrow('created') + '</th>' +
-      '<th>status</th><th>login</th></tr>';
+      (state.onlyReal ? '' : '<th>kind</th>') +
+      th('games', 'games') + th('wins', 'wins') + th('turnsPlayed', 'turns') +
+      th('coins', 'coins') + th('karma', 'karma') +
+      th('seen', 'last seen') + '<th>status</th><th>login</th></tr>';
+    var cols = state.onlyReal ? 10 : 11;
     profs.slice(0, 500).forEach(function (p) {
       var login = p.login
         ? esc(p.login.provider) + (p.email ? ' <span class="dim">' + esc(p.email) + '</span>' : '')
         : '<span class="dim">—</span>';
-      html += '<tr class="row player-row' + (state.expandedPlayer === p.code ? ' open' : '') + '" data-player="' + esc(p.code) + '">' +
+      html += '<tr class="row player-row' + (state.expandedPlayer === p.code ? ' open' : '') +
+        '" data-player="' + esc(p.code) + '" tabindex="0" role="button" aria-expanded="' +
+        (state.expandedPlayer === p.code ? 'true' : 'false') + '">' +
         '<td class="mono">' + esc(p.code) + '</td>' +
         '<td>' + esc(p.name || '—') + (p.flag ? ' ' + esc(p.flag) : '') +
           (p.banned ? ' <span class="pill bad">banned</span>' : '') + '</td>' +
+        (state.onlyReal ? '' : '<td>' + (p.real
+          ? '<span class="pill player">player</span>'
+          : '<span class="pill visitor">visitor</span>') + '</td>') +
+        '<td>' + fmtNum(p.games) + '</td>' +
+        '<td>' + (p.wins > 0 ? '<span class="ok">' + fmtNum(p.wins) + '</span>' : '<span class="dim">0</span>') + '</td>' +
+        '<td class="dim">' + fmtNum(p.turnsPlayed) + '</td>' +
         '<td class="gold">' + fmtNum(p.coins) + '</td>' +
-        '<td>' + fmtNum(p.karma) + '</td><td>' + fmtNum(p.friends) + '</td>' +
-        '<td>' + fmtWhen(p.seen) + '</td><td>' + fmtWhen(p.created) + '</td>' +
+        '<td>' + fmtNum(p.karma) + '</td>' +
+        '<td>' + (p.seen ? fmtAgo(p.seen) : '—') + '</td>' +
         '<td>' + esc(p.status) + (p.roomId ? ' <span class="mono dim">(' + esc(p.roomId) + ')</span>' : '') + '</td>' +
         '<td>' + login + '</td></tr>';
-      if (state.expandedPlayer === p.code) html += drawerHtml(p);
+      if (state.expandedPlayer === p.code) html += drawerHtml(p, cols);
     });
-    if (!profs.length) html += '<tr><td colspan="9" class="dim">' + (q ? 'Nobody matches that filter' : 'No profiles yet') + '</td></tr>';
+    if (!profs.length) {
+      html += '<tr><td colspan="' + cols + '" class="dim" style="padding:16px 10px;line-height:1.6">' +
+        (q
+          ? 'Nobody matches that filter' + (state.onlyReal ? ' among real players — try "Everyone".' : '.')
+          : (state.onlyReal && everyone.length
+            ? 'No real players yet. ' + fmtNum(everyone.length) + ' profile' + (everyone.length === 1 ? ' exists' : 's exist') +
+              ', but none has finished a game — a profile is minted the moment any browser joins a lobby. Switch to "Everyone" to see them.'
+            : 'No profiles yet — the first browser to open a lobby gets the first row.')) + '</td></tr>';
+    }
     document.getElementById('playercount').textContent =
-      fmtNum(profs.length) + (q ? ' matching' : '') + (profs.length > 500 ? ' (showing 500)' : '');
+      fmtNum(profs.length) + (state.onlyReal ? ' real' : ' incl. visitors') + (q ? ' matching' : '') +
+      (profs.length > 500 ? ' (showing 500)' : '');
     keepInputs(['d-coins', 'd-creason', 'd-karma', 'd-kreason', 'd-breason'], function () {
       swap('playersT', html);
     });
+  }
+
+  /**
+   * The split, drawn once so the ratio is impossible to misread: how many of
+   * the profiles on file belong to someone who has actually played.
+   */
+  function renderPlayerMix() {
+    var t = state.data.totals || {};
+    var everyone = allPlayers();
+    var real = Number(t.realPlayers || 0);
+    var total = everyone.length || Number(t.profiles || 0);
+    var visitors = Math.max(0, total - real);
+    var pct = total > 0 ? (real / total * 100) : 0;
+    var never = 0, once = 0;
+    everyone.forEach(function (p) {
+      if (!p.real) return;
+      // Exactly one, not "at most one": a real player carrying turns from
+      // before the game counter shipped has games 0, and we do not know how
+      // many they played. Counting them as one-and-done would be a guess.
+      if (p.games === 1) once++;
+      if (!p.wins) never++;
+    });
+    var html = total
+      ? '<div class="stack">' +
+          (real ? '<i style="width:' + pct.toFixed(1) + '%;background:#e3a93c"></i>' : '') +
+          (visitors ? '<i style="flex:1;background:#33473a"></i>' : '') +
+        '</div>' +
+        '<div class="legend">' +
+          '<span><i style="background:#e3a93c"></i>' + fmtNum(real) + ' real player' + (real === 1 ? '' : 's') +
+            ' · ' + pct.toFixed(0) + '%</span>' +
+          '<span><i style="background:#33473a"></i>' + fmtNum(visitors) + ' visitor' + (visitors === 1 ? '' : 's') + '</span>' +
+        '</div>'
+      : '<div class="dim" style="font-size:13px">No profiles on file yet.</div>';
+    html += '<div class="caption">A profile is minted the moment any browser joins a lobby — a test tab, a second phone and a passer-by all get one. ' +
+      'A real player has finished at least one game, which is the only number on this desk worth planning around.</div>';
+    if (real) {
+      html += '<div class="idsplit">' +
+        '<div><b>' + fmtNum(t.realToday) + '</b><span>seen today</span></div>' +
+        '<div><b>' + fmtNum(t.realWeek) + '</b><span>seen this week</span></div>' +
+        '<div><b>' + fmtNum(once) + '</b><span>played once only</span></div>' +
+        '<div><b>' + fmtNum(real - never) + '</b><span>have won a game</span></div></div>';
+    }
+    document.getElementById('playermix').innerHTML = html;
   }
 
   function renderEconomy() {
@@ -1423,6 +1840,7 @@ export const adminPageHTML = `<!doctype html>
     renderOccupancy();
     renderGames();
     renderPlayers();
+    renderPlayerMix();
     renderEconomy();
     renderModeration();
     renderSystem();
@@ -1585,10 +2003,45 @@ export const adminPageHTML = `<!doctype html>
     }
   });
 
+  // Enter or Space on a focused row does what a click does — the drawer is
+  // the main verb on this page and it should not need a mouse.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    var el = e.target;
+    if (!el || !el.closest) return;
+    if (el.closest('input, textarea, button, a')) return;
+    var row = el.closest('.player-row, .room-row, th.sortable');
+    if (!row) return;
+    e.preventDefault();
+    row.click();
+  });
+
   document.getElementById('search').addEventListener('input', function (e) {
     state.search = e.target.value;
     renderPlayers();
   });
+
+  // The two switches that decide whether this desk is looking at people or
+  // at browsers. Both re-render in place; neither touches the poll.
+  function setOnlyReal(on) {
+    if (state.onlyReal === on) return;
+    state.onlyReal = on;
+    state.expandedPlayer = null;
+    state.drawerMsg = null;
+    if (state.data) renderPlayers();
+  }
+  document.getElementById('pf-real').addEventListener('click', function () { setOnlyReal(true); });
+  document.getElementById('pf-all').addEventListener('click', function () { setOnlyReal(false); });
+
+  function setFeedTourists(on) {
+    if (state.feedTourists === on) return;
+    state.feedTourists = on;
+    document.getElementById('feed-hide').setAttribute('aria-pressed', on ? 'false' : 'true');
+    document.getElementById('feed-all').setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (state.data) renderFeed();
+  }
+  document.getElementById('feed-hide').addEventListener('click', function () { setFeedTourists(false); });
+  document.getElementById('feed-all').addEventListener('click', function () { setFeedTourists(true); });
 
   document.getElementById('c-go').addEventListener('click', function () {
     var code = document.getElementById('c-code').value.trim().toUpperCase();
@@ -1667,14 +2120,20 @@ export const adminPageHTML = `<!doctype html>
     });
   });
 
+  // The export follows the switch: real players by default, everyone when
+  // the table is showing everyone. The kind column says which is which.
   document.getElementById('csv-players').addEventListener('click', function () {
-    var rows = [['code', 'name', 'flag', 'coins', 'karma', 'friends', 'status', 'room', 'provider', 'email', 'last_seen', 'created', 'banned']];
-    (state.data && state.data.profiles || []).forEach(function (p) {
-      rows.push([p.code, p.name || '', p.flag || '', p.coins, p.karma, p.friends, p.status,
+    var rows = [['code', 'name', 'flag', 'kind', 'games', 'wins', 'turns_played', 'coins', 'karma', 'friends',
+      'status', 'room', 'provider', 'email', 'first_game', 'last_seen', 'created', 'banned']];
+    allPlayers().forEach(function (p) {
+      if (state.onlyReal && !p.real) return;
+      rows.push([p.code, p.name || '', p.flag || '', p.real ? 'player' : 'visitor',
+        p.games, p.wins, p.turnsPlayed, p.coins, p.karma, p.friends, p.status,
         p.roomId || '', (p.login && p.login.provider) || '', p.email || '',
-        iso(p.seen), iso(p.created), p.banned ? 'yes' : 'no']);
+        p.real ? iso(p.firstPlayed) : '', iso(p.seen), iso(p.created), p.banned ? 'yes' : 'no']);
     });
-    downloadCsv('moneymove-players-' + new Date().toISOString().slice(0, 10) + '.csv', rows);
+    downloadCsv('moneymove-' + (state.onlyReal ? 'real-players-' : 'profiles-') +
+      new Date().toISOString().slice(0, 10) + '.csv', rows);
   });
 
   document.getElementById('csv-ledger').addEventListener('click', function () {

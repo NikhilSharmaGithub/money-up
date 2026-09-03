@@ -13,8 +13,9 @@ import {
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
   ownedTally, dataFiles,
   dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
-  registerPushDevice,
+  registerPushDevice, realCounts,
 } from './social.js';
+import { noteGameDay, daySeries, bucketByDay, lastDayKeys } from './dayStats.js';
 import {
   startBackups, backupInfo, streamDataBackup,
   initWebhookHealth, noteWebhook, webhookHealth,
@@ -392,15 +393,29 @@ function recordTransitions(room) {
   }
   if (room.status === 'ended' && prev === 'playing') {
     stats.gamesEnded++;
-    // Winning pays two coins — a token, not a wage. The store is stocked
-    // from the daily visit and the shop; a win is bragging rights.
-    // Team games pay every human on the winning side.
+    // How long the table ran: the lifetime turn tally and the game record
+    // both read it, so it has to be in hand before either is written.
     const turns = room.turnCount || 0;
-    const payout = turns >= 40 ? 3 : 2;
+    // Winning pays two coins, the runner-up one. A token, not a wage — the
+    // shop is where coins are meant to come from.
+    // Team games pay every human on the winning side.
     const winners = room.winningTeam != null
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
-    for (const w of winners) awardWin(w.id, payout, `won ${room.id} on ${room.map.name}`);
+    for (const w of winners) awardWin(w.id, 2, `won ${room.id} on ${room.map.name}`);
+    // Second place is whoever stood tallest among the beaten: solvent seats
+    // by net worth first, then whoever fell last. Net worth walks the
+    // ownership map, and this whole block runs inside a state broadcast —
+    // one throw here and the table's last frame never ships while the tally
+    // is left half-written, so the walk is allowed to shrug.
+    const worth = (p) => { try { return room.netWorth(p) || 0; } catch { return 0; } };
+    const winnerIds = new Set(winners.map((w) => w.id));
+    const runnerUp = [...room.players]
+      .filter((p) => !p.isBot && !winnerIds.has(p.id))
+      .sort((a, b) => Number(a.bankrupt) - Number(b.bankrupt) || worth(b) - worth(a))[0];
+    // Second place is paid, not credited with a win: `placing` keeps the coin
+    // out of the lifetime tally the leaderboard and the wins column read.
+    if (runnerUp) awardWin(runnerUp.id, 1, `runner-up in ${room.id}`, { placing: true });
     // The same moment feeds the trophy shelf and the lifetime tallies: one
     // title per human — winners and losers alike — and the game's turn count
     // for everyone who saw it end. House players fall through both filters:
@@ -411,6 +426,11 @@ function recordTransitions(room) {
     for (const p of room.players) {
       if (!p.isBot) noteTurns(p.id, turns);
     }
+    // The other book, and the one the owner actually asked for: which real
+    // humans played on which calendar day. Public codes only, deduped by
+    // the day tally — a browser that opened a lobby and left never reaches
+    // here, so this line cannot be padded by visitors.
+    noteGameDay(stats, room.players.filter((p) => !p.isBot).map((p) => codeForToken(p.id)));
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
@@ -490,6 +510,15 @@ app.get('/api/admin/data', (req, res) => {
   const roomsByStatus = { lobby: 0, playing: 0, ended: 0 };
   for (const r of rooms.values()) roomsByStatus[r.status] = (roomsByStatus[r.status] || 0) + 1;
 
+  // Real players — the headline the profile count was never able to give.
+  // A profile is minted the moment a browser joins a lobby; a real player
+  // has finished a game. The dashboard leads with the second number and
+  // labels the first one honestly.
+  const real = realCounts(now);
+  const dayKeys = lastDayKeys(30, now);
+  const newRealPerDay = bucketByDay(dayKeys, profs.filter((p) => p.real).map((p) => p.firstPlayed));
+  const series = daySeries(stats, 30, now).map((d, i) => ({ ...d, newReal: newRealPerDay[i] }));
+
   res.json({
     totals: {
       gamesStarted: stats.gamesStarted,
@@ -497,12 +526,21 @@ app.get('/api/admin/data', (req, res) => {
       liveRooms: rooms.size,
       liveSockets: [...socketsOf.values()].reduce((n, s) => n + s.size, 0),
       profiles: profs.length,
+      realPlayers: real.all,
+      realToday: real.today,
+      realWeek: real.week,
+      realMonth: real.month,
+      tourists: real.tourists,
       coinsInCirculation,
       avgKarma,
       dau: activeSince(dayMs),
       wau: activeSince(7 * dayMs),
       mau: activeSince(30 * dayMs),
     },
+    // Real players and games per calendar day, oldest first, plus the day
+    // each real player's first finished game landed on. Recorded from the
+    // game-end hook, capped at 90 days on disk, served 30 at a time.
+    series,
     revenue: {
       // The ledger began with a deploy; purchases before its first entry
       // exist only as dedupe ids with no amounts, so they are not counted.
@@ -547,7 +585,10 @@ app.get('/api/admin/data', (req, res) => {
       quickStartAt: r.quickStartAt || null,
     })),
     recentGames: stats.recent,
-    profiles: profs,
+    // Every profile, each row flagged real (finished a game) or not, so the
+    // desk can show players by default and visitors on request. Public
+    // fields only — the identity token never appears here.
+    players: profs,
     moderation: {
       bans: bansView(),
       audit: auditLog.slice(-300),

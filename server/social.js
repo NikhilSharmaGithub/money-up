@@ -238,8 +238,14 @@ export function awardCoins(token, amount) {
  * The same payout, written down. awardCoins predates the ledger and leaves no
  * trace; wins routed through here get a zero-dollar entry, so the economy
  * panel can say where every coin came from instead of guessing.
+ *
+ * `placing` is for a payout that is not a win — the runner-up's consolation
+ * coin. It banks and it is written down like any other, but it must not touch
+ * the lifetime win tally: the public leaderboard and the admin's wins column
+ * both read that number, and a player who was beaten showing up as a winner
+ * is a lie neither of them can be talked out of afterwards.
  */
-export function awardWin(token, amount, note) {
+export function awardWin(token, amount, note, { placing = false } = {}) {
   const coins = Math.floor(Number(amount) || 0);
   const balance = awardCoins(token, coins);
   if (balance == null) return null;
@@ -247,7 +253,7 @@ export function awardWin(token, amount, note) {
   // bumps the count and banks the purse. awardCoins just minted the profile
   // if it somehow didn't exist, so the get can't miss.
   const p = profiles.get(token);
-  if (p) {
+  if (p && !placing) {
     p.wins = (p.wins || 0) + 1;
     p.winnings = (p.winnings || 0) + coins;
   }
@@ -333,12 +339,13 @@ export function equipItem(token, slot, itemId) {
 }
 
 // ------------------------------------------------------------ daily reward --
-// Showing up pays. Day one is 20 coins; every consecutive day adds 5 until
-// the purse flattens at 50, and a missed day starts the ladder over — the
-// reward is for the habit, not the backlog. Dates are the server's calendar.
-const DAILY_BASE = 20;
-const DAILY_STEP = 5;
-const DAILY_CAP = 50;
+// Showing up pays, but barely: one coin on day one, two on the second day
+// in a row, up to seven and no further — a week of habit is worth a week's
+// worth, and a missed day starts the ladder over. Coins have to stay scarce
+// enough that the shop is worth visiting. Dates are the server's calendar.
+const DAILY_BASE = 1;
+const DAILY_STEP = 1;
+const DAILY_CAP = 7;
 
 /** Server-local calendar date as a key: same day, same string. */
 function dayKey(when = Date.now()) {
@@ -455,13 +462,79 @@ export function recordTitle(token, title) {
   save();
 }
 
-/** Lifetime turns, bumped once per finished game for everyone still seated. */
+/**
+ * Lifetime turns, bumped once per finished game for everyone still seated.
+ * The same call is where a visitor becomes a player: the first game that
+ * puts a turn on the board stamps `firstPlayed`, and that date is what the
+ * "new real players" chart is drawn from. `games` counts the sittings even
+ * when a table somehow ends on turn zero.
+ */
 export function noteTurns(token, turns) {
   const p = profiles.get(token);
   const n = Math.floor(Number(turns) || 0);
-  if (!p || n <= 0) return;
-  p.turnsPlayed = (p.turnsPlayed || 0) + n;
+  if (!p) return;
+  p.games = (p.games || 0) + 1;
+  if (n > 0) {
+    if (!(p.turnsPlayed > 0)) p.firstPlayed = Date.now();
+    p.turnsPlayed = (p.turnsPlayed || 0) + n;
+  }
   save();
+}
+
+// ----------------------------------------------------------- real players --
+// A profile is minted the moment a browser joins a lobby, so the profile
+// count is a count of visitors: the owner's own test tabs, anyone who opened
+// a table and left, every extra browser. The book that answers "who actually
+// played" is this one — a real player has finished at least one game, which
+// is exactly what turnsPlayed records.
+export const isRealProfile = (p) => (p && p.turnsPlayed > 0) || false;
+
+/** The public row for one profile — codes and totals, never tokens. */
+const playerRow = (p) => ({
+  code: p.code,
+  name: p.name || '',
+  flag: p.flag || '',
+  coins: p.coins ?? 0,
+  karma: p.karma ?? KARMA_MAX,
+  games: p.games || 0,
+  wins: p.wins || 0,
+  winnings: p.winnings || 0,
+  turnsPlayed: p.turnsPlayed || 0,
+  // Profiles that turned real before turn tracking shipped have no first
+  // game on file; their birthdate is the closest honest stand-in, and the
+  // flag says which one the caller is looking at. A visitor has no first
+  // game at all, and says so.
+  firstPlayed: p.turnsPlayed > 0 ? (p.firstPlayed || p.created || null) : null,
+  firstPlayedExact: !!p.firstPlayed,
+  seen: p.seen || null,
+  created: p.created || null,
+});
+
+/** Everyone who has finished a game, busiest first. */
+export function realPlayers() {
+  return [...profiles.values()]
+    .filter(isRealProfile)
+    .map(playerRow)
+    .sort((a, b) => b.games - a.games || b.wins - a.wins || b.coins - a.coins);
+}
+
+/**
+ * The headline counts. `today` and `week` are real players *seen* in the
+ * window — the profile's last sighting, the same clock the DAU strip uses —
+ * so the hero can lead with people instead of browsers.
+ */
+export function realCounts(now = Date.now()) {
+  const day = 24 * 60 * 60 * 1000;
+  let all = 0, today = 0, week = 0, month = 0;
+  for (const p of profiles.values()) {
+    if (!isRealProfile(p)) continue;
+    all++;
+    const since = p.seen ? now - p.seen : Infinity;
+    if (since < day) today++;
+    if (since < 7 * day) week++;
+    if (since < 30 * day) month++;
+  }
+  return { all, today, week, month, tourists: profiles.size - all, profiles: profiles.size };
 }
 
 /** The caller's own shelf — read-only, same no-minting rule as walletOf. */
@@ -637,18 +710,21 @@ export function friendsOf(token) {
 }
 
 // ---------------------------------------------------------------- presence --
-/** Everything the admin dashboard needs — read-only snapshot. */
+/**
+ * Everything the admin dashboard needs — read-only snapshot. Every row says
+ * whether it belongs to a real player or a visitor, so the desk can filter
+ * the tourists out instead of counting them as customers.
+ */
 export function allProfiles() {
   return [...profiles.values()].map((p) => {
     const at = presence.get(p.token);
     return {
-      code: p.code, name: p.name || '', flag: p.flag || '',
+      ...playerRow(p),
       friends: (p.friends || []).length,
-      coins: p.coins ?? 0, karma: p.karma ?? KARMA_MAX,
       roomId: at?.roomId || null, status: at?.status || 'offline',
       login: p.login || null, email: p.email || null,
-      seen: p.seen || null, created: p.created || null,
       banned: bans.has(p.token),
+      real: isRealProfile(p),
     };
   });
 }

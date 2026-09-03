@@ -112,7 +112,7 @@ struct DailyRewardCard: View {
                         } else {
                             Art.icon(.coin, size: 19)
                         }
-                        Text(claiming ? "Collecting…" : "Collect \(amount) coins")
+                        Text(claiming ? "Collecting…" : "Collect \(amount) \(amount == 1 ? "coin" : "coins")")
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -144,7 +144,7 @@ struct DailyRewardCard: View {
                         .monospacedDigit()
                         .foregroundStyle(P.gold)
                         .contentTransition(.numericText())
-                    Text("coins")
+                    Text(counted == 1 ? "coin" : "coins")
                         .font(.system(size: 15, weight: .heavy, design: .rounded))
                         .foregroundStyle(P.gold.opacity(0.85))
                 }
