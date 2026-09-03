@@ -732,6 +732,20 @@ export function registerPushDevice(token, deviceToken, platform) {
 /** The sender's read — push.js needs the devices, never the whole profile. */
 export const pushDevicesOf = (token) => profiles.get(token)?.push || [];
 
+/**
+ * Apple says a device token is dead — the app was deleted, or the token was
+ * reissued. Keeping it means one more doomed request on every future turn for
+ * the rest of that player's life, so it goes.
+ */
+export function forgetPushDevice(token, device) {
+  const p = profiles.get(token);
+  if (!p?.push?.length) return { ok: true, devices: 0 };
+  const before = p.push.length;
+  p.push = p.push.filter((d) => d.device !== device);
+  if (p.push.length !== before) save();
+  return { ok: true, devices: p.push.length };
+}
+
 // -------------------------------------------------------------------- bans --
 // A ban sticks to the device token, not the name on it — renaming doesn't
 // help. Clearing the browser does; this is a lock on the door, not a fortress.

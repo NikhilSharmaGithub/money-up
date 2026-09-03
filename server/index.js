@@ -803,7 +803,9 @@ function getRoom(id) {
     // already looking at the board, which is to say never.
     if (!p || p.isBot || p.bankrupt) return;
     if (seatsOf.get(id)?.get(playerId)?.size) return;
-    sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`);
+    // Collapsed per table: three turns come round while a phone is in a
+    // pocket and it should find one notification waiting, not three.
+    sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`, { collapseId: id });
   };
   rooms.set(id, room);
   socketsOf.set(id, new Set());
