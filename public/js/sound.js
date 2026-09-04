@@ -118,28 +118,80 @@ export const sfx = {
   },
   step: () => tone({ freq: jit(650, 0.05), dur: 0.04, type: 'sine', vol: 0.055 }),
 
-  // A bought piece should sound like itself when it moves. These play once per
-  // tile — eleven times on a good roll — so every one of them is shorter and
-  // quieter than it wants to be. Anything with an engine putts, anything alive
-  // pads, the ship washes, the rocket hisses.
-  stepFor: (skin) => {
+  // A bought piece should sound like itself when it moves.
+  //
+  // The trick to these being worth hearing eleven times in a row is that they
+  // do not repeat. A walk is a journey: the engine pulls away and climbs, the
+  // paws alternate like two feet rather than one stamp, the wash gets deeper
+  // as the ship gathers way. And the last tile is not another step — it is an
+  // arrival, and gets its own sound. That last beat is most of the
+  // satisfaction; without it a walk just stops.
+  //
+  // All of it stays short and quiet on purpose. A sound that is a delight the
+  // first time and a nuisance the fortieth is a badly made sound.
+  stepFor: (skin, { i = 0, total = 1, last = false } = {}) => {
     const kind = STEP_KIND[String(skin || '').replace(/\uFE0F/g, '')];
+    if (!kind) return sfx.step();
+    // How far into the walk, 0 → 1. Everything below leans on this.
+    const along = total > 1 ? i / (total - 1) : 1;
+
     if (kind === 'engine') {
-      tone({ freq: jit(88, 0.07), to: 68, dur: 0.075, type: 'sawtooth', vol: 0.06 });
-      noise({ dur: 0.03, from: 800, to: 260, q: 1.2, vol: 0.03, at: 0.004 });
+      if (last) {
+        // Off the gas, a scuff of rubber, and the body settling on its springs.
+        noise({ dur: 0.14, from: 2600, to: 620, q: 2.4, vol: 0.05 });
+        tone({ freq: jit(168), to: 62, dur: 0.2, type: 'sawtooth', vol: 0.055, at: 0.02 });
+        tone({ freq: jit(58, 0.04), dur: 0.14, type: 'sine', vol: 0.06, at: 0.11 });
+        return;
+      }
+      // Pulling away: a third higher by the end, never more.
+      const rev = 1 + along * 0.34;
+      tone({ freq: jit(76 * rev, 0.05), to: 60 * rev, dur: 0.085, type: 'sawtooth', vol: 0.055 });
+      tone({ freq: jit(152 * rev, 0.04), to: 120 * rev, dur: 0.06, type: 'triangle', vol: 0.022 });
+      noise({ dur: 0.032, from: 760, to: 250, q: 1.5, vol: 0.028 });
       return;
     }
+
     if (kind === 'paw') {
-      tone({ freq: jit(190, 0.08), to: 130, dur: 0.06, type: 'sine', vol: 0.075 });
-      noise({ dur: 0.028, from: 500, to: 180, q: 0.8, vol: 0.028 });
+      if (last) {
+        // Both feet land together, and something heavy stops being carried.
+        tone({ freq: jit(140), to: 82, dur: 0.13, type: 'sine', vol: 0.085 });
+        noise({ dur: 0.07, from: 620, to: 160, q: 0.9, vol: 0.045, at: 0.01 });
+        tone({ freq: jit(66, 0.05), dur: 0.12, type: 'triangle', vol: 0.05, at: 0.05 });
+        return;
+      }
+      // Left, right, left: two feet, not one stamp repeated.
+      const other = i % 2 === 1;
+      tone({ freq: jit(other ? 168 : 205, 0.06), to: other ? 112 : 138, dur: 0.065, type: 'sine', vol: 0.075 });
+      noise({ dur: 0.03, from: other ? 430 : 540, to: 165, q: 0.85, vol: 0.03 });
       return;
     }
-    if (kind === 'water') { noise({ dur: 0.11, from: 1500, to: 420, q: 0.7, vol: 0.05 }); return; }
+
+    if (kind === 'water') {
+      if (last) {
+        // The hull touching, and the wash running out from under it.
+        noise({ dur: 0.26, from: 1100, to: 260, q: 0.6, vol: 0.06 });
+        tone({ freq: jit(96), to: 58, dur: 0.16, type: 'sine', vol: 0.05, at: 0.02 });
+        return;
+      }
+      // Gathering way: the wash deepens as she moves.
+      noise({ dur: 0.12 + along * 0.04, from: 1600 - along * 300, to: 400, q: 0.7, vol: 0.045 + along * 0.012 });
+      return;
+    }
+
     if (kind === 'thrust') {
-      noise({ dur: 0.09, from: 2600, to: 900, q: 1.4, vol: 0.045 });
-      tone({ freq: jit(240), to: 420, dur: 0.07, type: 'triangle', vol: 0.035 });
+      if (last) {
+        // Retro burn, then the legs touching down.
+        noise({ dur: 0.18, from: 3200, to: 500, q: 1.1, vol: 0.055 });
+        tone({ freq: jit(420), to: 120, dur: 0.16, type: 'triangle', vol: 0.045 });
+        tone({ freq: jit(70, 0.05), dur: 0.12, type: 'sine', vol: 0.055, at: 0.1 });
+        return;
+      }
+      const climb = 1 + along * 0.5;
+      noise({ dur: 0.085, from: 2400 * climb, to: 850, q: 1.5, vol: 0.042 });
+      tone({ freq: jit(230 * climb), to: 400 * climb, dur: 0.07, type: 'triangle', vol: 0.032 });
       return;
     }
+
     sfx.step();
   },
 

@@ -399,7 +399,7 @@ async function walk(state, player, from, to, dir, gen, onStep, onArrive) {
     if (walkGen.get(player.id) !== gen) return;
     cur = (cur + dir + size) % size;
     place(state, player.id, cur, ms, STEP_EASE);
-    onStep?.(cur, n === distance - 1, player);
+    onStep?.(cur, n === distance - 1, player, n, distance);
     await sleep(ms);
   }
   if (walkGen.get(player.id) === gen) onArrive?.(player);
