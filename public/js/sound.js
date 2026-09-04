@@ -75,6 +75,19 @@ const jit = (f, spread = 0.02) => f * (1 + (Math.random() * 2 - 1) * spread);
 const slop = (t) => Math.max(0, t + (Math.random() * 2 - 1) * 0.012);
 const rnd = (a, b) => a + Math.random() * (b - a);
 
+/**
+ * What a piece sounds like on the move. Only the ones with an obvious voice
+ * are listed; everything else — a hat, a briefcase, a diamond — keeps the
+ * plain tick, because inventing a noise for a top hat is how a board starts
+ * sounding like a cartoon.
+ */
+const STEP_KIND = {
+  '🚗': 'engine', '🏎': 'engine', '🛵': 'engine', '🛺': 'engine',
+  '🐕': 'paw', '🐘': 'paw', '🐅': 'paw', '🐉': 'paw',
+  '🚢': 'water',
+  '🚀': 'thrust',
+};
+
 export const sfx = {
   click: () => {
     // soft woodblock: two quiet partials, no square-wave beep
@@ -104,6 +117,31 @@ export const sfx = {
     tone({ freq: jit(260), to: 175, dur: 0.1, type: 'triangle', vol: 0.08, at: t + 0.02 });
   },
   step: () => tone({ freq: jit(650, 0.05), dur: 0.04, type: 'sine', vol: 0.055 }),
+
+  // A bought piece should sound like itself when it moves. These play once per
+  // tile — eleven times on a good roll — so every one of them is shorter and
+  // quieter than it wants to be. Anything with an engine putts, anything alive
+  // pads, the ship washes, the rocket hisses.
+  stepFor: (skin) => {
+    const kind = STEP_KIND[String(skin || '').replace(/\uFE0F/g, '')];
+    if (kind === 'engine') {
+      tone({ freq: jit(88, 0.07), to: 68, dur: 0.075, type: 'sawtooth', vol: 0.06 });
+      noise({ dur: 0.03, from: 800, to: 260, q: 1.2, vol: 0.03, at: 0.004 });
+      return;
+    }
+    if (kind === 'paw') {
+      tone({ freq: jit(190, 0.08), to: 130, dur: 0.06, type: 'sine', vol: 0.075 });
+      noise({ dur: 0.028, from: 500, to: 180, q: 0.8, vol: 0.028 });
+      return;
+    }
+    if (kind === 'water') { noise({ dur: 0.11, from: 1500, to: 420, q: 0.7, vol: 0.05 }); return; }
+    if (kind === 'thrust') {
+      noise({ dur: 0.09, from: 2600, to: 900, q: 1.4, vol: 0.045 });
+      tone({ freq: jit(240), to: 420, dur: 0.07, type: 'triangle', vol: 0.035 });
+      return;
+    }
+    sfx.step();
+  },
 
   buy: () => {
     // a warm strum, each note doubled an octave up very quietly

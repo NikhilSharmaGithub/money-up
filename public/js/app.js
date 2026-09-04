@@ -915,7 +915,7 @@ function render() {
   safe('highlight', () => highlightTiles(state));
   safe('tokens', () => syncTokens(state, {
     meId,
-    onStep: () => sfx.step(),
+    onStep: (_tile, _last, who) => sfx.stepFor(who?.tokenSkin),
     onArrive: () => highlightTiles(state),
     // The clank belongs to the door closing, not to the server saying so —
     // it waits for the piece to be set down inside.

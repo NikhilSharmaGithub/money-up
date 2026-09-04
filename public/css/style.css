@@ -1031,6 +1031,41 @@ select { cursor: pointer; }
 .token.in-flight .token-face { transform: scale(1.16); }
 .token .token-face { transition: transform .2s var(--pop); }
 .token-face { font-size: clamp(6.5px, .8vw, 11px); font-weight: 900; color: rgba(255, 255, 255, .95); }
+
+/* ─────────────────────────────────────────────── a bought piece ──
+   A car drawn inside a coloured circle reads as a sticker on a counter. A
+   piece on a board stands on a base: the glyph itself, at a size worth
+   looking at, on a small disc in the player's colour — which is still how
+   you tell whose it is. The circle goes; the colour stays. */
+.token.skinned {
+  border: none;
+  box-shadow: none;
+  width: clamp(17px, 2.2vw, 31px);
+  height: clamp(17px, 2.2vw, 31px);
+}
+.token-base {
+  position: absolute; left: 50%; bottom: 4%;
+  width: 62%; height: 20%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: var(--tc);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 0 0 1px rgba(0, 0, 0, .18);
+}
+.token:not(.skinned) .token-base { display: none; }
+.token.skinned .token-face {
+  font-size: clamp(13px, 1.75vw, 25px);
+  line-height: 1;
+  transform: translateY(-9%);
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .45));
+}
+/* Your own piece, and the turn, mark the base rather than ringing a disc
+   that is no longer there. */
+.token.skinned.is-mine::before { inset: -2px; border-color: rgba(255, 255, 255, .5); opacity: .5; }
+.token.skinned.is-mine .token-base { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .8), 0 1px 3px rgba(0, 0, 0, .5); }
+.token.skinned.is-mine.is-turn .token-base {
+  box-shadow: 0 0 0 2px var(--gold), 0 0 9px color-mix(in srgb, var(--gold) 70%, transparent), 0 1px 3px rgba(0, 0, 0, .5);
+}
+.token.skinned.in-flight .token-face { transform: translateY(-9%) scale(1.16); }
 .token.is-turn { box-shadow: 0 0 0 2px var(--ink), 0 0 14px var(--tc), 0 3px 8px rgba(60, 30, 35, .4); z-index: 2; }
 .token.is-turn::after {
   content: ''; position: absolute; inset: -5px; border-radius: 50%;

@@ -328,17 +328,27 @@ export function syncTokens(state, { onStep, onArrive, onJailed, meId } = {}) {
       layerEl.appendChild(el);
       rec = { el, pos: null, face: null };
       tokens.set(p.id, rec);
-      rec.el.style.background = p.color;
       rec.el.style.setProperty('--tc', p.color);
       place(state, p.id, p.pos, 0);
     }
     // a store token skin replaces the initial — live, so equipping mid-game
     // restyles the piece on everyone's board
-    const face = p.tokenSkin || (p.name[0] || '?').toUpperCase();
+    // A player who has bought a piece gets the piece, standing on a base in
+    // their colour — not the piece squeezed inside a coloured disc, which is
+    // what a car in a circle looked like. The disc stays for everyone else,
+    // because an initial needs something to sit on.
+    const skin = p.tokenSkin || '';
+    const face = skin || (p.name[0] || '?').toUpperCase();
     if (rec.face !== face) {
       rec.face = face;
-      rec.el.innerHTML = `<span class="token-face${p.tokenSkin ? ' skin' : ''}">${escapeHtml(face)}</span>`;
+      rec.el.innerHTML = skin
+        ? `<i class="token-base"></i><span class="token-face skin">${escapeHtml(face)}</span>`
+        : `<span class="token-face">${escapeHtml(face)}</span>`;
     }
+    rec.el.classList.toggle('skinned', !!skin);
+    // The colour moves from the disc to the base; --tc keeps carrying it for
+    // the turn glow either way.
+    rec.el.style.background = skin ? 'transparent' : p.color;
     rec.el.classList.toggle('is-turn', state.turn?.playerId === p.id && state.status === 'playing');
     // Eight discs of similar size, and one of them is yours. Marking it — a
     // quiet ring always, a lit one on your own turn — is the difference
@@ -389,7 +399,7 @@ async function walk(state, player, from, to, dir, gen, onStep, onArrive) {
     if (walkGen.get(player.id) !== gen) return;
     cur = (cur + dir + size) % size;
     place(state, player.id, cur, ms, STEP_EASE);
-    onStep?.(cur, n === distance - 1);
+    onStep?.(cur, n === distance - 1, player);
     await sleep(ms);
   }
   if (walkGen.get(player.id) === gen) onArrive?.(player);
