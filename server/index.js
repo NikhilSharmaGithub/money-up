@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 import { GameRoom, COLORS } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
 import { sendTurnPush } from './push.js';
+import * as cup from './tournament.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
@@ -214,6 +215,26 @@ app.get('/api/leaderboard', (_req, res) => res.json({ top: leaderboardView() }))
 /** Only ever your own shelf — the token is a secret, so that's all it opens. */
 app.get('/api/achievements', (req, res) => {
   res.json(achievementsView(String(req.query.token || '').slice(0, 64)));
+});
+
+// ---- tournaments ---------------------------------------------------------
+// Hidden entirely until the owner switches it on: a client that asks a server
+// with cups off gets `enabled: false` and draws nothing at all.
+app.get('/api/cup', (req, res) => {
+  res.json(cup.publicView(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/cup/join', (req, res) => {
+  const result = cup.join(String(req.body?.token || '').slice(0, 64));
+  if (result.needsLogin) return res.status(401).json(result);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/cup/leave', (req, res) => {
+  const result = cup.leave(String(req.body?.token || '').slice(0, 64));
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
 });
 
 // ---- push (scaffolding) --------------------------------------------------
@@ -442,6 +463,13 @@ function recordTransitions(room) {
     // the day tally — a browser that opened a lobby and left never reaches
     // here, so this line cannot be padded by visitors.
     noteGameDay(stats, room.players.filter((p) => !p.isBot).map((p) => codeForToken(p.id)));
+
+    // A cup table just ended: whoever won goes through, and if that completes
+    // the round, the next one is drawn and seated on the spot.
+    if (room.cupMatch) {
+      const out = cup.matchFinished(room.id, room.winner?.id);
+      if (out?.roundComplete) seatCupMatches();
+    }
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
@@ -652,6 +680,48 @@ const adminBodyGuard = (req, res) => {
   return false;
 };
 
+// ---- the cup, from the owner's side --------------------------------------
+// Everything here is one POST with the key in the body, like every other
+// admin action. The read is folded into the dashboard's own state below.
+app.post('/api/admin/cup', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const { action } = req.body || {};
+  let result;
+  switch (action) {
+    case 'read':
+      result = { ok: true };
+      break;
+    case 'enable':
+      result = cup.setEnabled(!!req.body.enabled);
+      audit('cup', 'switch', `tournaments ${result.enabled ? 'ON' : 'off'}`);
+      break;
+    case 'open':
+      result = cup.openCup({
+        name: req.body.name,
+        joinSeconds: req.body.joinSeconds,
+        prize: req.body.prize,
+      });
+      if (result.ok) audit('cup', result.cup.id, `opened "${result.cup.name}" — doors ${Math.round((result.cup.closesAt - Date.now()) / 1000)}s`);
+      break;
+    case 'close':
+      result = cup.closeDoor();
+      if (result.ok) audit('cup', 'doors', result.cancelled ? 'closed with too few entrants' : `closed — ${result.matches} tables`);
+      break;
+    case 'cancel':
+      result = cup.cancelCup();
+      if (result.ok) audit('cup', 'cancel', 'cup cancelled by the owner');
+      break;
+    case 'paid':
+      result = cup.markPaid(req.body.cupId, req.body.place);
+      if (result.ok) audit('cup', req.body.cupId, `${req.body.place} place marked paid`);
+      break;
+    default:
+      result = { error: 'Unknown action' };
+  }
+  if (result.error) return res.status(400).json(result);
+  res.json({ ...result, view: cup.ownerView() });
+});
+
 /** Grant coins to a friend code — recorded in the ledger as provider 'admin'. */
 app.post('/api/admin/credit', (req, res) => {
   if (!adminBodyGuard(req, res)) return;
@@ -807,9 +877,25 @@ function getRoom(id) {
     // pocket and it should find one notification waiting, not three.
     sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`, { collapseId: id });
   };
+  // A cup table is only a normal room with a label and a locked lid, and both
+  // live in memory. A restart — every deploy is one — would hand the next
+  // person to open the link an ordinary room with bots on offer, and the
+  // bracket behind it would wait for a result that could never come. So the
+  // cup is asked, every time a room is made, whether this id is one of its
+  // own. The game inside is gone either way; the match is not.
+  const match = cup.matchByRoom(id);
+  if (match) dressCupTable(room, match);
   rooms.set(id, room);
   socketsOf.set(id, new Set());
   return room;
+}
+
+/** Two seats, no bots, private, and a label the client can read. */
+function dressCupTable(room, matchId) {
+  room.settings.isPrivate = true;
+  room.settings.allowBots = false;
+  room.settings.maxPlayers = 2;
+  room.cupMatch = matchId;
 }
 
 /**
@@ -971,6 +1057,64 @@ function broadcast(room) {
   }
 }
 
+/**
+ * Give every cup match that needs one a table, and start it.
+ *
+ * A cup table is an ordinary private room with two seats and nobody else
+ * allowed in. It is created here rather than by either player, so neither has
+ * to be online at the moment the round is drawn: the room waits, and the
+ * client walks into it when its owner opens the app.
+ */
+function seatCupMatches() {
+  for (const m of cup.matchesNeedingRooms()) {
+    const room = getRoom(newRoomId());
+    dressCupTable(room, m.id);
+    cup.matchStarted(m.id, room.id);
+    console.log(`cup: table ${room.id} for match ${m.id}`);
+  }
+}
+
+/**
+ * How long a cup table waits for people who may never come. The doors are
+ * shut by then and everyone still in has been sent straight to their table,
+ * so this is generous rather than tight — but it is finite, because one
+ * empty table otherwise holds up every other player's evening.
+ */
+const CUP_NO_SHOW_MS = 8 * 60 * 1000;
+
+/**
+ * Tables nobody opened. A match that has started playing is left completely
+ * alone however long it runs — games are long, and the sweeper has no
+ * business inside one. This only ever looks at tables still in the lobby.
+ */
+function sweepCupNoShows() {
+  const now = Date.now();
+  for (const m of cup.playingMatches()) {
+    if (now - (m.startedAt || 0) < CUP_NO_SHOW_MS) continue;
+    const room = rooms.get(m.roomId);
+    if (room && room.status !== 'lobby') continue;   // being played: not our business
+    const came = [m.a, m.b].filter((token) => room?.player(token));
+    if (came.length >= 2) continue;                  // both there, the table will start itself
+    const winner = came.length === 1 ? came[0] : null;
+    const out = cup.forfeit(m.roomId, winner);
+    console.log(winner
+      ? `cup: walkover in ${m.roomId} — the other player never came`
+      : `cup: ${m.roomId} voided — neither player came`);
+    if (out?.roundComplete) seatCupMatches();
+  }
+}
+
+// The join window closes on its own clock, and the moment it does the first
+// round needs tables.
+setInterval(() => {
+  try {
+    cup.tick();
+    seatCupMatches();
+    sweepCupNoShows();
+    cup.prune();
+  } catch (e) { console.warn('cup tick:', e.message); }
+}, 5000).unref?.();
+
 // Reap idle rooms every couple of minutes — bots playing to an empty
 // theatre burn a timer a second for nobody.
 setInterval(() => {
@@ -1059,6 +1203,12 @@ io.on('connection', (socket) => {
     }
     room = getRoom(roomId);
     playerId = String(token).slice(0, 64);
+    // A cup table has exactly two chairs and both have names on them. The
+    // link is private, but a link can be forwarded, and a match somebody's
+    // friend sat down at is not a match. Everyone else may watch, which is
+    // what the ordinary full-table path already does.
+    const cupOutsider = !!room.cupMatch && !room.player(playerId)
+      && !cup.mayPlay(room.cupMatch, playerId);
     socket.join(roomId);
     socketsOf.get(roomId).add(socket.id);
     claimSeat(roomId, playerId, socket.id);
@@ -1068,6 +1218,11 @@ io.on('connection', (socket) => {
 
     if (room.player(playerId)) {
       room.reconnect(playerId);
+    } else if (cupOutsider) {
+      socket.emit('joinFailed', {
+        message: 'This is a cup table — the two players were drawn for it',
+        spectate: true,
+      });
     } else {
       const res = room.addPlayer({ id: playerId, name, flag });
       if (res.error) {
@@ -1088,6 +1243,12 @@ io.on('connection', (socket) => {
     if (room.quick && room.status === 'lobby'
         && room.players.filter((p) => !p.isBot).length >= room.settings.maxPlayers) {
       room.startQuickMatch();
+    }
+    // A cup match starts itself. Both players were drawn for it and both are
+    // now sitting at it; making one of them press a button first is a chance
+    // for the other to wait, wonder, and leave.
+    if (room.cupMatch && room.status === 'lobby' && room.players.length >= 2) {
+      room.start(room.hostId);
     }
     socket.emit('you', { playerId, roomId });
     const held = seatsHeldBy(roomId, socket.id);
@@ -1124,9 +1285,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('appearance', guard((d = {}) => room.updateAppearance(playerId, d)));
-  socket.on('settings', guard((d = {}) => room.updateSettings(playerId, d)));
+  socket.on('settings', guard((d = {}) => {
+    // The cup sets its own table: two seats, no bots, private.
+    if (room.cupMatch) return fail('A cup table is set by the cup');
+    room.updateSettings(playerId, d);
+  }));
   socket.on('addBot', guard(() => {
     if (playerId !== room.hostId) return fail('Only the host can add bots');
+    // A cup match is between the two who were drawn. A house player at that
+    // table is a free win, so there is no house player at that table.
+    if (room.cupMatch) return fail('Not at a cup table');
     ok(room.addBot());
   }));
   // Clients only ever see other players as aliases, so any id that names
@@ -1134,6 +1302,8 @@ io.on('connection', (socket) => {
   // own real token still passes through untouched — see GameRoom.resolveId.
   socket.on('kick', guard((targetId) => {
     if (playerId !== room.hostId) return fail('Only the host can remove players');
+    // Removing your opponent is not a way to win a cup match.
+    if (room.cupMatch) return fail('Not at a cup table');
     const target = room.resolveId(String(targetId || ''));
     if (target === room.hostId) return;
     room.removePlayer(target);

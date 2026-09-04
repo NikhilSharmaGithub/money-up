@@ -729,6 +729,12 @@ export function registerPushDevice(token, deviceToken, platform) {
   return { ok: true, devices: p.push.length };
 }
 
+/**
+ * A profile as it stands, or nothing. Reading must not mint — the same rule
+ * walletOf states — so this is a lookup and never a constructor.
+ */
+export const profilesByToken = (token) => (token ? profiles.get(token) : null) || null;
+
 /** The sender's read — push.js needs the devices, never the whole profile. */
 export const pushDevicesOf = (token) => profiles.get(token)?.push || [];
 

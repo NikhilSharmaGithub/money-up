@@ -269,6 +269,7 @@ export const adminPageHTML = `<!doctype html>
   <a href="#games">Games</a>
   <a href="#economy">Economy</a>
   <a href="#ads">Ads</a>
+  <a href="#cup">Cup</a>
   <a href="#moderation">Moderation</a>
   <a href="#system">System</a>
   <div class="spacer"></div>
@@ -484,6 +485,42 @@ export const adminPageHTML = `<!doctype html>
     </section>
   </section>
 
+  <section class="panel" id="sec-cup">
+    <section class="tiles" id="cuptiles"></section>
+    <section class="card">
+      <h2>Tournaments</h2>
+      <p class="hint">A cup is a join window and a knockout. Everyone who enters is paired off when the doors shut — a hundred entrants make fifty tables — and the winners play on until one is left. First, second and third are paid by you, by hand: this desk records who finished where and remembers which ones you have settled. It never moves money on its own.</p>
+      <div id="cupswitch"></div>
+      <div class="msg" id="cupmsg"></div>
+    </section>
+    <div class="cards">
+      <div class="card">
+        <h2>Open a cup</h2>
+        <p class="hint">The doors stay open for as long as you say, then the draw happens on its own. Entering needs a signed-in account, because a prize needs somebody to pay.</p>
+        <div class="mini-forms">
+          <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
+          <div class="field"><label>Doors open (seconds)</label><input id="cup-secs" type="number" value="300" /></div>
+          <div class="field"><label>First</label><input id="cup-first" type="number" value="200" /></div>
+          <div class="field"><label>Second</label><input id="cup-second" type="number" value="100" /></div>
+          <div class="field"><label>Third</label><input id="cup-third" type="number" value="50" /></div>
+          <div class="field"><label>Currency</label><input id="cup-cur" value="USD" /></div>
+        </div>
+        <div style="margin-top:14px"><button class="btn sm" id="cup-open">Open the doors</button>
+          <button class="btn sm ghost" id="cup-close">Close them now</button>
+          <button class="btn sm ghost" id="cup-cancel">Cancel the cup</button></div>
+      </div>
+      <div class="card">
+        <h2>What is happening</h2>
+        <div id="cupnow"></div>
+      </div>
+    </div>
+    <section class="card">
+      <h2>Owed</h2>
+      <p class="hint">Finished cups and the three people to pay. Marking one paid is a note to yourself — nothing leaves an account from here.</p>
+      <div id="cupowed"></div>
+    </section>
+  </section>
+
   <section class="panel" id="sec-moderation">
     <div class="cards">
       <div class="card">
@@ -550,6 +587,7 @@ export const adminPageHTML = `<!doctype html>
     // The ads gateway keeps its own books and its own endpoint, so it is
     // polled beside the main payload rather than folded into it.
     ads: null, adsError: false,
+    cup: null,
   };
   var DAY = 86400000;
   var NL = String.fromCharCode(10);
@@ -959,7 +997,7 @@ export const adminPageHTML = `<!doctype html>
   }
 
   // ------------------------------------------------------------ sections --
-  var SECTIONS = ['overview', 'revenue', 'players', 'tables', 'games', 'economy', 'ads', 'moderation', 'system'];
+  var SECTIONS = ['overview', 'revenue', 'players', 'tables', 'games', 'economy', 'ads', 'cup', 'moderation', 'system'];
   function applySection() {
     var sec = (location.hash || '').replace('#', '');
     if (SECTIONS.indexOf(sec) < 0) sec = 'overview';
@@ -2331,6 +2369,25 @@ export const adminPageHTML = `<!doctype html>
       return;
     }
 
+    // The cup switches and its pay-out notes.
+    el = t.closest('[data-cup-en]');
+    if (el) {
+      if (el.getAttribute('aria-pressed') === 'true') return;
+      var on = el.getAttribute('data-cup-en') === '1';
+      if (on && !confirm('Switch tournaments ON?' + NL + NL +
+        'The cup card appears on the web for every player, and anybody signed in can enter.')) return;
+      cupPost('enable', { enabled: on });
+      return;
+    }
+    el = t.closest('[data-cup-paid]');
+    if (el) {
+      var parts = el.getAttribute('data-cup-paid').split('|');
+      if (!confirm('Mark ' + parts[1] + ' place as paid?' + NL + NL +
+        'This is a note to yourself. Nothing leaves any account from here.')) return;
+      cupPost('paid', { cupId: parts[0], place: parts[1] });
+      return;
+    }
+
     // The ads switches. Turning the system on is the one click on this page
     // that starts paying strangers, so it asks first.
     el = t.closest('[data-ads-set]');
@@ -2411,6 +2468,33 @@ export const adminPageHTML = `<!doctype html>
     state.drawerMsg = null;
     if (state.data) renderPlayers();
   }
+  var cupOpenBtn = document.getElementById('cup-open');
+  if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
+    var secs = Number(document.getElementById('cup-secs').value) || 300;
+    if (!confirm('Open the doors for ' + secs + ' seconds?' + NL + NL +
+      'When they shut, everyone who entered is paired off and the tables start.')) return;
+    cupPost('open', {
+      name: document.getElementById('cup-name').value,
+      joinSeconds: secs,
+      prize: {
+        currency: document.getElementById('cup-cur').value,
+        first: Number(document.getElementById('cup-first').value),
+        second: Number(document.getElementById('cup-second').value),
+        third: Number(document.getElementById('cup-third').value),
+      },
+    });
+  });
+  var cupCloseBtn = document.getElementById('cup-close');
+  if (cupCloseBtn) cupCloseBtn.addEventListener('click', function () {
+    if (!confirm('Close the doors now and draw the first round?')) return;
+    cupPost('close', {});
+  });
+  var cupCancelBtn = document.getElementById('cup-cancel');
+  if (cupCancelBtn) cupCancelBtn.addEventListener('click', function () {
+    if (!confirm('Cancel this cup?' + NL + NL + 'Everyone who entered is dropped and nothing is paid.')) return;
+    cupPost('cancel', {});
+  });
+
   document.getElementById('pf-real').addEventListener('click', function () { setOnlyReal(true); });
   document.getElementById('pf-all').addEventListener('click', function () { setOnlyReal(false); });
 
@@ -2569,6 +2653,110 @@ export const adminPageHTML = `<!doctype html>
       })
       .catch(function () { state.error = true; renderStatus(); });
     refreshAds();
+    refreshCup();
+  }
+
+  // ── the cup ──────────────────────────────────────────────────────────
+  // Everything the owner does to a tournament is one POST; the read comes
+  // back on the same reply, so the desk never has to ask twice.
+  function cupPost(action, body) {
+    var payload = body || {};
+    payload.action = action;
+    post('/api/admin/cup', payload, function (d) {
+      var msg = document.getElementById('cupmsg');
+      if (d && d.error) { if (msg) { msg.textContent = d.error; msg.className = 'msg bad'; } return; }
+      if (msg) { msg.textContent = 'Done.'; msg.className = 'msg good'; }
+      if (d && d.view) { state.cup = d.view; renderCup(); }
+    });
+  }
+
+  function cupMoney(cup, n) {
+    var cur = (cup && cup.prize && cup.prize.currency) || 'USD';
+    return (cur === 'USD' ? '$' : cur + ' ') + n;
+  }
+
+  function renderCup() {
+    var v = state.cup;
+    if (!v) { swap('cuptiles', tileHtml('—', 'tournaments', 'loading')); return; }
+    var c = v.current;
+    var live = c ? (c.state === 'joining' ? 'DOORS OPEN' : c.state === 'running' ? 'RUNNING' : 'DONE') : 'NONE';
+    swap('cuptiles',
+      tileHtml(v.enabled ? 'CUPS ON' : 'CUPS OFF', 'tournaments',
+        v.enabled ? 'the card shows on the web' : 'hidden everywhere') +
+      tileHtml(live, 'right now', c ? esc(c.name) : 'no cup open') +
+      tileHtml(c ? fmtNum(c.entrants.length) : '0', 'entered', 'signed-in players') +
+      tileHtml(c ? String(c.rounds.length) : '0', 'rounds drawn', '') +
+      tileHtml(fmtNum(v.history.length), 'finished', 'kept for a while'));
+
+    swap('cupswitch', '<div class="field"><label>Cup master switch</label>' +
+      '<span class="seg" role="group">' +
+      '<button type="button" data-cup-en="0" aria-pressed="' + (v.enabled ? 'false' : 'true') + '">Cups OFF</button>' +
+      '<button type="button" data-cup-en="1" aria-pressed="' + (v.enabled ? 'true' : 'false') + '">Cups ON</button>' +
+      '</span></div>' +
+      '<div class="caption" style="max-width:520px;margin-top:8px">Off, and no player sees a cup at all — the card is not drawn and the join route refuses. This is the switch that keeps it hidden while you try it out.</div>');
+
+    var now = '';
+    if (!c) now = '<div class="caption">No cup is open. Fill the form and open the doors.</div>';
+    else {
+      now = '<div class="field"><label>' + esc(c.name) + '</label></div>' +
+        '<div class="caption">State: <b>' + esc(c.state) + '</b> · ' + c.entrants.length + ' entered · prizes ' +
+        cupMoney(c, c.prize.first) + ' / ' + cupMoney(c, c.prize.second) + ' / ' + cupMoney(c, c.prize.third) + '</div>';
+      if (c.state === 'joining') {
+        var left = Math.max(0, Math.round((c.closesAt - Date.now()) / 1000));
+        now += '<div class="caption" style="margin-top:6px">Doors close in ' + left + 's.</div>';
+      }
+      var last = c.rounds.length ? c.rounds[c.rounds.length - 1] : null;
+      if (last) {
+        var doneCount = 0;
+        last.matches.forEach(function (m) { if (m.state === 'done') doneCount++; });
+        now += '<div class="caption" style="margin-top:6px">Latest round: <b>' + esc(last.kind) + '</b> — ' +
+          doneCount + ' of ' + last.matches.length + ' tables finished.</div>';
+        // The bracket itself, which is the thing worth watching while a cup
+        // runs: who is playing whom, at which table, and how it went.
+        now += '<div style="margin-top:10px">' + last.matches.slice(0, 60).map(function (m) {
+          var right = m.state === 'done'
+            ? (m.void ? 'void — nobody came' : 'won by <b>' + esc(m.winner || '—') + '</b>' + (m.walkover ? ' (walkover)' : ''))
+            : m.state === 'playing' ? 'playing at <b>' + esc(m.roomId || '—') + '</b>' : 'waiting for a table';
+          return '<div class="caption" style="display:flex;gap:10px;justify-content:space-between;' +
+            'padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+            '<span>' + esc(m.a) + ' v ' + esc(m.b) + '</span><span>' + right + '</span></div>';
+        }).join('') + '</div>';
+        if (last.matches.length > 60) {
+          now += '<div class="caption">and ' + (last.matches.length - 60) + ' more tables</div>';
+        }
+      }
+      if (c.entrants.length) {
+        now += '<div class="caption" style="margin-top:8px">' +
+          c.entrants.slice(0, 40).map(function (e) { return esc(e.name) + ' (' + esc(e.code) + ')'; }).join(', ') +
+          (c.entrants.length > 40 ? ' and ' + (c.entrants.length - 40) + ' more' : '') + '</div>';
+      }
+    }
+    swap('cupnow', now);
+
+    var owed = '';
+    v.history.forEach(function (h) {
+      if (!h.standings) return;
+      var paid = h.paid || {};
+      owed += '<div class="card" style="margin-bottom:10px"><b>' + esc(h.name) + '</b>' +
+        '<div class="caption">' + h.entrants.length + ' entered</div>';
+      ['first', 'second', 'third'].forEach(function (place) {
+        var who = h.standings[place];
+        if (!who) return;
+        owed += '<div class="field" style="margin-top:8px"><label>' + place + ' — ' +
+          cupMoney(h, h.prize[place]) + '</label>' +
+          '<div class="caption">' + esc(who.name) + ' (' + esc(who.code) + ') ' +
+          (paid[place] ? '· <b>paid</b>' : '<button class="btn sm" style="margin-left:8px" data-cup-paid="' +
+            esc(h.id) + '|' + place + '">Mark paid</button>') + '</div></div>';
+      });
+      owed += '</div>';
+    });
+    swap('cupowed', owed || '<div class="caption">Nothing owed. Finished cups show up here with their three names.</div>');
+  }
+
+  function refreshCup() {
+    post('/api/admin/cup', { action: 'read' }, function (d) {
+      if (d && d.view) { state.cup = d.view; renderCup(); }
+    });
   }
 
   // The ads gateway is its own router with its own books, so it answers on

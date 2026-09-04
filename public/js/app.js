@@ -152,6 +152,7 @@ function showLanding() {
   fetch(api('/api/ads/config')).then((r) => r.json()).then(setAdsConfig).catch(() => {});
   refreshProfileChip();
   refreshDaily();
+  watchCup();
   refreshLeaderboard();
   watchPublicRooms();
   initGoogleSignIn();
@@ -1429,6 +1430,168 @@ $('#chatForm').addEventListener('submit', (e) => {
   actions.chat(text, chatChannel);
   input.value = '';
 });
+
+// ---- the cup -------------------------------------------------------------
+//
+// A tournament: a five-minute door, everybody paired off behind it, and three
+// prizes at the end. The card exists only while the server says cups are on —
+// a server with them off answers `enabled: false` and nothing is drawn, which
+// is how this ships hidden.
+//
+// The poll is slow (six seconds) except while a door is open or a round is
+// being drawn, when a player is waiting on a number that changes.
+
+let cupTimer = null;
+let cupClock = null;
+let cupSeen = null;          // the match this browser has already walked into
+
+function watchCup() {
+  clearTimeout(cupTimer);
+  fetch(api(`/api/cup?token=${encodeURIComponent(token)}`))
+    .then((r) => r.json())
+    .then(paintCup)
+    .catch(() => {})
+    .finally(() => { cupTimer = setTimeout(watchCup, cupPollMs); });
+}
+let cupPollMs = 6000;
+
+function stopCupClock() { clearInterval(cupClock); cupClock = null; }
+
+function paintCup(data) {
+  const card = $('#cupCard');
+  if (!card) return;
+  const cup = data?.enabled ? data.cup : null;
+  if (!cup) { card.classList.add('hidden'); stopCupClock(); cupPollMs = 30000; return; }
+  card.classList.remove('hidden');
+
+  // Your table is ready: go, once. Walking in is the player's own click on
+  // every later visit, but the first one should not need finding.
+  if (cup.you?.roomId && cupSeen !== cup.you.roomId) {
+    cupSeen = cup.you.roomId;
+    toast(`Your cup table is ready — playing ${cup.you.opponent || 'your opponent'}`);
+    setTimeout(() => go(cup.you.roomId), 900);
+  }
+
+  const money = (n) => `${cup.prize.currency === 'USD' ? '$' : `${cup.prize.currency} `}${n}`;
+  // Three places, three metals. The first is bigger than the others because
+  // it is the thing everybody is actually here for.
+  const prizes = `<div class="cup-prizes">
+      <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money(cup.prize.first)}</b></div>
+      <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money(cup.prize.second)}</b></div>
+      <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money(cup.prize.third)}</b></div>
+    </div>`;
+
+  if (cup.state === 'joining') {
+    cupPollMs = 3000;
+    card.innerHTML = `<div class="cup-head">
+        <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>
+        <div class="cup-body">
+          <div class="cup-title">${escapeHtml(cup.name)}</div>
+          <div class="cup-sub">Knockout — last one standing takes ${money(cup.prize.first)}</div>
+        </div>
+        <span class="cup-count"><b>${cup.entrants}</b> in</span>
+      </div>
+      <div class="cup-clock">
+        <div class="cup-clock-line">
+          <span>Doors close in</span>
+          <b id="cupClockText">…</b>
+        </div>
+        <div class="cup-bar"><i id="cupBar" style="width:100%"></i></div>
+      </div>
+      ${prizes}
+      ${cup.you.joined
+        ? `<div class="cup-in ok">${icon('people', 14)} You are in. Your first table opens when the doors close.</div>
+           <button class="btn ghost small wide" id="cupLeave">Withdraw</button>`
+        : '<button class="btn gold wide wrap" id="cupJoin">Enter the cup</button>'}`;
+    const opened = cup.openedAt || cup.closesAt - 5 * 60 * 1000;
+    const clock = () => {
+      const el = $('#cupClockText');
+      if (!el) return;
+      const left = Math.max(0, cup.closesAt - Date.now());
+      const secs = Math.ceil(left / 1000);
+      el.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      // Under half a minute the clock stops being information and starts
+      // being a nudge, so it says so in red.
+      el.classList.toggle('urgent', secs <= 30);
+      const bar = $('#cupBar');
+      const span = Math.max(1, cup.closesAt - opened);
+      if (bar) bar.style.width = `${Math.max(0, Math.min(100, (left / span) * 100)).toFixed(2)}%`;
+    };
+    clock();
+    stopCupClock();
+    cupClock = setInterval(clock, 500);
+    const join = $('#cupJoin');
+    if (join) join.onclick = () => { sfx.click(); enterCup(); };
+    const leave = $('#cupLeave');
+    if (leave) leave.onclick = () => { sfx.click(); leaveCup(); };
+    return;
+  }
+
+  stopCupClock();
+  if (cup.state === 'running') {
+    cupPollMs = 4000;
+    const r = cup.round;
+    const you = cup.you.joined
+      ? (cup.you.out ? 'You are out of this one.'
+        : cup.you.roomId ? 'Your table is open — good luck.'
+        : 'Waiting for your next table.')
+      : 'Running now — the doors are shut.';
+    // The bracket as a row of lights: one per table in this round, lit while
+    // it is still being played, dimmed once it is decided.
+    const dots = r ? `<div class="cup-dots">${r.matches
+      .map((m) => `<i class="${m.state === 'done' ? 'done' : 'live'}" title="${escapeHtml(`${m.a} v ${m.b}`)}"></i>`)
+      .join('')}</div>` : '';
+    card.innerHTML = `<div class="cup-head">
+        <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>
+        <div class="cup-body">
+          <div class="cup-title">${escapeHtml(cup.name)}</div>
+          <div class="cup-sub">${r ? escapeHtml(roundName(r)) : 'Drawing the bracket…'}</div>
+        </div>
+        <span class="cup-count"><b>${cup.entrants}</b> in</span>
+      </div>
+      ${dots}
+      ${prizes}
+      <div class="cup-in${cup.you.roomId ? ' ok' : cup.you.out ? ' out' : ''}">${escapeHtml(you)}</div>
+      ${cup.you.roomId ? `<button class="btn primary wide" id="cupGo">Go to your table</button>` : ''}`;
+    const goBtn = $('#cupGo');
+    if (goBtn) goBtn.onclick = () => { sfx.click(); go(cup.you.roomId); };
+    return;
+  }
+
+  cupPollMs = 20000;
+  card.classList.add('hidden');
+}
+
+function roundName(r) {
+  if (r.kind === 'final') return 'The final';
+  if (r.kind === 'thirdPlace') return 'Third place';
+  const live = r.matches.filter((m) => m.state !== 'done').length;
+  return `Round ${r.n} — ${live} of ${r.matches.length} still playing`;
+}
+
+async function enterCup() {
+  try {
+    const res = await fetch(api('/api/cup/join'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const out = await res.json();
+    if (res.status === 401) return toast('Sign in first — a prize needs somebody to pay');
+    if (!res.ok || out.error) return toast(out.error || 'Could not enter', 'error');
+    toast('You are in the cup');
+    watchCup();
+  } catch { toast('Could not reach the server', 'error'); }
+}
+
+async function leaveCup() {
+  try {
+    await fetch(api('/api/cup/leave'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    watchCup();
+  } catch { /* the next poll puts it right */ }
+}
 
 // ---- an offer arrives ----------------------------------------------------
 // Every offer is put in front of its reader exactly once. Answering it, or

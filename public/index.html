@@ -76,6 +76,10 @@
          until the server has actually said there is something to collect. -->
     <div class="landing-card daily-card hidden" id="dailyCard"></div>
 
+    <!-- The cup. Drawn only when the server says tournaments are on; a server
+         with them off answers `enabled: false` and this stays empty. -->
+    <div class="landing-card cup-card hidden" id="cupCard"></div>
+
     <div class="landing-card">
       <button id="continueBtn" class="btn wide continue-btn wrap hidden">Continue game</button>
       <!-- Games this browser walked out of and never finished. app.js fills it. -->

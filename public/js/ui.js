@@ -263,7 +263,7 @@ export function renderPlayers(state, meId, el, actions) {
         <div class="avatar ghost-seat">+</div>
         <div class="pinfo"><div class="pname dim">Empty seat</div>
           <div class="pmeta dim">waiting for a player…</div></div>
-        ${state.hostId === meId && !state.quick ? '<button class="btn tiny" data-addbot>Add bot</button>' : ''}
+        ${state.hostId === meId && !state.quick && !state.cup ? '<button class="btn tiny" data-addbot>Add bot</button>' : ''}
       </div>`).join('');
 
     el.querySelectorAll('[data-addbot]').forEach((b) => {
@@ -395,7 +395,8 @@ export function renderPlayers(state, meId, el, actions) {
     const me = state.players.find((x) => x.id === meId);
     const canTrade = state.status === 'playing' && p.id !== meId && !isOut(p) && !isOut(me || {});
     // Nobody hosts a Quick Play table, so nobody gets to throw strangers off it.
-    const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId && !state.quick;
+    const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId
+      && !state.quick && !state.cup;
     // The chair travels: a host can pass it to anyone actually at the table.
     const canPassHost = state.hostId === meId && p.id !== meId && !p.isBot
       && p.connected !== false && !state.quick && state.status !== 'playing';
@@ -707,7 +708,9 @@ const turnClockOptions = (current) => {
 
 function renderSettings(state, meId, el, actions) {
   const isHost = state.hostId === meId;
-  const dis = isHost ? '' : 'disabled';
+  // A cup table is set by the cup: two seats, no bots, nothing to argue over.
+  // The server refuses all of it anyway; this is so nobody is invited to try.
+  const dis = isHost && !state.cup ? '' : 'disabled';
 
   const toggle = (d) => `<div class="setting">
       <span class="s-icon">${icon(d.icon)}</span>
@@ -785,7 +788,7 @@ function renderSettings(state, meId, el, actions) {
     ${isHost ? `
       <div class="stack">
         <button class="btn primary big" id="startBtn">${icon('dice')} Start Game</button>
-        <button class="btn wide ghost" id="botBtn">＋ Add a bot</button>
+        ${state.cup ? '' : '<button class="btn wide ghost" id="botBtn">＋ Add a bot</button>'}
       </div>`
       : '<div class="panel waiting"><span class="pulse-dot"></span> Waiting for the host to start…</div>'}
   `;
@@ -1304,7 +1307,9 @@ export function renderCenter(state, meId, actions) {
     }
     statusEl.innerHTML = `
       <div class="lobby-head">
-        <div class="room-code">${searching ? `${icon('bolt')} Quick Play` : `Room <b>${escapeHtml(state.id)}</b>`}</div>
+        <div class="room-code">${searching ? `${icon('bolt')} Quick Play`
+          : state.cup ? `${icon('trophy')} Cup match`
+          : `Room <b>${escapeHtml(state.id)}</b>`}</div>
         <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
       </div>
       <div class="seat-row">${Array.from({ length: seats }, (_, i) => {
@@ -1318,7 +1323,10 @@ export function renderCenter(state, meId, actions) {
           <span class="seat-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
         </div>`;
       }).join('')}</div>
-      <div class="dim small">${seated} of ${seats} ${seated === 1 ? 'seat' : 'seats'} taken</div>`;
+      <div class="dim small">${state.cup && seated < seats
+        ? 'Waiting for the player drawn against you'
+        : `${seated} of ${seats} ${seated === 1 ? 'seat' : 'seats'} taken`}</div>
+      ${state.cup ? '<div class="dim small cup-note">Winner goes through. Loser is out of the cup.</div>' : ''}`;
     on('#cStart', actions.start);
     paintQuickCountdown();
     return;

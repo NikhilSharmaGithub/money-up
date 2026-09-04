@@ -6,6 +6,9 @@ import { GameRoom } from '../server/game.js';
 import { MAPS, generateRandomMap, GROUPS } from '../server/maps.js';
 import { TEAMS } from '../server/game.js';
 import { diff, applyPatch, snapshot, feedTail, applyFeed, RESYNC } from '../server/delta.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 let failures = 0;
 const seen = new Set();
@@ -1995,6 +1998,198 @@ const viewOf = (room, held, base) => {
   room.dispose();
   if (!trimmed) fail('delta: the chat window never slid, so the keep count went untested');
   ok(`${checked} filtered chat tails rebuilt their viewer's window exactly, window sliding included`);
+}
+
+
+// ─────────────────────────────────────────────────────────── tournaments ──
+//
+// A cup is a bracket and three prizes, and the only way to be sure the
+// bracket is right is to run whole ones. These play out with a fixed winner
+// rule (no randomness, so a failure repeats), from the two-entrant case that
+// is a final on its own up to the two hundred the owner asked about.
+console.log('\n▶ tournaments');
+{
+  // Both modules keep files; point them somewhere disposable before loading.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cup-'));
+  process.env.DATA_DIR = dir;
+  const social = await import('../server/social.js');
+  const cup = await import('../server/tournament.js');
+  cup.setEnabled(true);
+
+  const runCup = (n, { pick = (a) => a } = {}) => {
+    cup.cancelCup();
+    cup.openCup({ name: `${n} up`, joinSeconds: 60 });
+    const tokens = [];
+    for (let i = 0; i < n; i++) {
+      const token = `cup-${n}-${i}`;
+      social.profileFor(token, { name: `P${i}` });
+      social.attachLogin(token, 'test', `sub-${n}-${i}`, `P${i}`);
+      const r = cup.join(token);
+      if (r.error) fail(`cup: a signed-in player was refused — ${r.error}`);
+      tokens.push(token);
+    }
+    cup.closeDoor();
+
+    let tables = 0, guard = 0;
+    const playedWith = new Map();   // token -> how many matches it has played
+    while (cup.currentCup() && cup.currentCup().state === 'running') {
+      if (++guard > 5000) { fail('cup: the bracket never finished'); break; }
+      const waiting = cup.matchesNeedingRooms();
+      if (!waiting.length) { fail('cup: running, but no table is waiting to be made'); break; }
+      // Every table in a round is played before the next round is drawn, so
+      // nobody can be sitting at two of them at once.
+      const seatedNow = new Set();
+      for (const m of waiting) {
+        for (const t of [m.a, m.b]) {
+          if (seatedNow.has(t)) fail('cup: a player was seated at two tables at once');
+          seatedNow.add(t);
+          playedWith.set(t, (playedWith.get(t) || 0) + 1);
+        }
+      }
+      for (const m of waiting) {
+        const roomId = `room-${++tables}`;
+        cup.matchStarted(m.id, roomId);
+        cup.matchFinished(roomId, pick(m.a, m.b));
+      }
+    }
+
+    const done = cup.ownerView().history[0];
+    return { tables, standings: done?.standings || null, cup: done, playedWith };
+  };
+
+  // The shape of the thing, at the sizes he named and at the awkward ones.
+  const shapes = [[2, 1], [3, 2], [4, 4], [5, 4], [8, 8], [16, 16], [100, 100], [200, 200]];
+  for (const [n, expectTables] of shapes) {
+    const r = runCup(n);
+    if (r.tables !== expectTables) fail(`cup: ${n} entrants made ${r.tables} tables, expected ${expectTables}`);
+    if (!r.standings) fail(`cup: ${n} entrants finished with no standings`);
+    else {
+      const places = ['first', 'second', 'third'].slice(0, Math.min(3, n));
+      for (const place of places) {
+        if (!r.standings[place]) fail(`cup: ${n} entrants left ${place} place empty`);
+      }
+      const named = new Set(Object.values(r.standings).filter(Boolean).map((x) => x.code));
+      if (named.size !== places.length) fail(`cup: ${n} entrants put one player in two places`);
+    }
+  }
+  ok('2 → 200 entrants: 100 entrants make 100 tables, 200 make 200, and every cup names a top three');
+
+  // A bye is a free pass, so it must go to somebody who has earned the rest —
+  // never twice to the same player while somebody else has played fewer.
+  {
+    const r = runCup(11);
+    const counts = [...r.playedWith.values()];
+    const spread = Math.max(...counts) - Math.min(...counts);
+    if (spread > 3) fail(`cup: an odd bracket spread play from ${Math.min(...counts)} to ${Math.max(...counts)} matches`);
+    let byes = 0;
+    for (const round of r.cup.rounds) for (const m of round.matches) if (m.walkover) byes++;
+    if (!byes) fail('cup: an 11-entrant bracket never needed a walkover, which cannot be');
+    ok(`an 11-entrant bracket handed out ${byes} walkover(s) without anyone idling a round too long`);
+  }
+
+  // The winner is the one who won the final — not the one the loop happened
+  // to leave holding the list.
+  {
+    const r = runCup(8, { pick: (a) => a });   // the first seat always wins
+    const final = r.cup.rounds.find((x) => x.kind === 'final');
+    const third = r.cup.rounds.find((x) => x.kind === 'thirdPlace');
+    if (!final) fail('cup: an 8-entrant cup drew no final');
+    else if (r.standings.first.name !== final.matches[0].winner) {
+      fail('cup: first place is not the player who won the final');
+    }
+    if (!third) fail('cup: an 8-entrant cup never played for third');
+    else if (r.standings.third.name !== third.matches[0].winner) {
+      fail('cup: third place is not the player who won the third-place table');
+    }
+    ok('first and third are the players who actually won the final and the third-place table');
+  }
+
+  // Nobody is made to wait for somebody who never came.
+  {
+    const enter = (t, i) => {
+      const token = `no-show-${t}-${i}`;
+      social.profileFor(token, { name: `NS${i}` });
+      social.attachLogin(token, 'test', `ns-${t}-${i}`, `NS${i}`);
+      cup.join(token);
+      return token;
+    };
+    // One player turns up, the other does not: a walkover, and the cup goes on.
+    cup.cancelCup();
+    cup.openCup({ name: 'Walkover', joinSeconds: 60 });
+    const four = [0, 1, 2, 3].map((i) => ({ token: enter('w', i), name: `NS${i}` }));
+    cup.closeDoor();
+    let n = 0;
+    for (const m of cup.matchesNeedingRooms()) {
+      const room = `w-${++n}`;
+      cup.matchStarted(m.id, room);
+      cup.forfeit(room, m.a);          // whoever came first wins the empty table
+    }
+    if (!cup.currentCup()) fail('cup: two walkovers ended the cup instead of drawing a final');
+    else {
+      const semiWinners = cup.currentCup().rounds[0].matches.map((m) => m.winner);
+      const final = cup.currentCup().rounds.find((r) => r.kind === 'final');
+      if (!final) fail('cup: walkovers did not draw the next round');
+      else if (!semiWinners.every((w) => [final.matches[0].a, final.matches[0].b].includes(w))) {
+        fail('cup: the players who won by walkover were not the ones drawn into the final');
+      }
+    }
+    // Now void everything that is left: nobody at all turns up.
+    let guard = 0;
+    while (cup.currentCup() && ++guard < 20) {
+      for (const m of cup.matchesNeedingRooms()) {
+        const room = `v-${++n}`;
+        cup.matchStarted(m.id, room);
+        cup.forfeit(room, null);
+      }
+    }
+    const dead = cup.ownerView().history[0];
+    if (!dead?.abandoned) fail('cup: a cup nobody played was not recorded as abandoned');
+    if (dead?.standings?.first) fail('cup: a cup nobody played still crowned somebody');
+    if (four.some((p) => !dead.entrants.find((e) => e.name === p.name)?.out)) {
+      fail('cup: a voided table left one of its players still in the cup');
+    }
+    ok('a table one player opened is a walkover; a table neither opened is void, and a cup of those ends unwon');
+
+    // The desk is behind a key, but a desk gets screenshotted: an identity
+    // token in that payload would be an account anyone could read and use.
+    const desk = JSON.stringify(cup.ownerView());
+    if (desk.includes('no-show-w-0') || desk.includes('"token"')) {
+      fail('cup: the owner view carries a player identity token');
+    }
+    ok('the owner view names winners without carrying anybody\'s identity token');
+  }
+
+  // The door: shut to anyone who has not signed in, and shut to everyone once
+  // the cup is under way.
+  {
+    cup.cancelCup();
+    cup.openCup({ name: 'Door', joinSeconds: 60 });
+    const anon = cup.join('nobody-at-all');
+    if (!anon.needsLogin) fail('cup: a signed-out player was not asked to sign in');
+    social.profileFor('door-1', { name: 'Door' });
+    if (!cup.join('door-1').needsLogin) fail('cup: an account with no sign-in was let in');
+    social.attachLogin('door-1', 'test', 'door-sub', 'Door');
+    if (!cup.join('door-1').ok) fail('cup: a signed-in player was kept out');
+    if (cup.join('door-1').entrants !== 1) fail('cup: joining twice counted twice');
+    cup.closeDoor();
+    social.profileFor('late-1', { name: 'Late' });
+    social.attachLogin('late-1', 'test', 'late-sub', 'Late');
+    if (!cup.join('late-1').error) fail('cup: somebody walked in after the door closed');
+    ok('the door needs a sign-in, ignores a second knock, and shuts when it shuts');
+  }
+
+  // Off means invisible — the whole point of shipping this dark.
+  {
+    cup.setEnabled(false);
+    const view = cup.publicView('door-1');
+    if (view.enabled || view.cup) fail('cup: a switched-off cup was still visible to a player');
+    if (!cup.join('door-1').error) fail('cup: a switched-off cup still took entries');
+    cup.setEnabled(true);
+    cup.cancelCup();
+    cup.setEnabled(false);
+    ok('with the switch off there is no cup to see and no door to knock on');
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');

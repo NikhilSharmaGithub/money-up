@@ -2791,6 +2791,10 @@ export class GameRoom {
       auction: this.auction,
       trades: this.trades,
       quick: !!this.quick,
+      // Set from outside by whoever made this table for a cup match. The room
+      // itself does not know what a cup is; it only carries the label so the
+      // client can stop offering things a cup table does not allow.
+      cup: !!this.cupMatch,
       reliefCard: this.reliefCard || null,
       awaiting: Object.entries(this.awaiting || {}).map(([id, a]) => ({
         id, until: a.until, grants: a.grants,
