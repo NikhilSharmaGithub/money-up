@@ -279,15 +279,32 @@ function slotFor(state, playerId, tileIndex) {
   return SLOT_OFFSETS[k % SLOT_OFFSETS.length];
 }
 
-function place(state, playerId, tileIndex, ms = 0) {
+/**
+ * Put a token on a tile.
+ *
+ * `ease` matters more than it looks: every move used to inherit the stylesheet's
+ * `linear`, and a piece that crosses a tile at a constant speed and stops dead
+ * reads as a cursor being dragged rather than a piece being played.
+ *
+ * `lift` raises the token off the board without moving it along it — the
+ * carried half of a teleport, where the piece is picked up, flown, and set
+ * down rather than sliding through the middle of the felt.
+ */
+function place(state, playerId, tileIndex, ms = 0, ease = 'linear', lift = 0) {
   const rec = tokens.get(playerId);
   const c = tileCenter(tileIndex);
   if (!rec || !c) return;
   const [ox, oy] = slotFor(state, playerId, tileIndex);
+  rec.el.style.transitionTimingFunction = ease;
   rec.el.style.transitionDuration = `${ms}ms`;
-  rec.el.style.transform = `translate(${c.x + ox * c.size}px, ${c.y + oy * c.size}px) translate(-50%, -50%)`;
+  rec.el.style.transform = `translate(${c.x + ox * c.size}px, ${c.y + oy * c.size - lift}px) translate(-50%, -50%)`;
   rec.pos = tileIndex;
 }
+
+/** A step of a walk: quick, with a little overshoot, so it lands rather than stops. */
+const STEP_EASE = 'cubic-bezier(.32, 1.45, .52, 1)';
+/** Carried through the air: slow out, slow in, nothing abrupt at either end. */
+const FLIGHT_EASE = 'cubic-bezier(.45, 0, .25, 1)';
 
 /**
  * Reconciles the token layer with server state. Tokens hop tile by tile when a
@@ -337,7 +354,9 @@ export function syncTokens(state, { onStep, onArrive, meId } = {}) {
   for (const p of state.players) {
     if (p.bankrupt) continue;
     const rec = tokens.get(p.id);
-    if (!rec || rec.pos === p.pos) { place(state, p.id, p.pos, 220); continue; }
+    // Mid-air, and already on its way to the right tile: leave it alone.
+    if (flying.get(p.id) === p.pos) continue;
+    if (!rec || rec.pos === p.pos) { place(state, p.id, p.pos, 220, 'ease-out'); continue; }
 
     const gen = (walkGen.get(p.id) || 0) + 1;
     walkGen.set(p.id, gen);
@@ -345,8 +364,7 @@ export function syncTokens(state, { onStep, onArrive, meId } = {}) {
     if (fresh && move.playerId === p.id && move.steps) {
       walk(state, p, rec.pos, p.pos, move.steps > 0 ? 1 : -1, gen, onStep, onArrive);
     } else {
-      place(state, p.id, p.pos, 420);
-      onArrive?.(p);
+      fly(state, p, p.pos, gen, onArrive);
     }
   }
 }
@@ -354,16 +372,62 @@ export function syncTokens(state, { onStep, onArrive, meId } = {}) {
 async function walk(state, player, from, to, dir, gen, onStep, onArrive) {
   const size = state.map.size;
   const distance = dir > 0 ? (to - from + size) % size : (from - to + size) % size;
-  const ms = distance > 12 ? 55 : distance > 7 ? 80 : 115;
+  // Long rolls used to run at 55ms a tile, which is faster than an eye can
+  // follow a piece around a corner. Slow enough to read, quick enough that
+  // eleven of them is not a wait.
+  const ms = distance > 12 ? 78 : distance > 7 ? 96 : 128;
   let cur = from;
   for (let n = 0; n < distance; n++) {
     if (walkGen.get(player.id) !== gen) return;
     cur = (cur + dir + size) % size;
-    place(state, player.id, cur, ms);
+    place(state, player.id, cur, ms, STEP_EASE);
     onStep?.(cur, n === distance - 1);
     await sleep(ms);
   }
   if (walkGen.get(player.id) === gen) onArrive?.(player);
+}
+
+/**
+ * Not a walk: a card, or the corner that sends you to prison.
+ *
+ * This used to be one 420ms straight line, which on a square board means the
+ * piece cuts diagonally across the middle of the felt — over the logo, through
+ * the dice — and arrives somewhere else with nothing to say it happened. Watch
+ * a game and you cannot tell that "Go to prison" sent you to prison.
+ *
+ * So the piece is picked up, carried, and set down. Three beats, and the one
+ * in the middle is slow enough to follow with your eyes.
+ */
+// Where each token is being carried to, while it is in the air. The board is
+// re-rendered on every push from the server — a bid, a chat line, somebody
+// else's rent — and each of those used to start the flight again from
+// wherever the piece had got to. The lift never finished, so the piece
+// appeared to slide and then drop for no reason. A flight already heading for
+// the right tile is left alone.
+const flying = new Map();
+
+async function fly(state, player, to, gen, onArrive) {
+  const rec = tokens.get(player.id);
+  if (!rec) return;
+  const from = rec.pos;
+  const alive = () => walkGen.get(player.id) === gen;
+  flying.set(player.id, to);
+  const land = () => { if (flying.get(player.id) === to) flying.delete(player.id); };
+
+  rec.el.classList.add('in-flight');
+  place(state, player.id, from, 190, 'cubic-bezier(.2,.8,.3,1)', 26);   // lifted
+  await sleep(190);
+  if (!alive()) { rec.el.classList.remove('in-flight'); land(); return; }
+
+  place(state, player.id, to, 560, FLIGHT_EASE, 26);                    // carried
+  await sleep(560);
+  if (!alive()) { rec.el.classList.remove('in-flight'); land(); return; }
+
+  place(state, player.id, to, 260, 'cubic-bezier(.34,1.5,.5,1)', 0);    // set down
+  await sleep(260);
+  rec.el.classList.remove('in-flight');
+  land();
+  if (alive()) onArrive?.(player);
 }
 
 /** Keeps tokens glued to their tiles when the window resizes. */

@@ -1015,9 +1015,21 @@ select { cursor: pointer; }
   display: grid; place-items: center;
   border: 2px solid var(--card);
   box-shadow: 0 3px 8px rgba(0, 0, 0, .4);
-  transition: transform .11s linear;
+  /* Duration and easing are written per move by board.js — a walking step
+     and a piece carried to prison are not the same motion and should not
+     share one curve. This is only the floor for anything that moves without
+     being asked to, like a window resize. */
+  transition: transform .11s ease-out;
   will-change: transform;
 }
+/* Carried, not sliding: lifted off the felt, a little larger, and above every
+   tile it passes over — including the ones with houses on them. */
+.token.in-flight {
+  z-index: 30;
+  filter: drop-shadow(0 10px 8px rgba(0, 0, 0, .38));
+}
+.token.in-flight .token-face { transform: scale(1.16); }
+.token .token-face { transition: transform .2s var(--pop); }
 .token-face { font-size: clamp(6.5px, .8vw, 11px); font-weight: 900; color: rgba(255, 255, 255, .95); }
 .token.is-turn { box-shadow: 0 0 0 2px var(--ink), 0 0 14px var(--tc), 0 3px 8px rgba(60, 30, 35, .4); z-index: 2; }
 .token.is-turn::after {
