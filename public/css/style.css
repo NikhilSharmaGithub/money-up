@@ -2613,3 +2613,33 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   70%  { box-shadow: 0 0 0 12px transparent; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+/* ────────────────────────────────────────────────── the door closing ──
+   A piece being sent to prison is the one arrival on this board that happens
+   TO you, and it used to pass unremarked: the token appeared in the corner
+   and that was all. The corner answers now — one jolt, a red wash across the
+   tile, and a ring that snaps shut and fades. Under a second, once, and never
+   for a visitor who merely landed there. */
+.tile.slammed { animation: prisonJolt .5s cubic-bezier(.36, .07, .19, .97); z-index: 6; }
+.tile.slammed::after {
+  content: ''; position: absolute; inset: 0; border-radius: var(--tile-ri);
+  background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--red) 55%, transparent), transparent 70%);
+  box-shadow: 0 0 0 3px var(--red);
+  animation: prisonFlash .85s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes prisonJolt {
+  10%, 90% { transform: translate(-1px, 1px); }
+  20%, 80% { transform: translate(2px, -1px); }
+  30%, 50%, 70% { transform: translate(-3px, 2px); }
+  40%, 60% { transform: translate(3px, -2px); }
+}
+@keyframes prisonFlash {
+  0% { opacity: 0; box-shadow: 0 0 0 10px color-mix(in srgb, var(--red) 0%, transparent); }
+  18% { opacity: 1; box-shadow: 0 0 0 3px var(--red); }
+  100% { opacity: 0; box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile.slammed { animation: none; }
+  .tile.slammed::after { animation: prisonFlash .85s ease-out forwards; }
+}

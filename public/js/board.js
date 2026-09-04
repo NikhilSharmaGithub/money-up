@@ -310,7 +310,7 @@ const FLIGHT_EASE = 'cubic-bezier(.45, 0, .25, 1)';
  * Reconciles the token layer with server state. Tokens hop tile by tile when a
  * player rolled, and glide directly when they were teleported by a card.
  */
-export function syncTokens(state, { onStep, onArrive, meId } = {}) {
+export function syncTokens(state, { onStep, onArrive, onJailed, meId } = {}) {
   layerEl = document.getElementById('tokenLayer');
   if (!layerEl) return;
 
@@ -364,7 +364,15 @@ export function syncTokens(state, { onStep, onArrive, meId } = {}) {
     if (fresh && move.playerId === p.id && move.steps) {
       walk(state, p, rec.pos, p.pos, move.steps > 0 ? 1 : -1, gen, onStep, onArrive);
     } else {
-      fly(state, p, p.pos, gen, onArrive);
+      // Why the piece is being carried, as the server told it: a card, or a
+      // jailing. Only the second one slams a door.
+      const cause = [...(state.moves || [])].reverse()
+        .find((m) => m.playerId === p.id && m.to === p.pos)?.cause;
+      fly(state, p, p.pos, gen, onArrive, (who, at) => {
+        if (cause !== 'jail') return;
+        slamPrison(at);
+        onJailed?.(who, at);
+      });
     }
   }
 }
@@ -406,7 +414,25 @@ async function walk(state, player, from, to, dir, gen, onStep, onArrive) {
 // the right tile is left alone.
 const flying = new Map();
 
-async function fly(state, player, to, gen, onArrive) {
+/**
+ * The door closing behind somebody.
+ *
+ * Only for an arrival that is a jailing — a card that lands you on the prison
+ * tile as a visitor is not the same event and gets nothing. The tile itself
+ * does the reacting, because the piece is small and the corner is where the
+ * eye needs to be told to look.
+ */
+function slamPrison(index) {
+  const el = tileEls[index];
+  if (!el) return;
+  el.classList.remove('slammed');
+  // Reading it back restarts the animation on a second jailing in one game.
+  void el.offsetWidth;
+  el.classList.add('slammed');
+  setTimeout(() => el.classList.remove('slammed'), 900);
+}
+
+async function fly(state, player, to, gen, onArrive, onLand) {
   const rec = tokens.get(player.id);
   if (!rec) return;
   const from = rec.pos;
@@ -427,7 +453,9 @@ async function fly(state, player, to, gen, onArrive) {
   await sleep(260);
   rec.el.classList.remove('in-flight');
   land();
-  if (alive()) onArrive?.(player);
+  if (!alive()) return;
+  onLand?.(player, to);
+  onArrive?.(player);
 }
 
 /** Keeps tokens glued to their tiles when the window resizes. */

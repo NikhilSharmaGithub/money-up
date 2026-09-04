@@ -917,6 +917,9 @@ function render() {
     meId,
     onStep: () => sfx.step(),
     onArrive: () => highlightTiles(state),
+    // The clank belongs to the door closing, not to the server saying so —
+    // it waits for the piece to be set down inside.
+    onJailed: () => sfx.jail(),
   }));
   if (rebuilt) requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
 
@@ -1052,6 +1055,10 @@ function showReliefCardOnce() {
 let lastMyMoney = null;
 let hadAuction = false;
 let lastAuctionBid = 0;
+// The newest jailing this client has already handed to the flight, so a
+// re-render of the same state does not queue a second door.
+let lastJailMoveAt = 0;
+
 function playSoundsForNewEvents() {
   // My own wallet gets its own voice: a coin ring when money lands, an
   // "ishh…" when it leaves — the generic room sounds stay for everyone else.
@@ -1074,6 +1081,12 @@ function playSoundsForNewEvents() {
   hadAuction = !!a;
   lastAuctionBid = a?.bid || 0;
 
+  // Is a piece on its way to prison right now? The server marks that move
+  // 'jail'; nothing else does.
+  const jailMove = (state.moves || []).filter((m) => m.cause === 'jail').pop();
+  const jailFlight = !!jailMove && jailMove.at > lastJailMoveAt;
+  if (jailFlight) lastJailMoveAt = jailMove.at;
+
   const fresh = state.log.filter((l) => l.at > lastLogAt);
   if (!fresh.length) return;
   lastLogAt = state.log[state.log.length - 1].at;
@@ -1081,7 +1094,11 @@ function playSoundsForNewEvents() {
   if (kinds.has('bankrupt')) return sfx.bankrupt();
   if (!myDelta && kinds.has('rent')) return sfx.rent();
   if (kinds.has('buy')) return sfx.buy();
-  if (kinds.has('jail')) return sfx.jail();
+  // A jailing is voiced on landing (see onJailed above), so the line that
+  // announces it stays quiet — otherwise the door slams a second before the
+  // piece is anywhere near it. Every other jail line — paying the fine,
+  // spending a card — moves nobody, and keeps its sound here.
+  if (kinds.has('jail') && !jailFlight) return sfx.jail();
   if (kinds.has('build')) return sfx.build();
   if (kinds.has('trade')) return sfx.trade();
   // auction openings + bids are voiced by the state diff below, not the log
