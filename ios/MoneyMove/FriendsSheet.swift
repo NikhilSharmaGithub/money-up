@@ -19,6 +19,10 @@ struct FriendsSheet: View {
     @Environment(\.colorScheme) private var scheme
 
     @State private var friends: [FriendEntry] = []
+    /// People who have asked to be friends, and people this player has asked.
+    @State private var requests: [FriendEntry] = []
+    @State private var sentAsks: [FriendEntry] = []
+    @State private var inviting: Set<String> = []
     @State private var profile: ProfileInfo?
     @State private var addCode = ""
     @State private var adding = false
@@ -33,6 +37,7 @@ struct FriendsSheet: View {
                 VStack(spacing: 16) {
                     yourCode(P)
                     addBox(P)
+                    if !requests.isEmpty || !sentAsks.isEmpty { pendingCard(P) }
                     list(P)
                 }
                 .padding(16)
@@ -125,7 +130,7 @@ struct FriendsSheet: View {
                     .disabled(profile == nil)
                 }
 
-                Text("Give this to somebody and they can add you. Adding works both ways — you will each appear on the other's list.")
+                Text("Give this to somebody and they can ask to be friends. You decide — a request waits here until you accept it.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
                     .multilineTextAlignment(.center)
@@ -180,6 +185,88 @@ struct FriendsSheet: View {
                 }
             }
         }
+    }
+
+    // MARK: - requests
+
+    /// Adding somebody used to put you straight on their list, on the grounds
+    /// that you had to know their code. But a code gets read over a shoulder
+    /// or guessed at six characters, and being on a stranger's list means they
+    /// can message you and see when you are online. They decide now.
+    private func pendingCard(_ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                if !requests.isEmpty {
+                    PanelTitle("Wants to be friends (\(requests.count))")
+                    ForEach(requests) { r in
+                        HStack(spacing: 11) {
+                            face(r, tint: P.gold, P)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.name)
+                                    .font(.system(size: 14.5, weight: .heavy, design: .rounded))
+                                    .foregroundStyle(P.ink)
+                                    .lineLimit(1)
+                                Text("asked to be friends · \(r.code)")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(P.ink3)
+                            }
+                            Spacer(minLength: 4)
+                            Button("Accept") { Task { await answer(r, yes: true) } }
+                                .buttonStyle(MMButtonStyle(kind: .gold))
+                            Button {
+                                Task { await answer(r, yes: false) }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(P.ink3)
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(P.gold.opacity(0.6), lineWidth: 1))
+                    }
+                }
+                if !sentAsks.isEmpty {
+                    PanelTitle("Asked (\(sentAsks.count))")
+                    ForEach(sentAsks) { r in
+                        HStack(spacing: 11) {
+                            face(r, tint: P.rule, P)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.name)
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .foregroundStyle(P.ink2)
+                                    .lineLimit(1)
+                                Text("waiting for them to accept")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(P.ink3)
+                            }
+                            Spacer(minLength: 4)
+                            Button("Cancel") { Task { await answer(r, yes: false) } }
+                                .buttonStyle(MMButtonStyle(kind: .ghost))
+                        }
+                        .padding(10)
+                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(P.rule, lineWidth: 1))
+                    }
+                }
+            }
+        }
+    }
+
+    private func face(_ entry: FriendEntry, tint: Color, _ P: Palette) -> some View {
+        let glyph = [entry.avatar ?? "", entry.flag ?? ""].first { !$0.isEmpty } ?? ""
+        return ZStack {
+            Circle().fill(P.card)
+            if glyph.isEmpty { Art.icon(.people, size: 17, tint: P.ink3) }
+            else { Text(glyph).font(.system(size: 19)) }
+        }
+        .frame(width: 36, height: 36)
+        .overlay(Circle().stroke(tint, lineWidth: 1))
     }
 
     // MARK: - the list
@@ -318,6 +405,19 @@ struct FriendsSheet: View {
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(MMButtonStyle(kind: started ? .ghost : .primary))
+                } else if store.roomId != nil {
+                    // The other direction: ask them to come to yours.
+                    Button {
+                        Task { await invite(entry) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Art.icon(.people, size: 14)
+                            Text(inviting.contains(entry.code) ? "Invited" : "Invite")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+                    .disabled(inviting.contains(entry.code))
                 }
             }
         }
@@ -339,11 +439,43 @@ struct FriendsSheet: View {
             body: ["token": store.token, "name": store.nickname, "flag": store.flag])
     }
 
+    private struct SocialFeed: Decodable {
+        var friends: [FriendEntry] = []
+        var requests: [FriendEntry] = []
+        var sent: [FriendEntry] = []
+    }
+
     private func loadFriends() async {
         // A dropped read must not blank a list somebody is looking at.
-        guard let fresh: [FriendEntry] = try? await store.fetchJSON(
-            "/api/friends?token=\(store.token)", raw: true) else { return }
-        friends = fresh
+        guard let fresh: SocialFeed = try? await store.fetchJSON(
+            "/api/social?token=\(store.token)", raw: true) else { return }
+        friends = fresh.friends
+        requests = fresh.requests
+        sentAsks = fresh.sent
+    }
+
+    private func answer(_ entry: FriendEntry, yes: Bool) async {
+        struct Reply: Decodable { var ok: Bool? }
+        let _: Reply? = try? await store.fetchJSON(
+            yes ? "/api/friends/accept" : "/api/friends/decline", method: "POST",
+            body: ["token": store.token, "code": entry.code])
+        if yes { Haptics.turn(); store.showToast("You are friends now") }
+        await loadFriends()
+    }
+
+    private func invite(_ entry: FriendEntry) async {
+        guard let room = store.roomId else { return }
+        struct Reply: Decodable { var ok: Bool?; var error: String? }
+        let reply: Reply? = try? await store.fetchJSON(
+            "/api/invite", method: "POST",
+            body: ["token": store.token, "code": entry.code, "roomId": room])
+        if reply?.ok == true {
+            inviting.insert(entry.code)
+            Haptics.tap()
+            store.showToast("Invited \(entry.name)")
+        } else {
+            store.showToast(reply?.error ?? "Could not invite them", isError: true)
+        }
     }
 
     private func add() async {
@@ -357,7 +489,7 @@ struct FriendsSheet: View {
         if reply?.ok == true {
             addCode = ""
             Haptics.turn()
-            store.showToast("Added")
+            store.showToast("Request sent")
             await loadFriends()
         } else {
             store.showToast(reply?.error ?? "No player with that code", isError: true)

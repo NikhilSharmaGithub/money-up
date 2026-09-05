@@ -11,7 +11,8 @@ import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
 import {
-  profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
+  profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
+  inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
@@ -126,9 +127,48 @@ app.post('/api/friends', (req, res) => {
   res.json(result);
 });
 
+/** Friends, plus who has asked and who you have asked — the app's shape. */
+app.get('/api/social', (req, res) => {
+  res.json(socialOf(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/friends/accept', (req, res) => {
+  const result = acceptFriend(String(req.body?.token || '').slice(0, 64), req.body?.code);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/friends/decline', (req, res) => {
+  res.json(declineFriend(String(req.body?.token || '').slice(0, 64), req.body?.code));
+});
+
 app.post('/api/friends/remove', (req, res) => {
   const { token, code } = req.body || {};
   res.json(removeFriend(String(token || '').slice(0, 64), code));
+});
+
+/**
+ * Ask a friend to your table. They get it on their next poll wherever they
+ * are — landing screen or mid-game — and a push if their phone is registered
+ * and APNs is configured.
+ */
+app.post('/api/invite', (req, res) => {
+  const result = inviteFriend(String(req.body?.token || '').slice(0, 64),
+    req.body?.code, req.body?.roomId);
+  if (result.error) return res.status(400).json(result);
+  const { token: theirToken, ...safe } = result;
+  sendTurnPush(theirToken, `${safe.to?.name ? '' : ''}You have been invited to a game on MoneyMove`,
+    { collapseId: 'invite' });
+  res.json(safe);
+});
+
+/** Whatever is waiting for this player: an invite, for now. */
+app.get('/api/invite', (req, res) => {
+  res.json({ invite: inviteFor(String(req.query.token || '').slice(0, 64)) });
+});
+
+app.post('/api/invite/clear', (req, res) => {
+  res.json(clearInvite(String(req.body?.token || '').slice(0, 64)));
 });
 
 // ---- friend chat (DMs, polled) -------------------------------------------

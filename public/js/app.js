@@ -160,6 +160,10 @@ function showLanding() {
     token, name: nickname, flag: myFlag,
     onToast: toast,
     onJoin: (id) => go(id),
+    // Whatever table this browser is sitting at, so a friend can be asked to
+    // come to it — and so an invite to the table you are already in is not
+    // announced back at you.
+    currentRoom: () => roomId,
   });
 }
 

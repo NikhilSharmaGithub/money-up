@@ -25,14 +25,21 @@ const post = (path, body) => fetch(api(path), {
 
 /** The friends we last heard about, so the card and the room agree. */
 let friends = [];
+let requests = [];      // people who have asked to be friends
+let sentAsks = [];      // people this player has asked
 let joinHandler = null;
 let toastHandler = () => {};
+/** Which room this browser is sitting in, so a friend can be invited to it. */
+let roomOf = () => null;
+/** The invite on screen, so a repaint does not re-announce the same one. */
+let invitedBy = '';
 
 /** Registers this browser's profile and returns its friend code. */
-export async function initSocial({ token, name, flag, onToast, onJoin }) {
+export async function initSocial({ token, name, flag, onToast, onJoin, currentRoom }) {
   myToken = token;
   joinHandler = onJoin;
   toastHandler = onToast;
+  if (currentRoom) roomOf = currentRoom;
   try {
     const me = await post('/api/profile', { token, name, flag });
     myCode = me.code;
@@ -49,8 +56,9 @@ export async function initSocial({ token, name, flag, onToast, onJoin }) {
   if (card) card.onclick = () => openFriendsModal();
 
   await refreshFriends(token);
+  await checkInvite();
   clearInterval(pollTimer);
-  pollTimer = setInterval(() => refreshFriends(token), 10000);
+  pollTimer = setInterval(() => { refreshFriends(token); checkInvite(); }, 10000);
   return myCode;
 }
 
@@ -70,7 +78,10 @@ const onlineCount = () => friends.filter((f) => (f.status || 'offline') !== 'off
 
 async function refreshFriends(token) {
   try {
-    friends = await fetch(api(`/api/friends?token=${encodeURIComponent(token)}`)).then((r) => r.json());
+    const d = await fetch(api(`/api/social?token=${encodeURIComponent(token)}`)).then((r) => r.json());
+    friends = d.friends || [];
+    requests = d.requests || [];
+    sentAsks = d.sent || [];
   } catch {
     return; // keep whatever is on screen rather than blanking it on a blip
   }
@@ -82,11 +93,16 @@ async function refreshFriends(token) {
   const sub = $('#friendsSub');
   if (sub) {
     const on = onlineCount();
-    sub.textContent = !friends.length ? 'Swap codes and play together'
-      : on ? `${friends.length} · ${on} on right now`
-        : `${friends.length} · nobody on right now`;
-    sub.classList.toggle('on', on > 0);
+    // A request waiting is the one thing worth saying over everything else.
+    sub.textContent = requests.length
+      ? `${requests.length} friend request${requests.length > 1 ? 's' : ''} waiting`
+      : !friends.length ? 'Swap codes and play together'
+        : on ? `${friends.length} · ${on} on right now`
+          : `${friends.length} · nobody on right now`;
+    sub.classList.toggle('on', on > 0 || requests.length > 0);
   }
+  const dot = $('#friendsDot');
+  if (dot) dot.classList.toggle('hidden', !requests.length);
   // Keep an open room in step with the poll.
   if (document.querySelector('.friends-modal')) paintFriendList();
 }
@@ -114,13 +130,14 @@ export function openFriendsModal() {
         <button class="btn ghost small" id="fmCopy">${icon('key', 13)} Copy</button>
         <button class="btn ghost small" id="fmShare">${icon('people', 13)} Share</button>
       </div>
-      <p class="fm-hint">Give this to somebody and they can add you. Adding works both ways — you will each appear on the other's list.</p>
+      <p class="fm-hint">Give this to somebody and they can ask to be friends. You decide — a request waits here until you accept it.</p>
     </div>
     <div class="chart-label">Add a friend</div>
     <form class="fm-add" id="fmAdd">
       <input id="fmCode" class="code-input" maxlength="6" placeholder="THEIR CODE" autocomplete="off" />
       <button class="btn gold" type="submit">Add</button>
     </form>
+    <div id="fmRequests"></div>
     <div class="chart-label" id="fmListLabel">Your friends</div>
     <div id="friendList" class="friend-list"></div>`, (root) => {
     $('#friendsClose', root).onclick = closeModal;
@@ -156,7 +173,100 @@ export function openFriendsModal() {
   }, 'friends-modal');
 }
 
+/**
+ * An invite, wherever the reader is.
+ *
+ * It has to work in the middle of a game as much as on the landing screen —
+ * that is when somebody is most likely to be asked — so this is a strip that
+ * drops in at the top of whatever is on screen rather than a modal, which
+ * would take the board away from a player mid-turn.
+ */
+async function checkInvite() {
+  let invite = null;
+  try {
+    ({ invite } = await fetch(api(`/api/invite?token=${encodeURIComponent(myToken)}`)).then((r) => r.json()));
+  } catch { return; }
+  if (!invite) { invitedBy = ''; document.querySelector('.invite-strip')?.remove(); return; }
+  // Already in the table they are asking about: nothing to announce.
+  if (roomOf() === invite.roomId) return;
+  // The same invite twice is one invite.
+  const key = `${invite.from}:${invite.roomId}:${invite.at}`;
+  if (invitedBy === key) return;
+  invitedBy = key;
+  showInvite(invite);
+}
+
+function showInvite(invite) {
+  document.querySelector('.invite-strip')?.remove();
+  const el = document.createElement('div');
+  el.className = 'invite-strip';
+  el.innerHTML = `<span class="is-mark">${icon('people', 17, 'solo')}</span>
+    <span class="is-body">
+      <b>${escapeHtml(invite.name)}</b>
+      <span>wants you at their table</span>
+    </span>
+    <button class="btn tiny primary" data-go>Join</button>
+    <button class="icon-btn tiny-x" data-shut title="Not now">✕</button>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('in'));
+
+  const clear = () => {
+    post('/api/invite/clear', { token: myToken }).catch(() => {});
+    el.classList.remove('in');
+    setTimeout(() => el.remove(), 220);
+  };
+  el.querySelector('[data-go]').onclick = () => { clear(); joinHandler?.(invite.roomId); };
+  el.querySelector('[data-shut]').onclick = clear;
+  // Nobody should have to dismiss a note about a table that will have started
+  // by the time they look up.
+  setTimeout(() => { if (el.isConnected) { el.classList.remove('in'); setTimeout(() => el.remove(), 220); } }, 45000);
+}
+
+/**
+ * Requests, above the list.
+ *
+ * Adding somebody used to put you straight on their list, on the grounds
+ * that you had to know their code. But a code gets read over a shoulder or
+ * guessed at six characters, and being on a stranger's list means they can
+ * message you and see when you are online. The other person decides now.
+ */
+function paintRequests() {
+  const el = $('#fmRequests');
+  if (!el) return;
+  if (!requests.length && !sentAsks.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `${requests.length ? `<div class="chart-label">Wants to be friends (${requests.length})</div>
+      ${requests.map((r) => `<div class="friend req">
+          <span class="friend-flag">${r.avatar || r.flag ? escapeHtml(r.avatar || r.flag) : icon('people', 16, 'solo')}</span>
+          <span class="friend-who"><b>${escapeHtml(r.name)}</b>
+            <span class="friend-status off">asked to be friends <i>${escapeHtml(r.code)}</i></span></span>
+          <button class="btn tiny primary" data-yes="${escapeHtml(r.code)}">Accept</button>
+          <button class="icon-btn tiny-x" data-no="${escapeHtml(r.code)}" title="Decline">✕</button>
+        </div>`).join('')}` : ''}
+    ${sentAsks.length ? `<div class="chart-label">Asked (${sentAsks.length})</div>
+      ${sentAsks.map((r) => `<div class="friend">
+          <span class="friend-flag">${r.avatar || r.flag ? escapeHtml(r.avatar || r.flag) : icon('people', 16, 'solo')}</span>
+          <span class="friend-who"><b>${escapeHtml(r.name)}</b>
+            <span class="friend-status off">waiting for them to accept</span></span>
+          <button class="icon-btn tiny-x" data-no="${escapeHtml(r.code)}" title="Take it back">✕</button>
+        </div>`).join('')}` : ''}`;
+
+  el.querySelectorAll('[data-yes]').forEach((b) => {
+    b.onclick = async () => {
+      await post('/api/friends/accept', { token: myToken, code: b.dataset.yes }).catch(() => {});
+      toastHandler('You are friends now');
+      await refreshFriends(myToken);
+    };
+  });
+  el.querySelectorAll('[data-no]').forEach((b) => {
+    b.onclick = async () => {
+      await post('/api/friends/decline', { token: myToken, code: b.dataset.no }).catch(() => {});
+      await refreshFriends(myToken);
+    };
+  });
+}
+
 function paintFriendList() {
+  paintRequests();
   const el = $('#friendList');
   if (!el) return;
   const label = $('#fmListLabel');
@@ -191,7 +301,9 @@ function paintFriendList() {
         title="Message ${escapeHtml(f.name)}" aria-label="Message ${escapeHtml(f.name)}">${icon('chat', null, 'solo')}</button>
       ${f.roomId ? `<button class="btn tiny ${started ? '' : 'primary'}" data-join="${escapeHtml(f.roomId)}"
           title="${started ? 'Their game has started — you can watch it' : 'Take a seat at their table'}"
-        >${started ? 'Watch' : 'Join'}</button>` : ''}
+        >${started ? 'Watch' : 'Join'}</button>`
+      : roomOf() ? `<button class="btn tiny" data-invite="${escapeHtml(f.code)}"
+          title="Ask ${escapeHtml(f.name)} to come to your table">Invite</button>` : ''}
       <button class="icon-btn tiny-x" data-drop="${escapeHtml(f.code)}" data-name="${escapeHtml(f.name)}"
         title="Remove ${escapeHtml(f.name)}" aria-label="Remove ${escapeHtml(f.name)}">✕</button>
     </div>`;
@@ -202,6 +314,18 @@ function paintFriendList() {
   });
   el.querySelectorAll('[data-join]').forEach((b) => {
     b.onclick = () => { closeModal(); joinHandler?.(b.dataset.join); };
+  });
+  el.querySelectorAll('[data-invite]').forEach((b) => {
+    b.onclick = async () => {
+      const room = roomOf();
+      if (!room) return;
+      try {
+        const { to } = await post('/api/invite', { token: myToken, code: b.dataset.invite, roomId: room });
+        toastHandler(`Invited ${to?.name || 'them'}`);
+        b.textContent = 'Invited';
+        b.disabled = true;
+      } catch (err) { toastHandler(err.message, 'error'); }
+    };
   });
   // Removing is mutual and there is no undo, and the ✕ sits a thumb's width
   // from Message and Join — worth one question first.

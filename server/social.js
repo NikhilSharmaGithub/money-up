@@ -848,30 +848,87 @@ export function dmsWith(token, rawCode) {
 export function dmThreads() { return dms; }
 
 // ----------------------------------------------------------------- friends --
+//
+// Adding somebody used to put each of you straight on the other's list, on
+// the grounds that you had to know their code. But a code gets read over a
+// shoulder, forwarded, guessed at six characters — and being on a stranger's
+// list means they can message you and see when you are online. So it is a
+// request now, and the other person decides.
+
+/** Codes come off keyboards, so they are compared uppercased and trimmed. */
+const asCode = (raw) => String(raw || '').trim().toUpperCase();
+
+/** The two lists every profile keeps besides its friends, made on demand. */
+function pending(p) {
+  p.wants ??= [];       // codes this player has asked to be friends with
+  p.asked ??= [];       // codes that have asked this player
+  return p;
+}
+
 export function addFriend(token, rawCode) {
   const me = profileFor(token);
   if (!me) return { error: 'Unknown player' };
-  const code = String(rawCode || '').trim().toUpperCase();
+  const code = asCode(rawCode);
   if (!code) return { error: 'Enter a friend code' };
   if (code === me.code) return { error: "That's your own code" };
 
   const theirToken = byCode.get(code);
   if (!theirToken) return { error: 'No player with that code' };
-  const them = profiles.get(theirToken);
+  const them = pending(profiles.get(theirToken));
+  pending(me);
 
+  if (me.friends.includes(code)) return { error: 'You are already friends', already: true };
+  if (me.friends.length >= MAX_FRIENDS) return { error: 'Your friends list is full' };
+  if (them.friends.length >= MAX_FRIENDS) return { error: 'Their friends list is full' };
+
+  // They asked first: this is an acceptance, not a second request.
+  if (me.asked.includes(code)) return acceptFriend(token, code);
+  if (me.wants.includes(code)) return { ok: true, sent: true, friend: publicView(them) };
+
+  me.wants.push(code);
+  them.asked.push(me.code);
+  save();
+  return { ok: true, sent: true, friend: publicView(them) };
+}
+
+/** Say yes to a request. Only then does either list change. */
+export function acceptFriend(token, rawCode) {
+  const me = pending(profiles.get(token) || {});
+  if (!me.code) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  if (!me.asked.includes(code)) return { error: 'No request from that player' };
+  const them = pending(profiles.get(byCode.get(code)) || {});
+  if (!them.code) return { error: 'That player is gone' };
   if (me.friends.length >= MAX_FRIENDS) return { error: 'Your friends list is full' };
 
-  // Friendship is mutual and needs no approval step — you had to know the code.
-  if (!me.friends.includes(them.code)) me.friends.push(them.code);
+  me.asked = me.asked.filter((c) => c !== code);
+  them.wants = them.wants.filter((c) => c !== me.code);
+  if (!me.friends.includes(code)) me.friends.push(code);
   if (!them.friends.includes(me.code)) them.friends.push(me.code);
   save();
-  return { ok: true, friend: publicView(them) };
+  return { ok: true, accepted: true, friend: publicView(them) };
+}
+
+/** Say no, or take back a request you sent. Both are this. */
+export function declineFriend(token, rawCode) {
+  const me = pending(profiles.get(token) || {});
+  if (!me.code) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  const them = pending(profiles.get(byCode.get(code)) || {});
+  me.asked = me.asked.filter((c) => c !== code);
+  me.wants = me.wants.filter((c) => c !== code);
+  if (them.code) {
+    them.wants = them.wants.filter((c) => c !== me.code);
+    them.asked = them.asked.filter((c) => c !== me.code);
+  }
+  save();
+  return { ok: true };
 }
 
 export function removeFriend(token, rawCode) {
   const me = profiles.get(token);
   if (!me) return { error: 'Unknown player' };
-  const code = String(rawCode || '').trim().toUpperCase();
+  const code = asCode(rawCode);
   me.friends = me.friends.filter((c) => c !== code);
   const them = profiles.get(byCode.get(code));
   if (them) them.friends = them.friends.filter((c) => c !== me.code);
@@ -879,15 +936,84 @@ export function removeFriend(token, rawCode) {
   return { ok: true };
 }
 
+/** One person, dressed with wherever they are right now. */
+function withPresence(them) {
+  if (!them) return null;
+  const at = presence.get(them.token);
+  return { ...publicView(them), ...(at ? { roomId: at.roomId, status: at.status } : { status: 'offline' }) };
+}
+
 export function friendsOf(token) {
   const me = profiles.get(token);
   if (!me) return [];
-  return me.friends.map((code) => {
+  return me.friends.map((code) => withPresence(profiles.get(byCode.get(code)))).filter(Boolean);
+}
+
+/**
+ * The whole friends picture for one player: who they are friends with, who
+ * has asked them, and who they have asked. The list route still answers with
+ * a plain array for older clients — this is the shape the app reads.
+ */
+export function socialOf(token) {
+  const me = profiles.get(token);
+  if (!me) return { friends: [], requests: [], sent: [] };
+  pending(me);
+  const card = (code) => {
     const them = profiles.get(byCode.get(code));
-    if (!them) return null;
-    const at = presence.get(them.token);
-    return { ...publicView(them), ...(at ? { roomId: at.roomId, status: at.status } : { status: 'offline' }) };
-  }).filter(Boolean);
+    return them ? publicView(them) : null;
+  };
+  return {
+    friends: friendsOf(token),
+    requests: me.asked.map(card).filter(Boolean),
+    sent: me.wants.map(card).filter(Boolean),
+  };
+}
+
+// ----------------------------------------------------------------- invites --
+//
+// "Join their table" only ever worked one way round: you could walk into a
+// friend's lobby, but you could not ask a friend to come to yours. An invite
+// is that other direction — a note that expires, so nobody is chasing a table
+// that filled up ten minutes ago.
+
+/** @type {Map<string, {from:string, name:string, roomId:string, at:number}>} */
+const invites = new Map();     // recipient token -> the newest invite for them
+const INVITE_LIFE_MS = 5 * 60 * 1000;
+
+/**
+ * Ask a friend to come and play. Friends only, because an invite is a
+ * notification and a stranger with your code should not be able to send you
+ * one. The newest replaces any older one: two invites from the same evening
+ * are not two things to answer.
+ */
+export function inviteFriend(token, rawCode, roomId) {
+  const me = profiles.get(token);
+  if (!me) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  if (!me.friends.includes(code)) return { error: 'You can only invite friends' };
+  const them = profiles.get(byCode.get(code));
+  if (!them) return { error: 'That player is gone' };
+  const room = String(roomId || '').toLowerCase().slice(0, 12);
+  if (!room) return { error: 'No table to invite them to' };
+
+  invites.set(them.token, {
+    from: me.code, name: me.name || 'A friend', roomId: room, at: Date.now(),
+  });
+  return { ok: true, to: publicView(them), token: them.token };
+}
+
+/** The invite waiting for this player, if it has not gone stale. */
+export function inviteFor(token) {
+  const inv = invites.get(token);
+  if (!inv) return null;
+  if (Date.now() - inv.at > INVITE_LIFE_MS) { invites.delete(token); return null; }
+  return { from: inv.from, name: inv.name, roomId: inv.roomId, at: inv.at };
+}
+
+/** Answered, ignored, or acted on — either way it is done with. */
+export function clearInvite(token) {
+  invites.delete(token);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------- presence --

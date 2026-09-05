@@ -17,6 +17,9 @@ struct LandingView: View {
     @State private var authConfig: AuthConfig?
     @State private var signingIn = false
     @State private var friends: [FriendEntry] = []
+    /// People waiting on an answer. The summary row leads with them, because
+    /// a request is the one thing here that somebody else is waiting on.
+    @State private var friendRequests: [FriendEntry] = []
     @State private var publicRooms: [PublicRoom] = []
     @State private var storeItems: [StoreItem] = []
     @State private var dmFriend: FriendEntry?
@@ -1089,7 +1092,8 @@ struct LandingView: View {
                             .foregroundStyle(P.ink)
                         Text(friendsLine)
                             .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(friendsOnline > 0 ? P.good : P.ink3)
+                            .foregroundStyle(!friendRequests.isEmpty ? P.gold
+                                             : friendsOnline > 0 ? P.good : P.ink3)
                     }
 
                     Spacer(minLength: 6)
@@ -1125,6 +1129,9 @@ struct LandingView: View {
     }
 
     private var friendsLine: String {
+        if !friendRequests.isEmpty {
+            return "\(friendRequests.count) friend request\(friendRequests.count > 1 ? "s" : "") waiting"
+        }
         if friends.isEmpty { return "Swap codes and play together" }
         if friendsOnline == 0 { return "\(friends.count) · nobody on right now" }
         return "\(friends.count) · \(friendsOnline) on right now"
@@ -1298,21 +1305,19 @@ Task { await appleLinked(userId: cred.user) }
     }
 
     private func loadFriends() async {
-        // GameStore.fetchJSON builds its URL with appending(path:), which
-        // percent-encodes "?", so this query-string GET is issued directly.
         // A failed poll keeps whatever is on screen: blanking the list on a
         // blip tells the player their friends are gone, which they are not.
-        guard let base = store.serverURL,
-              var comps = URLComponents(url: base.appending(path: "/api/friends"),
-                                        resolvingAgainstBaseURL: false) else { return }
-        comps.queryItems = [URLQueryItem(name: "token", value: store.token)]
-        guard let url = comps.url,
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let fresh = try? JSONDecoder().decode([FriendEntry].self, from: data) else { return }
-        // Anyone you can actually walk in on floats to the top, exactly like
-        // the web list — an offline crowd should never bury a live table.
-        friends = fresh.sorted {
+        struct Feed: Decodable {
+            var friends: [FriendEntry] = []
+            var requests: [FriendEntry] = []
+        }
+        guard let feed: Feed = try? await store.fetchJSON(
+            "/api/social?token=\(store.token)", raw: true) else { return }
+        // Anyone you can actually walk in on floats to the top — an offline
+        // crowd should never bury a live table.
+        friends = feed.friends.sorted {
             ($0.roomId != nil ? 0 : 1, $0.name.lowercased()) < ($1.roomId != nil ? 0 : 1, $1.name.lowercased())
         }
+        friendRequests = feed.requests
     }
 }

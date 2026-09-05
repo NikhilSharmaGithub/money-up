@@ -2375,6 +2375,52 @@ console.log('\n▶ tournaments');
     ok('two cups run side by side with their own clocks, entrants and brackets, and a player is in one at a time');
   }
 
+  // Friendship is a request now, and an invite only travels between friends.
+  {
+    const who = (n) => {
+      const token = `soc-${n}`;
+      social.profileFor(token, { name: `S${n}` });
+      social.attachLogin(token, 'test', `sc-${n}`, `S${n}`);
+      return { token, code: social.profilesByToken(token).code };
+    };
+    const a = who('a'), b = who('b'), c = who('c');
+
+    // Asking does not put anybody on anybody's list.
+    const asked = social.addFriend(a.token, b.code);
+    if (!asked.sent) fail('social: adding somebody did not send a request');
+    if (social.friendsOf(a.token).length || social.friendsOf(b.token).length) {
+      fail('social: a request put people on each other\'s lists before it was answered');
+    }
+    const bSees = social.socialOf(b.token);
+    if (bSees.requests.length !== 1) fail('social: the request never reached the other person');
+    if (social.socialOf(a.token).sent.length !== 1) fail('social: the asker was not shown what they asked');
+
+    // Asking back is an acceptance rather than a second request.
+    const back = social.addFriend(b.token, a.code);
+    if (!back.accepted) fail('social: asking somebody who had asked you did not just accept');
+    if (social.friendsOf(a.token).length !== 1 || social.friendsOf(b.token).length !== 1) {
+      fail('social: accepting did not make them friends both ways');
+    }
+    if (social.socialOf(b.token).requests.length) fail('social: an answered request stayed in the list');
+
+    // Declining leaves no trace on either side.
+    social.addFriend(a.token, c.code);
+    social.declineFriend(c.token, a.code);
+    if (social.socialOf(c.token).requests.length) fail('social: a declined request stayed');
+    if (social.socialOf(a.token).sent.length) fail('social: declining left the asker still waiting');
+    if (social.friendsOf(a.token).some((f) => f.code === c.code)) fail('social: a decline made friends anyway');
+
+    // Invites are for friends, and the newest replaces the last.
+    if (!social.inviteFriend(a.token, b.code, 'room1').ok) fail('social: a friend could not be invited');
+    if (!social.inviteFriend(a.token, c.code, 'room1').error) fail('social: a stranger could be invited');
+    if (social.inviteFor(b.token)?.roomId !== 'room1') fail('social: the invite did not arrive');
+    social.inviteFriend(a.token, b.code, 'room2');
+    if (social.inviteFor(b.token)?.roomId !== 'room2') fail('social: a newer invite did not replace the old one');
+    social.clearInvite(b.token);
+    if (social.inviteFor(b.token)) fail('social: a cleared invite came back');
+    ok('a friend request waits to be answered, asking back accepts it, and only friends can be invited to a table');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {

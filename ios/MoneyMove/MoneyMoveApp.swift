@@ -43,6 +43,9 @@ struct RootView: View {
     /// switcher rebuilds this view's identity, which must not replay it).
     static var didSplash = false
     @State private var splashing = !RootView.didSplash
+    /// One invite poll for the whole app: a friend's "come and play" has to
+    /// find the player in a game as readily as on the home screen.
+    @StateObject private var inviteWatch = InviteWatch()
 
     var body: some View {
         // Feed the static before anything below reads a palette, then key the
@@ -77,12 +80,17 @@ struct RootView: View {
             // Gives the APNs callback somewhere to deliver a device token, and
             // refreshes it for anyone who has already granted permission.
             PushRegistrar.shared.adopt(store)
+            inviteWatch.start(store)
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }
         .overlay { reliefOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
+        .overlay(alignment: .top) {
+            InviteBanner(watch: inviteWatch).environmentObject(store)
+        }
+        .animation(.spring(duration: 0.35), value: inviteWatch.invite)
         .overlay { revealOverlay }
         // The transitions above only play if the animation lives on a view
         // that CONTAINS them — hung any deeper and they simply pop in.
