@@ -2268,10 +2268,10 @@ export function cupMoney(cup, place) {
  * column and an honest one; the path above it is the part that answers
  * "where am I", and it stays short however big the cup gets.
  */
-export function openCupBracket(token) {
+export function openCupBracket(token, cupId) {
   openModal(`<div class="chart-loading">${icon('trophy', 22, 'solo')}<p>Drawing the chart…</p></div>`,
     null, 'wide chart-modal');
-  fetch(api(`/api/cup/bracket?token=${encodeURIComponent(token || '')}`))
+  fetch(api(`/api/cup/bracket?token=${encodeURIComponent(token || '')}&cup=${encodeURIComponent(cupId || '')}`))
     .then((r) => r.json())
     .then((data) => {
       const b = data?.bracket;

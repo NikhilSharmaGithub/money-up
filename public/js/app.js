@@ -1445,9 +1445,13 @@ let cupTimer = null;
 let cupClock = null;
 let cupSeen = null;          // the match this browser has already walked into
 
+// Which cup the card is showing, when there is more than one. Blank lets the
+// server pick the one that matters most to this reader — see publicView.
+let cupShow = '';
+
 function watchCup() {
   clearTimeout(cupTimer);
-  fetch(api(`/api/cup?token=${encodeURIComponent(token)}`))
+  fetch(api(`/api/cup?token=${encodeURIComponent(token)}&show=${encodeURIComponent(cupShow)}`))
     .then((r) => r.json())
     .then(paintCup)
     .catch(() => {})
@@ -1468,6 +1472,9 @@ function paintCup(data) {
   const codeHadFocus = document.activeElement === $('#cupCode');
   const cup = data?.enabled ? data.cup : null;
   if (!cup) { card.classList.add('hidden'); stopCupClock(); cupPollMs = 30000; return; }
+  // The card follows whichever cup the server handed back, so joining and
+  // the chart always act on the one being looked at.
+  cupShow = cup.id;
   card.classList.remove('hidden');
 
   // Your table is ready: go, once. Walking in is the player's own click on
@@ -1513,7 +1520,8 @@ function paintCup(data) {
   }))} · open for ${Math.round((cup.closesAt - cup.openedAt) / 60000)} min</div>
       ${prizes}
       <div class="cup-in">${icon('people', 14)} Come back then — joining takes one tap.</div>
-      <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`;
+      <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>
+      ${otherCupsHTML(data.others)}`;
     const clock = () => {
       const el = $('#cupClockText');
       if (!el) return;
@@ -1523,6 +1531,7 @@ function paintCup(data) {
     stopCupClock();
     cupClock = setInterval(clock, 1000);
     wireCupPoster(cup);
+    wireOtherCups();
     return;
   }
 
@@ -1557,7 +1566,8 @@ function paintCup(data) {
              </div>
              <div class="cup-in">${icon('key', 13)} Invite only — you need the code from whoever set it up.</div>`
           : `<button class="btn gold wide wrap" id="cupJoin">${icon('trophy', 14)} Join</button>`}
-           <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`}`;
+           <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`}
+      ${otherCupsHTML(data.others)}`;
     const opened = cup.openedAt || cup.closesAt - 5 * 60 * 1000;
     const clock = () => {
       const el = $('#cupClockText');
@@ -1590,6 +1600,7 @@ function paintCup(data) {
     const leave = $('#cupLeave');
     if (leave) leave.onclick = () => { sfx.click(); leaveCup(); };
     wireCupPoster(cup);
+    wireOtherCups();
     return;
   }
 
@@ -1622,10 +1633,12 @@ function paintCup(data) {
         ? `<div class="cup-run">${icon('trophy', 12)} ${cup.you.survived} won · <b>${cup.you.left}</b> still in${cup.you.roundLabel ? ` · ${escapeHtml(cup.you.roundLabel)}` : ''}</div>`
         : ''}
       ${cup.you.roomId ? `<button class="btn primary wide" id="cupGo">Go to your table</button>` : ''}
-      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>`;
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>
+      ${otherCupsHTML(data.others)}`;
     const goBtn = $('#cupGo');
     if (goBtn) goBtn.onclick = () => { sfx.click(); go(cup.you.roomId); };
     wireCupChart();
+    wireOtherCups();
     return;
   }
 
@@ -1654,8 +1667,10 @@ function paintCup(data) {
         ${step('third', s.third, '3rd')}
       </div>
       ${mine ? `<div class="cup-in ok">${icon('trophy', 14)} You finished ${mine}. The prize is paid by hand — hold on to your friend code.</div>` : ''}
-      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>`;
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>
+      ${otherCupsHTML(data.others)}`;
     wireCupChart();
+    wireOtherCups();
     return;
   }
 
@@ -1671,9 +1686,42 @@ function longCountdown(ms) {
   return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
 }
 
+/**
+ * The cups this card is not showing. One row each — enough to tell them
+ * apart and to choose one — because a screen has room for one card and a
+ * person can be interested in more than one cup.
+ */
+function otherCupsHTML(others) {
+  if (!others?.length) return '';
+  const when = (o) => {
+    if (o.state === 'scheduled') return `opens in ${longCountdown(o.openedAt - Date.now())}`;
+    if (o.state === 'joining') return `closes in ${longCountdown(o.closesAt - Date.now())}`;
+    if (o.state === 'running') return 'being played';
+    return 'finished';
+  };
+  return `<div class="cup-others">
+      <div class="cup-others-head">Also on</div>
+      ${others.map((o) => `<button class="cup-other" data-cup="${o.id}">
+          <span class="co-name">${escapeHtml(o.name)}${o.joined ? '<i>joined</i>' : ''}</span>
+          <span class="co-when">${when(o)} · ${o.entrants}${o.maxPlayers ? `/${o.maxPlayers}` : ''}${o.needsCode ? ' · invite only' : ''}</span>
+        </button>`).join('')}
+    </div>`;
+}
+
+function wireOtherCups() {
+  document.querySelectorAll('.cup-other').forEach((b) => {
+    b.onclick = () => {
+      sfx.click();
+      cupShow = b.dataset.cup;
+      cupCodeDraft = '';
+      watchCup();
+    };
+  });
+}
+
 function wireCupChart() {
   const b = $('#cupChart');
-  if (b) b.onclick = () => { sfx.click(); openCupBracket(token); };
+  if (b) b.onclick = () => { sfx.click(); openCupBracket(token, cupShow); };
 }
 
 function wireCupPoster(cup) {
@@ -1695,7 +1743,7 @@ async function enterCup() {
   try {
     const res = await fetch(api('/api/cup/join'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, code }),
+      body: JSON.stringify({ token, code, cupId: cupShow }),
     });
     const out = await res.json();
     if (res.status === 401) return toast('Sign in first — a prize needs somebody to pay');
@@ -1713,7 +1761,7 @@ async function leaveCup() {
   try {
     await fetch(api('/api/cup/leave'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, cupId: cupShow }),
     });
     watchCup();
   } catch { /* the next poll puts it right */ }

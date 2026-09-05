@@ -36,9 +36,12 @@ const KEEP_FINISHED_MS = 90 * 60 * 1000;
 
 const state = {
   enabled: false,          // the owner's switch; hidden on every client until on
-  current: null,           // the one cup that is open or running
+  cups: [],                // every cup not yet finished, oldest first
   history: [],             // finished cups, newest first, capped
 };
+
+/** As many cups as one person can sensibly run and pay out at once. */
+const MAX_LIVE_CUPS = 6;
 
 // ─────────────────────────────────────────────────────────────── storage ──
 
@@ -46,9 +49,11 @@ function load() {
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     state.enabled = !!raw.enabled;
-    state.current = raw.current || null;
+    // `current` is how a single-cup world wrote itself down; a file from one
+    // still opens, as the first of many.
+    state.cups = Array.isArray(raw.cups) ? raw.cups : (raw.current ? [raw.current] : []);
     state.history = Array.isArray(raw.history) ? raw.history.slice(0, 50) : [];
-    if (state.current) console.log(`  tournament: restored "${state.current.name}" (${state.current.state})`);
+    for (const t of state.cups) console.log(`  tournament: restored "${t.name}" (${t.state})`);
   } catch { /* first run */ }
 }
 
@@ -59,7 +64,7 @@ function save() {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(FILE, JSON.stringify({
-        enabled: state.enabled, current: state.current, history: state.history.slice(0, 50),
+        enabled: state.enabled, cups: state.cups, history: state.history.slice(0, 50),
       }, null, 1));
     } catch (e) { console.warn('tournament: could not save —', e.message); }
   }, 400);
@@ -72,59 +77,130 @@ load();
 const now = () => Date.now();
 const id = () => Math.random().toString(36).slice(2, 8);
 
+/** Every cup still going: announced, taking entries, or being played. */
+export const liveCups = () => state.cups;
+
+/** One cup by id, live or finished. */
+const cupById = (cupId) => state.cups.find((t) => t.id === cupId)
+  || state.history.find((t) => t.id === cupId)
+  || null;
+
+/** The cup a match belongs to — matches carry ids of their own. */
+function cupOfMatch(matchId) {
+  for (const t of state.cups) {
+    for (const r of t.rounds) if (r.matches.some((m) => m.id === matchId)) return t;
+  }
+  return null;
+}
+
+/** The cup whose table this room was made for. */
+function cupOfRoom(roomId) {
+  for (const t of state.cups) {
+    for (const r of t.rounds) if (r.matches.some((m) => m.roomId === roomId)) return t;
+  }
+  return null;
+}
+
+/** Every cup this player has a stake in, live or just finished. */
+const cupsOf = (token) => (token
+  ? [...state.cups, ...state.history].filter((t) => t.entrants.some((e) => e.token === token))
+  : []);
+
 /** A cup as a client should see it — never a token, only public codes. */
 /** How long a finished cup stays on the players' screens. */
 const SHOW_RESULT_MS = 10 * 60 * 1000;
 
-export function publicView(token) {
-  // A cup that has just been won is still the most interesting thing on the
-  // page. Clearing it the instant the final ends means the winner never sees
-  // that they won — the card simply vanishes at the moment it matters most.
-  const t = state.current
-    || state.history.find((h) => h.endedAt && now() - h.endedAt < SHOW_RESULT_MS)
-    || null;
-  if (!state.enabled || !t) return { enabled: state.enabled, cup: null };
+/**
+ * What one player should see.
+ *
+ * With several cups running there is still only room for one card, so this
+ * picks the one that matters most to the reader — the one they are playing
+ * in, then the one they have joined, then the soonest they could join — and
+ * hands back the rest as a short list they can flick through.
+ */
+export function publicView(token, wantId) {
+  if (!state.enabled) return { enabled: false, cup: null, others: [] };
+  const mine = new Set(cupsOf(token).map((t) => t.id));
+  const shown = [
+    ...state.cups,
+    // A cup that has just been won is still the most interesting thing on the
+    // page. Clearing it the instant the final ends means the winner never
+    // sees that they won — the card simply vanishes at the moment it matters.
+    ...state.history.filter((h) => h.endedAt && !h.cancelled && now() - h.endedAt < SHOW_RESULT_MS
+      && mine.has(h.id)),
+  ];
+  if (!shown.length) return { enabled: true, cup: null, others: [] };
+
+  // Lower sorts first: your live game, then yours, then whatever opens next.
+  const rank = (t) => {
+    const yours = mine.has(t.id);
+    if (yours && t.state === 'running') return 0;
+    if (yours && t.state === 'joining') return 1;
+    if (yours) return 2;
+    if (t.state === 'joining') return 3;
+    if (t.state === 'scheduled') return 4;
+    return 5;
+  };
+  const ordered = [...shown].sort((a, b) => rank(a) - rank(b) || a.openedAt - b.openedAt);
+  const t = (wantId && ordered.find((x) => x.id === wantId)) || ordered[0];
+
+  return {
+    enabled: true,
+    cup: cupView(t, token),
+    // Enough for a row each: name, what it is doing, and when.
+    others: ordered.filter((x) => x.id !== t.id).map((x) => ({
+      id: x.id,
+      name: x.name,
+      state: x.state,
+      openedAt: x.openedAt,
+      closesAt: x.closesAt,
+      entrants: x.entrants.length,
+      maxPlayers: x.maxPlayers || 0,
+      joined: mine.has(x.id),
+      needsCode: !!x.joinCode,
+    })),
+  };
+}
+
+function cupView(t, token) {
   const mine = token ? t.entrants.find((e) => e.token === token) : null;
   const match = mine ? liveMatchFor(t, token) : null;
   return {
-    enabled: true,
-    cup: {
-      id: t.id,
-      name: t.name,
-      state: t.state,
-      prize: t.prize,
-      // The same prize in the reader's own money, when we know a rate for
-      // the country they fly. Null for everybody else, and the card falls
-      // back to the owner's figure — see fx.js on why nothing is invented.
-      local: localPrize(t, token),
-      // Both ends of the join window: the card draws a bar that drains, and a
-      // bar needs to know how long the whole thing was.
-      openedAt: t.openedAt,
-      closesAt: t.closesAt,
-      entrants: t.entrants.length,
-      maxPlayers: t.maxPlayers || 0,
-      // Whether a code is wanted, never the code itself: an invite-only cup
-      // whose code any client could read is not invite-only.
-      needsCode: !!t.joinCode,
-      rounds: t.rounds.length,
-      // The bracket, with names rather than identities.
-      round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
-      standings: t.standings || null,
-      you: mine ? {
-        joined: true,
-        code: mine.code,
-        name: mine.name,
-        out: !!mine.out,
-        placed: mine.placed || null,
-        // Where to go, the moment there is somewhere to go.
-        roomId: match?.roomId || null,
-        opponent: match ? nameOf(t, match.a === token ? match.b : match.a) : null,
-        // How far they have come and how many are left with them. This is
-        // the whole story of a knockout from one player's seat, and it is
-        // four numbers rather than the entire bracket.
-        ...standing(t, token),
-      } : { joined: false },
-    },
+    id: t.id,
+    name: t.name,
+    state: t.state,
+    prize: t.prize,
+    // The same prize in the reader's own money, when we know a rate for
+    // the country they fly. Null for everybody else, and the card falls
+    // back to the owner's figure — see fx.js on why nothing is invented.
+    local: localPrize(t, token),
+    // Both ends of the join window: the card draws a bar that drains, and a
+    // bar needs to know how long the whole thing was.
+    openedAt: t.openedAt,
+    closesAt: t.closesAt,
+    entrants: t.entrants.length,
+    maxPlayers: t.maxPlayers || 0,
+    // Whether a code is wanted, never the code itself: an invite-only cup
+    // whose code any client could read is not invite-only.
+    needsCode: !!t.joinCode,
+    rounds: t.rounds.length,
+    // The bracket, with names rather than identities.
+    round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
+    standings: t.standings || null,
+    you: mine ? {
+      joined: true,
+      code: mine.code,
+      name: mine.name,
+      out: !!mine.out,
+      placed: mine.placed || null,
+      // Where to go, the moment there is somewhere to go.
+      roomId: match?.roomId || null,
+      opponent: match ? nameOf(t, match.a === token ? match.b : match.a) : null,
+      // How far they have come and how many are left with them. This is
+      // the whole story of a knockout from one player's seat, and it is
+      // four numbers rather than the entire bracket.
+      ...standing(t, token),
+    } : { joined: false },
   };
 }
 
@@ -172,11 +248,13 @@ const playersIn = (r) => r.matches.reduce((n, m) => n + (m.a ? 1 : 0) + (m.b ? 1
  * countdown would be silly. A player opens the chart, this answers once, and
  * it answers again when they pull to refresh.
  */
-export function bracketView(token) {
-  const t = state.current
+export function bracketView(token, cupId) {
+  if (!state.enabled) return { enabled: false, bracket: null };
+  const t = (cupId && cupById(cupId))
+    || state.cups[0]
     || state.history.find((h) => h.endedAt && now() - h.endedAt < SHOW_RESULT_MS)
     || null;
-  if (!state.enabled || !t) return { enabled: state.enabled, bracket: null };
+  if (!t) return { enabled: true, bracket: null };
   const mine = token ? t.entrants.find((e) => e.token === token) : null;
   return {
     enabled: true,
@@ -259,7 +337,7 @@ function liveMatchFor(t, token) {
 export function ownerView() {
   return {
     enabled: state.enabled,
-    current: state.current ? scrub(state.current) : null,
+    cups: state.cups.map(scrub),
     history: state.history.slice(0, 20).map(scrub),
   };
 }
@@ -323,71 +401,76 @@ function money(v, fallback) {
  * at that second; one announced for Sunday at eight can be turned up for.
  */
 export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCode } = {}) {
-  // A cup already under way cannot be re-opened, but one that has not started
-  // playing yet can be changed. Moving the date used to be refused outright,
-  // which meant cancelling and rebuilding it — and losing everybody who had
-  // already joined — to fix a typo in the hour.
-  const live = state.current;
-  const editable = live && (live.state === 'scheduled' || live.state === 'joining');
-  if (live && !editable && live.state !== 'done') {
-    return { error: 'This cup has already started playing — finish or cancel it first' };
+  if (state.cups.length >= MAX_LIVE_CUPS) {
+    return { error: `That is ${MAX_LIVE_CUPS} cups at once — finish or delete one first` };
   }
-
-  const secs = Math.max(30, Math.min(30 * 86400, Math.floor(Number(joinSeconds) || 300)));
-  const wanted = Number(opensAt) || 0;
-  // A minute's grace, so "in a moment" is not an announcement nobody sees.
-  const scheduled = wanted > now() + 60 * 1000;
-  const opens = scheduled ? wanted : now();
-  const cap = Math.max(0, Math.min(5000, Math.floor(Number(maxPlayers) || 0)));
-  // A code makes a cup invite-only. Empty means anyone signed in may join.
-  const code = String(joinCode ?? '').trim().slice(0, 16);
-
-  if (editable) {
-    live.name = String(name || live.name).slice(0, 40);
-    live.prize = {
-      currency: String(prize?.currency || live.prize.currency).slice(0, 4),
-      first: money(prize?.first, live.prize.first),
-      second: money(prize?.second, live.prize.second),
-      third: money(prize?.third, live.prize.third),
-    };
-    live.maxPlayers = cap;
-    live.joinCode = code;
-    live.openedAt = opens;
-    live.closesAt = opens + secs * 1000;
-    live.state = scheduled ? 'scheduled' : 'joining';
-    save();
-    return { ok: true, updated: true, cup: live };
-  }
-
-  state.current = {
+  const t = {
     id: id(),
     name: String(name || 'MoneyMove Cup').slice(0, 40),
-    state: scheduled ? 'scheduled' : 'joining',
-    prize: {
-      currency: String(prize?.currency || 'USD').slice(0, 4),
-      first: money(prize?.first, 200),
-      second: money(prize?.second, 100),
-      third: money(prize?.third, 50),
-    },
-    // Nought means no limit. A cup with a limit stops taking entries when it
-    // is full, which is the only way to promise a field of a given size.
-    maxPlayers: cap,
-    joinCode: code,
+    state: 'joining',
+    prize: { currency: 'USD', first: 200, second: 100, third: 50 },
+    maxPlayers: 0,
+    joinCode: '',
     announcedAt: now(),
-    openedAt: opens,
-    closesAt: opens + secs * 1000,
+    openedAt: now(),
+    closesAt: now() + 300 * 1000,
     entrants: [],
     rounds: [],
     standings: null,
     paid: {},
   };
+  state.cups.push(t);
+  applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode });
   save();
-  return { ok: true, cup: state.current };
+  return { ok: true, cup: t };
 }
 
-/** Second thoughts: throw the doors open before the announced minute. */
-export function openDoorsNow() {
-  const t = state.current;
+/**
+ * Change a cup that has not started playing: its name, when joining opens,
+ * how long it stays open, the limit, the code, the prizes. Everybody who has
+ * already joined stays joined — moving an hour should not cost you your field.
+ */
+export function updateCup(cupId, settings = {}) {
+  const t = state.cups.find((x) => x.id === cupId);
+  if (!t) return { error: 'No such cup' };
+  if (t.state !== 'scheduled' && t.state !== 'joining') {
+    return { error: 'This one has already started playing' };
+  }
+  applySettings(t, settings);
+  save();
+  return { ok: true, updated: true, cup: t };
+}
+
+/** The settings a cup takes, in one place, so create and edit cannot drift. */
+function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode } = {}) {
+  const secs = Math.max(30, Math.min(30 * 86400, Math.floor(Number(joinSeconds) || 300)));
+  const wanted = Number(opensAt) || 0;
+  // A minute's grace, so "in a moment" is not an announcement nobody sees.
+  const scheduled = wanted > now() + 60 * 1000;
+  const opens = scheduled ? wanted : now();
+
+  if (name != null) t.name = String(name).slice(0, 40);
+  if (prize) {
+    t.prize = {
+      currency: String(prize.currency || t.prize.currency).slice(0, 4),
+      first: money(prize.first, t.prize.first),
+      second: money(prize.second, t.prize.second),
+      third: money(prize.third, t.prize.third),
+    };
+  }
+  // Nought means no limit. A cup with a limit stops taking entries when it is
+  // full, which is the only way to promise a field of a given size.
+  if (maxPlayers != null) t.maxPlayers = Math.max(0, Math.min(5000, Math.floor(Number(maxPlayers) || 0)));
+  // A code makes a cup invite-only. Empty means anyone signed in may join.
+  if (joinCode != null) t.joinCode = String(joinCode).trim().slice(0, 16);
+  t.openedAt = opens;
+  t.closesAt = opens + secs * 1000;
+  t.state = scheduled ? 'scheduled' : 'joining';
+}
+
+/** Second thoughts: let people start joining before the announced minute. */
+export function openDoorsNow(cupId) {
+  const t = state.cups.find((x) => x.id === cupId) || null;
   if (!t || t.state !== 'scheduled') return { error: 'No announced cup to open' };
   const kept = t.closesAt - t.openedAt;   // the window keeps its length
   t.openedAt = now();
@@ -397,19 +480,24 @@ export function openDoorsNow() {
   return { ok: true, cup: t };
 }
 
-export function cancelCup() {
-  if (!state.current) return { error: 'Nothing to cancel' };
-  state.current.state = 'done';
-  state.current.cancelled = true;
-  state.history.unshift(state.current);
-  state.current = null;
+/** Delete a cup. Everyone in it is dropped and nothing is paid. */
+export function cancelCup(cupId) {
+  const i = cupId
+    ? state.cups.findIndex((t) => t.id === cupId)
+    : (state.cups.length ? 0 : -1);
+  if (i < 0) return { error: 'No such cup' };
+  const [t] = state.cups.splice(i, 1);
+  t.state = 'done';
+  t.cancelled = true;
+  t.endedAt = now();
+  state.history.unshift(t);
   save();
-  return { ok: true };
+  return { ok: true, cup: scrub(t) };
 }
 
 /** Mark a placing as settled, so the desk stops asking to pay it twice. */
 export function markPaid(cupId, place) {
-  const cup = state.current?.id === cupId ? state.current : state.history.find((h) => h.id === cupId);
+  const cup = cupById(cupId);
   if (!cup) return { error: 'No such cup' };
   if (!['first', 'second', 'third'].includes(place)) return { error: 'Unknown place' };
   cup.paid ??= {};
@@ -431,18 +519,26 @@ export function markPaid(cupId, place) {
 /** Codes are compared the way people type them: trimmed, any case. */
 const sameCode = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
-export function join(token, code) {
-  const t = state.current;
-  if (!state.enabled || !t) return { error: 'No cup is open' };
+export function join(token, code, cupId) {
+  if (!state.enabled) return { error: 'No cup is open' };
+  const t = cupId ? state.cups.find((x) => x.id === cupId) : state.cups[0];
+  if (!t) return { error: 'No cup is open' };
   if (t.state === 'scheduled') {
-    return { error: 'Not open yet — the doors open at the announced time', notYet: true };
+    return { error: 'Not open yet — joining opens at the announced time', notYet: true };
   }
-  if (t.state !== 'joining') return { error: 'The door has closed on this one' };
+  if (t.state !== 'joining') return { error: 'Joining has closed on this one' };
   // No account at all and an account with no sign-in are the same answer to
   // the person reading it: a prize needs somebody it can actually be paid to.
   const p = profilesByToken(token);
   if (!p || !p.login) return { error: 'Sign in to enter — a prize needs somebody to pay', needsLogin: true };
   if (t.entrants.some((e) => e.token === token)) return { ok: true, already: true, entrants: t.entrants.length };
+  // One cup at a time. Two live cups can draw a table for the same person in
+  // the same minute, and being pulled between two games is nobody's idea of a
+  // tournament. Finish the one you are in, or leave it.
+  const busy = state.cups.find((x) => x.id !== t.id && x.entrants.some((e) => e.token === token && !e.out));
+  if (busy) {
+    return { error: `You are already in "${busy.name}" — leave that one first`, alreadyIn: busy.id };
+  }
   if (t.maxPlayers && t.entrants.length >= t.maxPlayers) {
     return { error: 'This one is full', full: true };
   }
@@ -454,11 +550,13 @@ export function join(token, code) {
   }
   t.entrants.push({ token, code: p.code, name: p.name || 'Player', joinedAt: now() });
   save();
-  return { ok: true, entrants: t.entrants.length };
+  return { ok: true, entrants: t.entrants.length, cupId: t.id };
 }
 
-export function leave(token) {
-  const t = state.current;
+export function leave(token, cupId) {
+  const t = cupId
+    ? state.cups.find((x) => x.id === cupId)
+    : state.cups.find((x) => x.entrants.some((e) => e.token === token));
   if (!t || t.state !== 'joining') return { error: 'Too late to withdraw' };
   const before = t.entrants.length;
   t.entrants = t.entrants.filter((e) => e.token !== token);
@@ -512,15 +610,13 @@ const playedCounts = (t) => {
  * Fewer than two entrants is not a cup; it is one person and a prize, so it
  * is cancelled rather than awarded.
  */
-export function closeDoor() {
-  const t = state.current;
-  if (!t || t.state !== 'joining') return { error: 'Not in the joining state' };
+export function closeDoor(cupId) {
+  const t = cupId
+    ? state.cups.find((x) => x.id === cupId)
+    : state.cups.find((x) => x.state === 'joining');
+  if (!t || t.state !== 'joining') return { error: 'Nothing is taking entries' };
   if (t.entrants.length < 2) {
-    t.state = 'done';
-    t.cancelled = true;
-    t.reason = 'not enough entrants';
-    state.history.unshift(t);
-    state.current = null;
+    retire(t, { cancelled: true, reason: 'not enough entrants' });
     save();
     return { ok: true, cancelled: true };
   }
@@ -547,12 +643,13 @@ function drawRound(t, tokens, kindHint) {
 
 /** Every match in the newest round that still needs a table. */
 export function matchesNeedingRooms() {
-  const t = state.current;
-  if (!t || t.state !== 'running') return [];
   const out = [];
-  for (const r of t.rounds) {
-    for (const m of r.matches) {
-      if (m.state === 'pending' && m.a && m.b) out.push(m);
+  for (const t of state.cups) {
+    if (t.state !== 'running') continue;
+    for (const r of t.rounds) {
+      for (const m of r.matches) {
+        if (m.state === 'pending' && m.a && m.b) out.push(m);
+      }
     }
   }
   return out;
@@ -560,10 +657,11 @@ export function matchesNeedingRooms() {
 
 /** The match a room was made for, if the room is a cup table at all. */
 export function matchByRoom(roomId) {
-  const t = state.current;
-  if (!t || !roomId) return null;
-  for (const r of t.rounds) for (const m of r.matches) {
-    if (m.roomId === roomId && m.state === 'playing') return m.id;
+  if (!roomId) return null;
+  for (const t of state.cups) {
+    for (const r of t.rounds) for (const m of r.matches) {
+      if (m.roomId === roomId && m.state === 'playing') return m.id;
+    }
   }
   return null;
 }
@@ -573,7 +671,7 @@ export function matchByRoom(roomId) {
  * door — a forwarded link must not put a third person in a cup game.
  */
 export function mayPlay(matchId, token) {
-  const t = state.current;
+  const t = cupOfMatch(matchId);
   if (!t) return false;
   for (const r of t.rounds) for (const m of r.matches) {
     if (m.id === matchId) return m.a === token || m.b === token;
@@ -583,7 +681,7 @@ export function mayPlay(matchId, token) {
 
 /** The server made a table for this match; remember where it is. */
 export function matchStarted(matchId, roomId) {
-  const t = state.current;
+  const t = cupOfMatch(matchId);
   if (!t) return;
   for (const r of t.rounds) for (const m of r.matches) {
     if (m.id === matchId) {
@@ -602,7 +700,7 @@ export function matchStarted(matchId, roomId) {
  * write the standings.
  */
 export function matchFinished(roomId, winnerToken, worth = null) {
-  const t = state.current;
+  const t = cupOfRoom(roomId);
   if (!t || t.state !== 'running') return null;
   const found = liveMatchInRoom(t, roomId);
   if (!found) return null;
@@ -630,7 +728,7 @@ export function matchFinished(roomId, winnerToken, worth = null) {
  * out and the bracket carries on a place short. Pass null for that.
  */
 export function forfeit(roomId, winnerToken = null) {
-  const t = state.current;
+  const t = cupOfRoom(roomId);
   if (!t || t.state !== 'running') return null;
   const found = liveMatchInRoom(t, roomId);
   if (!found) return null;
@@ -642,12 +740,13 @@ export function forfeit(roomId, winnerToken = null) {
 
 /** Every playing match, with the time its table opened. For the sweeper. */
 export function playingMatches() {
-  const t = state.current;
-  if (!t || t.state !== 'running') return [];
   const out = [];
-  for (const r of t.rounds) for (const m of r.matches) {
-    if (m.state === 'playing' && m.roomId) {
-      out.push({ id: m.id, roomId: m.roomId, a: m.a, b: m.b, startedAt: m.startedAt || 0 });
+  for (const t of state.cups) {
+    if (t.state !== 'running') continue;
+    for (const r of t.rounds) for (const m of r.matches) {
+      if (m.state === 'playing' && m.roomId) {
+        out.push({ id: m.id, roomId: m.roomId, a: m.a, b: m.b, startedAt: m.startedAt || 0 });
+      }
     }
   }
   return out;
@@ -728,10 +827,7 @@ function finish(t, soleWinner = null) {
     t.standings = { first: entrantCard(t, soleWinner), second: null, third: null };
     const e = t.entrants.find((x) => x.token === soleWinner);
     if (e) e.placed = 'first';
-    t.state = 'done';
-    t.endedAt = now();
-    state.history.unshift(t);
-    state.current = null;
+    retire(t);
     save();
     return;
   }
@@ -756,21 +852,22 @@ function finish(t, soleWinner = null) {
     const e = t.entrants.find((x) => x.token === who);
     if (e) e.placed = place;
   }
-  t.state = 'done';
-  t.endedAt = now();
-  state.history.unshift(t);
-  state.current = null;
+  retire(t);
   save();
+}
+
+/** A cup's last act: off the live list, on to the history, with a reason. */
+function retire(t, extra = {}) {
+  Object.assign(t, extra, { state: 'done', endedAt: now() });
+  const i = state.cups.indexOf(t);
+  if (i >= 0) state.cups.splice(i, 1);
+  state.history.unshift(t);
 }
 
 /** A cup nobody finished. Recorded honestly rather than awarded to anyone. */
 function abandon(t) {
   t.standings = { first: null, second: null, third: null };
-  t.abandoned = true;
-  t.state = 'done';
-  t.endedAt = now();
-  state.history.unshift(t);
-  state.current = null;
+  retire(t, { abandoned: true });
   save();
 }
 
@@ -781,16 +878,22 @@ const entrantCard = (t, token) => {
 
 /** Housekeeping the server calls on a timer: shut the door when time is up. */
 export function tick() {
-  const t = state.current;
-  if (!state.enabled || !t) return { closed: false };
-  // An announced cup opens itself at the appointed minute.
-  if (t.state === 'scheduled' && now() >= t.openedAt) {
-    t.state = 'joining';
-    save();
-    console.log(`cup: "${t.name}" doors opened on schedule`);
+  if (!state.enabled) return { closed: false };
+  let closed = false;
+  // Each cup keeps its own clock: one opens itself at the appointed minute,
+  // another shuts its list and draws, and they do not wait for each other.
+  for (const t of [...state.cups]) {
+    if (t.state === 'scheduled' && now() >= t.openedAt) {
+      t.state = 'joining';
+      save();
+      console.log(`cup: "${t.name}" opened for joining on schedule`);
+    }
+    if (t.state === 'joining' && now() >= t.closesAt) {
+      closeDoor(t.id);
+      closed = true;
+    }
   }
-  if (t.state === 'joining' && now() >= t.closesAt) return { closed: true, ...closeDoor() };
-  return { closed: false };
+  return { closed };
 }
 
 /** Old finished cups stop being interesting; the list is not a ledger. */
@@ -802,4 +905,5 @@ export function prune() {
 }
 
 export const isEnabled = () => state.enabled;
-export const currentCup = () => state.current;
+/** The first cup still going. Handy when there is only one, which is usual. */
+export const currentCup = () => state.cups[0] || null;

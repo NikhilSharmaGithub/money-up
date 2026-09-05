@@ -16,6 +16,21 @@ import SwiftUI
 struct CupFeed: Decodable, Equatable {
     var enabled: Bool?
     var cup: Cup?
+    /// The cups this card is not showing — a row each, enough to tell them
+    /// apart and to choose one.
+    var others: [Other] = []
+
+    struct Other: Decodable, Equatable, Identifiable {
+        var id: String
+        var name: String
+        var state: String
+        var openedAt: Double?
+        var closesAt: Double?
+        var entrants: Int
+        var maxPlayers: Int = 0
+        var joined: Bool = false
+        var needsCode: Bool = false
+    }
 
     struct Cup: Decodable, Equatable {
         var id: String
@@ -111,6 +126,9 @@ final class CupWatch: ObservableObject {
 
     private weak var store: GameStore?
     private var task: Task<Void, Never>?
+    /// Which cup the card is showing. Blank lets the server pick the one that
+    /// matters most to this reader — see publicView.
+    private(set) var showing = ""
     /// The table this device has already been sent to. A player walks into
     /// their first table without hunting for it, but only once — coming back
     /// out of a game must not throw them straight back in.
@@ -156,10 +174,19 @@ final class CupWatch: ObservableObject {
     @discardableResult private func load() async -> Bool {
         guard let store else { return false }
         guard let fresh: CupFeed = try? await store.fetchJSON(
-            "/api/cup?token=\(store.token)", raw: true) else { return false }
+            "/api/cup?token=\(store.token)&show=\(showing)", raw: true) else { return false }
         feed = fresh
+        // Follow whatever came back, so joining and the chart always act on
+        // the cup being looked at.
+        if let id = fresh.cup?.id { showing = id }
         openTable(fresh.enabled == true ? fresh.cup?.you.roomId : nil)
         return true
+    }
+
+    /// Look at one of the other cups instead.
+    func show(_ cupId: String) {
+        showing = cupId
+        Task { await load() }
     }
 
     func enter(code: String = "") async {
@@ -169,7 +196,8 @@ final class CupWatch: ObservableObject {
         struct Reply: Decodable { var ok: Bool?; var error: String?; var needsLogin: Bool? }
         let reply: Reply? = try? await store.fetchJSON(
             "/api/cup/join", method: "POST",
-            body: ["token": store.token, "code": code.trimmingCharacters(in: .whitespaces)])
+            body: ["token": store.token, "code": code.trimmingCharacters(in: .whitespaces),
+                   "cupId": showing])
         if reply?.ok == true {
             Haptics.turn()
             store.showToast("Joined — good luck")
@@ -185,7 +213,7 @@ final class CupWatch: ObservableObject {
         defer { busy = false }
         struct Reply: Decodable { var ok: Bool? }
         let _: Reply? = try? await store.fetchJSON(
-            "/api/cup/leave", method: "POST", body: ["token": store.token])
+            "/api/cup/leave", method: "POST", body: ["token": store.token, "cupId": showing])
         await load()
     }
 
@@ -331,6 +359,7 @@ struct CupCard: View {
                 prizes(cup, P)
                 note("Come back then — joining takes one tap.", tone: P.ink3, P)
                 moreButton("What is a cup?", .question, chart: false, P)
+                otherCups(P)
             }
         }
     }
@@ -424,6 +453,7 @@ struct CupCard: View {
                     }
                     moreButton("What is a cup?", .question, chart: false, P)
                 }
+                otherCups(P)
             }
         }
     }
@@ -452,6 +482,7 @@ struct CupCard: View {
                     .buttonStyle(MMButtonStyle(kind: .primary))
                 }
                 moreButton("See the chart", .chart, chart: true, P)
+                otherCups(P)
             }
         }
     }
@@ -479,6 +510,7 @@ struct CupCard: View {
                     }
                     moreButton("See the chart", .chart, chart: true, P)
                 }
+                otherCups(P)
             }
         }
     }
@@ -626,6 +658,69 @@ struct CupCard: View {
         FlowDots(count: min(matches.count, 60),
                  live: matches.prefix(60).map { $0.state != "done" },
                  onColor: P.gold, offColor: P.rule2)
+    }
+
+    /// The cups this card is not showing. A screen has room for one card and
+    /// a person can be interested in more than one cup.
+    @ViewBuilder private func otherCups(_ P: Palette) -> some View {
+        let others = watch.feed?.others ?? []
+        if !others.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Divider().overlay(P.rule)
+                Text("ALSO ON")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .kerning(1)
+                    .foregroundStyle(P.ink3)
+                ForEach(others) { o in
+                    Button {
+                        Haptics.tap()
+                        watch.show(o.id)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 7) {
+                                Text(o.name)
+                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                    .foregroundStyle(P.ink)
+                                    .lineLimit(1)
+                                if o.joined {
+                                    Text("JOINED")
+                                        .font(.system(size: 8.5, weight: .black, design: .rounded))
+                                        .kerning(0.6)
+                                        .foregroundStyle(P.good)
+                                }
+                                Spacer(minLength: 4)
+                            }
+                            Text(otherLine(o))
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 9)
+                        .padding(.horizontal, 11)
+                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .stroke(P.rule, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    private func otherLine(_ o: CupFeed.Other) -> String {
+        let count = o.maxPlayers > 0 ? "\(o.entrants)/\(o.maxPlayers)" : "\(o.entrants)"
+        let code = o.needsCode ? " · invite only" : ""
+        switch o.state {
+        case "scheduled":
+            let left = ((o.openedAt ?? 0) / 1000) - Date().timeIntervalSince1970
+            return "opens in \(longCountdown(left)) · \(count)\(code)"
+        case "joining":
+            let left = ((o.closesAt ?? 0) / 1000) - Date().timeIntervalSince1970
+            return "closes in \(longCountdown(left)) · \(count)\(code)"
+        case "running": return "being played · \(count)"
+        default: return "finished"
+        }
     }
 
     private func note(_ text: String, tone: Color, _ P: Palette) -> some View {

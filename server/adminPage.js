@@ -223,6 +223,24 @@ export const adminPageHTML = `<!doctype html>
     font-size: 20px; font-weight: 800; color: #e8b52e;
     font-family: ui-monospace, monospace; letter-spacing: 2px;
   }
+  /* One card per cup, and the one you are editing wears the highlight. */
+  .cupcard {
+    padding: 11px 13px; margin-bottom: 8px; border-radius: 12px; cursor: pointer;
+    background: rgba(255, 255, 255, .02); border: 1px solid rgba(255, 255, 255, .07);
+  }
+  .cupcard:hover { border-color: rgba(232, 181, 46, .4); }
+  .cupcard.on { background: rgba(232, 181, 46, .08); border-color: #e8b52e; }
+  .cupcard-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .cupcard-top b { font-size: 14px; color: #dfe7e0; }
+  .cupcard .caption { margin-top: 3px; }
+  .cupstate {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 99px; color: #93a396;
+    background: rgba(255, 255, 255, .05);
+  }
+  .cupstate.joining { color: #7ee2a8; background: rgba(126, 226, 168, .12); }
+  .cupstate.running { color: #e8b52e; background: rgba(232, 181, 46, .14); }
+  .cupstate.scheduled { color: #9fc4e8; background: rgba(159, 196, 232, .12); }
   .cuplist { margin-top: 8px; max-height: 320px; overflow: auto; }
   .cuprow {
     display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
@@ -533,8 +551,14 @@ export const adminPageHTML = `<!doctype html>
       <div class="msg" id="cupmsg"></div>
     </section>
     <div class="cards">
+      <div class="card" style="grid-column:1 / -1">
+        <h2>Your cups</h2>
+        <p class="hint">Up to six at once. Pick one to edit it below, or start a new one.</p>
+        <div id="cuplistall"></div>
+        <div style="margin-top:12px"><button class="btn sm" id="cup-new">＋ New cup</button></div>
+      </div>
       <div class="card">
-        <h2>Set up a cup</h2>
+        <h2 id="cup-formtitle">Set up a cup</h2>
         <p class="hint">Three things decide a cup: when players can start joining, how long joining stays open, and what the winners get. Save it once and you can change any of it — the date included — right up until the games start.</p>
         <div class="mini-forms">
           <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
@@ -2541,7 +2565,11 @@ export const adminPageHTML = `<!doctype html>
   // The button's own label follows the situation: nothing exists yet, or
   // there is something to save changes to.
   function cupButtonLabels() {
-    var running = state.cup && state.cup.current;
+    var running = (!cupMakingNew && cupPicked)
+      ? ((state.cup && state.cup.cups) || []).find(function (x) { return x.id === cupPicked; })
+      : null;
+    var title = document.getElementById('cup-formtitle');
+    if (title) title.textContent = running ? 'Editing "' + running.name + '"' : 'Set up a new cup';
     var save = document.getElementById('cup-open');
     if (save) save.textContent = running ? 'Save changes' : 'Save this cup';
     var early = document.getElementById('cup-now');
@@ -2552,13 +2580,40 @@ export const adminPageHTML = `<!doctype html>
     if (del) del.style.display = running ? '' : 'none';
   }
 
+  // Clicking a cup in the list points the form and the live panel at it.
+  document.addEventListener('click', function (e) {
+    var pick = e.target.closest && e.target.closest('[data-cup-pick]');
+    if (!pick) return;
+    cupMakingNew = false;
+    cupPicked = pick.getAttribute('data-cup-pick');
+    cupFormFilled = '';
+    if (state.cup) renderCup();
+  });
+  var cupNewBtn = document.getElementById('cup-new');
+  if (cupNewBtn) cupNewBtn.addEventListener('click', function () {
+    // An empty form makes a new cup rather than changing the one on screen.
+    cupMakingNew = true;
+    cupPicked = '';
+    cupFormFilled = 'new';
+    ['cup-when', 'cup-code'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    var name = document.getElementById('cup-name');
+    if (name) { name.value = 'MoneyMove Cup'; name.focus(); name.select(); }
+    cupButtonLabels();
+    cupWhenNote();
+    var list = document.getElementById('cuplistall');
+    if (list) list.querySelectorAll('.cupcard.on').forEach(function (el) { el.classList.remove('on'); });
+  });
+
   var cupOpenBtn = document.getElementById('cup-open');
   if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
     var mins = Math.max(1, Number(document.getElementById('cup-mins').value) || 5);
     var cap = Math.max(0, Number(document.getElementById('cup-max').value) || 0);
     var code = (document.getElementById('cup-code').value || '').trim();
     var when = cupWhenMs();
-    var running = state.cup && state.cup.current;
+    var running = cupPicked ? (state.cup.cups || []).find(function (x) { return x.id === cupPicked; }) : null;
     var ask = running
       ? 'Save these changes to "' + running.name + '"?' + NL + NL +
         'Everyone who has already joined stays joined.'
@@ -2569,7 +2624,8 @@ export const adminPageHTML = `<!doctype html>
         : 'Open joining now, for ' + mins + ' minutes?' + NL + NL +
           'When it closes, everyone who joined is paired off and the games start.';
     if (!confirm(ask)) return;
-    cupPost('open', {
+    cupPost(running ? 'update' : 'open', {
+      cupId: running ? running.id : '',
       name: document.getElementById('cup-name').value,
       joinSeconds: mins * 60,
       opensAt: when,
@@ -2586,17 +2642,17 @@ export const adminPageHTML = `<!doctype html>
   var cupNowBtn = document.getElementById('cup-now');
   if (cupNowBtn) cupNowBtn.addEventListener('click', function () {
     if (!confirm('Let people start joining right now, ahead of the date?')) return;
-    cupPost('openNow', {});
+    cupPost('openNow', { cupId: cupPicked });
   });
   var cupCloseBtn = document.getElementById('cup-close');
   if (cupCloseBtn) cupCloseBtn.addEventListener('click', function () {
     if (!confirm('Stop people joining now and start the games?')) return;
-    cupPost('close', {});
+    cupPost('close', { cupId: cupPicked });
   });
   var cupCancelBtn = document.getElementById('cup-cancel');
   if (cupCancelBtn) cupCancelBtn.addEventListener('click', function () {
     if (!confirm('Delete this cup?' + NL + NL + 'Everyone who joined is dropped and nothing is paid.')) return;
-    cupPost('cancel', {});
+    cupPost('cancel', { cupId: cupPicked });
   });
 
   document.getElementById('pf-real').addEventListener('click', function () { setOnlyReal(true); });
@@ -2770,6 +2826,9 @@ export const adminPageHTML = `<!doctype html>
       var msg = document.getElementById('cupmsg');
       if (d && d.error) { if (msg) { msg.textContent = d.error; msg.className = 'msg bad'; } return; }
       if (msg) { msg.textContent = 'Done.'; msg.className = 'msg good'; }
+      // A cup that was just made becomes the one the desk is looking at.
+      if (d && d.cup && d.cup.id) { cupMakingNew = false; cupPicked = d.cup.id; cupFormFilled = ''; }
+      if (action === 'cancel') { cupMakingNew = false; cupPicked = ''; cupFormFilled = ''; }
       if (d && d.view) { state.cup = d.view; renderCup(); }
     });
   }
@@ -2826,13 +2885,45 @@ export const adminPageHTML = `<!doctype html>
     cupWhenNote();
   }
 
+  /** Which cup the form and the live panel are looking at. */
+  var cupPicked = '';
+  /** True while the form is being used to make a new one rather than edit an
+   *  existing cup — the five-second refresh must not drag it back. */
+  var cupMakingNew = false;
+  var cupState = { scheduled: 'Waiting for its time', joining: 'Open for joining',
+    running: 'Games in progress', done: 'Finished' };
+
   function renderCup() {
     var v = state.cup;
     if (!v) { swap('cuptiles', tileHtml('—', 'tournaments', 'loading')); return; }
-    var c = v.current;
+    var cups = v.cups || [];
+    // Stay on the cup you were looking at; fall back to the first. Unless a
+    // new one is being written, in which case leave the form alone.
+    if (!cupMakingNew && !cups.some(function (x) { return x.id === cupPicked; })) {
+      cupPicked = cups.length ? cups[0].id : '';
+      cupFormFilled = '';
+    }
+    var c = cupMakingNew ? null : (cups.find(function (x) { return x.id === cupPicked; }) || null);
     fillCupForm(c);
     if (!c) cupFormFilled = '';
     cupButtonLabels();
+
+    // Every cup, one to a row, with what it is doing and when.
+    swap('cuplistall', cups.length
+      ? cups.map(function (x) {
+        var when = x.state === 'scheduled' ? 'opens ' + new Date(x.openedAt).toLocaleString()
+          : x.state === 'joining' ? 'closes ' + new Date(x.closesAt).toLocaleString()
+            : x.state === 'running' ? (x.rounds.length + ' rounds drawn') : '';
+        return '<div class="cupcard' + (x.id === cupPicked ? ' on' : '') + '" data-cup-pick="' + esc(x.id) + '">' +
+          '<div class="cupcard-top"><b>' + esc(x.name) + '</b>' +
+          '<span class="cupstate ' + esc(x.state) + '">' + esc(cupState[x.state] || x.state) + '</span></div>' +
+          '<div class="caption">' + esc(when) + ' · ' + x.entrants.length +
+          (x.maxPlayers ? ' of ' + x.maxPlayers : '') + ' joined' +
+          (x.joinCode ? ' · code ' + esc(x.joinCode) : '') + '</div>' +
+          '</div>';
+      }).join('')
+      : '<div class="caption">No cups yet. Press <b>New cup</b> and fill in the form below.</div>');
+
     var live = !c ? 'NONE'
       : c.state === 'scheduled' ? 'ANNOUNCED'
         : c.state === 'joining' ? 'JOINING OPEN'
@@ -2840,12 +2931,12 @@ export const adminPageHTML = `<!doctype html>
     swap('cuptiles',
       tileHtml(v.enabled ? 'CUPS ON' : 'CUPS OFF', 'tournaments',
         !v.enabled ? 'hidden everywhere'
-          : c ? (c.state === 'scheduled' ? 'announced — players are counting down' : 'players can see this one')
-            : 'on, but nothing is open yet') +
-      tileHtml(live, 'right now', c ? esc(c.name) : 'no cup open') +
+          : cups.length ? (cups.length === 1 ? 'players can see it' : cups.length + ' cups running')
+            : 'on, but no cup made yet') +
+      tileHtml(live, 'looking at', c ? esc(c.name) : 'no cup made') +
       tileHtml(c ? fmtNum(c.entrants.length) + (c.maxPlayers ? ' / ' + c.maxPlayers : '') : '0',
         'joined', c && c.maxPlayers ? 'limit set' : 'signed-in players') +
-      tileHtml(c ? String(c.rounds.length) : '0', 'rounds drawn', '') +
+      tileHtml(String(cups.length), 'cups', 'live right now') +
       tileHtml(fmtNum(v.history.length), 'finished', 'kept for a while'));
 
     swap('cupswitch', '<div class="field"><label>Cup master switch</label>' +

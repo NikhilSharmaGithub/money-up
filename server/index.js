@@ -222,7 +222,10 @@ app.get('/api/achievements', (req, res) => {
 // Hidden entirely until the owner switches it on: a client that asks a server
 // with cups off gets `enabled: false` and draws nothing at all.
 app.get('/api/cup', (req, res) => {
-  res.json(cup.publicView(String(req.query.token || '').slice(0, 64)));
+  // `show` names which cup the client is looking at; without it the server
+  // picks the one that matters most to this reader — see publicView.
+  res.json(cup.publicView(String(req.query.token || '').slice(0, 64),
+    String(req.query.show || '').slice(0, 12)));
 });
 
 /**
@@ -230,19 +233,22 @@ app.get('/api/cup', (req, res) => {
  * see bracketView for why.
  */
 app.get('/api/cup/bracket', (req, res) => {
-  res.json(cup.bracketView(String(req.query.token || '').slice(0, 64)));
+  res.json(cup.bracketView(String(req.query.token || '').slice(0, 64),
+    String(req.query.cup || '').slice(0, 12)));
 });
 
 app.post('/api/cup/join', (req, res) => {
   const result = cup.join(String(req.body?.token || '').slice(0, 64),
-    String(req.body?.code || '').slice(0, 32));
+    String(req.body?.code || '').slice(0, 32),
+    String(req.body?.cupId || '').slice(0, 12));
   if (result.needsLogin) return res.status(401).json(result);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
 
 app.post('/api/cup/leave', (req, res) => {
-  const result = cup.leave(String(req.body?.token || '').slice(0, 64));
+  const result = cup.leave(String(req.body?.token || '').slice(0, 64),
+    String(req.body?.cupId || '').slice(0, 12));
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
@@ -698,6 +704,18 @@ const adminBodyGuard = (req, res) => {
 // ---- the cup, from the owner's side --------------------------------------
 // Everything here is one POST with the key in the body, like every other
 // admin action. The read is folded into the dashboard's own state below.
+/** The settings the desk sends, whether it is making a cup or changing one. */
+const cupSettings = (body = {}) => ({
+  name: body.name,
+  joinSeconds: body.joinSeconds,
+  prize: body.prize,
+  // Epoch milliseconds. The desk sends an absolute instant rather than a
+  // wall-clock string, so the server never has to guess a timezone.
+  opensAt: body.opensAt,
+  maxPlayers: body.maxPlayers,
+  joinCode: body.joinCode,
+});
+
 app.post('/api/admin/cup', (req, res) => {
   if (!adminBodyGuard(req, res)) return;
   const { action } = req.body || {};
@@ -711,34 +729,25 @@ app.post('/api/admin/cup', (req, res) => {
       audit('cup', 'switch', `tournaments ${result.enabled ? 'ON' : 'off'}`);
       break;
     case 'open':
-      result = cup.openCup({
-        name: req.body.name,
-        joinSeconds: req.body.joinSeconds,
-        prize: req.body.prize,
-        // Epoch milliseconds. The desk sends an absolute instant rather than
-        // a wall-clock string, so the server never has to guess a timezone.
-        opensAt: req.body.opensAt,
-        maxPlayers: req.body.maxPlayers,
-        joinCode: req.body.joinCode,
-      });
-      if (result.ok) {
-        const what = result.updated ? 'changed' : result.cup.state === 'scheduled' ? 'announced' : 'opened';
-        audit('cup', result.cup.id, `${what} "${result.cup.name}" — ${result.cup.state === 'scheduled'
-          ? `registration opens ${new Date(result.cup.openedAt).toISOString()}`
-          : `registration open for ${Math.round((result.cup.closesAt - Date.now()) / 60000)} min`}`);
-      }
+      result = cup.openCup(cupSettings(req.body));
+      if (result.ok) audit('cup', result.cup.id, `made "${result.cup.name}"`);
+      break;
+    case 'update':
+      result = cup.updateCup(String(req.body.cupId || ''), cupSettings(req.body));
+      if (result.ok) audit('cup', result.cup.id, `changed "${result.cup.name}"`);
       break;
     case 'openNow':
-      result = cup.openDoorsNow();
-      if (result.ok) audit('cup', 'doors', 'opened early, by hand');
+      result = cup.openDoorsNow(String(req.body.cupId || ''));
+      if (result.ok) audit('cup', result.cup.id, 'opened joining early, by hand');
       break;
     case 'close':
-      result = cup.closeDoor();
+      result = cup.closeDoor(String(req.body.cupId || ''));
       if (result.ok) audit('cup', 'doors', result.cancelled ? 'closed with too few entrants' : `closed — ${result.matches} tables`);
+      if (result.ok) seatCupMatches();
       break;
     case 'cancel':
-      result = cup.cancelCup();
-      if (result.ok) audit('cup', 'cancel', 'cup cancelled by the owner');
+      result = cup.cancelCup(String(req.body.cupId || ''));
+      if (result.ok) audit('cup', result.cup?.id || 'cup', `deleted "${result.cup?.name || ''}"`);
       break;
     case 'paid':
       result = cup.markPaid(req.body.cupId, req.body.place);

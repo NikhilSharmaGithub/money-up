@@ -2017,7 +2017,7 @@ console.log('\n▶ tournaments');
   cup.setEnabled(true);
 
   const runCup = (n, { pick = (a) => a } = {}) => {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: `${n} up`, joinSeconds: 60 });
     const tokens = [];
     for (let i = 0; i < n; i++) {
@@ -2114,7 +2114,7 @@ console.log('\n▶ tournaments');
       return token;
     };
     // One player turns up, the other does not: a walkover, and the cup goes on.
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Walkover', joinSeconds: 60 });
     const four = [0, 1, 2, 3].map((i) => ({ token: enter('w', i), name: `NS${i}` }));
     cup.closeDoor();
@@ -2162,7 +2162,7 @@ console.log('\n▶ tournaments');
   // The chart: every round, named the way people name them, with the reader's
   // own match marked so a client can find it in a hundred-card column.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Chart', joinSeconds: 60 });
     const tokens = [];
     for (let i = 0; i < 8; i++) {
@@ -2210,7 +2210,7 @@ console.log('\n▶ tournaments');
   // A cup can be announced for later: everybody sees it and counts down to
   // it, and nobody gets in until the doors actually open.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     const soon = Date.now() + 3 * 60 * 60 * 1000;
     cup.openCup({ name: 'Sunday Cup', joinSeconds: 600, opensAt: soon });
     const t = cup.currentCup();
@@ -2231,7 +2231,7 @@ console.log('\n▶ tournaments');
 
     // Second thoughts: the doors can be thrown open early, and the window
     // keeps the length it was given.
-    const now = cup.openDoorsNow();
+    const now = cup.openDoorsNow(cup.currentCup()?.id);
     if (!now.ok) fail('cup: an announced cup could not be opened early');
     const t2 = cup.currentCup();
     if (t2?.state !== 'joining') fail('cup: opening early did not open the doors');
@@ -2240,7 +2240,7 @@ console.log('\n▶ tournaments');
     }
     if (!cup.join('early-bird').ok) fail('cup: the doors were open and still refused an entry');
     // And a cup opened without a time still opens on the spot.
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Right now', joinSeconds: 60 });
     if (cup.currentCup()?.state !== 'joining') fail('cup: a cup with no announced time did not open');
     ok('a cup can be announced for later, is visible while it waits, refuses entries until it opens, and can be opened early');
@@ -2249,9 +2249,9 @@ console.log('\n▶ tournaments');
   // An announced cup can be edited without losing the people already in it —
   // moving the hour used to mean deleting the cup and starting again.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'First go', joinSeconds: 300, opensAt: Date.now() + 3 * 3600 * 1000 });
-    cup.openDoorsNow();
+    cup.openDoorsNow(cup.currentCup()?.id);
     for (let i = 0; i < 3; i++) {
       const token = `edit-${i}`;
       social.profileFor(token, { name: `E${i}` });
@@ -2259,7 +2259,8 @@ console.log('\n▶ tournaments');
       cup.join(token);
     }
     const later = Date.now() + 5 * 86400 * 1000;
-    const moved = cup.openCup({ name: 'Second thoughts', joinSeconds: 900, opensAt: later, maxPlayers: 8 });
+    const moved = cup.updateCup(cup.currentCup().id,
+      { name: 'Second thoughts', joinSeconds: 900, opensAt: later, maxPlayers: 8 });
     if (!moved.ok || !moved.updated) fail('cup: a cup that had not started playing could not be changed');
     const t = cup.currentCup();
     if (t?.name !== 'Second thoughts') fail('cup: the new name did not stick');
@@ -2269,8 +2270,8 @@ console.log('\n▶ tournaments');
     if (t?.entrants.length !== 3) fail('cup: editing a cup threw away the people who had joined');
 
     // A limit means full is full.
-    cup.openDoorsNow();
-    cup.openCup({ name: 'Second thoughts', joinSeconds: 900, maxPlayers: 4 });
+    cup.openDoorsNow(cup.currentCup().id);
+    cup.updateCup(cup.currentCup().id, { name: 'Second thoughts', joinSeconds: 900, maxPlayers: 4 });
     for (let i = 3; i < 6; i++) {
       const token = `edit-${i}`;
       social.profileFor(token, { name: `E${i}` });
@@ -2284,7 +2285,7 @@ console.log('\n▶ tournaments');
 
     // A cup that is already being played cannot be edited out from under it.
     cup.closeDoor();
-    const tooLate = cup.openCup({ name: 'No', joinSeconds: 300 });
+    const tooLate = cup.updateCup(cup.currentCup().id, { name: 'No', joinSeconds: 300 });
     if (!tooLate.error) fail('cup: a cup whose games had started was still editable');
     ok('a cup can be edited — name, date, window, limit — until its games start, and a limit means full is full');
   }
@@ -2292,7 +2293,7 @@ console.log('\n▶ tournaments');
   // An invite-only cup: the code is the invitation, so the code must never
   // travel to the people who do not have it.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Invite only', joinSeconds: 300, joinCode: ' Sunday ' });
     const enter = (i) => {
       const token = `code-${i}`;
@@ -2315,19 +2316,69 @@ console.log('\n▶ tournaments');
     if (player.toLowerCase().includes('sunday')) fail('cup: the join code reached a player view');
     if (cup.publicView(c).cup?.needsCode !== true) fail('cup: players were not told a code is needed');
     // The owner does need it, to share it.
-    if (cup.ownerView().current?.joinCode !== 'Sunday') fail('cup: the owner cannot see the code they set');
+    if (cup.ownerView().cups[0]?.joinCode !== 'Sunday') fail('cup: the owner cannot see the code they set');
 
     // Clearing it opens the cup to everyone again.
-    cup.openCup({ name: 'Invite only', joinSeconds: 300, joinCode: '' });
+    cup.updateCup(cup.currentCup().id, { joinCode: '' });
     if (!cup.join(c).ok) fail('cup: clearing the code did not open the cup');
     if (cup.publicView(c).cup?.needsCode !== false) fail('cup: an open cup still claimed to need a code');
     ok('a coded cup takes the code any way it is typed, refuses without it, and never shows it to a player');
   }
 
+  // Several cups at once: they keep their own entrants, their own clocks and
+  // their own brackets, and a player is only ever in one of them.
+  {
+    while (cup.currentCup()) cup.cancelCup();
+    const sunday = cup.openCup({ name: 'Sunday', joinSeconds: 600 }).cup;
+    const friday = cup.openCup({ name: 'Friday', joinSeconds: 600,
+      opensAt: Date.now() + 2 * 86400 * 1000, joinCode: 'LATE' }).cup;
+    if (cup.liveCups().length !== 2) fail('cup: two cups did not both stay live');
+    if (friday.state !== 'scheduled') fail('cup: the second cup did not keep its own schedule');
+    if (sunday.state !== 'joining') fail('cup: making a second cup disturbed the first');
+
+    const who = (i) => {
+      const token = `many-${i}`;
+      social.profileFor(token, { name: `M${i}` });
+      social.attachLogin(token, 'test', `mn-${i}`, `M${i}`);
+      return token;
+    };
+    const a = who(0), b = who(1);
+    if (!cup.join(a, '', sunday.id).ok) fail('cup: could not join a named cup');
+    // One cup at a time: the second is refused while the first still has them.
+    cup.openDoorsNow(friday.id);
+    const both = cup.join(a, 'LATE', friday.id);
+    if (!both.alreadyIn) fail('cup: a player was let into two live cups at once');
+    cup.leave(a, sunday.id);
+    if (!cup.join(a, 'LATE', friday.id).ok) fail('cup: leaving one cup did not free the player for another');
+    // Entrants belong to their own cup.
+    if (!cup.join(b, '', sunday.id).ok) fail('cup: the other cup would not take anybody');
+    if (sunday.entrants.length !== 1 || friday.entrants.length !== 1) {
+      fail('cup: the two cups shared their entrants');
+    }
+    // The card picks the one that matters to the reader, and lists the rest.
+    const seenByA = cup.publicView(a);
+    if (seenByA.cup?.name !== 'Friday') fail('cup: the card did not lead with the cup this player is in');
+    if (seenByA.others.length !== 1 || seenByA.others[0].name !== 'Sunday') {
+      fail('cup: the other cup was not offered alongside');
+    }
+    if (seenByA.others[0].joined) fail('cup: a cup this player had left still read as joined');
+    // And it can be asked for a particular one.
+    if (cup.publicView(a, sunday.id).cup?.name !== 'Sunday') fail('cup: the card would not switch cups');
+
+    // Closing one draws only its own bracket.
+    cup.closeDoor(friday.id);
+    if (friday.state !== 'done') fail('cup: a one-entrant cup was not cancelled when its list closed');
+    if (sunday.state !== 'joining') fail('cup: closing one cup disturbed the other');
+    // Deleting names its cup.
+    const gone = cup.cancelCup(sunday.id);
+    if (!gone.ok || cup.liveCups().length !== 0) fail('cup: deleting a named cup did not remove it');
+    ok('two cups run side by side with their own clocks, entrants and brackets, and a player is in one at a time');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Result', joinSeconds: 60 });
     const tokens = [0, 1].map((i) => {
       const token = `result-${i}`;
@@ -2357,7 +2408,7 @@ console.log('\n▶ tournaments');
   // The door: shut to anyone who has not signed in, and shut to everyone once
   // the cup is under way.
   {
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.openCup({ name: 'Door', joinSeconds: 60 });
     const anon = cup.join('nobody-at-all');
     if (!anon.needsLogin) fail('cup: a signed-out player was not asked to sign in');
@@ -2380,7 +2431,7 @@ console.log('\n▶ tournaments');
     if (view.enabled || view.cup) fail('cup: a switched-off cup was still visible to a player');
     if (!cup.join('door-1').error) fail('cup: a switched-off cup still took entries');
     cup.setEnabled(true);
-    cup.cancelCup();
+    while (cup.currentCup()) cup.cancelCup();
     cup.setEnabled(false);
     ok('with the switch off there is no cup to see and no door to knock on');
   }

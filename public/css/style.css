@@ -844,6 +844,25 @@ select { cursor: pointer; }
 }
 .cup-code input::placeholder { letter-spacing: 1.5px; color: var(--ink-3); }
 .cup-code .btn { flex: none; }
+/* The cups this card is not showing, one row each. */
+.cup-others { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 11px; }
+.cup-others-head {
+  font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: 7px;
+}
+.cup-other {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 9px 11px; margin-bottom: 6px; border-radius: 11px; cursor: pointer;
+  background: var(--paper-2); border: 1px solid var(--rule); color: inherit;
+  font: inherit;
+}
+.cup-other:hover { border-color: var(--gold); }
+.co-name { font-size: 13px; font-weight: 800; color: var(--ink); }
+.co-name i {
+  font-style: normal; font-size: 9.5px; font-weight: 850; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--good); margin-left: 7px;
+}
+.co-when { font-size: 11.5px; color: var(--ink-2); }
 .cup-run {
   margin-top: 10px; font-size: 11.5px; color: var(--ink-2);
   display: flex; align-items: center; gap: 5px;
