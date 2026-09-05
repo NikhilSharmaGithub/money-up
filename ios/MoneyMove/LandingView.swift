@@ -119,7 +119,10 @@ struct LandingView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 20)
-            .padding(.bottom, 32)
+            // The tab bar floats over the page rather than sitting under it,
+            // so the last card needs room to clear it — at 32 the bottom row
+            // of the store grid was half behind the bar.
+            .padding(.bottom, 96)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
         }
@@ -522,9 +525,9 @@ struct LandingView: View {
         // A table nobody finished has no winner and no turn count to quote —
         // printing "Nobody · 0 turns" invents a result that never happened.
         let line = unfinished
-            ? "Left before the end · \(match.players.count) players"
-            : "\(match.winner) · \(match.players.count) players"
-                + (match.turns > 0 ? " · \(match.turns) turns" : "")
+            ? "Left before the end · \(match.players.count) player\(match.players.count == 1 ? "" : "s")"
+            : "\(match.winner) · \(match.players.count) player\(match.players.count == 1 ? "" : "s")"
+                + (match.turns > 0 ? " · \(match.turns) turn\(match.turns == 1 ? "" : "s")" : "")
 
         return MMCard(padding: 13) {
             HStack(spacing: 12) {

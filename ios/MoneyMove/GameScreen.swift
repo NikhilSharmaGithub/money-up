@@ -398,7 +398,9 @@ struct GameScreen: View {
     /// The web client reads ?room= on load, so this link seats a friend at the
     /// same table straight from a browser — no app install in the way.
     private var shareURL: URL {
-        let home = "https://money-up-nine.vercel.app/"
+        // The custom domain, not the deploy host it happens to sit behind: a
+        // link somebody sends a friend should say what the game is called.
+        let home = "https://www.moneymove.live/"
         return URL(string: "\(home)?room=\(store.roomId ?? "")") ?? URL(string: home)!
     }
 

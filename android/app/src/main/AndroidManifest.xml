@@ -34,6 +34,9 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.moneymove.live" />
+                <data android:scheme="https" android:host="moneymove.live" />
+                <!-- Links sent before the custom domain still open in the app. -->
                 <data android:scheme="https" android:host="money-up-nine.vercel.app" />
             </intent-filter>
         </activity>

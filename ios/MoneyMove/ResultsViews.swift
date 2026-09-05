@@ -278,9 +278,9 @@ struct MatchDetailSheet: View {
                             .background(record.won ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken), in: Capsule())
                     }
                     Text(unfinished
-                         ? "Left before the end · \(record.players.count) players"
-                         : "\(record.winner) won · \(record.players.count) players"
-                            + (record.turns > 0 ? " · \(record.turns) turns" : ""))
+                         ? "Left before the end · \(record.players.count) player\(record.players.count == 1 ? "" : "s")"
+                         : "\(record.winner) won · \(record.players.count) player\(record.players.count == 1 ? "" : "s")"
+                            + (record.turns > 0 ? " · \(record.turns) turn\(record.turns == 1 ? "" : "s")" : ""))
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink2)
                     Text(record.date.formatted(date: .abbreviated, time: .shortened))

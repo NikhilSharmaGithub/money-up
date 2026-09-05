@@ -61,7 +61,7 @@ class MainActivity : AppCompatActivity() {
     /** A tapped invite link should land on that table, not the home screen. */
     private fun startUrl(): String {
         val link = intent?.data
-        if (link != null && link.host == HOST) return link.toString()
+        if (link != null && link.host in OURS) return link.toString()
         return "https://$HOST/"
     }
 
@@ -90,7 +90,7 @@ class MainActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 // Anything that isn't the game itself belongs in the real browser.
-                if (url.host == HOST) return false
+                if (url.host in OURS) return false
                 startActivity(Intent(Intent.ACTION_VIEW, url))
                 return true
             }
@@ -138,13 +138,21 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.data?.let { if (it.host == HOST) web.loadUrl(it.toString()) }
+        intent.data?.let { if (it.host in OURS) web.loadUrl(it.toString()) }
     }
 
     override fun onPause() { super.onPause(); web.onPause() }
     override fun onResume() { super.onResume(); web.onResume() }
 
     private companion object {
-        const val HOST = "money-up-nine.vercel.app"
+        /** The address the game is actually called, and where it is loaded from. */
+        const val HOST = "www.moneymove.live"
+
+        /**
+         * Every host that is really this game. The deploy host the site sits
+         * behind still works, and links from before the custom domain still
+         * open in the app rather than bouncing out to a browser.
+         */
+        val OURS = setOf(HOST, "moneymove.live", "money-up-nine.vercel.app")
     }
 }
