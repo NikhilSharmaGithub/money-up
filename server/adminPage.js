@@ -2032,6 +2032,18 @@ export const adminPageHTML = `<!doctype html>
       '<div><div class="field"><label>Ads master switch</label>' +
       adSeg('enabled', s.enabled ? '1' : '0', [{ val: '0', text: 'Ads OFF' }, { val: '1', text: 'Ads ON' }]) +
       '</div><div class="caption" style="max-width:260px">One switch for the lot. Off, and no player on any platform sees an ad button at all — not "Watch an ad — double your winnings" on the game-over sheet, not the free-coins card on the home screen. They do not grey out; they are not drawn.</div></div>';
+    // The two families, above the individual slots: one switch each, because
+    // rewarded and interstitial are different products and an owner wanting
+    // one of them gone should not have to remember which slots belonged to it.
+    var kinds = s.kinds || { rewarded: true, interstitial: true };
+    sw += '<div><div class="field"><label>Rewarded ads</label>' +
+      adSeg('kind:rewarded', kinds.rewarded === false ? '0' : '1',
+        [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
+      '</div><div class="caption" style="max-width:260px">Both of the ads that pay coins — the double-win offer and the free-coins card. Off, and neither is drawn and neither claim is honoured, whatever the two switches below say.</div></div>';
+    sw += '<div><div class="field"><label>Interstitial ads</label>' +
+      adSeg('kind:interstitial', kinds.interstitial === false ? '0' : '1',
+        [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
+      '</div><div class="caption" style="max-width:260px">Every break that pays the player nothing. Off, and no full-screen ad is shown anywhere, whatever the pre-game switch says.</div></div>';
     AD_SLOTS.forEach(function (slot) {
       var spec = slots[slot.id] || {};
       sw += '<div><div class="field"><label>' + esc(slot.label) + '</label>' +
@@ -2491,6 +2503,9 @@ export const adminPageHTML = `<!doctype html>
           'Real ads from Google\\'s test account, no revenue, and rewards pay without server-side verification. ' +
           'For proving a client is wired up — never for a server with players on it.')) return;
         patch.testMode = val === '1';
+      } else if (what.indexOf('kind:') === 0) {
+        patch.kinds = {};
+        patch.kinds[what.slice(5)] = val === '1';
       } else if (what.indexOf('placement:') === 0) {
         patch.placements = {};
         patch.placements[what.slice(10)] = { enabled: val === '1' };

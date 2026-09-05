@@ -110,6 +110,15 @@ const defaults = () => ({
   // The master switch. ADS_ENABLED=1 still turns the system on at first boot;
   // once the file exists, the admin toggle is the only thing that matters.
   enabled: process.env.ADS_ENABLED === '1',
+  // One switch per family, under the master and over the individual slots.
+  // The two are genuinely different products — one trades thirty seconds for
+  // coins, the other takes the player's time and gives nothing back — and an
+  // owner wanting the second gone at midnight should not have to remember
+  // which of four slot switches belonged to it.
+  kinds: {
+    rewarded: true,
+    interstitial: true,
+  },
   // Which adapter the owner has chosen. 'house' needs nothing configured;
   // 'google' means the real networks — AdMob on the phone, H5 in the browser —
   // and each falls back to the house on its own until its ids are filled in.
@@ -230,6 +239,10 @@ function merge(base, raw) {
   if (typeof raw.testMode === 'boolean') out.testMode = raw.testMode;
   if (typeof raw.secret === 'string' && raw.secret) out.secret = raw.secret;
   if (Number(raw.changedAt) > 0) out.changedAt = Number(raw.changedAt);
+  out.kinds = { ...base.kinds };
+  for (const kind of ['rewarded', 'interstitial']) {
+    if (typeof raw.kinds?.[kind] === 'boolean') out.kinds[kind] = raw.kinds[kind];
+  }
   out.placements = { ...base.placements };
   for (const slot of PLACEMENTS) {
     const from = raw.placements?.[slot];
@@ -879,6 +892,12 @@ function readTicket(raw, token, now = Date.now()) {
  */
 function eligible(token, slot, { ref: pinned = '', now = Date.now() } = {}) {
   if (!settings.enabled) return { error: 'Ads are not enabled on this server', status: 403 };
+  // The family switch is checked here as well as in the config a client
+  // reads: a client holding a config from before the flip must not be able to
+  // claim against it.
+  if (settings.kinds?.rewarded === false) {
+    return { error: 'Rewarded ads are switched off', status: 403 };
+  }
   const spec = settings.placements[slot];
   if (!spec) return { error: 'Unknown placement', status: 400 };
   if (!spec.enabled) return { error: 'That placement is switched off', status: 403 };
@@ -962,7 +981,7 @@ function remainingFor(token, now = Date.now()) {
   const out = {};
   for (const slot of PLACEMENTS) {
     const spec = settings.placements[slot];
-    if (!settings.enabled || !spec.enabled) { out[slot] = 0; continue; }
+    if (!settings.enabled || settings.kinds?.rewarded === false || !spec.enabled) { out[slot] = 0; continue; }
     const cap = Math.max(0, Math.floor(capNum(spec.dailyCap, 0)));
     const each = perViewCoins(token, slot, now);
     out[slot] = each > 0
@@ -992,7 +1011,7 @@ export function configFor(token, platform = 'web', declared = true) {
     const spec = settings.placements[slot];
     placements[slot] = {
       ...spec,
-      enabled: settings.enabled && !!spec.enabled,
+      enabled: settings.enabled && settings.kinds?.rewarded !== false && !!spec.enabled,
       remaining: remaining[slot],
       // `unitId` is the field the first shipped clients read and it still
       // means the same thing: the id this client hands its SDK for this slot.
@@ -1011,7 +1030,7 @@ export function configFor(token, platform = 'web', declared = true) {
     const spec = settings.interstitials?.[slot] || {};
     const unitId = live.id === 'admob' ? admobInterstitial(slot, platform) : '';
     interstitials[slot] = {
-      enabled: !!(settings.enabled && spec.enabled && unitId),
+      enabled: !!(settings.enabled && settings.kinds?.interstitial !== false && spec.enabled && unitId),
       everyMinutes: Math.max(0, Number(spec.everyMinutes) || 0),
       unitId,
     };
@@ -1019,6 +1038,9 @@ export function configFor(token, platform = 'web', declared = true) {
 
   return {
     enabled: !!settings.enabled,
+    // Echoed so a client can tell "ads are off" from "this kind is off", and
+    // so a future surface has one field to read rather than four.
+    kinds: { ...(settings.kinds || { rewarded: true, interstitial: true }) },
     provider: live.id,
     placements,
     interstitials,
@@ -1354,6 +1376,14 @@ adsRouter.post('/admin', (req, res) => {
     if (body.testMode) {
       console.warn('admin: ads TEST MODE is on — Google test ids are serving and rewards pay without server-side verification.');
     }
+  }
+
+  settings.kinds ??= { rewarded: true, interstitial: true };
+  for (const kind of ['rewarded', 'interstitial']) {
+    const want = body.kinds?.[kind];
+    if (typeof want !== 'boolean' || want === settings.kinds[kind]) continue;
+    settings.kinds[kind] = want;
+    changes.push(`${kind} ads ${want ? 'ON' : 'off'}`);
   }
 
   for (const slot of PLACEMENTS) {
