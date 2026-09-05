@@ -3246,9 +3246,11 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .bs-row span { font-size: 11.5px; color: var(--ink-2); line-height: 1.35; }
 
 .mcities { font-size: 10.5px; font-weight: 700; color: var(--ink-2); }
+/* Two lines rather than an ellipsis: half a city name sells nothing. */
 .sc-cities {
-  font-size: 9.5px; font-weight: 650; color: var(--ink-3);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  font-size: 9.5px; font-weight: 650; color: var(--ink-3); line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; max-width: 100%;
 }
 .bb-tag.locked.sale { background: var(--gold-soft); }
 .bb-tag s, .sc-price s, #bbGo s { opacity: .55; font-weight: 650; margin-right: 2px; }

@@ -485,7 +485,8 @@ struct BoardPickerSheet: View {
                     Text(b.teaser)
                         .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink2)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 HStack(spacing: 6) {
@@ -778,10 +779,15 @@ struct BoardStoreShelf: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     if !b.teaser.isEmpty {
+                        // Two lines, because half a city name is worse than a
+                        // taller card: "New York City · Boston · San Fra…"
+                        // sells nothing at all.
                         Text(b.teaser)
                             .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                             .foregroundStyle(P.ink3)
-                            .lineLimit(1)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 HStack(spacing: 4) {
