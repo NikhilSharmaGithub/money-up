@@ -34,6 +34,8 @@ struct LandingView: View {
     /// One cup poll for the whole screen — see CupWatch. It also does the
     /// walking-in, so a player waiting on the Play tab is seated too.
     @StateObject private var cupWatch = CupWatch()
+    /// The friends room, opened from the summary row on the Social tab.
+    @State private var friendsOpen = false
 
     struct PublicRoom: Codable, Identifiable {
         var id: String
@@ -78,6 +80,9 @@ struct LandingView: View {
         .tint(P.red)
         .sheet(item: $dmFriend) { friend in
             DMSheet(friend: friend).environmentObject(store)
+        }
+        .sheet(isPresented: $friendsOpen) {
+            FriendsSheet().environmentObject(store)
         }
         .onAppear {
             selectedFlag = store.flag
@@ -1060,154 +1065,70 @@ struct LandingView: View {
 
     // MARK: - friends
 
+    /// A summary, and a door.
+    ///
+    /// Everything friends-shaped used to be stacked on this card: your code,
+    /// the add box, and the whole list. Fine for two friends, unreadable for
+    /// twenty. This is the count and your code; the room is FriendsSheet.
     private func friendsCard(_ P: Palette) -> some View {
-        MMCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 12) {
-                PanelTitle("Friends")
+        Button {
+            Haptics.tap()
+            friendsOpen = true
+        } label: {
+            MMCard(padding: 16) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous).fill(P.sunken)
+                        Art.icon(.people, size: 20, tint: P.ink2)
+                    }
+                    .frame(width: 42, height: 42)
 
-                // Signing in used to live here as a lone Apple button. It is
-                // the account card at the top of this tab now — both providers
-                // in one place, rather than two half-answers on one screen.
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Friends")
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(P.ink)
+                        Text(friendsLine)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(friendsOnline > 0 ? P.good : P.ink3)
+                    }
 
-                if let profile {
-                    HStack {
-                        Text("Your code")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                    Spacer(minLength: 6)
+
+                    if let profile {
+                        Text(profile.code)
+                            .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                            .kerning(1.5)
                             .foregroundStyle(P.ink2)
-                        Spacer()
-                        Button {
-                            UIPasteboard.general.string = profile.code
-                            store.showToast("Friend code copied")
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(profile.code)
-                                    .font(.system(size: 15, weight: .heavy, design: .monospaced))
-                                    .kerning(2)
-                                    .foregroundStyle(P.ink)
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(P.ink3)
-                            }
-                            .padding(.vertical, 7)
-                            .padding(.horizontal, 12)
-                            .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(P.rule, lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
+                            .padding(.vertical, 5)
+                            .padding(.horizontal, 10)
+                            .background(P.sunken, in: Capsule())
+                            .overlay(Capsule().stroke(P.rule, lineWidth: 1))
                     }
-                }
-
-                HStack(spacing: 8) {
-                    // Same reason as the room code: sanitise on the way in, or
-                    // fast typing loses characters to the write-back.
-                    TextField("FRIEND CODE", text: Binding(
-                        get: { addCode },
-                        set: { addCode = String($0.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(6)) }
-                    ))
-                        .font(.system(size: 15, weight: .bold, design: .monospaced))
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .keyboardType(.asciiCapable)
-                        .onSubmit { Task { await addFriend() } }
-                        .padding(11)
-                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(P.rule, lineWidth: 1))
-
-                    Button("Add") { Task { await addFriend() } }
-                        .buttonStyle(MMButtonStyle(kind: .ghost))
-                        .disabled(addCode.isEmpty)
-                }
-
-                if friends.isEmpty {
-                    Text("No friends yet — share your code to play together.")
-                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(P.ink3)
-                } else {
-                    VStack(spacing: 8) {
-                        ForEach(friends) { entry in
-                            friendRow(entry, P)
-                        }
-                    }
                 }
             }
         }
+        .buttonStyle(.plain)
         .task {
             await loadProfile()
             while !Task.isCancelled {
                 await loadFriends()
-                try? await Task.sleep(for: .seconds(10))
+                try? await Task.sleep(for: .seconds(20))
             }
         }
     }
 
-    private func friendRow(_ entry: FriendEntry, _ P: Palette) -> some View {
-        let status: (label: String, tint: Color) = switch entry.status ?? "offline" {
-        case "lobby": ("in a lobby", P.gold)
-        case "playing": ("in a game", P.good)
-        default: ("offline", P.ink3)
-        }
-        // Their equipped face if they have one, their flag otherwise — the
-        // same fallback chain the web friend list uses.
-        let face = [entry.avatar ?? "", entry.flag ?? ""].first { !$0.isEmpty } ?? ""
-        // Their game is already under way, so the seats are shut: promising a
-        // seat and delivering a spectator's view reads as a broken button.
-        let started = entry.status != "lobby"
-
-        return HStack(spacing: 10) {
-            // Their own face or flag if they picked one; a drawn stand-in if not.
-            if face.isEmpty {
-                Art.icon(.people, size: 20, tint: P.ink3)
-            } else {
-                Text(face).font(.system(size: 20))
-            }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.name)
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink)
-                    .lineLimit(1)
-                Text(status.label)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(status.tint)
-            }
-
-            Spacer(minLength: 4)
-
-            Button {
-                dmFriend = entry
-                Haptics.tap()
-            } label: {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(P.ink2)
-                    .frame(width: 32, height: 32)
-                    .background(P.card, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Message \(entry.name)")
-
-            if let roomId = entry.roomId {
-                Button(started ? "Watch" : "Join") { store.join(roomId: roomId) }
-                    .buttonStyle(MMButtonStyle(kind: started ? .ghost : .primary))
-            }
-
-            Button {
-                Task { await dropFriend(entry) }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(P.ink3)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(entry.name)")
-        }
-        .padding(10)
-        .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    private var friendsOnline: Int {
+        friends.filter { ($0.status ?? "offline") != "offline" }.count
     }
 
-    // MARK: - friends REST
+    private var friendsLine: String {
+        if friends.isEmpty { return "Swap codes and play together" }
+        if friendsOnline == 0 { return "\(friends.count) · nobody on right now" }
+        return "\(friends.count) · \(friendsOnline) on right now"
+    }
 
     // MARK: - signed-in identity
 
@@ -1393,181 +1314,5 @@ Task { await appleLinked(userId: cred.user) }
         friends = fresh.sorted {
             ($0.roomId != nil ? 0 : 1, $0.name.lowercased()) < ($1.roomId != nil ? 0 : 1, $1.name.lowercased())
         }
-    }
-
-    private func addFriend() async {
-        let code = addCode.trimmingCharacters(in: .whitespaces).uppercased()
-        guard !code.isEmpty else { return }
-        do {
-            let reply: AddFriendReply = try await store.fetchJSON(
-                "/api/friends", method: "POST",
-                body: ["token": store.token, "code": code])
-            if let error = reply.error {
-                store.showToast(error, isError: true)
-            } else {
-                addCode = ""
-                store.showToast("Friend added")
-                await loadFriends()
-            }
-        } catch {
-            store.showToast("Could not add that code", isError: true)
-        }
-    }
-
-    /// Friendship is mutual, so dropping someone is the only way out of a code
-    /// you gave away by mistake — the web list has always had this.
-    private func dropFriend(_ entry: FriendEntry) async {
-        Haptics.warn()
-        friends.removeAll { $0.code == entry.code }
-        let _: AddFriendReply? = try? await store.fetchJSON(
-            "/api/friends/remove", method: "POST",
-            body: ["token": store.token, "code": entry.code])
-        await loadFriends()
-    }
-}
-
-// MARK: - friend chat
-
-/// A lightweight DM thread with one friend, polled over REST — the same chat
-/// the web landing offers, so the conversation is shared across devices.
-struct DMSheet: View {
-    let friend: FriendEntry
-
-    @EnvironmentObject var store: GameStore
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var messages: [DMessage] = []
-    @State private var myCode = ""
-    @State private var draft = ""
-
-    private struct DMReply: Decodable {
-        var messages: [DMessage]?
-        var me: String?
-        var error: String?
-    }
-    private struct SendReply: Decodable { var ok: Bool?; var error: String? }
-
-    var body: some View {
-        let P = Palette.current(scheme)
-        NavigationStack {
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 6) {
-                            if messages.isEmpty {
-                                VStack(spacing: 6) {
-                                    Art.icon(.chat, size: 26, tint: P.ink3)
-                                    Text("Say hi")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(P.ink3)
-                                }
-                                .padding(.top, 30)
-                            }
-                            ForEach(messages) { msg in
-                                bubble(msg, P)
-                                    .id(msg.id)
-                            }
-                        }
-                        .padding(12)
-                    }
-                    .onChange(of: messages.last?.id) { _, new in
-                        guard let new else { return }
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(new, anchor: .bottom)
-                        }
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    TextField("Message \(friend.name)…", text: $draft)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(P.ink)
-                        .padding(.vertical, 9)
-                        .padding(.horizontal, 14)
-                        .background(P.sunken, in: Capsule())
-                        .submitLabel(.send)
-                        .onSubmit { Task { await send() } }
-
-                    // Nothing to send is a dead tap, so let the button say so.
-                    let sendable = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(sendable ? P.accentInk : P.ink3)
-                            .frame(width: 36, height: 36)
-                            .background(sendable ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!sendable)
-                    .accessibilityLabel("Send")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-            .background(P.sheet.ignoresSafeArea())
-            .navigationTitle("\(friend.flag?.isEmpty == false ? "\(friend.flag!) " : "")\(friend.name)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .task {
-            // poll while the sheet is up; the task dies with the sheet
-            while !Task.isCancelled {
-                await load()
-                try? await Task.sleep(for: .seconds(2.5))
-            }
-        }
-    }
-
-    private func bubble(_ msg: DMessage, _ P: Palette) -> some View {
-        let mine = msg.from == myCode
-        return HStack {
-            if mine { Spacer(minLength: 50) }
-            Text(msg.text)
-                .font(.system(size: 14.5, weight: .medium, design: .rounded))
-                .foregroundStyle(mine ? P.accentInk : P.ink)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 13)
-                .background(mine ? AnyShapeStyle(P.red) : AnyShapeStyle(P.card),
-                            in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            if !mine { Spacer(minLength: 50) }
-        }
-    }
-
-    private func load() async {
-        guard let base = store.serverURL,
-              var comps = URLComponents(url: base.appending(path: "/api/dm"),
-                                        resolvingAgainstBaseURL: false) else { return }
-        comps.queryItems = [
-            URLQueryItem(name: "token", value: store.token),
-            URLQueryItem(name: "code", value: friend.code),
-        ]
-        guard let url = comps.url,
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let reply = try? JSONDecoder().decode(DMReply.self, from: data) else { return }
-        if let me = reply.me { myCode = me }
-        if let msgs = reply.messages { messages = msgs }
-    }
-
-    private func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        draft = ""
-        SoundKit.shared.click()
-        let reply: SendReply? = try? await store.fetchJSON(
-            "/api/dm", method: "POST",
-            body: ["token": store.token, "code": friend.code, "text": text])
-        if let error = reply?.error {
-            store.showToast(error, isError: true)
-        }
-        await load()
     }
 }

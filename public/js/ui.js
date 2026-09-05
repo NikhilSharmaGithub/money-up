@@ -1994,7 +1994,7 @@ export function closeModal() {
   root.innerHTML = '';
 }
 
-function openModal(html, onMount, extraClass = '') {
+export function openModal(html, onMount, extraClass = '') {
   const root = $('#modalRoot');
   deedRepaint = null; // a new sheet replaces whatever was repainting
   runModalCleanup();  // …and a replaced sheet is a closed one

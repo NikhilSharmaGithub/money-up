@@ -117,17 +117,17 @@
       <div id="recentGames" class="recent-games"></div>
     </div>
 
-    <div class="landing-card friends-card" id="friendsCard">
-      <div class="fc-head">
-        <span class="panel-title" style="margin:0">Friends</span>
-        <button class="code-chip" id="myCode" title="Your friend code — tap to copy">······</button>
-      </div>
-      <form class="join-row" id="addFriendForm">
-        <input id="friendCode" class="code-input" maxlength="6" placeholder="friend code" autocomplete="off" />
-        <button class="btn small" type="submit">Add</button>
-      </form>
-      <div id="friendList" class="friend-list"></div>
-    </div>
+    <!-- A summary and a door. Your code, how many are on, and the room
+         behind it — see openFriendsModal in social.js. -->
+    <button class="landing-card friends-card" id="friendsCard">
+      <span class="fc-mark" data-ico="people"></span>
+      <span class="fc-body">
+        <span class="fc-title">Friends</span>
+        <span class="fc-sub" id="friendsSub">Swap codes and play together</span>
+      </span>
+      <span class="code-chip" id="myCode">······</span>
+      <span class="fc-chev">›</span>
+    </button>
 
     <!-- The lifetime table, top five here and all fifty behind "See all". -->
     <div class="landing-card leader-card hidden" id="leaderCard"></div>

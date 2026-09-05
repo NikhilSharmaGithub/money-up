@@ -1574,7 +1574,9 @@ function paintCup(data) {
       if (!el) return;
       const left = Math.max(0, cup.closesAt - Date.now());
       const secs = Math.ceil(left / 1000);
-      el.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      // A window can be hours or days long, and "246:51" is not a time
+      // anybody reads — longCountdown steps up to hours and days.
+      el.textContent = longCountdown(left);
       // Under half a minute the clock stops being information and starts
       // being a nudge, so it says so in red.
       el.classList.toggle('urgent', secs <= 30);

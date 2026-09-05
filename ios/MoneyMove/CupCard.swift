@@ -739,10 +739,10 @@ struct CupCard: View {
         cupMoney(prize: cup.prize, local: cup.local, place: place)
     }
 
-    private func clock(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.rounded(.up))
-        return String(format: "%d:%02d", s / 60, s % 60)
-    }
+    /// Kept only so old call sites read the same; longCountdown is the one
+    /// that steps up to hours and days, because a join window can be either
+    /// and "246:51" is not a time anybody reads.
+    private func clock(_ seconds: TimeInterval) -> String { longCountdown(seconds) }
 
     private func roundName(_ round: CupFeed.Round?) -> String {
         guard let round else { return "Drawing the bracket…" }
