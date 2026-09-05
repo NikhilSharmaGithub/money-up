@@ -224,6 +224,14 @@ app.get('/api/cup', (req, res) => {
   res.json(cup.publicView(String(req.query.token || '').slice(0, 64)));
 });
 
+/**
+ * The chart. Asked for when somebody opens it, never on the card's poll —
+ * see bracketView for why.
+ */
+app.get('/api/cup/bracket', (req, res) => {
+  res.json(cup.bracketView(String(req.query.token || '').slice(0, 64)));
+});
+
 app.post('/api/cup/join', (req, res) => {
   const result = cup.join(String(req.body?.token || '').slice(0, 64));
   if (result.needsLogin) return res.status(401).json(result);
@@ -467,7 +475,12 @@ function recordTransitions(room) {
     // A cup table just ended: whoever won goes through, and if that completes
     // the round, the next one is drawn and seated on the spot.
     if (room.cupMatch) {
-      const out = cup.matchFinished(room.id, room.winner?.id);
+      // What the two of them were worth when it ended. A bracket with nothing
+      // but names beside it tells you who went through and nothing about how
+      // close it was; net worth is this game's version of a scoreline.
+      const worth = {};
+      for (const p of room.players) worth[p.id] = p.bankrupt ? 0 : room.netWorth(p);
+      const out = cup.matchFinished(room.id, room.winner?.id, worth);
       if (out?.roundComplete) seatCupMatches();
     }
     stats.recent.unshift({

@@ -10,7 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
-  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen,
+  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -1501,8 +1501,12 @@ function paintCup(data) {
       ${prizes}
       ${cup.you.joined
         ? `<div class="cup-in ok">${icon('people', 14)} You are in. Your first table opens when the doors close.</div>
-           <button class="btn ghost small wide" id="cupLeave">Withdraw</button>`
-        : '<button class="btn gold wide wrap" id="cupJoin">Enter the cup</button>'}`;
+           <div class="row-2">
+             <button class="btn ghost small" id="cupPoster">${icon('question', 13)} How it works</button>
+             <button class="btn ghost small" id="cupLeave">Withdraw</button>
+           </div>`
+        : `<button class="btn gold wide wrap" id="cupJoin">Enter the cup</button>
+           <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`}`;
     const opened = cup.openedAt || cup.closesAt - 5 * 60 * 1000;
     const clock = () => {
       const el = $('#cupClockText');
@@ -1524,6 +1528,7 @@ function paintCup(data) {
     if (join) join.onclick = () => { sfx.click(); enterCup(); };
     const leave = $('#cupLeave');
     if (leave) leave.onclick = () => { sfx.click(); leaveCup(); };
+    wireCupPoster(cup);
     return;
   }
 
@@ -1552,9 +1557,14 @@ function paintCup(data) {
       ${dots}
       ${prizes}
       <div class="cup-in${cup.you.roomId ? ' ok' : cup.you.out ? ' out' : ''}">${escapeHtml(you)}</div>
-      ${cup.you.roomId ? `<button class="btn primary wide" id="cupGo">Go to your table</button>` : ''}`;
+      ${cup.you.joined && cup.you.survived != null
+        ? `<div class="cup-run">${icon('trophy', 12)} ${cup.you.survived} won · <b>${cup.you.left}</b> still in${cup.you.roundLabel ? ` · ${escapeHtml(cup.you.roundLabel)}` : ''}</div>`
+        : ''}
+      ${cup.you.roomId ? `<button class="btn primary wide" id="cupGo">Go to your table</button>` : ''}
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>`;
     const goBtn = $('#cupGo');
     if (goBtn) goBtn.onclick = () => { sfx.click(); go(cup.you.roomId); };
+    wireCupChart();
     return;
   }
 
@@ -1582,12 +1592,24 @@ function paintCup(data) {
         ${step('second', s.second, '2nd')}
         ${step('third', s.third, '3rd')}
       </div>
-      ${mine ? `<div class="cup-in ok">${icon('trophy', 14)} You finished ${mine}. The prize is paid by hand — hold on to your friend code.</div>` : ''}`;
+      ${mine ? `<div class="cup-in ok">${icon('trophy', 14)} You finished ${mine}. The prize is paid by hand — hold on to your friend code.</div>` : ''}
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>`;
+    wireCupChart();
     return;
   }
 
   cupPollMs = 20000;
   card.classList.add('hidden');
+}
+
+function wireCupChart() {
+  const b = $('#cupChart');
+  if (b) b.onclick = () => { sfx.click(); openCupBracket(token); };
+}
+
+function wireCupPoster(cup) {
+  const b = $('#cupPoster');
+  if (b) b.onclick = () => { sfx.click(); openCupPoster(cup); };
 }
 
 function roundName(r) {

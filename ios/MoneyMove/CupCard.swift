@@ -200,6 +200,9 @@ struct CupCard: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
 
+    @State private var showChart = false
+    @State private var showPoster = false
+
     var body: some View {
         let P = Palette.current(scheme)
         VStack(spacing: 0) {
@@ -213,6 +216,26 @@ struct CupCard: View {
             }
         }
         .animation(.spring(duration: 0.32), value: live)
+        .sheet(isPresented: $showChart) { CupChartSheet().environmentObject(store) }
+        .sheet(isPresented: $showPoster) {
+            if let cup = live { CupPosterSheet(cup: cup) }
+        }
+    }
+
+    /// "What is a cup?" before you enter one, "See the chart" once one is
+    /// running. Both are sheets — things you go and look at.
+    private func moreButton(_ title: String, _ glyph: Glyph, chart: Bool, _ P: Palette) -> some View {
+        Button {
+            Haptics.tap()
+            if chart { showChart = true } else { showPoster = true }
+        } label: {
+            HStack(spacing: 7) {
+                Art.icon(glyph, size: 14)
+                Text(title)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(MMButtonStyle(kind: .ghost))
     }
 
     private var live: CupFeed.Cup? { watch.live }
@@ -240,10 +263,13 @@ struct CupCard: View {
                     .background(P.sunken, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 } else if cup.you.joined == true {
                     note("You are in. Your first table opens when the doors close.", tone: P.good, P)
-                    Button("Withdraw") { Task { await watch.leave() } }
-                        .buttonStyle(MMButtonStyle(kind: .ghost))
-                        .frame(maxWidth: .infinity)
-                        .disabled(busy)
+                    HStack(spacing: 8) {
+                        moreButton("How it works", .question, chart: false, P)
+                        Button("Withdraw") { Task { await watch.leave() } }
+                            .buttonStyle(MMButtonStyle(kind: .ghost))
+                            .frame(maxWidth: .infinity)
+                            .disabled(busy)
+                    }
                 } else {
                     Button {
                         Task { await watch.enter() }
@@ -257,6 +283,7 @@ struct CupCard: View {
                     }
                     .buttonStyle(MMButtonStyle(kind: .gold))
                     .disabled(busy)
+                    moreButton("What is a cup?", .question, chart: false, P)
                 }
             }
         }
@@ -285,6 +312,7 @@ struct CupCard: View {
                     }
                     .buttonStyle(MMButtonStyle(kind: .primary))
                 }
+                moreButton("See the chart", .chart, chart: true, P)
             }
         }
     }
@@ -310,6 +338,7 @@ struct CupCard: View {
                         note("You finished \(cup.you.placed ?? ""). The prize is paid by hand — hold on to your friend code.",
                              tone: P.good, P)
                     }
+                    moreButton("See the chart", .chart, chart: true, P)
                 }
             }
         }

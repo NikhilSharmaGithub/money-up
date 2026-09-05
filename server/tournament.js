@@ -104,12 +104,100 @@ export function publicView(token) {
       you: mine ? {
         joined: true,
         code: mine.code,
+        name: mine.name,
         out: !!mine.out,
         placed: mine.placed || null,
         // Where to go, the moment there is somewhere to go.
         roomId: match?.roomId || null,
         opponent: match ? nameOf(t, match.a === token ? match.b : match.a) : null,
+        // How far they have come and how many are left with them. This is
+        // the whole story of a knockout from one player's seat, and it is
+        // four numbers rather than the entire bracket.
+        ...standing(t, token),
       } : { joined: false },
+    },
+  };
+}
+
+/**
+ * Where one player stands: rounds survived, how many are left in the cup
+ * beside them, and what the round they are in is called. The card draws a
+ * ladder from this without ever asking for the whole bracket.
+ */
+function standing(t, token) {
+  let survived = 0;
+  let currentRound = null;
+  for (let i = 0; i < t.rounds.length; i++) {
+    const m = t.rounds[i].matches.find((x) => x.a === token || x.b === token);
+    if (!m) continue;
+    currentRound = i;
+    if (m.state === 'done' && m.winner === token) survived++;
+  }
+  return {
+    survived,
+    round: currentRound == null ? null : currentRound + 1,
+    roundLabel: currentRound == null ? null : roundLabel(t.rounds[currentRound]),
+    // Everyone still capable of winning it, this player included.
+    left: t.entrants.filter((e) => !e.out).length,
+  };
+}
+
+/** "Final", "Semi-finals", "Round of 64" — what this depth is called. */
+function roundLabel(r) {
+  if (!r) return '';
+  if (r.kind === 'thirdPlace') return 'Third place';
+  const players = playersIn(r);
+  if (r.kind === 'final' || players === 2) return 'Final';
+  if (players <= 4) return 'Semi-finals';
+  if (players <= 8) return 'Quarter-finals';
+  return `Round of ${players}`;
+}
+
+const playersIn = (r) => r.matches.reduce((n, m) => n + (m.a ? 1 : 0) + (m.b ? 1 : 0), 0);
+
+/**
+ * The whole bracket, on request.
+ *
+ * Not part of the card's poll: two hundred entrants make two hundred matches,
+ * and re-sending all of them every four seconds to draw a card that shows a
+ * countdown would be silly. A player opens the chart, this answers once, and
+ * it answers again when they pull to refresh.
+ */
+export function bracketView(token) {
+  const t = state.current
+    || state.history.find((h) => h.endedAt && now() - h.endedAt < SHOW_RESULT_MS)
+    || null;
+  if (!state.enabled || !t) return { enabled: state.enabled, bracket: null };
+  const mine = token ? t.entrants.find((e) => e.token === token) : null;
+  return {
+    enabled: true,
+    bracket: {
+      id: t.id,
+      name: t.name,
+      state: t.state,
+      prize: t.prize,
+      entrants: t.entrants.length,
+      you: mine ? { code: mine.code, name: mine.name, out: !!mine.out, placed: mine.placed || null }
+        : null,
+      standings: t.standings || null,
+      rounds: t.rounds.map((r, i) => ({
+        n: i + 1,
+        kind: r.kind,
+        label: roundLabel(r),
+        players: playersIn(r),
+        matches: r.matches.map((m) => ({
+          a: m.a ? nameOf(t, m.a) : null,
+          b: m.b ? nameOf(t, m.b) : null,
+          aScore: m.aScore ?? null,
+          bScore: m.bScore ?? null,
+          state: m.state,
+          winner: m.winner ? nameOf(t, m.winner) : null,
+          walkover: !!m.walkover,
+          void: !!m.void,
+          // The one match on this row that belongs to the person reading it.
+          mine: !!token && (m.a === token || m.b === token),
+        })),
+      })),
     },
   };
 }
@@ -416,12 +504,18 @@ export function matchStarted(matchId, roomId) {
  * draw the next one — or, when only the final and its play-off are left,
  * write the standings.
  */
-export function matchFinished(roomId, winnerToken) {
+export function matchFinished(roomId, winnerToken, worth = null) {
   const t = state.current;
   if (!t || t.state !== 'running') return null;
   const found = liveMatchInRoom(t, roomId);
   if (!found) return null;
   const { m } = found;
+  // What each side was worth at the end. The bracket reads better with a
+  // scoreline than with two bare names, and this game's score is net worth.
+  if (worth) {
+    if (m.a && worth[m.a] != null) m.aScore = Math.round(worth[m.a]);
+    if (m.b && worth[m.b] != null) m.bScore = Math.round(worth[m.b]);
+  }
   // A winner the server does not recognise (a bot, a spectator) is treated as
   // nobody winning, and the match is decided the only honest way left: not at
   // all. It stays open for the owner to void.

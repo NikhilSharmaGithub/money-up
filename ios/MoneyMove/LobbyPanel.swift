@@ -444,55 +444,56 @@ extension LobbyPanel {
     /// last, Custom: a menu of the single-nation boards (each with its own
     /// regions and localized Treasure & Surprise deck) plus Shuffle, which
     /// deals a brand new board every game.
+    /// The board, as one line.
+    ///
+    /// This used to be four chips the width of the screen — three house
+    /// boards and a Custom menu — for a choice most tables never change. It
+    /// is a row with the current board on the right and everything behind a
+    /// tap now: the same three, then every single-nation board under its own
+    /// flag, then Shuffle.
     @ViewBuilder func quickBoards(_ P: Palette) -> some View {
-        let picks: [(String, Glyph, String)] = [
+        let currentId = store.state?.mapId ?? store.state?.settings.mapId ?? "classic"
+        let house: [(String, Glyph, String)] = [
             ("classic", .globe, "Classic"),
             ("worldwide", .plane, "Worldwide"),
             ("deathvalley", .skull, "Death Valley"),
         ]
-        HStack(spacing: 8) {
-            ForEach(picks, id: \.0) { id, icon, name in
-                let selected = store.state?.settings.mapId == id || store.state?.mapId == id
+        let country = countryBoards.first { $0.id == currentId }
+        let name = currentId == "random" ? "Shuffle"
+            : house.first { $0.0 == currentId }?.2
+            ?? country?.name
+            ?? store.state?.map.name
+            ?? "Classic"
+        let glyph: Glyph = currentId == "random" ? .dice
+            : house.first { $0.0 == currentId }?.1
+            ?? mapGlyph(country?.icon)
+
+        Menu {
+            ForEach(house, id: \.0) { id, _, label in
                 Button {
                     SoundKit.shared.click()
                     store.updateSettings(["mapId": id])
                 } label: {
-                    quickChip(icon: icon, name: name, selected: selected, P: P)
+                    Label(label, systemImage: id == currentId ? "checkmark" : "globe")
                 }
             }
-            customBoardMenu(P)
-        }
-        .task { await loadCountryBoards() }
-    }
-
-    /// Everything that isn't a one-tap board: the single-nation boards, each
-    /// under its own flag, and Shuffle at the bottom.
-    @ViewBuilder private func customBoardMenu(_ P: Palette) -> some View {
-        let currentId = store.state?.mapId ?? store.state?.settings.mapId ?? ""
-        let selected = currentId.hasPrefix("country-") || currentId == "random"
-        let current = countryBoards.first { $0.id == currentId }
-
-        Menu {
-            ForEach(countryBoards) { map in
-                Button {
-                    SoundKit.shared.click()
-                    store.updateSettings(["mapId": map.id])
-                } label: {
-                    // A menu row takes an Image but not an arbitrary view, so
-                    // each flag is rendered once and handed over as one.
-                    Label {
-                        Text(map.name)
-                    } icon: {
-                        if map.id == currentId {
-                            Image(systemName: "checkmark")
-                        } else if let flag = flagImages[map.id] {
-                            flag
+            if !countryBoards.isEmpty {
+                Divider()
+                ForEach(countryBoards) { map in
+                    Button {
+                        SoundKit.shared.click()
+                        store.updateSettings(["mapId": map.id])
+                    } label: {
+                        // A menu row takes an Image but not an arbitrary view,
+                        // so each flag is rendered once and handed over as one.
+                        Label {
+                            Text(map.name)
+                        } icon: {
+                            if map.id == currentId { Image(systemName: "checkmark") }
+                            else if let flag = flagImages[map.id] { flag }
                         }
                     }
                 }
-            }
-            if countryBoards.isEmpty {
-                Text("Loading countries…")
             }
             Divider()
             Button {
@@ -503,10 +504,26 @@ extension LobbyPanel {
                       systemImage: currentId == "random" ? "checkmark" : "dice")
             }
         } label: {
-            quickChip(icon: currentId == "random" ? .dice : mapGlyph(current?.icon),
-                      name: selected ? (currentId == "random" ? "Shuffle" : (current?.name ?? "Custom")) : "Custom",
-                      selected: selected, P: P)
+            HStack(spacing: 10) {
+                Art.icon(glyph, size: 19, tint: P.ink2)
+                Text("Board")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                Spacer(minLength: 6)
+                Text(name)
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(.horizontal, 13)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
         }
+        .task { await loadCountryBoards() }
     }
 
     /// The drawn flags, rasterised once so SwiftUI's menu can carry them.
@@ -519,24 +536,6 @@ extension LobbyPanel {
                 flagImages[map.id] = Image(uiImage: ui).renderingMode(.original)
             }
         }
-    }
-
-    private func quickChip(icon: Glyph, name: String, selected: Bool, P: Palette) -> some View {
-        VStack(spacing: 3) {
-            Art.icon(icon, size: 22, tint: selected ? P.red : P.ink2)
-            Text(name)
-                .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                .foregroundStyle(selected ? P.red : P.ink2)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 9)
-        .background(selected ? P.redSoft : P.sunken,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(selected ? P.red : Color.clear, lineWidth: 1.5)
-        )
     }
 
     private func loadCountryBoards() async {

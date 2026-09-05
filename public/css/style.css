@@ -599,6 +599,136 @@ select { cursor: pointer; }
 }
 .daily-card .btn.gold { margin-top: 13px; }
 
+/* ---- the cup chart: a bracket you can find yourself in ---- */
+.chart-modal { max-width: min(96vw, 1100px); }
+.chart-loading { display: grid; place-items: center; gap: 10px; padding: 40px 0; color: var(--ink-3); }
+.chart-head { display: flex; align-items: flex-start; gap: 12px; }
+.chart-head h2 { margin: 0; }
+.chart-head .sub { margin: 3px 0 0; }
+.chart-head .icon-btn { margin-left: auto; }
+.chart-label {
+  margin: 16px 0 8px; font-size: 11px; font-weight: 850; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.chart-podium { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+
+/* Your run: the short answer to "where am I", whatever the size of the cup. */
+.cup-ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cup-ladder li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 12px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.cup-ladder .lad-dot {
+  flex: none; width: 9px; height: 9px; border-radius: 99px; background: var(--rule-2);
+}
+.cup-ladder li.won { border-color: color-mix(in srgb, var(--good) 45%, var(--rule)); }
+.cup-ladder li.won .lad-dot { background: var(--good); }
+.cup-ladder li.lost .lad-dot { background: var(--bad); }
+.cup-ladder li.live { border-color: var(--gold); background: var(--gold-soft); }
+.cup-ladder li.live .lad-dot { background: var(--gold); animation: cupLive 1.6s var(--ease) infinite; }
+.cup-ladder .lad-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cup-ladder .lad-body b { font-size: 13px; font-weight: 850; color: var(--ink); }
+.cup-ladder .lad-body span { font-size: 11.5px; color: var(--ink-2); }
+.cup-ladder .lad-count {
+  flex: none; font-size: 11px; font-weight: 850; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 99px; padding: 2px 8px;
+}
+
+/* The tree. Columns of matches, one column per round, scrolled to yours. */
+.cup-tree {
+  display: flex; gap: 34px; align-items: stretch;
+  overflow: auto; max-height: min(56vh, 520px);
+  padding: 4px 2px 10px;
+  scrollbar-width: thin;
+}
+.cup-col { display: flex; flex-direction: column; min-width: 190px; }
+.cup-col-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 5px 2px 9px; background: var(--card);
+}
+.cup-col-head b { font-size: 12.5px; font-weight: 850; color: var(--ink); }
+.cup-col-head span { font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.cup-col-body {
+  flex: 1; display: flex; flex-direction: column; justify-content: space-around; gap: 10px;
+}
+
+.cup-match {
+  position: relative; flex: none;
+  border-radius: 11px; padding: 7px 9px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.cup-match.pending { opacity: .62; }
+.cup-match.mine { border-color: var(--gold); background: var(--gold-soft); }
+.cup-match.mine.latest { box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 32%, transparent); }
+.cm-you {
+  position: absolute; top: -8px; right: 8px;
+  font-size: 8.5px; font-weight: 900; letter-spacing: .08em;
+  color: var(--card); background: var(--gold);
+  border-radius: 99px; padding: 1px 6px;
+}
+.cm-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 3px 0; font-size: 12.5px; color: var(--ink-2);
+}
+.cm-row + .cm-row { border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+.cm-row.won { color: var(--ink); font-weight: 800; }
+.cm-row.empty { color: var(--ink-3); font-style: italic; }
+.cm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-score { flex: none; font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--ink-3); }
+.cm-row.won .cm-score { color: var(--good); }
+.cm-note {
+  display: block; margin-top: 2px; font-size: 9.5px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+
+/* The wiring between rounds: out of every match, and into the next column. */
+.cup-col-body:not(.last) .cup-match::after,
+.cup-col + .cup-col .cup-match::before {
+  content: ''; position: absolute; top: 50%;
+  width: 17px; height: 1px; background: var(--rule-2);
+}
+.cup-col-body:not(.last) .cup-match::after { left: 100%; }
+.cup-col + .cup-col .cup-match::before { right: 100%; }
+
+/* ---- the poster ---- */
+.poster-modal { max-width: min(94vw, 430px); }
+.poster { position: relative; text-align: center; }
+.poster-x { position: absolute; top: -4px; right: -4px; }
+.poster-top { padding: 6px 0 4px; }
+.poster-mark {
+  display: inline-grid; place-items: center; width: 62px; height: 62px;
+  border-radius: 20px; background: var(--gold-soft); border: 1px solid var(--gold);
+  color: var(--gold);
+}
+.poster-name {
+  margin-top: 11px; font-size: 23px; font-weight: 900; letter-spacing: -.02em; color: var(--ink);
+}
+.poster-tag { margin-top: 3px; font-size: 12.5px; color: var(--ink-2); }
+.poster-prizes { display: flex; gap: 8px; margin-top: 16px; }
+.poster-rungs {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px;
+  margin-top: 16px;
+}
+.poster-rungs .rung {
+  min-width: 30px; padding: 4px 7px; border-radius: 9px;
+  font-size: 12px; font-weight: 850; color: var(--ink-2);
+  background: var(--paper-2); border: 1px solid var(--rule);
+  font-variant-numeric: tabular-nums;
+}
+.poster-rungs .rung.last { background: var(--gold-soft); border-color: var(--gold); }
+.poster-rungs .rung-arrow { color: var(--ink-3); font-size: 11px; font-style: normal; }
+.poster-rules { margin: 18px 0 0; padding: 0; list-style: none; text-align: left; }
+.poster-rules li {
+  padding: 9px 12px; margin-bottom: 7px; border-radius: 11px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.5;
+}
+.poster-rules b { color: var(--ink); }
+.poster-foot { margin: 12px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.5; }
+
 /* ---- the cup: a card that only exists while one is running ---- */
 /* Off by default, so this is styling for something most visitors will never
    see. When it is on it sits directly under the daily reward, because both
@@ -698,6 +828,13 @@ select { cursor: pointer; }
 .cup-won { flex: none; font-size: 13px; font-weight: 850; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .cup-step.first .cup-won { color: var(--red-ink); }
 
+.cup-run {
+  margin-top: 10px; font-size: 11.5px; color: var(--ink-2);
+  display: flex; align-items: center; gap: 5px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: 99px; padding: 5px 11px; width: fit-content;
+}
+.cup-run b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .cup-note { margin-top: 4px; color: var(--gold); }
 .cup-in {
   margin-top: 12px; font-size: 12.5px; color: var(--ink-2);

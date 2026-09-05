@@ -2159,6 +2159,54 @@ console.log('\n▶ tournaments');
     ok('the owner view names winners without carrying anybody\'s identity token');
   }
 
+  // The chart: every round, named the way people name them, with the reader's
+  // own match marked so a client can find it in a hundred-card column.
+  {
+    cup.cancelCup();
+    cup.openCup({ name: 'Chart', joinSeconds: 60 });
+    const tokens = [];
+    for (let i = 0; i < 8; i++) {
+      const token = `chart-t-${i}`;
+      social.profileFor(token, { name: `C${i}` });
+      social.attachLogin(token, 'test', `ch-${i}`, `C${i}`);
+      cup.join(token);
+      tokens.push(token);
+    }
+    cup.closeDoor();
+    const me = tokens[0];
+    let table = 0, guard = 0;
+    while (cup.currentCup() && ++guard < 20) {
+      for (const m of cup.matchesNeedingRooms()) {
+        const room = `ct-${++table}`;
+        cup.matchStarted(m.id, room);
+        // The reader wins everything, so their run touches every round.
+        const winner = (m.a === me || m.b === me) ? me : m.a;
+        const other = winner === m.a ? m.b : m.a;
+        cup.matchFinished(room, winner, { [winner]: 3400, [other]: 120 });
+      }
+    }
+    const chart = cup.bracketView(me).bracket;
+    const labels = chart.rounds.map((r) => r.label);
+    for (const want of ['Quarter-finals', 'Semi-finals', 'Final']) {
+      if (!labels.includes(want)) fail(`cup: an 8-entrant chart never showed a ${want}`);
+    }
+    // One match per round is the reader's, and the scoreline came through.
+    for (const r of chart.rounds) {
+      if (r.kind === 'thirdPlace') continue;
+      const mine = r.matches.filter((m) => m.mine);
+      if (mine.length !== 1) fail(`cup: the chart marked ${mine.length} of the reader's matches in ${r.label}`);
+      if (mine[0] && mine[0].aScore == null && mine[0].bScore == null) {
+        fail('cup: a finished match reached the chart with no scoreline');
+      }
+    }
+    if (chart.rounds[0].players !== 8) fail('cup: the first round of an 8-entrant chart did not say 8');
+    // And the chart is a player view: names, never identity tokens.
+    if (JSON.stringify(chart).includes('chart-t-0')) {
+      fail('cup: the chart carries an identity token');
+    }
+    ok('the chart names every round, marks the reader\'s match in each, and carries scorelines but no tokens');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {

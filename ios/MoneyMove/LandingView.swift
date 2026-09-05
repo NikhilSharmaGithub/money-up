@@ -489,7 +489,14 @@ struct LandingView: View {
         // After the preferences, before the plumbing — the same rules the web
         // client's help modal reads out.
         HowToPlayCard()
+        // The server override is a workbench tool: it points the app at a
+        // machine on somebody's desk. On a phone from the App Store it is a
+        // row that can only break things — a mistyped address hides your
+        // friends, your coins and your history — so it ships only in a
+        // build made for developing against a local server.
+        #if DEBUG
         serverCard(P)
+        #endif
         MMCard {
             Text("An original implementation of the classic property-trading board game. Not affiliated with any trademark holder.")
                 .font(.system(size: 11.5, weight: .medium, design: .rounded))

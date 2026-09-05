@@ -2242,6 +2242,182 @@ const mapArt = (m) => (MAP_ART[m.id]
   ? icon(MAP_ART[m.id], 17)
   : groupFlag(m.icon, m.preview?.colors?.[1], 17));
 
+// ─────────────────────────────────────────────────────────── the cup chart ──
+/**
+ * The bracket, as a chart you can read your own run off.
+ *
+ * Two things stacked: your path — the rounds you have played, who you beat
+ * and where it ended — and then the whole tree, scrolled to your match. A
+ * hundred entrants is fifty cards in the first column, which is a long
+ * column and an honest one; the path above it is the part that answers
+ * "where am I", and it stays short however big the cup gets.
+ */
+export function openCupBracket(token) {
+  openModal(`<div class="chart-loading">${icon('trophy', 22, 'solo')}<p>Drawing the chart…</p></div>`,
+    null, 'wide chart-modal');
+  fetch(api(`/api/cup/bracket?token=${encodeURIComponent(token || '')}`))
+    .then((r) => r.json())
+    .then((data) => {
+      const b = data?.bracket;
+      if (!b) return closeModal();
+      openModal(chartHTML(b), (root) => {
+        $('#chartClose', root).onclick = closeModal;
+        // Land on your own match rather than on the top of a fifty-card
+        // column somebody else is in.
+        const mine = root.querySelector('.cup-match.mine.latest') || root.querySelector('.cup-match.mine');
+        const tree = $('.cup-tree', root);
+        if (mine && tree) {
+          tree.scrollLeft = Math.max(0, mine.offsetLeft - tree.clientWidth / 2 + mine.offsetWidth / 2);
+          tree.scrollTop = Math.max(0, mine.offsetTop - tree.clientHeight / 2 + mine.offsetHeight / 2);
+        }
+      }, 'wide chart-modal');
+    })
+    .catch(() => closeModal());
+}
+
+function chartHTML(b) {
+  const cur = b.prize?.currency === 'USD' ? '$' : `${b.prize?.currency || ''} `;
+  const money = (n) => `${cur}${n ?? 0}`;
+  const num = (n) => (n == null ? '' : Number(n).toLocaleString('en-US'));
+
+  // Your run, round by round. The one part of this that stays readable at any
+  // size, and the part that answers the only question a player really has.
+  const myName = b.you?.name || null;
+  const path = [];
+  for (const r of b.rounds) {
+    const m = r.matches.find((x) => x.mine);
+    if (!m) continue;
+    const other = m.a === myName ? m.b : m.a;
+    const won = m.winner === myName;
+    path.push({
+      label: r.label,
+      players: r.players,
+      state: m.state,
+      won,
+      other,
+      line: m.state !== 'done'
+        ? (other ? `playing ${escapeHtml(other)}` : 'waiting for a table')
+        : m.void ? 'nobody came'
+          : won ? `beat ${escapeHtml(other || 'a walkover')}`
+            : `lost to ${escapeHtml(m.winner || 'the other side')}`,
+    });
+  }
+  const ladder = path.length ? `<ol class="cup-ladder">
+      ${path.map((p) => `<li class="${p.state !== 'done' ? 'live' : p.won ? 'won' : 'lost'}">
+          <span class="lad-dot"></span>
+          <span class="lad-body">
+            <b>${escapeHtml(p.label)}</b>
+            <span>${p.line}</span>
+          </span>
+          <span class="lad-count">${p.players}</span>
+        </li>`).join('')}
+    </ol>` : '';
+
+  const standing = (() => {
+    if (!b.you) return `${b.entrants} entered`;
+    if (b.you.placed) return `You finished ${b.you.placed} — ${money(b.prize?.[b.you.placed])}`;
+    if (b.you.out) return `Knocked out after ${path.filter((p) => p.won).length} won`;
+    const live = path[path.length - 1];
+    return live ? `You are in the ${live.label.toLowerCase()}` : `${b.entrants} entered`;
+  })();
+
+  const matchCard = (m, isLatestMine) => {
+    const row = (name, score, won) => `<div class="cm-row ${won ? 'won' : ''} ${name ? '' : 'empty'}">
+        <span class="cm-name">${name ? escapeHtml(name) : '—'}</span>
+        <b class="cm-score">${m.state === 'done' && score != null ? num(score) : ''}</b>
+      </div>`;
+    return `<div class="cup-match ${m.mine ? 'mine' : ''} ${isLatestMine ? 'latest' : ''} ${m.state}">
+        ${m.mine ? '<span class="cm-you">YOU</span>' : ''}
+        ${row(m.a, m.aScore, m.winner && m.winner === m.a)}
+        ${row(m.b, m.bScore, m.winner && m.winner === m.b)}
+        ${m.walkover ? '<span class="cm-note">walkover</span>' : ''}
+        ${m.void ? '<span class="cm-note">void</span>' : ''}
+      </div>`;
+  };
+
+  // The last round this player appears in — what the chart scrolls to.
+  let latestMine = null;
+  b.rounds.forEach((r, ri) => r.matches.forEach((m, mi) => { if (m.mine) latestMine = `${ri}:${mi}`; }));
+
+  const tree = `<div class="cup-tree">
+      ${b.rounds.map((r, ri) => `<div class="cup-col">
+          <div class="cup-col-head">
+            <b>${escapeHtml(r.label)}</b>
+            <span>${r.players} left</span>
+          </div>
+          <div class="cup-col-body ${ri === b.rounds.length - 1 ? 'last' : ''}">
+            ${r.matches.map((m, mi) => matchCard(m, `${ri}:${mi}` === latestMine)).join('')}
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  const podium = b.standings?.first ? `<div class="chart-podium">
+      ${['first', 'second', 'third'].map((place, i) => {
+    const who = b.standings[place];
+    return `<div class="cup-step ${place}">
+          <span class="cup-place">${['1st', '2nd', '3rd'][i]}</span>
+          <b>${who ? escapeHtml(who.name) : '—'}</b>
+          <span class="cup-won">${money(b.prize?.[place])}</span>
+        </div>`;
+  }).join('')}
+    </div>` : '';
+
+  return `<div class="chart-head">
+      <div>
+        <h2>${escapeHtml(b.name)}</h2>
+        <p class="sub">${escapeHtml(standing)}</p>
+      </div>
+      <button class="icon-btn" id="chartClose" title="Close">✕</button>
+    </div>
+    ${podium}
+    ${ladder ? '<div class="chart-label">Your run</div>' : ''}
+    ${ladder}
+    <div class="chart-label">The chart</div>
+    ${tree}`;
+}
+
+/**
+ * The poster. What a cup is, in the order somebody deciding whether to enter
+ * wants it: the prize, the shape of the thing, and the two rules that catch
+ * people out.
+ */
+export function openCupPoster(cup) {
+  const cur = cup.prize?.currency === 'USD' ? '$' : `${cup.prize?.currency || ''} `;
+  const money = (n) => `${cur}${n ?? 0}`;
+  // The ladder a cup of this size actually runs: 100 → 50 → 25 → …
+  const rungs = [];
+  let left = Math.max(2, cup.entrants || 2);
+  for (let i = 0; i < 9 && left > 1; i++) { rungs.push(left); left = Math.ceil(left / 2); }
+  rungs.push(1);
+
+  openModal(`<div class="poster">
+      <button class="icon-btn poster-x" id="posterClose" title="Close">✕</button>
+      <div class="poster-top">
+        <span class="poster-mark">${icon('trophy', 30, 'solo')}</span>
+        <div class="poster-name">${escapeHtml(cup.name)}</div>
+        <div class="poster-tag">Knockout · winner takes ${money(cup.prize?.first)}</div>
+      </div>
+      <div class="poster-prizes">
+        <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money(cup.prize?.first)}</b></div>
+        <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money(cup.prize?.second)}</b></div>
+        <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money(cup.prize?.third)}</b></div>
+      </div>
+      <div class="poster-rungs">
+        ${rungs.map((n, i) => `<span class="rung ${i === rungs.length - 1 ? 'last' : ''}">${n === 1 ? '🏆' : n}</span>`)
+    .join('<i class="rung-arrow">→</i>')}
+      </div>
+      <ul class="poster-rules">
+        <li><b>Everyone enters at once.</b> When the doors close the whole field is paired off — a hundred players make fifty tables.</li>
+        <li><b>Win and you go through.</b> Lose and you are out. Your table opens by itself and takes you straight to it.</li>
+        <li><b>Two seats, no bots.</b> A cup table cannot be filled with house players, and the link cannot seat a third.</li>
+        <li><b>Come back for it.</b> A table nobody opens is given away after eight minutes.</li>
+      </ul>
+      <p class="poster-foot">Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code.</p>
+    </div>`, (root) => {
+    $('#posterClose', root).onclick = closeModal;
+  }, 'poster-modal');
+}
+
 export function openMapModal(state, actions) {
   fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {
     const card = (m) => `<button class="map-card ${m.id === state.mapId ? 'sel' : ''}" data-map="${m.id}">

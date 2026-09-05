@@ -212,6 +212,17 @@ export const adminPageHTML = `<!doctype html>
   .ok { color: #4fd98b; }
   .hint { font-size: 12px; color: #93a396; margin: -6px 0 10px; }
   .caption { font-size: 12px; color: #93a396; margin-top: 8px; }
+  /* The join window, counting down for real — see cupClockText. */
+  .cupclock {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin-top: 10px; padding: 10px 13px; border-radius: 12px;
+    background: rgba(232, 181, 46, .08); border: 1px solid rgba(232, 181, 46, .35);
+  }
+  .cupclock span { font-size: 12px; color: #93a396; }
+  .cupclock b {
+    font-size: 26px; font-weight: 800; color: #e8b52e;
+    font-variant-numeric: tabular-nums; letter-spacing: .5px;
+  }
   .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: #b8c4b4; flex-wrap: wrap; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   .idsplit { display: flex; gap: 26px; margin-top: 14px; flex-wrap: wrap; }
@@ -2670,6 +2681,20 @@ export const adminPageHTML = `<!doctype html>
     });
   }
 
+  // The join window's deadline, as the page last heard it, and the second
+  // hand that runs against it.
+  var cupClosesAt = 0;
+  function cupClockText() {
+    if (!cupClosesAt) return '';
+    var left = Math.max(0, Math.round((cupClosesAt - Date.now()) / 1000));
+    var m = Math.floor(left / 60), s = left % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+  setInterval(function () {
+    var el = document.getElementById('cup-clock');
+    if (el && cupClosesAt) el.textContent = cupClockText();
+  }, 1000);
+
   function cupMoney(cup, n) {
     var cur = (cup && cup.prize && cup.prize.currency) || 'USD';
     return (cur === 'USD' ? '$' : cur + ' ') + n;
@@ -2701,19 +2726,27 @@ export const adminPageHTML = `<!doctype html>
       now = '<div class="field"><label>' + esc(c.name) + '</label></div>' +
         '<div class="caption">State: <b>' + esc(c.state) + '</b> · ' + c.entrants.length + ' entered · prizes ' +
         cupMoney(c, c.prize.first) + ' / ' + cupMoney(c, c.prize.second) + ' / ' + cupMoney(c, c.prize.third) + '</div>';
+      // The clock, which ticks on its own between the five-second refreshes.
+      // A countdown that only moves when the page reloads is not a countdown.
       if (c.state === 'joining') {
-        var left = Math.max(0, Math.round((c.closesAt - Date.now()) / 1000));
-        now += '<div class="caption" style="margin-top:6px">Doors close in ' + left + 's.</div>';
+        cupClosesAt = c.closesAt;
+        now += '<div class="cupclock"><span>Doors close in</span>' +
+          '<b id="cup-clock">' + cupClockText() + '</b></div>';
+      } else {
+        cupClosesAt = 0;
       }
-      var last = c.rounds.length ? c.rounds[c.rounds.length - 1] : null;
-      if (last) {
+      // Every round, not only the latest: the whole bracket is the thing
+      // worth watching while a cup runs.
+      var shown = 0;
+      for (var ri = c.rounds.length - 1; ri >= 0; ri--) {
+        var r = c.rounds[ri];
         var doneCount = 0;
-        last.matches.forEach(function (m) { if (m.state === 'done') doneCount++; });
-        now += '<div class="caption" style="margin-top:6px">Latest round: <b>' + esc(last.kind) + '</b> — ' +
-          doneCount + ' of ' + last.matches.length + ' tables finished.</div>';
-        // The bracket itself, which is the thing worth watching while a cup
-        // runs: who is playing whom, at which table, and how it went.
-        now += '<div style="margin-top:10px">' + last.matches.slice(0, 60).map(function (m) {
+        r.matches.forEach(function (m) { if (m.state === 'done') doneCount++; });
+        now += '<div class="caption" style="margin-top:12px">Round ' + (ri + 1) + ' · <b>' + esc(r.kind) +
+          '</b> — ' + doneCount + ' of ' + r.matches.length + ' tables finished.</div>';
+        var room = r.matches.slice(0, Math.max(0, 80 - shown));
+        shown += room.length;
+        now += '<div>' + room.map(function (m) {
           var right = m.state === 'done'
             ? (m.void ? 'void — nobody came' : 'won by <b>' + esc(m.winner || '—') + '</b>' + (m.walkover ? ' (walkover)' : ''))
             : m.state === 'playing' ? 'playing at <b>' + esc(m.roomId || '—') + '</b>' : 'waiting for a table';
@@ -2721,8 +2754,9 @@ export const adminPageHTML = `<!doctype html>
             'padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
             '<span>' + esc(m.a) + ' v ' + esc(m.b) + '</span><span>' + right + '</span></div>';
         }).join('') + '</div>';
-        if (last.matches.length > 60) {
-          now += '<div class="caption">and ' + (last.matches.length - 60) + ' more tables</div>';
+        if (room.length < r.matches.length) {
+          now += '<div class="caption">and ' + (r.matches.length - room.length) + ' more tables</div>';
+          break;
         }
       }
       if (c.entrants.length) {
