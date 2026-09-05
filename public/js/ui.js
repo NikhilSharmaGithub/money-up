@@ -549,9 +549,16 @@ function boardTag(b) {
   return `<span class="bb-tag locked ${b.was ? 'sale' : ''}">${icon('coin', 10)} ${was}${b.price}</span>`;
 }
 
-/** Three of the places on it — what a card too small to list them all says. */
+/**
+ * Three of the places on it — what a card too small to list them all says.
+ *
+ * The server picks the dearest three rather than the first three, because a
+ * board is laid out cheapest-first and the top of that list sells Canada on
+ * Corner Brook. The fallback is only for a server too old to know that.
+ */
 const boardTeaser = (b) =>
-  (b.sets || []).flatMap((s) => s.cities).slice(0, 3).join(' · ');
+  (b.headline?.length ? b.headline : (b.sets || []).flatMap((s) => s.cities).slice(0, 3))
+    .join(' · ');
 
 /**
  * The board in words: every colour set with its own streets.

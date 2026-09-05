@@ -53,6 +53,8 @@ struct BoardSummary: Codable, Identifiable, Hashable {
     var country: Bool?
     var preview: BoardPreview?
     var sets: [BoardSet]?
+    /// The three dearest streets — the recognisable end of the board.
+    var headline: [String]?
 
     /// Playable right now — free, free today, or bought.
     var playable: Bool = true
@@ -63,8 +65,14 @@ struct BoardSummary: Codable, Identifiable, Hashable {
     var was: Int?
 
     /// A few of the places on it, for a card too small to list them all.
+    ///
+    /// The server picks the dearest three rather than the first three: a board
+    /// is laid out cheapest-first, so the top of that list sells Canada on
+    /// Corner Brook and Whitehorse. The fallback is only for a server too old
+    /// to know that.
     var teaser: String {
-        (sets ?? []).flatMap(\.cities).prefix(3).joined(separator: " · ")
+        let names = headline ?? Array((sets ?? []).flatMap(\.cities).prefix(3))
+        return names.prefix(3).joined(separator: " · ")
     }
 
     var storeId: String { "brd-\(id)" }

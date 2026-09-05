@@ -429,6 +429,16 @@ const summarise = (m) => ({
     color: GROUPS[g]?.color || '#8b5cf6',
     cities: idxs.map((i) => m.tiles[i].name),
   })),
+  // The three names for a card with room for three. Deliberately the DEAREST
+  // streets rather than the first ones: a board is laid out cheapest-first, so
+  // taking the top of the list sells Canada on Corner Brook and Whitehorse.
+  // The expensive end is the recognisable end — it is where Toronto is, and
+  // Mumbai, and Manhattan — and recognising something is the whole job here.
+  headline: m.tiles
+    .filter((t) => t.type === 'property')
+    .sort((a, b) => b.price - a.price)
+    .slice(0, 3)
+    .map((t) => t.name),
   // everything the client needs to draw a miniature of the board
   preview: {
     colors: m.tiles.map(swatch),
