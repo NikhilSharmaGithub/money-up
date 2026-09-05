@@ -454,13 +454,27 @@ struct AvatarView: View {
 }
 
 enum MMStatic {
-    static let flags = [
-        "🇮🇳", "🇬🇧", "🇺🇸", "🇧🇷", "🇩🇪", "🇫🇷", "🇮🇹", "🇪🇸", "🇵🇹", "🇳🇱",
-        "🇮🇪", "🇨🇭", "🇸🇪", "🇳🇴", "🇩🇰", "🇵🇱", "🇺🇦", "🇹🇷", "🇷🇴", "🇬🇷",
-        "🇮🇱", "🇦🇪", "🇸🇦", "🇪🇬", "🇿🇦", "🇳🇬", "🇰🇪", "🇨🇳", "🇯🇵", "🇰🇷",
-        "🇹🇭", "🇻🇳", "🇵🇭", "🇮🇩", "🇵🇰", "🇧🇩", "🇱🇰", "🇳🇵", "🇦🇺", "🇳🇿",
-        "🇨🇦", "🇲🇽", "🇦🇷", "🇨🇱", "🇨🇴", "🇷🇺", "🇸🇬", "🇲🇾", "🏴‍☠️", "🌍",
+    /// Flags with the names people know them by. A grid of fifty unlabelled
+    /// flags asks the reader to recognise every one of them; a named list can
+    /// be read, and it fits behind one row instead of half a screen.
+    static let countries: [(flag: String, name: String)] = [
+        ("🇮🇳", "India"), ("🇬🇧", "United Kingdom"), ("🇺🇸", "United States"),
+        ("🇧🇷", "Brazil"), ("🇩🇪", "Germany"), ("🇫🇷", "France"), ("🇮🇹", "Italy"),
+        ("🇪🇸", "Spain"), ("🇵🇹", "Portugal"), ("🇳🇱", "Netherlands"),
+        ("🇮🇪", "Ireland"), ("🇨🇭", "Switzerland"), ("🇸🇪", "Sweden"), ("🇳🇴", "Norway"),
+        ("🇩🇰", "Denmark"), ("🇵🇱", "Poland"), ("🇺🇦", "Ukraine"), ("🇹🇷", "Türkiye"),
+        ("🇷🇴", "Romania"), ("🇬🇷", "Greece"),
+        ("🇮🇱", "Israel"), ("🇦🇪", "United Arab Emirates"), ("🇸🇦", "Saudi Arabia"),
+        ("🇪🇬", "Egypt"), ("🇿🇦", "South Africa"), ("🇳🇬", "Nigeria"), ("🇰🇪", "Kenya"),
+        ("🇨🇳", "China"), ("🇯🇵", "Japan"), ("🇰🇷", "South Korea"),
+        ("🇹🇭", "Thailand"), ("🇻🇳", "Vietnam"), ("🇵🇭", "Philippines"),
+        ("🇮🇩", "Indonesia"), ("🇵🇰", "Pakistan"), ("🇧🇩", "Bangladesh"),
+        ("🇱🇰", "Sri Lanka"), ("🇳🇵", "Nepal"), ("🇦🇺", "Australia"), ("🇳🇿", "New Zealand"),
+        ("🇨🇦", "Canada"), ("🇲🇽", "Mexico"), ("🇦🇷", "Argentina"), ("🇨🇱", "Chile"),
+        ("🇨🇴", "Colombia"), ("🇷🇺", "Russia"), ("🇸🇬", "Singapore"), ("🇲🇾", "Malaysia"),
+        ("🏴‍☠️", "No country — pirate"), ("🌍", "The whole world"),
     ]
+    static let flags = countries.map(\.flag)
     /// One-tap reactions: the five that answer almost anything at a table.
     static let reactions = ["👍", "😂", "😱", "🤝", "🔥"]
     static let emotes = reactions + ["💸", "🎲", "😭", "🏠", "🤡"]

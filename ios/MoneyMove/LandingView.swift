@@ -587,12 +587,7 @@ struct LandingView: View {
                     .padding(11)
                     .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Country flag")
-                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
-                    flagGrid(P)
-                }
+                flagPicker(P)
             }
         }
     }
@@ -803,29 +798,52 @@ struct LandingView: View {
         }
     }
 
-    private func flagGrid(_ P: Palette) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 6) {
-            ForEach(MMStatic.flags, id: \.self) { f in
-                let selected = selectedFlag == f
-                Text(f)
-                    .font(.system(size: 20))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 34)
-                    .background(
-                        selected ? P.redSoft : P.sunken,
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(selected ? P.red : Color.clear, lineWidth: 1.5)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .onTapGesture {
-                        let next = selected ? "" : f
-                        selectedFlag = next
-                        store.setAppearance(flag: next)
-                    }
+    /// Your flag, as one row.
+    ///
+    /// This was a grid of fifty unlabelled flags taking up half the Settings
+    /// screen, which asked the reader to recognise every one of them. It is a
+    /// named list behind a tap now, with the one you picked on the right.
+    private func flagPicker(_ P: Palette) -> some View {
+        let current = MMStatic.countries.first { $0.flag == selectedFlag }
+        return Menu {
+            Button {
+                selectedFlag = ""
+                store.setAppearance(flag: "")
+            } label: {
+                Label("No flag", systemImage: selectedFlag.isEmpty ? "checkmark" : "flag.slash")
             }
+            Divider()
+            ForEach(MMStatic.countries, id: \.flag) { country in
+                Button {
+                    SoundKit.shared.click()
+                    selectedFlag = country.flag
+                    store.setAppearance(flag: country.flag)
+                } label: {
+                    Text(country.flag == selectedFlag
+                         ? "\(country.flag)  \(country.name)  ✓"
+                         : "\(country.flag)  \(country.name)")
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Text(selectedFlag.isEmpty ? "🏳️" : selectedFlag)
+                    .font(.system(size: 19))
+                Text("Country flag")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                Spacer(minLength: 6)
+                Text(current?.name ?? "None")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(.horizontal, 13)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
         }
     }
 
