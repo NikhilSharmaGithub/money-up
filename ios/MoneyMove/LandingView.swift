@@ -39,6 +39,9 @@ struct LandingView: View {
     @StateObject private var cupWatch = CupWatch()
     /// The friends room, opened from the summary row on the Social tab.
     @State private var friendsOpen = false
+    /// Notes from whoever runs the game — the bell at the top of Social.
+    @StateObject private var noticeWatch = NoticeWatch()
+    @State private var noticesOpen = false
 
     struct PublicRoom: Codable, Identifiable {
         var id: String
@@ -87,6 +90,9 @@ struct LandingView: View {
         .sheet(isPresented: $friendsOpen) {
             FriendsSheet().environmentObject(store)
         }
+        .sheet(isPresented: $noticesOpen) {
+            NoticesSheet(watch: noticeWatch)
+        }
         .onAppear {
             selectedFlag = store.flag
             store.refreshWallet()
@@ -103,6 +109,7 @@ struct LandingView: View {
             await loadAuthConfig()
             await refreshMe()
             cupWatch.start(store)
+            noticeWatch.start(store)
         }
         // A door can close while the app sits in a pocket, and a table can be
         // drawn in that time. Coming back asks straight away rather than
@@ -110,6 +117,7 @@ struct LandingView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.willEnterForegroundNotification)) { _ in
             cupWatch.reload()
+            Task { await noticeWatch.load() }
         }
     }
 
@@ -387,7 +395,16 @@ struct LandingView: View {
     /// because both of the things under it need one — a cup will not take an
     /// entry it cannot pay, and a friend code belongs to an account.
     @ViewBuilder private func socialTab(_ P: Palette) -> some View {
-        pageTitle("Social", "Your account, your friends, and whatever is being played for.", P)
+        // The title, with the bell beside it: a note about a round opening is
+        // no use two taps deep.
+        HStack(alignment: .top) {
+            pageTitle("Social", "Your account, your friends, and whatever is being played for.", P)
+            NoticeBell(watch: noticeWatch) {
+                Haptics.tap()
+                noticesOpen = true
+            }
+            .padding(.top, 8)
+        }
         accountCard(P)
         // Draws nothing at all unless the owner has tournaments switched on.
         CupCard(signedIn: me?.signedIn == true, watch: cupWatch)

@@ -41,6 +41,7 @@ function load() {
     for (const [key, thread] of Object.entries(raw.dms || {})) {
       dms.set(key, thread);
     }
+    if (Array.isArray(raw.notices)) notices.push(...raw.notices);
     console.log(`  social: restored ${profiles.size} profile(s)`);
   } catch {
     // first run, or the store was wiped by a redeploy — start fresh
@@ -56,6 +57,7 @@ function save() {
       fs.writeFileSync(STORE, JSON.stringify({
         profiles: [...profiles.values()],
         dms: Object.fromEntries(dms),
+        notices: notices.slice(0, MAX_NOTICES),
       }));
     } catch (err) {
       console.warn('social: could not persist profiles —', err.message);
@@ -967,6 +969,87 @@ export function socialOf(token) {
     requests: me.asked.map(card).filter(Boolean),
     sent: me.wants.map(card).filter(Boolean),
   };
+}
+
+// ----------------------------------------------------------------- notices --
+//
+// A note from the owner to a player, or to everybody.
+//
+// This is not chat and not a DM: it goes one way, it is written by whoever
+// runs the game, and it exists for the two things a tournament needs a voice
+// for — telling the field when the next round is, and telling a winner their
+// prize is on its way. Nobody can reply to one, so nobody can be dragged into
+// a conversation they did not ask for.
+
+/** @type {{id:string, text:string, title:string, to:string, at:number}[]} */
+const notices = [];        // newest first
+const MAX_NOTICES = 200;
+
+/**
+ * Write one. `toCode` empty means everybody; a friend code means that player
+ * alone. Returns the notice, and the token to push to when it has an address.
+ */
+export function sendNotice({ text, title, toCode } = {}) {
+  const body = String(text || '').trim().slice(0, 400);
+  if (!body) return { error: 'Write something first' };
+  const to = asCode(toCode);
+  let theirToken = '';
+  if (to) {
+    theirToken = byCode.get(to) || '';
+    if (!theirToken) return { error: 'No player with that code' };
+  }
+  const notice = {
+    id: Math.random().toString(36).slice(2, 10),
+    text: body,
+    title: String(title || '').trim().slice(0, 60),
+    to,                                   // '' = everyone
+    at: Date.now(),
+  };
+  notices.unshift(notice);
+  notices.length = Math.min(notices.length, MAX_NOTICES);
+  save();
+  return { ok: true, notice, token: theirToken };
+}
+
+/** Everything this player is meant to see, newest first, and how many are new. */
+export function noticesFor(token) {
+  const me = profiles.get(token);
+  if (!me) return { notices: [], unread: 0 };
+  const mine = notices.filter((n) => !n.to || n.to === me.code);
+  const seen = Number(me.noticesSeen) || 0;
+  return {
+    notices: mine.slice(0, 50).map((n) => ({
+      id: n.id, text: n.text, title: n.title, at: n.at,
+      // Whether it was written to this player or to the whole field. Worth
+      // saying: "you won" reads differently from "everybody won".
+      personal: !!n.to,
+      unread: n.at > seen,
+    })),
+    unread: mine.filter((n) => n.at > seen).length,
+  };
+}
+
+/** Opening the list is reading it. */
+export function markNoticesRead(token) {
+  const me = profiles.get(token);
+  if (!me) return { ok: true };
+  me.noticesSeen = Date.now();
+  save();
+  return { ok: true };
+}
+
+/** The owner's own view: everything sent, whoever it went to. */
+export function allNotices() {
+  return notices.slice(0, 50).map((n) => ({ ...n, to: n.to || '' }));
+}
+
+/** Delete one that was sent by mistake. */
+export function dropNotice(id) {
+  const i = notices.findIndex((n) => n.id === String(id || ''));
+  if (i < 0) return { error: 'No such note' };
+  notices.splice(i, 1);
+  save();
+  return { ok: true };
 }
 
 // ----------------------------------------------------------------- invites --

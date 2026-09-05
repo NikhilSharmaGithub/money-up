@@ -13,6 +13,7 @@ import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
   inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
+  sendNotice, noticesFor, markNoticesRead, allNotices, dropNotice,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
@@ -165,6 +166,15 @@ app.post('/api/invite', (req, res) => {
 /** Whatever is waiting for this player: an invite, for now. */
 app.get('/api/invite', (req, res) => {
   res.json({ invite: inviteFor(String(req.query.token || '').slice(0, 64)) });
+});
+
+/** The owner's notes to this player, and to the whole field. */
+app.get('/api/notices', (req, res) => {
+  res.json(noticesFor(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/notices/read', (req, res) => {
+  res.json(markNoticesRead(String(req.body?.token || '').slice(0, 64)));
 });
 
 app.post('/api/invite/clear', (req, res) => {
@@ -801,6 +811,39 @@ app.post('/api/admin/cup', (req, res) => {
   }
   if (result.error) return res.status(400).json(result);
   res.json({ ...result, view: cup.ownerView() });
+});
+
+/**
+ * Write to the field, or to one player.
+ *
+ * The one voice the owner has: "round two is at ten", "your prize is on its
+ * way". It goes one way — nobody can reply — and a note addressed to somebody
+ * also buzzes their phone where push is configured.
+ */
+app.post('/api/admin/notice', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  if (req.body?.drop) {
+    const gone = dropNotice(req.body.drop);
+    return res.status(gone.error ? 400 : 200).json({ ...gone, notices: allNotices() });
+  }
+  const result = sendNotice({
+    text: req.body?.text, title: req.body?.title, toCode: req.body?.code,
+  });
+  if (result.error) return res.status(400).json(result);
+  audit('notice', result.notice.to || 'everyone', String(result.notice.text).slice(0, 120));
+  // A note with an address is worth a buzz; one to the whole field is not
+  // — a hundred phones lighting up at once is how an app gets muted.
+  if (result.token) {
+    sendTurnPush(result.token, result.notice.title
+      ? `${result.notice.title} — ${result.notice.text}`
+      : result.notice.text, { collapseId: 'notice' });
+  }
+  res.json({ ok: true, notice: result.notice, notices: allNotices() });
+});
+
+app.get('/api/admin/notices', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json({ notices: allNotices() });
 });
 
 /** Grant coins to a friend code — recorded in the ledger as provider 'admin'. */

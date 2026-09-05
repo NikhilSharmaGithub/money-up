@@ -2472,6 +2472,52 @@ console.log('\n▶ tournaments');
     ok('a scheduled cup opens each round at its appointed minute, seats nothing early, and tells every player who they play and when');
   }
 
+  // Notes from the owner: one to everybody, one to a single player, and
+  // never the second reaching anybody it was not written to.
+  {
+    const who = (n) => {
+      const token = `note-${n}`;
+      social.profileFor(token, { name: `N${n}` });
+      social.attachLogin(token, 'test', `nt-${n}`, `N${n}`);
+      return { token, code: social.profilesByToken(token).code };
+    };
+    const winner = who('w'), other = who('o');
+
+    if (!social.sendNotice({ text: 'Round two opens at ten.' }).ok) {
+      fail('notice: a note to everybody was refused');
+    }
+    const personal = social.sendNotice({
+      title: 'You won', text: 'Your prize is on its way.', toCode: winner.code,
+    });
+    if (!personal.ok) fail('notice: a note to one player was refused');
+    if (personal.token !== winner.token) fail('notice: an addressed note named the wrong phone to buzz');
+    if (!social.sendNotice({ text: '   ' }).error) fail('notice: an empty note was accepted');
+    if (!social.sendNotice({ text: 'hello', toCode: 'NOBODY' }).error) {
+      fail('notice: a note to a code nobody has was accepted');
+    }
+
+    const mine = social.noticesFor(winner.token);
+    const theirs = social.noticesFor(other.token);
+    if (mine.notices.length !== 2) fail('notice: the winner did not get both notes');
+    if (theirs.notices.length !== 1) fail('notice: somebody saw a note written to another player');
+    if (theirs.notices.some((n) => n.text.includes('prize'))) {
+      fail('notice: a personal note leaked to the whole field');
+    }
+    if (!mine.notices[0].personal) fail('notice: a personal note was not marked as one');
+    if (mine.unread !== 2 || theirs.unread !== 1) fail('notice: the unread count was wrong');
+
+    // Reading is reading, and only for the reader.
+    social.markNoticesRead(winner.token);
+    if (social.noticesFor(winner.token).unread !== 0) fail('notice: reading did not clear the count');
+    if (social.noticesFor(other.token).unread !== 1) fail('notice: one player reading cleared another\'s');
+
+    // And the owner can take one back.
+    const id = social.allNotices()[0].id;
+    social.dropNotice(id);
+    if (social.allNotices().some((n) => n.id === id)) fail('notice: a deleted note stayed');
+    ok('a note reaches everybody or exactly one player, is never read by anybody else, and can be taken back');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {

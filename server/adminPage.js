@@ -230,7 +230,23 @@ export const adminPageHTML = `<!doctype html>
   }
   .cupcard:hover { border-color: rgba(232, 181, 46, .4); }
   .cupcard.on { background: rgba(232, 181, 46, .08); border-color: #e8b52e; }
-  .cupcard-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .cupcard-top { display: flex; align-items: center; gap: 10px; }
+  .cupcard-top b { flex: 1; min-width: 0; }
+  /* Notes the owner has sent. */
+  .ntrow {
+    display: flex; align-items: flex-start; gap: 10px; padding: 9px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .05); font-size: 13px;
+  }
+  .ntwho { flex: none; width: 92px; }
+  .ntbody { flex: 1; min-width: 0; color: #dfe7e0; line-height: 1.5; }
+  .ntbody b { color: #e8b52e; }
+  .ntwhen { display: block; margin-top: 2px; font-size: 11px; color: #6d7d70; }
+  .cupdel {
+    flex: none; width: 24px; height: 24px; border-radius: 99px; cursor: pointer;
+    font-size: 12px; line-height: 1; color: #93a396;
+    background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .1);
+  }
+  .cupdel:hover { color: #fff; background: #b23c4e; border-color: #b23c4e; }
   .cupcard-top b { font-size: 14px; color: #dfe7e0; }
   .cupcard .caption { margin-top: 3px; }
   .cupstate {
@@ -641,6 +657,19 @@ export const adminPageHTML = `<!doctype html>
         <div id="cupnow"></div>
       </div>
     </div>
+    <section class="card">
+      <h2>Write to players</h2>
+      <p class="hint">The one voice you have in the app. Leave the code blank and it goes to everybody; put a friend code in and only that player sees it — and their phone buzzes, where push is set up. Nobody can reply to a note.</p>
+      <div class="mini-forms">
+        <div class="field"><label>Heading (optional)</label><input id="nt-title" maxlength="60" placeholder="Round two" /></div>
+        <div class="field"><label>To (friend code — blank = everyone)</label><input id="nt-code" maxlength="6" placeholder="everyone" /></div>
+      </div>
+      <div class="field" style="margin-top:10px"><label>The note</label>
+        <textarea id="nt-text" rows="3" maxlength="400" placeholder="Round two opens at 10pm. Ten minutes to turn up."></textarea></div>
+      <div style="margin-top:12px"><button class="btn sm" id="nt-send">Send it</button></div>
+      <div class="msg" id="ntmsg"></div>
+      <div id="ntlist"></div>
+    </section>
     <section class="card">
       <h2>Owed</h2>
       <p class="hint">Finished cups and the three people to pay. Marking one paid is a note to yourself — nothing leaves an account from here.</p>
@@ -2808,6 +2837,14 @@ export const adminPageHTML = `<!doctype html>
 
   // Clicking a cup in the list points the form and the live panel at it.
   document.addEventListener('click', function (e) {
+    var del = e.target.closest && e.target.closest('[data-cup-del]');
+    if (del) {
+      var cupId = del.getAttribute('data-cup-del');
+      if (!confirm('Delete this cup?' + NL + NL +
+        'Everyone who joined is dropped and nothing is paid.')) return;
+      cupPost('cancel', { cupId: cupId });
+      return;
+    }
     var pick = e.target.closest && e.target.closest('[data-cup-pick]');
     if (!pick) return;
     cupMakingNew = false;
@@ -2832,6 +2869,68 @@ export const adminPageHTML = `<!doctype html>
     var list = document.getElementById('cuplistall');
     if (list) list.querySelectorAll('.cupcard.on').forEach(function (el) { el.classList.remove('on'); });
   });
+
+  // ---- writing to players -----------------------------------------------
+  function renderNotices(list) {
+    var el = document.getElementById('ntlist');
+    if (!el) return;
+    if (!list || !list.length) {
+      el.innerHTML = '<div class="caption">Nothing sent yet.</div>';
+      return;
+    }
+    el.innerHTML = '<div class="caption" style="margin-top:14px">Sent</div>' +
+      list.map(function (n) {
+        return '<div class="ntrow">' +
+          '<div class="ntwho">' + (n.to
+            ? '<span class="pill">' + esc(n.to) + '</span>'
+            : '<span class="pill ok">everyone</span>') + '</div>' +
+          '<div class="ntbody">' + (n.title ? '<b>' + esc(n.title) + '</b> ' : '') +
+          esc(n.text) + '<span class="ntwhen">' + esc(new Date(n.at).toLocaleString()) + '</span></div>' +
+          '<button class="cupdel" data-nt-del="' + esc(n.id) + '" title="Delete this note">✕</button>' +
+          '</div>';
+      }).join('');
+  }
+
+  function noticePost(body, then) {
+    body.key = KEY;
+    post('/api/admin/notice', body, function (d) {
+      var msg = document.getElementById('ntmsg');
+      if (d && d.error) { if (msg) { msg.textContent = d.error; msg.className = 'msg bad'; } return; }
+      if (msg) { msg.textContent = 'Sent.'; msg.className = 'msg good'; }
+      renderNotices(d && d.notices);
+      if (then) then();
+    });
+  }
+
+  var ntSend = document.getElementById('nt-send');
+  if (ntSend) ntSend.addEventListener('click', function () {
+    var text = (document.getElementById('nt-text').value || '').trim();
+    var code = (document.getElementById('nt-code').value || '').trim().toUpperCase();
+    if (!text) return alert('Write the note first.');
+    if (!confirm(code
+      ? 'Send this to ' + code + ' only?'
+      : 'Send this to EVERY player?' + NL + NL + 'They all see it the next time they open the app.')) return;
+    noticePost({
+      text: text, title: (document.getElementById('nt-title').value || '').trim(), code: code,
+    }, function () {
+      document.getElementById('nt-text').value = '';
+      document.getElementById('nt-title').value = '';
+      document.getElementById('nt-code').value = '';
+    });
+  });
+
+  document.addEventListener('click', function (e) {
+    var del = e.target.closest && e.target.closest('[data-nt-del]');
+    if (!del) return;
+    if (!confirm('Delete this note? Players who have already read it keep it.')) return;
+    noticePost({ drop: del.getAttribute('data-nt-del') });
+  });
+
+  // Whatever has been sent already, on first paint of the section.
+  fetch('/api/admin/notices?key=' + encodeURIComponent(KEY))
+    .then(function (r) { return r.json(); })
+    .then(function (d) { renderNotices(d && d.notices); })
+    .catch(function () {});
 
   var cupOpenBtn = document.getElementById('cup-open');
   if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
@@ -3154,7 +3253,8 @@ export const adminPageHTML = `<!doctype html>
             : x.state === 'running' ? (x.rounds.length + ' rounds drawn') : '';
         return '<div class="cupcard' + (x.id === cupPicked ? ' on' : '') + '" data-cup-pick="' + esc(x.id) + '">' +
           '<div class="cupcard-top"><b>' + esc(x.name) + '</b>' +
-          '<span class="cupstate ' + esc(x.state) + '">' + esc(cupState[x.state] || x.state) + '</span></div>' +
+          '<span class="cupstate ' + esc(x.state) + '">' + esc(cupState[x.state] || x.state) + '</span>' +
+          '<button class="cupdel" data-cup-del="' + esc(x.id) + '" title="Delete this cup">✕</button></div>' +
           '<div class="caption">' + esc(when) + ' · ' + x.entrants.length +
           (x.maxPlayers ? ' of ' + x.maxPlayers : '') + ' joined' +
           (x.joinCode ? ' · code ' + esc(x.joinCode) : '') + '</div>' +
