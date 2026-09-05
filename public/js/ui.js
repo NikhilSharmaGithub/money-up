@@ -2258,6 +2258,164 @@ export function cupMoney(cup, place) {
   return `${cur}${Number(cup?.prize?.[place] ?? 0).toLocaleString('en-US')}`;
 }
 
+/**
+ * The tournament, opened.
+ *
+ * The card is a summary — a countdown, three prizes, one button. This is the
+ * room behind it, and it answers the question a player in a cup actually has
+ * at nine in the evening: not "what round am I in" but "who do I play, when
+ * does the door open, and what happens if I miss it". That goes at the top.
+ */
+export function openCupDetail(cup, token, onJoin) {
+  const money = (place) => cupMoney(cup, place);
+  const you = cup.you || {};
+  const next = you.next || null;
+  const num = (n) => Number(n || 0).toLocaleString('en-US');
+
+  // What a field this size takes, so "round 3 of 8" means something before
+  // the bracket has been drawn that far.
+  let depth = 0;
+  for (let n = Math.max(2, cup.entrants); n > 1; n = Math.ceil(n / 2)) depth++;
+
+  const pool = (() => {
+    const l = cup.local;
+    if (l && l.first != null) {
+      return `≈${l.symbol || `${l.code} `}${num(l.first + l.second + l.third)}`;
+    }
+    const cur = cup.prize?.currency === 'USD' ? '$' : `${cup.prize?.currency || ''} `;
+    return `${cur}${num((cup.prize?.first || 0) + (cup.prize?.second || 0) + (cup.prize?.third || 0))}`;
+  })();
+
+  const schedLine = (() => {
+    const times = cup.schedule?.times || [];
+    if (!times.length) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    const clock = times.map((m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`);
+    const joined = clock.length === 1 ? clock[0]
+      : `${clock.slice(0, -1).join(', ')} and ${clock[clock.length - 1]}`;
+    return `Rounds at ${joined} · ${cup.schedule.windowMinutes} minutes to turn up`;
+  })();
+
+  const nextBlock = next ? `<div class="cd-next ${next.open ? 'open' : ''}">
+      <div class="cd-next-head">${next.open ? 'Your match is open' : 'Your next match'}</div>
+      <div class="cd-vs">
+        <span class="cd-side mine">${escapeHtml(you.name || 'You')}</span>
+        <span class="cd-v">v</span>
+        <span class="cd-side">${escapeHtml(next.opponent || 'a bye')}</span>
+      </div>
+      <div class="cd-when" id="cdWhen"></div>
+      ${next.roomId ? `<button class="btn primary wide" id="cdPlay">${icon('dice', 15)} Play your match</button>` : ''}
+    </div>` : '';
+
+  // Your own run, off the round the card already carries — the whole bracket
+  // is a separate fetch and this has to open instantly.
+  const myName = you.name;
+  const rungs = [];
+  const r = cup.round;
+  if (myName && r?.matches) {
+    r.matches.forEach((m) => {
+      if (m.a !== myName && m.b !== myName) return;
+      const other = m.a === myName ? m.b : m.a;
+      const won = m.winner === myName;
+      rungs.push({
+        label: r.kind === 'final' ? 'The final' : `Round ${r.n || 1}`,
+        line: m.state !== 'done' ? `playing ${escapeHtml(other || '…')}`
+          : won ? `beat ${escapeHtml(other || 'a walkover')}`
+            : `lost to ${escapeHtml(m.winner || 'the other side')}`,
+        cls: m.state !== 'done' ? 'live' : won ? 'won' : 'lost',
+      });
+    });
+  }
+
+  const standings = cup.standings?.first ? `<div class="chart-label">Final standings</div>
+    <div class="chart-podium">
+      ${['first', 'second', 'third'].map((place, i) => {
+    const who = cup.standings[place];
+    const mine = who?.code && who.code === you.code;
+    return `<div class="cup-step ${place} ${mine ? 'mine' : ''}">
+          <span class="cup-place">${['1st', '2nd', '3rd'][i]}</span>
+          <b>${who ? escapeHtml(who.name) : '—'}</b>
+          <span class="cup-won">${money(place)}</span>
+          ${who?.code && !mine ? `<button class="icon-btn cd-add" data-ask="${escapeHtml(who.code)}"
+            title="Ask ${escapeHtml(who.name)} to be friends">${icon('people', 13, 'solo')}</button>` : ''}
+        </div>`;
+  }).join('')}
+    </div>` : '';
+
+  openModal(`<div class="chart-head">
+      <div>
+        <h2>${escapeHtml(cup.name)}</h2>
+        <p class="sub">${cup.needsCode ? 'Invite only' : 'Open to everyone'} · knockout — last one standing takes ${money('first')}</p>
+        ${schedLine ? `<p class="sub">${icon('snooze', 12)} ${escapeHtml(schedLine)}</p>` : ''}
+      </div>
+      <button class="icon-btn" id="cdClose" title="Close">✕</button>
+    </div>
+    <div class="cd-tiles">
+      <div><span>Prize pool</span><b>${pool}</b></div>
+      <div><span>${cup.state === 'done' ? 'Finished' : 'Round'}</span><b>${cup.state === 'done' ? '—' : `${you.round || cup.rounds || 1} of ${depth}`}</b></div>
+      <div><span>Still in</span><b>${num(you.left ?? cup.entrants)}</b></div>
+    </div>
+    ${nextBlock}
+    ${rungs.length ? `<div class="chart-label">Your run</div>
+      <ol class="cup-ladder">${rungs.map((x) => `<li class="${x.cls}">
+        <span class="lad-dot"></span>
+        <span class="lad-body"><b>${escapeHtml(x.label)}</b><span>${x.line}</span></span>
+      </li>`).join('')}</ol>` : ''}
+    ${standings}
+    <button class="btn ghost small wide" id="cdChart">${icon('chart', 13)} See the whole chart</button>
+    <div class="chart-label">How it works</div>
+    <ul class="poster-rules">
+      <li>Win your match and you go through. Lose it and you are out.</li>
+      ${cup.schedule?.times?.length ? `<li>Each round opens at its time and stays open ${cup.schedule.windowMinutes} minutes. <b>Turn up inside that window or you are out</b> — even if you would have won.</li>` : ''}
+      <li>Prizes are paid by hand by whoever set the cup up. Keep your friend code.</li>
+    </ul>`, (root) => {
+    $('#cdClose', root).onclick = closeModal;
+    $('#cdChart', root).onclick = () => openCupBracket(token, cup.id);
+    const play = $('#cdPlay', root);
+    if (play) play.onclick = () => { closeModal(); onJoin?.(next.roomId); };
+    // The door's clock, ticking, because a countdown that only moves on a
+    // refresh is not one.
+    const when = $('#cdWhen', root);
+    if (when && next) {
+      const paint = () => {
+        if (!when.isConnected) return clearInterval(timer);
+        if (!next.open && next.opensAt) {
+          when.textContent = `Opens in ${longCountdownText(next.opensAt - Date.now())}`;
+          when.className = 'cd-when';
+        } else if (next.closesAt) {
+          when.textContent = `Door shuts in ${longCountdownText(next.closesAt - Date.now())} — miss it and you are out`;
+          when.className = 'cd-when urgent';
+        } else {
+          when.textContent = 'Your table is being made…';
+        }
+      };
+      paint();
+      const timer = setInterval(paint, 1000);
+    }
+    root.querySelectorAll('[data-ask]').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          const res = await fetch(api('/api/friends'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, code: b.dataset.ask }),
+          });
+          const out = await res.json();
+          b.textContent = out.ok ? '✓' : '✕';
+          b.disabled = true;
+        } catch { /* the next open of this sheet tries again */ }
+      };
+    });
+  }, 'wide cup-detail');
+}
+
+/** Days and hours when it is far off, minutes and seconds when it is close. */
+function longCountdownText(ms) {
+  const left = Math.max(0, Math.round(ms / 1000));
+  if (left >= 86400) return `${Math.floor(left / 86400)}d ${Math.floor((left % 86400) / 3600)}h`;
+  if (left >= 3600) return `${Math.floor(left / 3600)}h ${Math.floor((left % 3600) / 60)}m`;
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+}
+
 // ─────────────────────────────────────────────────────────── the cup chart ──
 /**
  * The bracket, as a chart you can read your own run off.

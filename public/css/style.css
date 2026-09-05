@@ -679,6 +679,47 @@ select { cursor: pointer; }
 .friend-flag.lobby { box-shadow: 0 0 0 1.5px var(--gold); }
 .friend-flag.playing { box-shadow: 0 0 0 1.5px var(--good); }
 
+/* ---- the tournament, opened ---- */
+.cup-detail { max-width: min(94vw, 480px); }
+.cd-tiles { display: flex; gap: 8px; margin-top: 14px; }
+.cd-tiles > div {
+  flex: 1; min-width: 0; text-align: center; padding: 11px 6px; border-radius: 13px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.cd-tiles span {
+  display: block; font-size: 10.5px; font-weight: 850; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.cd-tiles b {
+  display: block; margin-top: 3px; font-size: 17px; font-weight: 900; color: var(--ink);
+  font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* What happens next, which is the whole reason this screen exists. */
+.cd-next {
+  margin-top: 14px; padding: 14px; border-radius: 15px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.cd-next.open { background: var(--gold-soft); border-color: var(--gold); }
+.cd-next-head {
+  font-size: 10.5px; font-weight: 850; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cd-next.open .cd-next-head { color: var(--good); }
+.cd-vs { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.cd-side {
+  flex: 1; min-width: 0; text-align: center; padding: 10px 8px; border-radius: 11px;
+  font-size: 14px; font-weight: 850; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--rule);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-side.mine { color: var(--ink); border-color: var(--gold); }
+.cd-v { flex: none; font-size: 13px; font-weight: 900; color: var(--ink-3); }
+.cd-when { margin-top: 10px; font-size: 12.5px; font-weight: 700; color: var(--ink-2);
+  font-variant-numeric: tabular-nums; }
+.cd-when.urgent { color: var(--bad); }
+.cd-next .btn { margin-top: 11px; }
+.cd-add { margin-left: 8px; }
+
 /* ---- the cup chart: a bracket you can find yourself in ---- */
 .chart-modal { max-width: min(96vw, 1100px); }
 .chart-loading { display: grid; place-items: center; gap: 10px; padding: 40px 0; color: var(--ink-3); }

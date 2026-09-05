@@ -10,7 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
-  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, cupMoney,
+  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -1535,6 +1535,7 @@ function paintCup(data) {
     stopCupClock();
     cupClock = setInterval(clock, 1000);
     wireCupPoster(cup);
+    wireCupHead(cup);
     wireOtherCups();
     return;
   }
@@ -1606,6 +1607,7 @@ function paintCup(data) {
     const leave = $('#cupLeave');
     if (leave) leave.onclick = () => { sfx.click(); leaveCup(); };
     wireCupPoster(cup);
+    wireCupHead(cup);
     wireOtherCups();
     return;
   }
@@ -1639,11 +1641,11 @@ function paintCup(data) {
         ? `<div class="cup-run">${icon('trophy', 12)} ${cup.you.survived} won · <b>${cup.you.left}</b> still in${cup.you.roundLabel ? ` · ${escapeHtml(cup.you.roundLabel)}` : ''}</div>`
         : ''}
       ${cup.you.roomId ? `<button class="btn primary wide" id="cupGo">Go to your table</button>` : ''}
-      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} Open the tournament</button>
       ${otherCupsHTML(data.others)}`;
     const goBtn = $('#cupGo');
     if (goBtn) goBtn.onclick = () => { sfx.click(); go(cup.you.roomId); };
-    wireCupChart();
+    wireCupChart(cup);
     wireOtherCups();
     return;
   }
@@ -1673,9 +1675,9 @@ function paintCup(data) {
         ${step('third', s.third, '3rd')}
       </div>
       ${mine ? `<div class="cup-in ok">${icon('trophy', 14)} You finished ${mine}. The prize is paid by hand — hold on to your friend code.</div>` : ''}
-      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} See the chart</button>
+      <button class="btn ghost small wide" id="cupChart">${icon('chart', 13)} Open the tournament</button>
       ${otherCupsHTML(data.others)}`;
-    wireCupChart();
+    wireCupChart(cup);
     wireOtherCups();
     return;
   }
@@ -1725,9 +1727,22 @@ function wireOtherCups() {
   });
 }
 
-function wireCupChart() {
+function wireCupChart(cup) {
   const b = $('#cupChart');
-  if (b) b.onclick = () => { sfx.click(); openCupBracket(token, cupShow); };
+  if (b) b.onclick = () => { sfx.click(); openCupDetail(cup, token, (id) => go(id)); };
+  // The head is a door too — tapping the name is the obvious thing to try.
+  const head = $('#cupCard .cup-head');
+  if (head) {
+    head.style.cursor = 'pointer';
+    head.onclick = () => { sfx.click(); openCupDetail(cup, token, (id) => go(id)); };
+  }
+}
+
+function wireCupHead(cup) {
+  const head = $('#cupCard .cup-head');
+  if (!head) return;
+  head.style.cursor = 'pointer';
+  head.onclick = () => { sfx.click(); openCupDetail(cup, token, (id) => go(id)); };
 }
 
 function wireCupPoster(cup) {
