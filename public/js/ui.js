@@ -2570,6 +2570,25 @@ function chartHTML(b) {
  */
 export function openCupPoster(cup) {
   const money = (place) => cupMoney(cup, place);
+  // What this cup is committing its players to, in dates and hours.
+  const sched = cup.schedule?.times?.length ? {
+    windowMinutes: cup.schedule.windowMinutes || 10,
+    matchMinutes: cup.schedule.matchMinutes || 90,
+    clock: cup.schedule.times.map((m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`)
+      .join(' and '),
+  } : null;
+  const plan = cup.plan || [];
+  const shape = (() => {
+    let n = Math.max(2, cup.maxPlayers || cup.entrants || 2), rounds = 0;
+    while (n > 1) { n = Math.ceil(n / 2); rounds++; }
+    return { rounds, evenings: Math.ceil(rounds / (cup.schedule?.times?.length || 2)) };
+  })();
+  const when = (ms) => new Date(ms).toLocaleString([], {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+  const shutAt = cup.closesAt ? when(cup.closesAt) : '';
+  const finalAt = plan.length ? when(plan[plan.length - 1].opensAt) : '';
+
   // The ladder a cup of this size actually runs: 100 → 50 → 25 → …
   const rungs = [];
   let left = Math.max(2, cup.entrants || 2);
@@ -2592,11 +2611,18 @@ export function openCupPoster(cup) {
         ${rungs.map((n, i) => `<span class="rung ${i === rungs.length - 1 ? 'last' : ''}">${n === 1 ? '🏆' : n}</span>`)
     .join('<i class="rung-arrow">→</i>')}
       </div>
+      ${sched ? `<div class="poster-when">
+        <div class="pw-line"><span>Joining shuts</span><b>${escapeHtml(shutAt)}</b></div>
+        <div class="pw-line"><span>Rounds</span><b>${escapeHtml(sched.clock)}</b></div>
+        <div class="pw-line"><span>Evenings</span><b>${shape.evenings} · ${shape.rounds} rounds</b></div>
+        ${finalAt ? `<div class="pw-line"><span>The final</span><b>${escapeHtml(finalAt)}</b></div>` : ''}
+      </div>` : ''}
       <ul class="poster-rules">
-        <li><b>Everyone enters at once.</b> When the doors close the whole field is paired off — a hundred players make fifty tables.</li>
-        <li><b>Win and you go through.</b> Lose and you are out. Your table opens by itself and takes you straight to it.</li>
+        <li><b>Everyone enters at once.</b> When joining shuts the whole field is paired off — a hundred players make fifty tables.</li>
+        <li><b>Win and you go through. Lose and you are out.</b> One defeat ends your tournament: there is no second chance and no losers' bracket.</li>
+        ${sched ? `<li><b>Turn up inside the window.</b> Each round opens at its time and stays open ${sched.windowMinutes} minutes. Miss it and you are out — even if you would have won.</li>
+        <li><b>Every game is ${sched.matchMinutes} minutes.</b> Nobody bankrupt by then? The player with the higher net worth goes through.</li>` : ''}
         <li><b>Two seats, no bots.</b> A cup table cannot be filled with house players, and the link cannot seat a third.</li>
-        <li><b>Come back for it.</b> A table nobody opens is given away after eight minutes.</li>
       </ul>
       <p class="poster-foot">${cup.local ? `Prizes are set in ${escapeHtml(cup.prize?.currency || 'USD')} and shown here in your own money at today’s rate. ` : ''}Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code.</p>
     </div>`, (root) => {

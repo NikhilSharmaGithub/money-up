@@ -241,6 +241,15 @@ export const adminPageHTML = `<!doctype html>
   .cupstate.joining { color: #7ee2a8; background: rgba(126, 226, 168, .12); }
   .cupstate.running { color: #e8b52e; background: rgba(232, 181, 46, .14); }
   .cupstate.scheduled { color: #9fc4e8; background: rgba(159, 196, 232, .12); }
+  /* The standard shape, at the top of the form. */
+  .cupstd {
+    padding: 13px; margin-bottom: 14px; border-radius: 13px;
+    background: rgba(232, 181, 46, .06); border: 1px solid rgba(232, 181, 46, .3);
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+  }
+  .cupstd .field { margin: 0; }
+  .cupstd .caption { flex-basis: 100%; margin-top: 2px; line-height: 1.6; }
+  .warn-line { color: #e8b52e; }
   .cuplist { margin-top: 8px; max-height: 320px; overflow: auto; }
   .cuprow {
     display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
@@ -559,6 +568,14 @@ export const adminPageHTML = `<!doctype html>
       </div>
       <div class="card">
         <h2 id="cup-formtitle">Set up a cup</h2>
+        <!-- The standard shape, so every tournament this game runs is the
+             same tournament and a player only has to learn it once. -->
+        <div class="cupstd">
+          <div class="field"><label>Starts on</label><input id="cup-start" type="date" /></div>
+          <div class="field"><label>Players</label><input id="cup-size" type="number" value="256" min="2" /></div>
+          <button class="btn sm" id="cup-standard">Build the standard tournament</button>
+          <div class="caption" id="cup-preview"></div>
+        </div>
         <p class="hint">Three things decide a cup: when players can start joining, how long joining stays open, and what the winners get. Save it once and you can change any of it — the date included — right up until the games start.</p>
         <div class="mini-forms">
           <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
@@ -568,6 +585,7 @@ export const adminPageHTML = `<!doctype html>
           <div class="field"><label>Join code (blank = anyone can join)</label><input id="cup-code" placeholder="e.g. SUNDAY" maxlength="16" /></div>
           <div class="field"><label>Match times each day (blank = back to back)</label><input id="cup-times" placeholder="20:00, 22:00" /></div>
           <div class="field"><label>Each match window (minutes)</label><input id="cup-window" type="number" value="10" min="2" /></div>
+          <div class="field"><label>Game length (minutes)</label><input id="cup-length" type="number" value="90" min="5" /></div>
           <div class="field"><label>1st prize</label><input id="cup-first" type="number" value="200" /></div>
           <div class="field"><label>2nd prize</label><input id="cup-second" type="number" value="100" /></div>
           <div class="field"><label>3rd prize</label><input id="cup-third" type="number" value="50" /></div>
@@ -2576,6 +2594,57 @@ export const adminPageHTML = `<!doctype html>
     if (state.data) renderPlayers();
   }
   /**
+   * The standard tournament.
+   *
+   * Every cup this game runs should be the same cup, so a player learns it
+   * once: joining opens the moment it is announced and shuts at eight on the
+   * first evening, two rounds a night at eight and ten, ten minutes to turn
+   * up, ninety minutes a game. The owner picks a date, a size and three
+   * prizes; everything else follows from those.
+   */
+  var STD = { times: [20 * 60, 22 * 60], windowMinutes: 10, matchMinutes: 90 };
+
+  /** How many rounds a field of this size takes, and how many evenings. */
+  function cupShape(players) {
+    var n = Math.max(2, Math.floor(players) || 2), rounds = 0, steps = [];
+    while (n > 1) { steps.push(n); n = Math.ceil(n / 2); rounds++; }
+    return { rounds: rounds, evenings: Math.ceil(rounds / STD.times.length), steps: steps };
+  }
+
+  function cupPreview() {
+    var el = document.getElementById('cup-preview');
+    if (!el) return;
+    var size = Number((document.getElementById('cup-size') || {}).value) || 0;
+    var date = (document.getElementById('cup-start') || {}).value;
+    if (!size || !date) {
+      el.textContent = 'Pick a date and a size and this says exactly what will happen.';
+      return;
+    }
+    var shape = cupShape(size);
+    // Round one is at the first slot on the start date; each round after it
+    // takes the next slot.
+    var start = new Date(date + 'T00:00:00');
+    var when = function (i) {
+      var d = new Date(start);
+      d.setDate(d.getDate() + Math.floor(i / STD.times.length));
+      var m = STD.times[i % STD.times.length];
+      d.setHours(Math.floor(m / 60), m % 60, 0, 0);
+      return d;
+    };
+    var last = when(shape.rounds - 1);
+    var pow2 = Math.pow(2, Math.round(Math.log(size) / Math.log(2)));
+    el.innerHTML = '<b>' + size + ' players → ' + shape.rounds + ' rounds over ' +
+      shape.evenings + ' evening' + (shape.evenings > 1 ? 's' : '') + '.</b> ' +
+      'Joining opens the moment you save and shuts at ' + when(0).toLocaleString() + '. ' +
+      'The final is ' + last.toLocaleString() + '. ' +
+      'Two rounds a night at 20:00 and 22:00, ten minutes to turn up, ninety minutes a game.' +
+      (pow2 !== size
+        ? '<br><span class="warn-line">' + size + ' is not a power of two, so some rounds hand out byes. ' +
+          pow2 + ' would give a clean bracket.</span>'
+        : '');
+  }
+
+  /**
    * "20:00, 22:00" becomes minutes past local midnight, and the offset the
    * desk is sitting in travels with it — so eight in the evening means eight
    * where the owner is, not eight at Greenwich.
@@ -2596,6 +2665,7 @@ export const adminPageHTML = `<!doctype html>
     return {
       times: times,
       windowMinutes: Number((document.getElementById('cup-window') || {}).value) || 10,
+      matchMinutes: Number((document.getElementById('cup-length') || {}).value) || 90,
       offsetMinutes: -new Date().getTimezoneOffset(),
     };
   }
@@ -2622,6 +2692,36 @@ export const adminPageHTML = `<!doctype html>
     note.textContent = 'Players will see this cup straight away and count down to ' +
       new Date(ms).toLocaleString() + ' — ' + human + ' from now. Nobody can join until then.';
   }
+  ['cup-start', 'cup-size'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', cupPreview);
+  });
+  cupPreview();
+
+  // One button fills the whole form from a date, a size and the standard.
+  var cupStdBtn = document.getElementById('cup-standard');
+  if (cupStdBtn) cupStdBtn.addEventListener('click', function () {
+    var size = Number((document.getElementById('cup-size') || {}).value) || 0;
+    var date = (document.getElementById('cup-start') || {}).value;
+    if (!size || !date) return alert('Pick a start date and a number of players first.');
+    var shape = cupShape(size);
+    var first = new Date(date + 'T00:00:00');
+    first.setHours(Math.floor(STD.times[0] / 60), STD.times[0] % 60, 0, 0);
+    if (!confirm('Build a ' + size + '-player tournament starting ' + first.toLocaleString() + '?' + NL + NL +
+      shape.rounds + ' rounds over ' + shape.evenings + ' evenings, two a night at 20:00 and 22:00. ' +
+      'Joining opens as soon as you save and shuts when round one starts.')) return;
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.value = v; };
+    set('cup-when', '');                       // joining opens now
+    // Joining stays open until round one begins.
+    set('cup-mins', Math.max(1, Math.round((first - Date.now()) / 60000)));
+    set('cup-max', size);
+    set('cup-times', '20:00, 22:00');
+    set('cup-window', STD.windowMinutes);
+    cupWhenNote();
+    cupPreview();
+    document.getElementById('cup-open').click();
+  });
+
   var cupWhenBox = document.getElementById('cup-when');
   if (cupWhenBox) { cupWhenBox.addEventListener('input', cupWhenNote); cupWhenNote(); }
 
@@ -2945,6 +3045,7 @@ export const adminPageHTML = `<!doctype html>
       return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
     }).join(', '));
     set('cup-window', (c.schedule && c.schedule.windowMinutes) || 10);
+    set('cup-length', (c.schedule && c.schedule.matchMinutes) || 90);
     set('cup-first', c.prize.first);
     set('cup-second', c.prize.second);
     set('cup-third', c.prize.third);

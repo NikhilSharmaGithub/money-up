@@ -363,15 +363,21 @@ struct CupPosterSheet: View {
 
                     rungs(P)
 
+                    if let sched = cup.schedule, sched.times?.isEmpty == false { whenBox(sched, P) }
+
                     VStack(spacing: 7) {
                         rule("Everyone enters at once.",
-                             "When the doors close the whole field is paired off — a hundred players make fifty tables.", P)
-                        rule("Win and you go through.",
-                             "Lose and you are out. Your table opens by itself and takes you straight to it.", P)
+                             "When joining shuts the whole field is paired off — a hundred players make fifty tables.", P)
+                        rule("Win and you go through. Lose and you are out.",
+                             "One defeat ends your tournament: there is no second chance and no losers' bracket.", P)
+                        if let sched = cup.schedule, sched.times?.isEmpty == false {
+                            rule("Turn up inside the window.",
+                                 "Each round opens at its time and stays open \(sched.windowMinutes ?? 10) minutes. Miss it and you are out — even if you would have won.", P)
+                            rule("Every game is \(sched.matchMinutes ?? 90) minutes.",
+                                 "Nobody bankrupt by then? The player with the higher net worth goes through.", P)
+                        }
                         rule("Two seats, no bots.",
                              "A cup table cannot be filled with house players, and the link cannot seat a third.", P)
-                        rule("Come back for it.",
-                             "A table nobody opens is given away after eight minutes.", P)
                     }
 
                     Text(cup.local == nil
@@ -391,6 +397,43 @@ struct CupPosterSheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+    }
+
+    /// What this cup commits its players to, in dates and hours.
+    private func whenBox(_ sched: CupFeed.Schedule, _ P: Palette) -> some View {
+        let pad = { (n: Int) in n < 10 ? "0\(n)" : "\(n)" }
+        let clock = (sched.times ?? []).map { "\(pad($0 / 60)):\(pad($0 % 60))" }.joined(separator: " and ")
+        var n = max(2, cup.maxPlayers > 0 ? cup.maxPlayers : cup.entrants), rounds = 0
+        while n > 1 { n = Int(ceil(Double(n) / 2)); rounds += 1 }
+        let evenings = Int(ceil(Double(rounds) / Double(max(1, (sched.times ?? []).count))))
+        let shut = cup.closesDate
+        let last = cup.plan.last?.opensDate
+        return VStack(spacing: 0) {
+            line("Joining shuts", shut.map { $0.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()) } ?? "—", P)
+            line("Rounds", clock, P)
+            line("Evenings", "\(evenings) · \(rounds) rounds", P)
+            if let last {
+                line("The final", last.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()), P)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 13)
+        .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+
+    private func line(_ label: String, _ value: String, _ P: Palette) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+            Spacer(minLength: 10)
+            Text(value)
+                .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.ink)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 7)
     }
 
     /// The ladder a cup of this size actually runs: 100 → 50 → 25 → … → 🏆

@@ -155,6 +155,8 @@ struct CupFeed: Decodable, Equatable {
     struct Schedule: Decodable, Equatable {
         var times: [Int]?
         var windowMinutes: Int?
+        /// How long a cup game may run before it is decided on net worth.
+        var matchMinutes: Int?
         var offsetMinutes: Int?
     }
 }

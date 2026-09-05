@@ -864,6 +864,14 @@ select { cursor: pointer; }
 }
 .poster-rungs .rung.last { background: var(--gold-soft); border-color: var(--gold); }
 .poster-rungs .rung-arrow { color: var(--ink-3); font-size: 11px; font-style: normal; }
+.poster-when {
+  margin-top: 16px; padding: 12px 14px; border-radius: 13px; text-align: left;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.pw-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12.5px; }
+.pw-line + .pw-line { border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+.pw-line span { color: var(--ink-3); }
+.pw-line b { color: var(--ink); font-weight: 850; text-align: right; }
 .poster-rules { margin: 18px 0 0; padding: 0; list-style: none; text-align: left; }
 .poster-rules li {
   padding: 9px 12px; margin-bottom: 7px; border-radius: 11px;

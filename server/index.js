@@ -1171,10 +1171,11 @@ const CUP_NO_SHOW_MS = 8 * 60 * 1000;
 function sweepCupNoShows() {
   const now = Date.now();
   for (const m of cup.playingMatches()) {
-    // A game still being played when the next round is due would hold up
-    // everybody else's evening. A tournament cannot wait on one table, so it
-    // is decided the way every timed sport decides one: whoever is ahead when
-    // the whistle goes. Net worth is this game's score.
+    // Every cup game runs to a clock — ninety minutes by default, and never
+    // past the moment the next round is due. A property game has no natural
+    // length, and a tournament needs one, so at the whistle it is decided the
+    // way every timed sport decides one: whoever is ahead. Net worth is this
+    // game's score.
     const room = rooms.get(m.roomId);
     if (m.decideAt && now >= m.decideAt && room?.status === 'playing') {
       const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));

@@ -58,6 +58,10 @@ const DEFAULT_SCHEDULE = {
   times: [20 * 60, 22 * 60],
   // How long a round's door stays open. Miss it and you are out.
   windowMinutes: 10,
+  // How long a cup game may run. A property game has no natural length —
+  // two careful players can trade and mortgage for hours — and a tournament
+  // needs one, so at the whistle the richer player goes through.
+  matchMinutes: 90,
   // The owner's own clock, so "20:00" means eight in the evening where they
   // are rather than eight at Greenwich. Sent from the desk's browser.
   offsetMinutes: 0,
@@ -435,6 +439,10 @@ function nextMatchFor(t, token) {
         closesAt: r.closesAt || null,
         open: !r.opensAt || now() >= r.opensAt,
         roomId: m.state === 'playing' ? m.roomId : null,
+        // The whistle on this game, if it has started and the cup runs to a
+        // clock. A player mid-game should be able to see it coming.
+        endsAt: m.state === 'playing' && m.startedAt && t.schedule
+          ? m.startedAt + (t.schedule.matchMinutes || 90) * 60000 : null,
       };
     }
   }
@@ -606,6 +614,7 @@ function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinC
     t.schedule = times.length ? {
       times,
       windowMinutes: Math.max(2, Math.min(240, Math.floor(Number(schedule.windowMinutes) || 10))),
+      matchMinutes: Math.max(5, Math.min(600, Math.floor(Number(schedule.matchMinutes) || 90))),
       offsetMinutes: Math.max(-840, Math.min(840, Math.floor(Number(schedule.offsetMinutes) || 0))),
     } : null;
   }
@@ -910,10 +919,16 @@ export function playingMatches() {
           // when the table was made: everybody in that round gets the same
           // ten minutes, whichever minute their table happened to open.
           deadline: r.closesAt || 0,
-          // And the moment the NEXT round is due. A game still running then
-          // would hold up everybody else's evening, so it is decided on the
-          // board rather than left to finish — see the sweeper.
-          decideAt: r.opensAt && t.schedule ? nextSlot(t.schedule, r.opensAt + 60000) : 0,
+          // When this game must be over. Two things can call it: the clock
+          // every cup game runs to, and the moment the next round is due.
+          // Whichever comes first — see the sweeper.
+          decideAt: (() => {
+            const byNext = r.opensAt && t.schedule ? nextSlot(t.schedule, r.opensAt + 60000) : 0;
+            const byLength = m.startedAt && t.schedule
+              ? m.startedAt + (t.schedule.matchMinutes || 90) * 60000 : 0;
+            const both = [byNext, byLength].filter(Boolean);
+            return both.length ? Math.min(...both) : 0;
+          })(),
         });
       }
     }
