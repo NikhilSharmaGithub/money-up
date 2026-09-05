@@ -32,6 +32,9 @@ struct LandingView: View {
     /// app (open sheets included) on the spot.
     @AppStorage("mm.appearance") private var appearanceID = "system"
     @ObservedObject private var shop = CoinShop.shared
+    /// One cup poll for the whole screen — see CupWatch. It also does the
+    /// walking-in, so a player waiting on the Play tab is seated too.
+    @StateObject private var cupWatch = CupWatch()
 
     struct PublicRoom: Codable, Identifiable {
         var id: String
@@ -64,8 +67,8 @@ struct LandingView: View {
             tabPage { storeTab(P) }
                 .tabItem { Label("Store", systemImage: "bag.fill") }
 
-            tabPage { friendsTab(P) }
-                .tabItem { Label("Friends", systemImage: "person.2.fill") }
+            tabPage { socialTab(P) }
+                .tabItem { Label("Social", systemImage: "person.2.fill") }
 
             tabPage { historyTab(P) }
                 .tabItem { Label("History", systemImage: "clock.fill") }
@@ -90,6 +93,14 @@ struct LandingView: View {
             await AdDesk.shared.refresh(store)
             await loadAuthConfig()
             await refreshMe()
+            cupWatch.start(store)
+        }
+        // A door can close while the app sits in a pocket, and a table can be
+        // drawn in that time. Coming back asks straight away rather than
+        // waiting out the poll.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            cupWatch.reload()
         }
     }
 
@@ -359,8 +370,15 @@ struct LandingView: View {
         await Cosmetics.buyOrEquip(item, owned: owned, equipped: equipped, store: store)
     }
 
-    @ViewBuilder private func friendsTab(_ P: Palette) -> some View {
-        pageTitle("Friends", "Swap codes, chat, jump into their room.", P)
+    /// Everything that involves other people: who you are to them, the cup if
+    /// one is running, and the people themselves. The account comes first
+    /// because both of the things under it need one — a cup will not take an
+    /// entry it cannot pay, and a friend code belongs to an account.
+    @ViewBuilder private func socialTab(_ P: Palette) -> some View {
+        pageTitle("Social", "Your account, your friends, and whatever is being played for.", P)
+        accountCard(P)
+        // Draws nothing at all unless the owner has tournaments switched on.
+        CupCard(signedIn: me?.signedIn == true, watch: cupWatch)
         friendsCard(P)
     }
 
@@ -1061,37 +1079,9 @@ struct LandingView: View {
             VStack(alignment: .leading, spacing: 12) {
                 PanelTitle("Friends")
 
-                // Signing in ties your name + friend code to your Apple ID, so
-                // a reinstall or a second device keeps the same identity.
-                SignInWithAppleButton(.signIn) { request in
-                    request.requestedScopes = [.fullName]
-                } onCompletion: { result in
-                    switch result {
-                    case .success(let auth):
-                        guard let cred = auth.credential as? ASAuthorizationAppleIDCredential else { return }
-                        // Apple offers the real name on a first sign-in. It is
-                        // not asked for and not sent: the play name comes from
-                        // the player, never from the account behind them.
-                        Task {
-                            struct Reply: Decodable { var ok: Bool?; var name: String?; var code: String? }
-                            let reply: Reply? = try? await store.fetchJSON(
-                                "/api/auth/apple", method: "POST",
-                                body: ["token": store.token, "userId": cred.user, "nickname": store.nickname])
-                            if reply?.ok == true {
-                                if let n = reply?.name, !n.isEmpty { store.nickname = n }
-                                store.showToast("Signed in with Apple")
-                                await loadProfile()
-                            } else {
-                                store.showToast("Could not reach the server", isError: true)
-                            }
-                        }
-                    case .failure:
-                        store.showToast("Apple Sign-In was cancelled", isError: true)
-                    }
-                }
-                .signInWithAppleButtonStyle(scheme == .light ? .black : .white)
-                .frame(height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // Signing in used to live here as a lone Apple button. It is
+                // the account card at the top of this tab now — both providers
+                // in one place, rather than two half-answers on one screen.
 
                 if let profile {
                     HStack {
@@ -1271,7 +1261,7 @@ struct LandingView: View {
                         .buttonStyle(MMButtonStyle(kind: .ghost))
                 }
             }
-        } else if authConfig?.googleReady == true {
+        } else {
             MMCard(padding: 12) {
                 VStack(spacing: 8) {
                     Text("Keep your name, coins and friends on every device")
@@ -1279,24 +1269,29 @@ struct LandingView: View {
                         .foregroundStyle(P.ink3)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Button {
-                        Task { await googleSignInTapped() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if signingIn { ProgressView().scaleEffect(0.8).tint(.black) }
-                            else { GoogleG(size: 17) }
-                            Text(signingIn ? "Signing in…" : "Sign in with Google")
-                                .font(.system(size: 15.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.black.opacity(0.84))
+                    // Google needs a client id from the server; Apple never
+                    // does. Hiding Apple because Google is unconfigured used
+                    // to leave a player with no way in at all.
+                    if authConfig?.googleReady == true {
+                        Button {
+                            Task { await googleSignInTapped() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if signingIn { ProgressView().scaleEffect(0.8).tint(.black) }
+                                else { GoogleG(size: 17) }
+                                Text(signingIn ? "Signing in…" : "Sign in with Google")
+                                    .font(.system(size: 15.5, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.black.opacity(0.84))
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 1))
                         }
-                        .frame(maxWidth: .infinity, minHeight: 46)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.black.opacity(0.12), lineWidth: 1))
+                        .buttonStyle(.plain)
+                        .disabled(signingIn)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(signingIn)
 
                     SignInWithAppleButton(.signIn) { request in
                         request.requestedScopes = [.fullName]

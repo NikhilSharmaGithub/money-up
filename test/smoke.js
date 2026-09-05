@@ -2159,6 +2159,36 @@ console.log('\n▶ tournaments');
     ok('the owner view names winners without carrying anybody\'s identity token');
   }
 
+  // A cup that vanishes the instant it is won never tells the winner they won
+  // it, so a finished one stays on the players' screens for a while.
+  {
+    cup.cancelCup();
+    cup.openCup({ name: 'Result', joinSeconds: 60 });
+    const tokens = [0, 1].map((i) => {
+      const token = `result-${i}`;
+      social.profileFor(token, { name: `R${i}` });
+      social.attachLogin(token, 'test', `res-${i}`, `R${i}`);
+      cup.join(token);
+      return token;
+    });
+    cup.closeDoor();
+    const m = cup.matchesNeedingRooms()[0];
+    cup.matchStarted(m.id, 'result-room');
+    cup.matchFinished('result-room', tokens[0]);
+    if (cup.currentCup()) fail('cup: a two-entrant final did not end the cup');
+    const winnerSees = cup.publicView(tokens[0]);
+    const loserSees = cup.publicView(tokens[1]);
+    if (winnerSees.cup?.state !== 'done') fail('cup: the winner was shown no result at all');
+    if (winnerSees.cup?.standings?.first?.name !== 'R0') fail('cup: the result named the wrong winner');
+    if (winnerSees.cup?.you?.placed !== 'first') fail('cup: the winner was not told they came first');
+    if (loserSees.cup?.you?.placed !== 'second') fail('cup: the runner-up was not told they came second');
+    // And it is still a player view: no identity tokens in it.
+    if (JSON.stringify(winnerSees).includes('result-0')) {
+      fail('cup: the player view of a finished cup carries an identity token');
+    }
+    ok('a finished cup stays on screen long enough to tell both players where they came');
+  }
+
   // The door: shut to anyone who has not signed in, and shut to everyone once
   // the cup is under way.
   {

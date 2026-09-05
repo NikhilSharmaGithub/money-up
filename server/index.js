@@ -1364,6 +1364,9 @@ io.on('connection', (socket) => {
   socket.on('makeHost', guard(({ id } = {}) => ok(room.makeHost(playerId, room.resolveId(String(id || ''))))));
 
   socket.on('rematch', guard(() => {
+    // A cup match is played once. The result is already in the bracket, and a
+    // second game at that table would settle nothing and confuse everyone.
+    if (room.cupMatch) return fail('A cup match is played once');
     // First one to want another game gets to run it — whoever presses
     // Play again takes the host chair; the departed stay departed.
     ok(room.rematch(playerId));

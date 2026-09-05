@@ -99,10 +99,10 @@
 				Base,
 			);
 			mainGroup = MM00000000000000000MAING;
+			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				MM00000000000000000PKGRF /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 			);
-			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = MM00000000000000000PRDGP /* Products */;
 			projectDirPath = "";

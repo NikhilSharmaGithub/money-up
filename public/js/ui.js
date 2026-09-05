@@ -1019,7 +1019,7 @@ function renderMyStuff(state, meId, el, actions) {
       <div class="pot-amount">${money(state.vacationPot)}</div>
     </div>` : ''}
 
-    ${state.status === 'ended'
+    ${state.status === 'ended' && !state.cup
       ? (state.quick
         ? `<button class="btn primary wide wrap" id="againBtn">${icon('replay')} Play again</button>`
         : `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again</button>`)
@@ -1340,7 +1340,10 @@ export function renderCenter(state, meId, actions) {
         <button class="btn" id="cStandings">${icon('chart')} Final standings</button>
         <button class="btn ghost" id="cHome">${icon('door')} Back to home</button>
       </div>
-      ${state.hostId === meId ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again</button>` : ''}`;
+      ${state.hostId === meId && !state.cup
+        ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again</button>`
+        : ''}
+      ${state.cup ? `<div class="cup-note dim small">${icon('trophy')} A cup match is played once — the bracket has your result.</div>` : ''}`;
     statusEl.innerHTML = state.winner
       ? `<div class="win-line" style="color:${state.winner.color}">${icon('trophy')} ${escapeHtml(state.winner.name)} wins!</div>`
       : '<div class="win-line">Game over</div>';

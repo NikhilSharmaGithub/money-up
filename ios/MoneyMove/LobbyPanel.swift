@@ -32,15 +32,23 @@ struct LobbyPanel: View {
                     .padding(.top, 2)
                 }
 
-                if store.isHost { quickBoards(P) }
+                if isCup { cupBanner(P) }
 
-                if store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
+                if store.isHost, !isCup { quickBoards(P) }
+
+                // A cup table is set by the cup: two chairs, one board, no
+                // house players, and a second seat on this device would be
+                // sitting in your opponent's chair. The server refuses all of
+                // it; this is so nobody is invited to try.
+                if !isCup, store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
                     MMIconButton(.people, "Add player on this device", kind: .ghost, big: true) {
                         store.addLocalPlayer()
                     }
                 }
 
-                MMIconButton(.toolbox, "Game settings", kind: .ghost, big: true) { openSettings() }
+                if !isCup {
+                    MMIconButton(.toolbox, "Game settings", kind: .ghost, big: true) { openSettings() }
+                }
 
                 seatList(P)
 
@@ -59,6 +67,32 @@ struct LobbyPanel: View {
     }
 
     private var teamCount: Int { store.state?.settings.teams ?? 0 }
+
+    /// A table the cup made, rather than one somebody opened.
+    private var isCup: Bool { store.state?.cup == true }
+
+    /// What this table is and what is riding on it. A cup match looks exactly
+    /// like any other two-player game otherwise, and losing one costs more.
+    private func cupBanner(_ P: Palette) -> some View {
+        HStack(spacing: 9) {
+            Art.icon(.trophy, size: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Cup match")
+                    .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                Text(emptySeats > 0
+                     ? "Waiting for the player drawn against you"
+                     : "Winner goes through. Loser is out of the cup.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.gold, lineWidth: 1))
+    }
 
     private var emptySeats: Int {
         guard let state = store.state else { return 0 }
@@ -81,7 +115,7 @@ struct LobbyPanel: View {
     private func playerRow(_ p: PlayerState, _ P: Palette) -> some View {
         let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
         let canCycleTeam = teamCount > 0 && (p.id == store.meId || (store.isHost && p.isBot == true))
-        let canKick = store.isHost && p.id != store.meId
+        let canKick = store.isHost && p.id != store.meId && !isCup
 
         return HStack(spacing: 10) {
             AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 34, emoji: p.avatar ?? "")
@@ -139,7 +173,7 @@ struct LobbyPanel: View {
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(P.ink3)
             Spacer()
-            if store.isHost {
+            if store.isHost, !isCup {
                 Button("Add bot") { store.addBot() }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }

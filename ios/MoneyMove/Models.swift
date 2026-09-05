@@ -10,6 +10,9 @@ struct GameState: Codable, Equatable {
     var hostId: String?
     /// This table came out of Quick Play matchmaking.
     var quick: Bool?
+    /// This table was made for a cup match. Two chairs with names on them:
+    /// no bots, no guests, no settings, and nobody to throw out.
+    var cup: Bool?
     /// Epoch ms the matchmade table deals itself in; nil once it has.
     var quickStartAt: Double?
     var settings: GameSettings

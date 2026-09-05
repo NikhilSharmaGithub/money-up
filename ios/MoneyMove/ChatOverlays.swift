@@ -757,7 +757,21 @@ struct GameOverSheet: View {
             // The offer draws nothing at all on a dark server, for a loser, or
             // once today's views are spent; see AdOffer.swift.
             DoubleWinOffer()
-            if store.state?.quick == true {
+            if store.state?.cup == true {
+                // A cup match is played once: the bracket already has the
+                // result, and a second game at this table would settle
+                // nothing. What is left to do is go back and watch the draw.
+                HStack(spacing: 7) {
+                    Art.icon(.trophy, size: 15)
+                    Text("A cup match is played once — the bracket has your result.")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            } else if store.state?.quick == true {
                 // A matchmade table doesn't reconvene: offering "the same
                 // players" would tell the room the seats were never strangers.
                 MMIconButton(.replay, "Play again", kind: .primary, big: true) {

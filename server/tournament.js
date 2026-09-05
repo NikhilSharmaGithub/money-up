@@ -72,8 +72,16 @@ const now = () => Date.now();
 const id = () => Math.random().toString(36).slice(2, 8);
 
 /** A cup as a client should see it — never a token, only public codes. */
+/** How long a finished cup stays on the players' screens. */
+const SHOW_RESULT_MS = 10 * 60 * 1000;
+
 export function publicView(token) {
-  const t = state.current;
+  // A cup that has just been won is still the most interesting thing on the
+  // page. Clearing it the instant the final ends means the winner never sees
+  // that they won — the card simply vanishes at the moment it matters most.
+  const t = state.current
+    || state.history.find((h) => h.endedAt && now() - h.endedAt < SHOW_RESULT_MS)
+    || null;
   if (!state.enabled || !t) return { enabled: state.enabled, cup: null };
   const mine = token ? t.entrants.find((e) => e.token === token) : null;
   const match = mine ? liveMatchFor(t, token) : null;

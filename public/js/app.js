@@ -1558,6 +1558,34 @@ function paintCup(data) {
     return;
   }
 
+  // Finished. The server keeps it in front of everyone for a few minutes,
+  // because a cup that disappears the moment it is won never tells the winner
+  // they won it.
+  if (cup.state === 'done' && cup.standings) {
+    cupPollMs = 20000;
+    const s = cup.standings;
+    const mine = cup.you.placed;
+    const step = (place, who, label) => `<div class="cup-step ${place}${mine === place ? ' mine' : ''}">
+        <span class="cup-place">${label}</span>
+        <b>${who ? escapeHtml(who.name) : '—'}</b>
+        <span class="cup-won">${money(cup.prize[place])}</span>
+      </div>`;
+    card.innerHTML = `<div class="cup-head">
+        <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>
+        <div class="cup-body">
+          <div class="cup-title">${escapeHtml(cup.name)}</div>
+          <div class="cup-sub">${s.first ? `${escapeHtml(s.first.name)} takes it` : 'Nobody finished this one'}</div>
+        </div>
+      </div>
+      <div class="cup-podium">
+        ${step('first', s.first, '1st')}
+        ${step('second', s.second, '2nd')}
+        ${step('third', s.third, '3rd')}
+      </div>
+      ${mine ? `<div class="cup-in ok">${icon('trophy', 14)} You finished ${mine}. The prize is paid by hand — hold on to your friend code.</div>` : ''}`;
+    return;
+  }
+
   cupPollMs = 20000;
   card.classList.add('hidden');
 }

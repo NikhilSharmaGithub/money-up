@@ -38,10 +38,13 @@ struct ActionPanel: View {
             } else if store.state?.isEnded == true {
                 VStack(spacing: 8) {
                     // Anyone can call the next game — the chair goes to
-                    // whoever asks for it first.
-                    MMIconButton(.replay, "Play again",
-                                 kind: .primary, big: true) { store.rematch() }
-                    if !store.isHost {
+                    // whoever asks for it first. Except a cup match, which is
+                    // played once and is already recorded in the bracket.
+                    if store.state?.cup != true {
+                        MMIconButton(.replay, "Play again",
+                                     kind: .primary, big: true) { store.rematch() }
+                    }
+                    if !store.isHost, store.state?.cup != true {
                         Text("Whoever presses first hosts the next one.")
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
                             .foregroundStyle(P.ink3)

@@ -683,6 +683,21 @@ select { cursor: pointer; }
 }
 @keyframes cupLive { 50% { opacity: .35; } }
 
+/* The three who finished, once a cup is over. */
+.cup-podium { display: flex; flex-direction: column; gap: 6px; margin-top: 13px; }
+.cup-step {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 8px 11px; border-radius: 11px;
+  border: 1px solid var(--rule); background: var(--paper-2);
+}
+.cup-step.first { border-color: var(--gold); background: var(--gold-soft); }
+.cup-step.mine { box-shadow: inset 0 0 0 1px var(--good); }
+.cup-step b { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 850; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cup-step .cup-place { flex: none; width: 26px; }
+.cup-won { flex: none; font-size: 13px; font-weight: 850; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.cup-step.first .cup-won { color: var(--red-ink); }
+
 .cup-note { margin-top: 4px; color: var(--gold); }
 .cup-in {
   margin-top: 12px; font-size: 12.5px; color: var(--ink-2);
