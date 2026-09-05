@@ -56,7 +56,7 @@ struct CupDetailSheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
-        .sheet(isPresented: $showChart) { CupChartSheet().environmentObject(store) }
+        .sheet(isPresented: $showChart) { CupChartSheet(cupId: cup.id).environmentObject(store) }
     }
 
     // MARK: - the top

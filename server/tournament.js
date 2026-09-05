@@ -237,7 +237,11 @@ function cupView(t, token) {
       joined: true,
       code: mine.code,
       name: mine.name,
-      out: !!mine.out,
+      // Losing a semi-final sets `out`, and then the third-place play-off is
+      // drawn from exactly those losers — so both cards read "You are out of
+      // this one" with a live table and a prize sitting behind them. You are
+      // not out while you still have a match to play.
+      out: !!mine.out && !stillIn(t, token),
       placed: mine.placed || null,
       // Where to go, the moment there is somewhere to go.
       roomId: match?.roomId || null,
@@ -257,6 +261,10 @@ function cupView(t, token) {
  * beside them, and what the round they are in is called. The card draws a
  * ladder from this without ever asking for the whole bracket.
  */
+/** Is there a match this player still has to play, or is playing right now? */
+const stillIn = (t, token) => t.rounds.some((r) => r.matches.some(
+  (m) => m.state !== 'done' && (m.a === token || m.b === token)));
+
 function standing(t, token) {
   let survived = 0;
   let currentRound = null;
@@ -270,7 +278,9 @@ function standing(t, token) {
     survived,
     round: currentRound == null ? null : currentRound + 1,
     roundLabel: currentRound == null ? null : roundLabel(t.rounds[currentRound]),
-    // Everyone still capable of winning it, this player included.
+    // Everyone still capable of winning it, this player included. Somebody
+    // playing off for third is out of the running for the cup, so they are
+    // not counted here even though they still have a game to play.
     left: t.entrants.filter((e) => !e.out).length,
   };
 }
@@ -313,8 +323,11 @@ export function bracketView(token, cupId) {
       prize: t.prize,
       local: localPrize(t, token),
       entrants: t.entrants.length,
-      you: mine ? { code: mine.code, name: mine.name, out: !!mine.out, placed: mine.placed || null }
-        : null,
+      you: mine ? {
+        code: mine.code, name: mine.name,
+        out: !!mine.out && !stillIn(t, token),
+        placed: mine.placed || null,
+      } : null,
       standings: t.standings || null,
       rounds: t.rounds.map((r, i) => ({
         n: i + 1,
@@ -423,6 +436,29 @@ function planOf(t, token) {
  * not what somebody wants to know at nine in the evening; "you play Ravi at
  * ten, and the door shuts at ten past" is.
  */
+/**
+ * When a cup game must be over.
+ *
+ * Two things can call it: the clock every cup game runs to, and the moment the
+ * next round is due — because round two cannot start while round one is still
+ * being played, so the later of those was never really on offer. Whichever
+ * comes first wins, and BOTH the sweeper that blows the whistle and the number
+ * the player is shown come through here.
+ *
+ * They used not to. The sweeper took the earlier of the two and the player was
+ * shown the game's own length, so a match that started forty-five minutes into
+ * a two-hour gap promised ninety minutes and got seventy-five — and with rounds
+ * an hour apart, every game in the cup was short by up to an hour. Being cut
+ * off is survivable; being cut off at a time nobody told you is not.
+ */
+function whistleFor(t, r, m) {
+  if (!m?.startedAt || !t?.schedule) return null;
+  const byNext = r?.opensAt ? nextSlot(t.schedule, r.opensAt + 60000) : 0;
+  const byLength = m.startedAt + (t.schedule.matchMinutes || 90) * 60000;
+  const both = [byNext, byLength].filter(Boolean);
+  return both.length ? Math.min(...both) : null;
+}
+
 function nextMatchFor(t, token) {
   if (!token) return null;
   for (const r of t.rounds) {
@@ -440,9 +476,9 @@ function nextMatchFor(t, token) {
         open: !r.opensAt || now() >= r.opensAt,
         roomId: m.state === 'playing' ? m.roomId : null,
         // The whistle on this game, if it has started and the cup runs to a
-        // clock. A player mid-game should be able to see it coming.
-        endsAt: m.state === 'playing' && m.startedAt && t.schedule
-          ? m.startedAt + (t.schedule.matchMinutes || 90) * 60000 : null,
+        // clock. A player mid-game should be able to see it coming — and see
+        // the real one, which is why this is the sweeper's own function.
+        endsAt: m.state === 'playing' ? whistleFor(t, r, m) : null,
       };
     }
   }
@@ -499,6 +535,10 @@ function scrub(t) {
     })),
     rounds: t.rounds.map((r) => ({
       kind: r.kind,
+      // The owner needs the door as much as the players do — it is the one
+      // number somebody asks the desk about, and the desk could not answer.
+      opensAt: r.opensAt || null,
+      closesAt: r.closesAt || null,
       matches: r.matches.map((m) => ({
         a: nameOf(t, m.a), b: nameOf(t, m.b),
         state: m.state, roomId: m.roomId || null,
@@ -618,9 +658,17 @@ function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinC
       offsetMinutes: Math.max(-840, Math.min(840, Math.floor(Number(schedule.offsetMinutes) || 0))),
     } : null;
   }
-  t.openedAt = opens;
-  t.closesAt = opens + secs * 1000;
-  t.state = scheduled ? 'scheduled' : 'joining';
+  // Only move the door when the caller actually asked to.
+  //
+  // This used to reset all three every time, and the desk sends a blank date
+  // for a cup that is already taking entries — so editing a prize eighteen
+  // hours in slid everybody's join countdown eighteen hours forward, and
+  // renaming a cup could flip it from announced back to open.
+  if (opensAt !== undefined || joinSeconds !== undefined || t.openedAt == null) {
+    t.openedAt = opens;
+    t.closesAt = opens + secs * 1000;
+    t.state = scheduled ? 'scheduled' : 'joining';
+  }
 }
 
 /** Second thoughts: let people start joining before the announced minute. */
@@ -736,11 +784,14 @@ function shuffled(list) {
  * gift: the bye goes to whoever has played the most so far, so the person who
  * has already earned their place is the one who gets to rest.
  */
-function pairUp(tokens, playedCount) {
+function pairUp(tokens, byeCount) {
   const draw = shuffled(tokens);
   let bye = null;
   if (draw.length % 2 === 1) {
-    draw.sort((x, y) => (playedCount.get(y) || 0) - (playedCount.get(x) || 0));
+    // Fewest byes so far goes first, and the shuffle above breaks the ties —
+    // so nobody gets a second free pass while somebody else is still waiting
+    // for their first.
+    draw.sort((x, y) => (byeCount.get(x) || 0) - (byeCount.get(y) || 0));
     bye = draw.shift();
   }
   const matches = [];
@@ -750,11 +801,21 @@ function pairUp(tokens, playedCount) {
   return { matches, bye };
 }
 
-const playedCounts = (t) => {
+/**
+ * How many byes each player has already been handed.
+ *
+ * The bye used to be given to "whoever has played the most", counted over all
+ * matches — but in a knockout every survivor at a given depth has played
+ * exactly the same number, so the sort was a no-op and the bye was simply
+ * random. Over three hundred simulated 17-player cups somebody took two or
+ * more byes in seven out of ten, and one player reached the final having
+ * played a single real game. Counting the byes themselves is the number that
+ * actually varies.
+ */
+const byeCounts = (t) => {
   const c = new Map();
   for (const r of t.rounds) for (const m of r.matches) {
-    if (m.a) c.set(m.a, (c.get(m.a) || 0) + 1);
-    if (m.b) c.set(m.b, (c.get(m.b) || 0) + 1);
+    if (m.walkover && m.b === null && m.a) c.set(m.a, (c.get(m.a) || 0) + 1);
   }
   return c;
 };
@@ -781,23 +842,40 @@ export function closeDoor(cupId) {
   return { ok: true, matches: t.rounds[0].matches.length };
 }
 
+/**
+ * The door a round opens and shuts behind.
+ *
+ * A scheduled cup gives every round an appointed minute and a window. An
+ * unscheduled one opens immediately and never shuts, which is how every cup
+ * behaved before schedules existed.
+ *
+ * It is a function of its own because the final and the third-place play-off
+ * are pushed straight onto the list rather than drawn like the rest — and for
+ * a while that meant the two matches that decide the whole cup were the only
+ * two with no door at all. They opened the instant the semi-finals ended,
+ * minutes before the time every entrant had been shown, and their no-show
+ * sweep fell back to a flat eight minutes instead of the cup's own window.
+ */
+function doorFor(t) {
+  // Asked from a minute in the FUTURE, this threw away any slot inside the
+  // next sixty seconds — so a round finishing at 21:59:30 skipped the 22:00
+  // door and sent everybody home until tomorrow. It is worse than it sounds:
+  // when the whistle binds on the next round's own slot, the round always
+  // ends exactly on a slot, and so always burned the one it had just cut a
+  // game short for. Ask from a moment BEFORE now instead.
+  const opensAt = t.schedule ? nextSlot(t.schedule, now() - 1000) : now();
+  const windowMs = Math.max(1, Number(t.schedule?.windowMinutes) || 10) * 60000;
+  return { opensAt, closesAt: t.schedule ? opensAt + windowMs : null };
+}
+
 function drawRound(t, tokens, kindHint) {
   // Two left is the final, whatever the caller thought it was drawing. With
   // exactly two entrants that is the very first round — a cup of two is one
   // match — and calling it anything else left the bracket with no final to
   // finish on, which is how a two-player cup used to hang forever.
   const kind = tokens.length === 2 ? 'final' : (kindHint || 'round');
-  const { matches, bye } = pairUp(tokens, playedCounts(t));
-  // A scheduled cup gives the round a door: it opens at the next appointed
-  // minute and shuts a window later. An unscheduled one opens immediately and
-  // never shuts, which is how every cup behaved before schedules existed.
-  const opensAt = t.schedule ? nextSlot(t.schedule, now() + 60000) : now();
-  const windowMs = Math.max(1, Number(t.schedule?.windowMinutes) || 10) * 60000;
-  t.rounds.push({
-    kind, matches, bye, at: now(),
-    opensAt,
-    closesAt: t.schedule ? opensAt + windowMs : null,
-  });
+  const { matches, bye } = pairUp(tokens, byeCounts(t));
+  t.rounds.push({ kind, matches, bye, at: now(), ...doorFor(t) });
   // A bye is a walkover: it is recorded as a match nobody had to play, so the
   // bracket reads honestly rather than quietly promoting somebody.
   if (bye) t.rounds[t.rounds.length - 1].matches.push({
@@ -815,6 +893,22 @@ export function matchesNeedingRooms() {
       // appointed minute, so a player who opens the app an hour before is
       // told when to come back rather than dropped into an empty room.
       if (r.opensAt && now() < r.opensAt) continue;
+      // Nor does it open once it has already shut with nothing played.
+      //
+      // That is not a round of no-shows, it is a round nobody was ever given:
+      // the process was down across the whole window. Seating it now would
+      // hand the sweeper four tables whose deadline passed while they were
+      // being built, and it voided all four — which abandoned the entire cup
+      // after a seventeen-minute deploy. Slide it to the next appointed
+      // minute instead and let the round actually happen.
+      if (r.closesAt && now() > r.closesAt && r.matches.every((m) => m.state === 'pending')) {
+        const door = doorFor(t);
+        r.opensAt = door.opensAt;
+        r.closesAt = door.closesAt;
+        console.log(`cup: "${t.name}" slept through a window — round moved on`);
+        save();
+        continue;
+      }
       for (const m of r.matches) {
         if (m.state === 'pending' && m.a && m.b) out.push(m);
       }
@@ -919,16 +1013,9 @@ export function playingMatches() {
           // when the table was made: everybody in that round gets the same
           // ten minutes, whichever minute their table happened to open.
           deadline: r.closesAt || 0,
-          // When this game must be over. Two things can call it: the clock
-          // every cup game runs to, and the moment the next round is due.
-          // Whichever comes first — see the sweeper.
-          decideAt: (() => {
-            const byNext = r.opensAt && t.schedule ? nextSlot(t.schedule, r.opensAt + 60000) : 0;
-            const byLength = m.startedAt && t.schedule
-              ? m.startedAt + (t.schedule.matchMinutes || 90) * 60000 : 0;
-            const both = [byNext, byLength].filter(Boolean);
-            return both.length ? Math.min(...both) : 0;
-          })(),
+          // When this game must be over — the same number the player was
+          // shown, from the same function.
+          decideAt: whistleFor(t, r, m) || 0,
         });
       }
     }
@@ -980,11 +1067,15 @@ function advanceFrom(t, round) {
   // drawn from them, and its losers get the third-place table alongside it,
   // so nobody is ranked third by a tiebreak they never agreed to.
   if (winners.length === 2) {
-    const { matches } = pairUp(winners, playedCounts(t));
-    t.rounds.push({ kind: 'final', matches, at: now() });
+    const { matches } = pairUp(winners, byeCounts(t));
+    // One door for both: the play-off runs BESIDE the final, so they share a
+    // slot rather than eating two of them — and a finalist gets the same
+    // announced minute and the same window as every round before it.
+    const door = doorFor(t);
+    t.rounds.push({ kind: 'final', matches, at: now(), ...door });
     if (losers.length === 2) {
-      const playoff = pairUp(losers, playedCounts(t));
-      t.rounds.push({ kind: 'thirdPlace', matches: playoff.matches, at: now() });
+      const playoff = pairUp(losers, byeCounts(t));
+      t.rounds.push({ kind: 'thirdPlace', matches: playoff.matches, at: now(), ...door });
     } else if (losers.length === 1) {
       // A bye carried somebody into the final, so only one person actually
       // lost at this depth. There is nobody to play off against and no
@@ -1084,7 +1175,14 @@ export function tick() {
 export function prune() {
   const cut = now() - KEEP_FINISHED_MS;
   const before = state.history.length;
-  state.history = state.history.filter((h) => !h.endedAt || h.endedAt > cut).slice(0, 50);
+  // A cup that produced a result is a debt until it is paid, and this used to
+  // delete the only record of who is owed ninety minutes after the final. One
+  // timer was doing two jobs: how long a finished cup stays on a player's
+  // card, and how long the owner has to write down three names. Anything with
+  // standings now keeps its place in the fifty until the fifty run out.
+  state.history = state.history
+    .filter((h) => h.standings || !h.endedAt || h.endedAt > cut)
+    .slice(0, 50);
   if (state.history.length !== before) save();
 }
 

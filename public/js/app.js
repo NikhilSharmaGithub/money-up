@@ -7,7 +7,7 @@ import {
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
-  confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
+  confetti, openDeedModal, openHelpModal, openIntroModal, INTRO_VERSION, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
@@ -813,6 +813,21 @@ function joinInvite(code) {
 }
 
 // ─────────────────────────────────────────────────────────────────── boot ──
+const INTRO_KEY = 'moneymove:intro';
+
+/**
+ * The six cards, once, for somebody who has never been here.
+ *
+ * Not over a room link and not over an invite: arriving at a friend's table is
+ * a decision already made, and the six cards are then standing between two
+ * people who wanted to play. They will still be in the help sheet afterwards.
+ */
+function maybeIntro() {
+  const seen = Number(safeGet(localStorage, INTRO_KEY) || 0);
+  if (seen >= INTRO_VERSION) return;
+  openIntroModal(() => safeSet(localStorage, INTRO_KEY, String(INTRO_VERSION)));
+}
+
 function boot() {
   const invite = inviteCode();
   if (invite && !/^\/room\//i.test(location.pathname)) return joinInvite(invite);
@@ -834,7 +849,11 @@ function boot() {
     roomId = null;
     lastStatus = null;
     resetBoard();
-    return showLanding();
+    showLanding();
+    // After the landing is up, so the six cards open over something that
+    // already looks like a game rather than over an empty page.
+    maybeIntro();
+    return;
   }
 
   roomId = match[1].toLowerCase();
@@ -1483,7 +1502,12 @@ function paintCup(data) {
 
   // Your table is ready: go, once. Walking in is the player's own click on
   // every later visit, but the first one should not need finding.
-  if (cup.you?.roomId && cupSeen !== cup.you.roomId) {
+  //
+  // Never out of a game, though. This poll keeps running after boot() moves
+  // into a room, so a cup table opening while somebody was mid-game in an
+  // ordinary room used to pull them straight out of it. The app has always
+  // had this guard; the browser did not.
+  if (!roomId && cup.you?.roomId && cupSeen !== cup.you.roomId) {
     cupSeen = cup.you.roomId;
     toast(`Your cup table is ready — playing ${cup.you.opponent || 'your opponent'}`);
     setTimeout(() => go(cup.you.roomId), 900);

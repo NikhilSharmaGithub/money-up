@@ -521,8 +521,10 @@ struct LandingView: View {
         themeCard(P)
         appearanceCard(P)
         soundCard(P)
-        // After the preferences, before the plumbing — the same rules the web
+        // After the preferences, before the plumbing — the way back into the
+        // six cards a new player is shown, then the same rules the web
         // client's help modal reads out.
+        MMCard { IntroAgainRow() }
         HowToPlayCard()
         MMCard {
             Text("An original implementation of the classic property-trading board game. Not affiliated with any trademark holder.")

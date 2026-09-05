@@ -46,6 +46,9 @@ struct RootView: View {
     /// One invite poll for the whole app: a friend's "come and play" has to
     /// find the player in a game as readily as on the home screen.
     @StateObject private var inviteWatch = InviteWatch()
+    /// Which version of the intro this phone has been through. Zero is a phone
+    /// that has never opened the app, which is the whole point of it.
+    @AppStorage("mm.intro.seen") private var introSeen = 0
 
     var body: some View {
         // Feed the static before anything below reads a palette, then key the
@@ -62,6 +65,13 @@ struct RootView: View {
             } else {
                 GameScreen()
                     .transition(.opacity)
+            }
+
+            // First run: six cards before anything else, and only once the
+            // splash is out of the way — two flourishes at once is neither.
+            if !splashing && introSeen < INTRO_VERSION {
+                WelcomeIntro { withAnimation { introSeen = INTRO_VERSION } }
+                    .zIndex(9)
             }
 
             if splashing {

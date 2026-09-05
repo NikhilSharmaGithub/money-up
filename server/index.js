@@ -1258,6 +1258,14 @@ function seatCupMatches() {
     dressCupTable(room, m.id);
     cup.matchStarted(m.id, room.id);
     console.log(`cup: table ${room.id} for match ${m.id}`);
+    // And tell them. The whole design is "turn up inside your window or you
+    // are out", and until now the only way to learn the window had opened was
+    // to happen to have the app open and watch a poll. In a 256-player cup
+    // that is 256 people a round guessing the minute. This is the one message
+    // in the app somebody is genuinely waiting for.
+    for (const token of [m.a, m.b]) {
+      if (token) sendTurnPush(token, 'Your cup match is open — go and play it now', { collapseId: `cup:${room.id}` });
+    }
   }
 }
 
@@ -1277,6 +1285,20 @@ const CUP_NO_SHOW_MS = 8 * 60 * 1000;
 function sweepCupNoShows() {
   const now = Date.now();
   for (const m of cup.playingMatches()) {
+    // A table this process has never heard of is not an empty table.
+    //
+    // Rooms live in memory and memory does not survive a deploy, and Render
+    // deploys constantly. Every match that was being played when the process
+    // went down comes back pointing at a room id nobody holds — and read as
+    // "neither player came", which voided every live game in the round and
+    // then abandoned the whole cup, seconds after boot, before a single
+    // player could reconnect. Rebuild the table instead: getRoom re-dresses
+    // it as a cup table, and the two who were drawn can walk back into it.
+    if (!rooms.has(m.roomId)) {
+      getRoom(m.roomId);              // re-dressed as this match's table
+      console.log(`cup: rebuilt ${m.roomId} after a restart`);
+      continue;
+    }
     // Every cup game runs to a clock — ninety minutes by default, and never
     // past the moment the next round is due. A property game has no natural
     // length, and a tournament needs one, so at the whistle it is decided the
@@ -1322,8 +1344,11 @@ setInterval(refreshRates, 6 * 60 * 60 * 1000).unref?.();
 setInterval(() => {
   try {
     cup.tick();
-    seatCupMatches();
+    // Sweep BEFORE seating. The other order judged a table in the same tick
+    // it was created in, which is how a deploy that spanned a round's window
+    // could seat four dead tables and void all four microseconds later.
     sweepCupNoShows();
+    seatCupMatches();
     cup.prune();
   } catch (e) { console.warn('cup tick:', e.message); }
 }, 5000).unref?.();
@@ -1344,6 +1369,21 @@ setInterval(() => {
     // the game they were in — a lunch break, a train tunnel — and only then
     // call it over. The room itself lingers for the usual half hour.
     if (live === 0 && room.status === 'playing' && idleFor > 10 * 60 * 1000) {
+      // A cup table cannot just be switched off. The result is recorded by
+      // recordTransitions, which only ever runs from broadcast() — so ending
+      // one here left its match "playing" for ever, invisible to the sweeper
+      // (which skips anything not in a lobby) until the room was deleted and
+      // both entrants were voided with no net-worth decision at all. Decide
+      // it properly: whoever is ahead when the lights go out goes through.
+      if (room.cupMatch) {
+        const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));
+        const standing = room.players.filter((p) => !p.bankrupt).sort((a, b) => worth(b) - worth(a));
+        if (standing.length > 1) {
+          console.log(`cup: ${id} went quiet — decided on net worth`);
+          room.quit(standing[standing.length - 1].id);
+          continue;
+        }
+      }
       room.status = 'ended';
       room.dispose();
     }

@@ -2816,8 +2816,8 @@ function chartHTML(b) {
         ${m.mine ? '<span class="cm-you">YOU</span>' : ''}
         ${row(m.a, m.aScore, m.winner && m.winner === m.a)}
         ${row(m.b, m.bScore, m.winner && m.winner === m.b)}
-        ${m.walkover ? '<span class="cm-note">walkover</span>' : ''}
-        ${m.void ? '<span class="cm-note">void</span>' : ''}
+        ${m.void ? '<span class="cm-note">void</span>'
+          : m.walkover ? '<span class="cm-note">walkover</span>' : ''}
       </div>`;
   };
 
@@ -3016,6 +3016,120 @@ const RULES_HELP = [
   ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins.'],
 ];
 
+// ────────────────────────────────────────────────────────── first minutes ──
+// The same six cards the app shows a new player, word for word, so somebody
+// who learns the game in a browser and finishes it on a phone is never told
+// two different things.
+//
+// Skippable from the first frame, and reachable again from the help sheet, so
+// skipping it costs nothing.
+
+export const INTRO_VERSION = 1;
+
+const INTRO_PAGES = [
+  {
+    icon: 'globe',
+    title: 'Welcome to MoneyMove',
+    line: 'Buy streets. Build hotels. Bankrupt your friends.',
+    points: [
+      ['people', 'Two to eight players, on one screen or across the world'],
+      ['map', 'Nineteen boards — a world tour, single countries, and a few odd ones'],
+      ['dice', 'A game runs about half an hour'],
+    ],
+  },
+  {
+    icon: 'dice',
+    title: 'A turn is three things',
+    line: 'Roll, move, and deal with wherever you land.',
+    points: [
+      ['dice', 'Roll two dice and move. A double lets you roll again — three in a row and you are in prison'],
+      ['key', 'Land on a street nobody owns and you may buy it. Turn it down and everyone bids for it'],
+      ['payment', "Land on somebody else's and you pay their rent"],
+    ],
+  },
+  {
+    icon: 'houses',
+    title: 'Whole sets win games',
+    line: 'One street collects pennies. A country collects the game.',
+    points: [
+      ['crane', 'Own every street of one colour and you can build — houses first, then a hotel'],
+      ['cash', 'Rent climbs steeply with each one. A hotel on a good set ends most games'],
+      ['warning', 'This is the rule new players lose to. Chase sets, not bargains'],
+    ],
+  },
+  {
+    icon: 'trade',
+    title: 'Deals decide it',
+    line: 'Nobody completes a set by luck alone.',
+    points: [
+      ['trade', 'Offer cash, streets and prison cards to anyone, any time'],
+      ['gavel', 'A street somebody refuses goes to auction — that is where sets get finished'],
+      ['bank', 'Short of money? Mortgage a street for half, and buy it back later'],
+    ],
+  },
+  {
+    icon: 'people',
+    title: 'Play with anyone',
+    line: 'One tap and you are at a table.',
+    points: [
+      ['bolt', 'Play now drops you in with whoever else is online'],
+      ['door', 'Or make a private room and send the link to your friends'],
+      ['ticket', 'Nobody around? Share one screen and pass it around the table'],
+    ],
+  },
+  {
+    icon: 'trophy',
+    title: 'Cups, coins and boards',
+    line: 'There is more here than one game.',
+    points: [
+      ['trophy', 'Tournaments run to a clock, with real prizes for the last few standing'],
+      ['coin', 'Win games and turn up daily to earn coins'],
+      ['map', 'Two boards are free every day. Spend the coins to keep the ones you love'],
+    ],
+  },
+];
+
+export function openIntroModal(onDone) {
+  let page = 0;
+  const draw = (root) => {
+    const p = INTRO_PAGES[page];
+    const last = page === INTRO_PAGES.length - 1;
+    $('#introBody', root).innerHTML = `
+      <div class="intro-hero">${icon(p.icon, 54, 'solo')}</div>
+      <h2 class="intro-title">${escapeHtml(p.title)}</h2>
+      <p class="intro-line">${escapeHtml(p.line)}</p>
+      <div class="intro-points">
+        ${p.points.map(([g, text]) => `<div class="ip-row">
+          <span class="ip-ico">${icon(g, 17)}</span>
+          <span>${escapeHtml(text)}</span>
+        </div>`).join('')}
+      </div>`;
+    $('#introDots', root).innerHTML = INTRO_PAGES
+      .map((_, i) => `<i class="${i === page ? 'on' : ''}"></i>`).join('');
+    $('#introNext', root).textContent = last ? "Let's play" : 'Next';
+    $('#introNext', root).classList.toggle('gold', last);
+  };
+
+  openModal(`
+    <div class="intro">
+      <button class="intro-skip" id="introSkip">Skip</button>
+      <div id="introBody"></div>
+      <div class="intro-dots" id="introDots"></div>
+      <button class="btn primary big wide" id="introNext">Next</button>
+      <p class="intro-foot">You can read all this again from the ? in the corner.</p>
+    </div>`, (root) => {
+    draw(root);
+    const done = () => { closeModal(); onDone?.(); };
+    $('#introSkip', root).onclick = () => { sfx.click(); done(); };
+    $('#introNext', root).onclick = () => {
+      sfx.click();
+      if (page === INTRO_PAGES.length - 1) return done();
+      page++;
+      draw(root);
+    };
+  }, 'intro-modal');
+}
+
 export function openHelpModal() {
   openModal(`
     <h2>How to play</h2>
@@ -3030,8 +3144,14 @@ export function openHelpModal() {
       <b>Shortcuts</b> · Space or Enter fires the main button · C jumps to chat · Esc closes a dialog.
       Hover any tile for its rent card, click it for the full deed.
     </p>
-    <div class="modal-actions"><button class="btn primary" id="hClose">Got it</button></div>`, (root) => {
+    <div class="modal-actions">
+      <button class="btn ghost" id="hIntro">Show me the basics</button>
+      <button class="btn primary" id="hClose">Got it</button>
+    </div>`, (root) => {
     $('#hClose', root).onclick = closeModal;
+    // Skipping the six cards has to cost nothing, which means they have to be
+    // findable afterwards — and this sheet is where somebody looks.
+    $('#hIntro', root).onclick = () => { sfx.click(); closeModal(); openIntroModal(); };
   });
 }
 

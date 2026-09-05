@@ -352,7 +352,7 @@ struct CupCard: View {
             }
         }
         .animation(.spring(duration: 0.32), value: live)
-        .sheet(isPresented: $showChart) { CupChartSheet().environmentObject(store) }
+        .sheet(isPresented: $showChart) { CupChartSheet(cupId: live?.id ?? "").environmentObject(store) }
         .sheet(isPresented: $showDetail) {
             if let cup = live { CupDetailSheet(cup: cup, watch: watch).environmentObject(store) }
         }

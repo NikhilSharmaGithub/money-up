@@ -61,6 +61,10 @@ struct CupBracketFeed: Decodable {
 // MARK: - the chart
 
 struct CupChartSheet: View {
+    /// Which cup. Without it the server falls back to the first live one, and
+    /// with up to six running at once that is somebody else's bracket.
+    var cupId: String = ""
+
     @EnvironmentObject var store: GameStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -317,7 +321,7 @@ struct CupChartSheet: View {
 
     private func load() async {
         guard let feed: CupBracketFeed = try? await store.fetchJSON(
-            "/api/cup/bracket?token=\(store.token)", raw: true) else { failed = true; return }
+            "/api/cup/bracket?token=\(store.token)&cup=\(cupId)", raw: true) else { failed = true; return }
         guard let b = feed.bracket else { failed = true; return }
         bracket = b
     }

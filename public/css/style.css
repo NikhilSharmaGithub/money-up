@@ -3255,3 +3255,44 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .bb-tag.locked.sale { background: var(--gold-soft); }
 .bb-tag s, .sc-price s, #bbGo s { opacity: .55; font-weight: 650; margin-right: 2px; }
 .sc-flag.gold { background: var(--gold); color: var(--page); }
+
+/* ─────────────────────────────────────────────── the first six cards ── */
+.intro-modal { max-width: 460px; text-align: center; }
+.intro { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.intro-skip {
+  position: absolute; top: -6px; right: -4px; z-index: 2;
+  background: none; border: 0; cursor: pointer; padding: 6px 10px;
+  font: inherit; font-size: 13px; font-weight: 800; color: var(--ink-3);
+}
+.intro-skip:hover { color: var(--ink-2); }
+.intro-hero {
+  width: 108px; height: 108px; flex: none; display: grid; place-items: center;
+  border-radius: 50%; background: var(--gold-soft);
+  border: 1.5px solid color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.intro-title { margin: 0; font-size: 24px; font-weight: 900; line-height: 1.15; }
+.intro-line { margin: 0; font-size: 14.5px; font-weight: 650; color: var(--ink-2); }
+.intro-points {
+  width: 100%; display: flex; flex-direction: column; gap: 12px; text-align: left;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: var(--r); padding: 15px;
+}
+.ip-row { display: flex; align-items: flex-start; gap: 11px; font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.ip-ico {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: 9px; background: var(--card); border: 1px solid var(--rule);
+}
+.intro-dots { display: flex; gap: 6px; align-items: center; }
+.intro-dots i {
+  width: 7px; height: 7px; border-radius: 999px; background: var(--rule);
+  transition: width .25s var(--pop), background .25s;
+}
+.intro-dots i.on { width: 20px; background: var(--gold); }
+#introNext.gold { background: var(--gold); border-color: var(--gold); }
+.intro-foot { margin: 0; font-size: 11px; font-weight: 650; color: var(--ink-3); }
+
+@media (max-width: 420px) {
+  .intro-hero { width: 88px; height: 88px; }
+  .intro-title { font-size: 21px; }
+  .ip-row { font-size: 12.5px; }
+}
