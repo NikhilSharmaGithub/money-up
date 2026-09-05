@@ -543,7 +543,32 @@ function boardTag(b) {
   if (b.how === 'house') return '<span class="bb-tag free">Always free</span>';
   if (b.how === 'today') return '<span class="bb-tag today">Free today</span>';
   if (b.how === 'owned') return '<span class="bb-tag owned">Yours</span>';
-  return `<span class="bb-tag locked">${icon('coin', 10)} ${b.price}</span>`;
+  // The old price only when there really is one — a "was" that matches the
+  // price is the oldest lie in retail.
+  const was = b.was ? `<s>${b.was}</s> ` : '';
+  return `<span class="bb-tag locked ${b.was ? 'sale' : ''}">${icon('coin', 10)} ${was}${b.price}</span>`;
+}
+
+/** Three of the places on it — what a card too small to list them all says. */
+const boardTeaser = (b) =>
+  (b.sets || []).flatMap((s) => s.cities).slice(0, 3).join(' · ');
+
+/**
+ * The board in words: every colour set with its own streets.
+ *
+ * A rim of coloured chips says a board exists. This says whether you want it,
+ * and it is the only thing on the sheet anybody reads twice — nobody ever
+ * bought a board because it had twenty-two streets.
+ */
+function boardContents(b) {
+  if (!b.sets?.length) return '';
+  return `<div class="board-sets">
+    <div class="bs-head">What's on it</div>
+    ${b.sets.map((x) => `<div class="bs-row">
+      <i style="background:${escapeHtml(x.color)}"></i>
+      <div><b>${escapeHtml(x.name)}</b><span>${x.cities.map(escapeHtml).join(', ')}</span></div>
+    </div>`).join('')}
+  </div>`;
 }
 
 function boardBoxesHTML(state, isHost) {
@@ -636,13 +661,16 @@ export function openBoardBuy(token, boardId, onBought) {
         <span><b>${b.streets}</b> streets</span>
         <span><b>${b.countries}</b> sets</span>
       </div>
+      ${boardContents(b)}
       <p class="sub">Buy it once and it is yours for good. Only the host needs to own a board —
         everyone at your table plays it with you.</p>
       <button class="btn primary big wide" id="bbGo" ${short ? 'disabled' : ''}>
-        ${icon('coin')} ${short ? `${short} more coins needed` : `Unlock for ${b.price}`}
+        ${icon('coin')} ${short ? `${short} more coins needed`
+          : `${b.was ? `<s>${b.was}</s> ` : ''}Unlock for ${b.price}`}
       </button>
       <p class="bb-wallet">${short
         ? `You have ${coins}. Win a game, collect the daily reward, or top up in the store.`
+        : b.was ? `You have ${coins} coins. On sale today — three boards are, every day.`
         : `You have ${coins} coins.`}</p>
       <div class="modal-actions"><button class="btn ghost" id="bbClose">Close</button></div>
     </div>`, (root) => {
@@ -1973,20 +2001,25 @@ function boardSection(items, wallet, coins, shelf) {
     const owned = wallet.owned?.includes(i.id);
     const m = byMap.get(i.mapId);
     const freeNow = m?.how === 'today';
-    const short = !owned && coins < i.price;
+    const price = m?.price ?? i.price;
+    const short = !owned && coins < price;
+    const flag = freeNow ? 'Free today'
+      : m?.was ? `${Math.round((shelf?.saleOff ?? 0.3) * 100)}% off` : '';
     return `<button class="store-card board-card ${owned ? 'owned' : ''} ${short ? 'locked' : ''}"
         data-item="${i.id}" data-kind="board" data-owned="${owned ? 1 : 0}"
-        title="${owned ? 'Yours' : short ? `${i.price - coins} more coins needed` : escapeHtml(i.name)}">
+        title="${owned ? 'Yours' : short ? `${price - coins} more coins needed` : escapeHtml(i.name)}">
         ${m ? miniBoard(m.preview) : ''}
         <span class="sc-name">${escapeHtml(m?.name || i.name)}</span>
-        <span class="sc-price">${owned ? '✓ Yours' : `${icon('coin', 13)} ${i.price}`}</span>
-        ${freeNow && !owned ? '<span class="sc-flag">Free today</span>' : ''}
+        ${m ? `<span class="sc-cities">${escapeHtml(boardTeaser(m))}</span>` : ''}
+        <span class="sc-price">${owned ? '✓ Yours'
+          : `${icon('coin', 13)} ${m?.was ? `<s>${m.was}</s> ` : ''}${price}`}</span>
+        ${flag && !owned ? `<span class="sc-flag ${freeNow ? '' : 'gold'}">${flag}</span>` : ''}
       </button>`;
   };
   return `
     <h3 class="map-section">${icon('map')} Boards</h3>
-    <p class="sub">Classic is free forever and two more are free every day — buy one to keep it for good.
-      Only the host needs to own the board; everyone at the table plays it.</p>
+    <p class="sub">Classic is free forever and two more every day. Three boards are on sale, and the
+      shelf is redealt every morning. Only the host needs to own a board — everyone at the table plays it.</p>
     <div class="store-grid board-store-grid">${boards.map(card).join('')}</div>`;
 }
 
@@ -2887,6 +2920,7 @@ export function openBoardModal(state, actions, token, onChange) {
           ${miniBoard(m.preview)}
           <span class="mn">${mapArt(m)} ${escapeHtml(m.name)}</span>
           <span class="md">${escapeHtml(m.description)}</span>
+          <span class="mcities">${escapeHtml(boardTeaser(m))}</span>
           <span class="mstats">
             <b>${m.size}</b> tiles · <b>${m.streets}</b> streets · <b>${m.countries}</b> sets
           </span>

@@ -32,31 +32,44 @@ export const HOUSE_BOARD = 'classic';
 export const FREE_PER_DAY = 2;
 
 // ---------------------------------------------------------------- the shelf --
-// Prices are set against the coin economy the pieces already live in: a win
-// pays 2, the daily ladder pays 1 to 7, a watched ad pays 2 with four a day,
-// so a regular player banks something like 200 coins a month and a daily one
-// closer to 600.
+// What a board costs is set against what a board IS, and nothing else.
 //
-// They are also set against the coin packs, and set so that no pack ever just
-// barely misses. 500 coins ($4.99) buys any country board outright. 1100
-// ($9.99) buys anything on the shelf but Shuffle. 2500 ($19.99) buys Shuffle
-// with change. A price that lands a hundred coins above a pack is a trick, and
-// we are not running one.
+// Blitz is a 28-tile board with sixteen streets — a short game, priced short.
+// Mr. Worldwide is 48 tiles and ten countries, the biggest thing here. Lucky
+// Wheel gives half its board to chance. Death Valley has four sets instead of
+// eight. Those are real differences and they are what the numbers below are
+// measuring.
 //
-// Every country costs the same. There is no version of this where one nation's
-// board is worth more than another's.
+// The twelve country boards are identical in every way that can be counted:
+// eight sets, twenty-two streets, and twenty-eight Treasure and Surprise cards
+// written for that country alone. So they cost the same. There is no version
+// of this where India is dearer than Spain, and any spread invented to make
+// the shelf look livelier would be exactly that — invented.
+//
+// The shelf gets its life somewhere honest instead: three boards go on sale
+// every day, and the order is redealt every day. Over a cycle every board has
+// its turn at the front and its turn at a discount, so the list is never the
+// same twice and never a price ladder with the dear one parked at the end.
+//
+// They are also set against the coin packs. 500 coins is $4.99, and that buys
+// any country board outright at full price. A price that lands a hundred coins
+// above a pack is a trick, and we are not running one.
 const PRICES = {
-  // house boards — each its own idea of a game
-  bharat: 600,
-  blitz: 600,
-  luckywheel: 650,
-  deathvalley: 750,
-  worldwide: 800,
-  // not a board — a machine that deals a new one every single game, which is
+  blitz: 350,        // 28 tiles, 16 streets — the short game
+  luckywheel: 400,   // half the board is chance
+  bharat: 450,       // 40 tiles, no deck of its own
+  deathvalley: 550,  // four sets, head to head
+  worldwide: 700,    // 48 tiles, 28 streets, ten countries — the biggest
+  // Not a board: a machine that deals a new one every single game, which is
   // why it sits alone at the top of the shelf.
-  random: 1500,
+  random: 1200,
 };
+// Eight sets, twenty-two streets, and twenty-eight cards nobody else has.
 const COUNTRY_PRICE = 500;
+
+/** How many boards are discounted on any given day, and by how much. */
+export const SALE_PER_DAY = 3;
+export const SALE_OFF = 0.30;
 
 /** Store id for a board. Namespaced so it can never collide with a piece. */
 export const boardItemId = (mapId) => `brd-${mapId}`;
@@ -157,6 +170,39 @@ export function freeBoardsOn(when = Date.now()) {
     (_, k) => order[(slot * FREE_PER_DAY + k) % order.length]);
 }
 
+/**
+ * The three boards that are cheap today.
+ *
+ * Drawn from everything that is NOT free today — discounting a board somebody
+ * can already play for nothing is not an offer, it is noise — and dealt by the
+ * day, so the sale is the same for everybody and needs no more storing than
+ * the free pair does.
+ */
+export function saleBoardsOn(when = Date.now()) {
+  const free = new Set(freeBoardsOn(when));
+  const pool = SELLABLE.filter((id) => !free.has(id));
+  const order = dealtBy(dayNumber(when) * 1_000_003 + 7, pool);
+  return order.slice(0, Math.min(SALE_PER_DAY, pool.length));
+}
+
+/** What this board actually costs today, sale and all. Rounded to a round number. */
+export function priceOn(mapId, when = Date.now()) {
+  const base = priceOf(mapId);
+  if (!saleBoardsOn(when).includes(mapId)) return base;
+  return Math.round((base * (1 - SALE_OFF)) / 25) * 25;
+}
+
+/**
+ * The order the shop lays the boards out in today.
+ *
+ * Redealt daily for the same reason a shop moves its shelves: a list that
+ * never changes stops being looked at, and a list sorted by price teaches
+ * people to read only one end of it.
+ */
+export function shelfOrderOn(when = Date.now()) {
+  return dealtBy(dayNumber(when) * 2_246_822_519 + 11, SELLABLE);
+}
+
 // --------------------------------------------------------------- the answer --
 
 /**
@@ -184,17 +230,30 @@ export function mayUseBoard(mapId, owned = [], when = Date.now()) {
  */
 export function boardAccess(owned = [], when = Date.now()) {
   const free = freeBoardsOn(when);
+  const sale = saleBoardsOn(when);
+  const order = shelfOrderOn(when);
+  // `price` is always what you would pay right now. `was` appears only when
+  // that is less than the sticker, because a "was" that equals the price is
+  // the oldest lie in retail.
+  const money = (id) => {
+    const now = priceOn(id, when);
+    const base = priceOf(id);
+    return now < base ? { price: now, was: base } : { price: now };
+  };
   const state = (id) => {
-    if (id === HOUSE_BOARD) return { playable: true, how: 'house', price: 0 };
-    if (owned.includes(boardItemId(id))) return { playable: true, how: 'owned', price: priceOf(id) };
-    if (free.includes(id)) return { playable: true, how: 'today', price: priceOf(id) };
-    return { playable: false, how: 'locked', price: priceOf(id) };
+    if (id === HOUSE_BOARD) return { playable: true, how: 'house', price: 0, shelf: -1 };
+    const at = { shelf: order.indexOf(id) };
+    if (owned.includes(boardItemId(id))) return { playable: true, how: 'owned', ...money(id), ...at };
+    if (free.includes(id)) return { playable: true, how: 'today', ...money(id), ...at };
+    return { playable: false, how: 'locked', ...money(id), ...at };
   };
   return {
     free,
+    sale,
     until: nextRollover(when),
     cycleDays: CYCLE_DAYS,
     perDay: FREE_PER_DAY,
+    saleOff: SALE_OFF,
     house: HOUSE_BOARD,
     state,
   };

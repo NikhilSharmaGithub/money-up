@@ -33,6 +33,15 @@ struct BoardPreview: Codable, Hashable {
     var sides: BoardSides
 }
 
+/// One colour set on a board, and the places on it. This is the part people
+/// actually read — nobody ever bought a board because it had 22 streets.
+struct BoardSet: Codable, Hashable, Identifiable {
+    var name: String
+    var color: String
+    var cities: [String]
+    var id: String { name }
+}
+
 struct BoardSummary: Codable, Identifiable, Hashable {
     var id: String
     var name: String
@@ -43,12 +52,20 @@ struct BoardSummary: Codable, Identifiable, Hashable {
     var countries: Int?
     var country: Bool?
     var preview: BoardPreview?
+    var sets: [BoardSet]?
 
     /// Playable right now — free, free today, or bought.
     var playable: Bool = true
     /// Why: "house" | "today" | "owned" | "locked".
     var how: String = "house"
     var price: Int = 0
+    /// The sticker price, present only while this board is discounted.
+    var was: Int?
+
+    /// A few of the places on it, for a card too small to list them all.
+    var teaser: String {
+        (sets ?? []).flatMap(\.cities).prefix(3).joined(separator: " · ")
+    }
 
     var storeId: String { "brd-\(id)" }
 }
@@ -56,6 +73,8 @@ struct BoardSummary: Codable, Identifiable, Hashable {
 struct BoardShelfFeed: Codable {
     var boards: [BoardSummary] = []
     var free: [String] = []
+    var sale: [String] = []
+    var saleOff: Double = 0.3
     /// Server-local midnight, in milliseconds — when the two free ones change.
     var until: Double = 0
     var perDay: Int = 2
@@ -166,11 +185,19 @@ private struct BoardTag: View {
             case "house": return ("ALWAYS FREE", P.ink3, P.sunken)
             case "today": return ("FREE TODAY", P.good, P.good.opacity(0.14))
             case "owned": return ("YOURS", P.gold, P.goldSoft)
-            default:      return ("\(board.price)", P.gold, P.sunken)
+            default:      return ("\(board.price)", P.gold, board.was == nil ? P.sunken : P.goldSoft)
             }
         }()
         HStack(spacing: 3) {
             if board.how == "locked" { Art.icon(.coin, size: 8.5) }
+            // The old price, struck through, only while there is really an old
+            // price — a "was" that matches the price is the oldest lie in retail.
+            if let was = board.was, board.how == "locked" {
+                Text("\(was)")
+                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .strikethrough()
+                    .foregroundStyle(P.ink3)
+            }
             Text(text)
                 .font(.system(size: 8.5, weight: .black, design: .rounded))
                 .kerning(0.3)
@@ -444,6 +471,15 @@ struct BoardPickerSheet: View {
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+                // Three of the places on it. A description tells you what a
+                // board is about; the names tell you whether it is yours.
+                if !b.teaser.isEmpty {
+                    Text(b.teaser)
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack(spacing: 6) {
                     Text("\(b.size) tiles")
                         .font(.system(size: 10.5, weight: .semibold, design: .rounded))
@@ -540,6 +576,40 @@ struct BoardBuySheet: View {
                         if let c = board.countries { stat("\(c)", "sets", P) }
                     }
 
+                    // The board itself, in words. A rim of coloured chips says
+                    // a board exists; this says whether you want it — and it is
+                    // the only thing on this sheet anybody reads twice.
+                    if let sets = board.sets, !sets.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("WHAT'S ON IT")
+                                .font(.system(size: 10, weight: .black, design: .rounded))
+                                .kerning(0.7)
+                                .foregroundStyle(P.ink3)
+                            ForEach(sets) { set in
+                                HStack(alignment: .top, spacing: 8) {
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .fill(Color(css: set.color))
+                                        .frame(width: 9, height: 9)
+                                        .padding(.top, 3)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(set.name)
+                                            .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                            .foregroundStyle(P.ink)
+                                        Text(set.cities.joined(separator: ", "))
+                                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                            .foregroundStyle(P.ink2)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(13)
+                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+                    }
+
                     Text("Buy it once and it is yours for good. Only the host needs to own a board — everyone at your table plays it with you.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
@@ -553,6 +623,12 @@ struct BoardBuySheet: View {
                         HStack(spacing: 7) {
                             if busy { ProgressView().tint(P.accentInk) }
                             else { Art.icon(.coin, size: 16) }
+                            if let was = board.was, short == 0 {
+                                Text("\(was)")
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .strikethrough()
+                                    .opacity(0.55)
+                            }
                             Text(short > 0 ? "\(short) more coins needed" : "Unlock for \(board.price)")
                                 .font(.system(size: 15, weight: .heavy, design: .rounded))
                         }
@@ -563,7 +639,9 @@ struct BoardBuySheet: View {
 
                     Text(short > 0
                          ? "You have \(coins). Win a game, collect the daily reward, or top up in the Store tab."
-                         : "You have \(coins) coins.")
+                         : board.was != nil
+                           ? "You have \(coins) coins. On sale today — three boards are, every day."
+                           : "You have \(coins) coins.")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
                 }
@@ -636,7 +714,7 @@ struct BoardStoreShelf: View {
                     Text("Boards")
                         .font(.system(size: 15, weight: .heavy, design: .rounded))
                         .foregroundStyle(P.ink)
-                    Text("Classic is free forever, two more every day — buy one to keep it.")
+                    Text("Classic is free forever and two more every day. Three are on sale, and the shelf is redealt every morning.")
                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
                 }
@@ -676,15 +754,36 @@ struct BoardStoreShelf: View {
                             .padding(.vertical, 2.5).padding(.horizontal, 6)
                             .background(P.good, in: Capsule())
                             .padding(5)
+                    } else if b.was != nil {
+                        Text("\(Int((shelf.feed?.saleOff ?? 0.3) * 100))% OFF")
+                            .font(.system(size: 8, weight: .black, design: .rounded))
+                            .foregroundStyle(P.accentInk)
+                            .padding(.vertical, 2.5).padding(.horizontal, 6)
+                            .background(P.gold, in: Capsule())
+                            .padding(5)
                     }
                 }
-                Text(b.name)
-                    .font(.system(size: 12.5, weight: .heavy, design: .rounded))
-                    .foregroundStyle(P.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                VStack(spacing: 2) {
+                    Text(b.name)
+                        .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if !b.teaser.isEmpty {
+                        Text(b.teaser)
+                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .lineLimit(1)
+                    }
+                }
                 HStack(spacing: 4) {
                     if !owned { Art.icon(.coin, size: 12) }
+                    if let was = b.was, !owned {
+                        Text("\(was)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .strikethrough()
+                            .foregroundStyle(P.ink3)
+                    }
                     Text(b.how == "house" ? "Always free" : owned ? "✓ Yours" : "\(b.price)")
                         .font(.system(size: 10.5, weight: .heavy, design: .rounded))
                         .foregroundStyle(owned ? P.ink3 : P.gold)

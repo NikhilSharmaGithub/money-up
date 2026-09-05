@@ -420,6 +420,15 @@ const summarise = (m) => ({
   airports: m.airportCount,
   utilities: m.utilityCount,
   countries: Object.keys(m.groups).length,
+  // What is actually ON it — every colour set with its own cities, in board
+  // order. A rim of coloured chips says a board exists; this says whether you
+  // want it. Nobody ever bought a board because it had 22 streets; they buy it
+  // because it has Marine Drive on it.
+  sets: Object.entries(m.groups).map(([g, idxs]) => ({
+    name: GROUPS[g]?.name || g,
+    color: GROUPS[g]?.color || '#8b5cf6',
+    cities: idxs.map((i) => m.tiles[i].name),
+  })),
   // everything the client needs to draw a miniature of the board
   preview: {
     colors: m.tiles.map(swatch),

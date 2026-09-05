@@ -10,7 +10,7 @@ import { sendTurnPush } from './push.js';
 import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
-import { boardAccess, mayUseBoard, BOARD_ITEMS, HOUSE_BOARD } from './boards.js';
+import { boardAccess, mayUseBoard, priceOn, mapIdOfItem } from './boards.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
   inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
@@ -103,8 +103,12 @@ app.get('/api/boards', (req, res) => {
   const owned = token ? (walletOf(token)?.owned || []) : [];
   const access = boardAccess(owned);
   res.json({
-    boards: mapList().map((m) => ({ ...m, ...access.state(m.id) })),
+    boards: mapList()
+      .map((m) => ({ ...m, ...access.state(m.id) }))
+      .sort((a, b) => a.shelf - b.shelf),
     free: access.free,
+    sale: access.sale,
+    saleOff: access.saleOff,
     until: access.until,
     perDay: access.perDay,
     cycleDays: access.cycleDays,
@@ -343,7 +347,13 @@ app.post('/api/store/buy', (req, res) => {
   const { token, itemId } = req.body || {};
   const item = itemById(String(itemId || ''));
   if (!item) return res.status(400).json({ error: 'Unknown item' });
-  const result = buyItem(String(token || '').slice(0, 64), item);
+  // Three boards are discounted every day, and the discount has to be real
+  // where it counts — at the till. The catalogue carries the sticker price;
+  // this is the only place that decides what actually leaves the wallet, so
+  // it is the only place that needs to know about the sale.
+  const mapId = mapIdOfItem(item.id);
+  const charged = mapId ? { ...item, price: priceOn(mapId) } : item;
+  const result = buyItem(String(token || '').slice(0, 64), charged);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
