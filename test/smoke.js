@@ -2289,6 +2289,41 @@ console.log('\n▶ tournaments');
     ok('a cup can be edited — name, date, window, limit — until its games start, and a limit means full is full');
   }
 
+  // An invite-only cup: the code is the invitation, so the code must never
+  // travel to the people who do not have it.
+  {
+    cup.cancelCup();
+    cup.openCup({ name: 'Invite only', joinSeconds: 300, joinCode: ' Sunday ' });
+    const enter = (i) => {
+      const token = `code-${i}`;
+      social.profileFor(token, { name: `C${i}` });
+      social.attachLogin(token, 'test', `cd-${i}`, `C${i}`);
+      return token;
+    };
+    const a = enter(0), b = enter(1), c = enter(2);
+    const bare = cup.join(a);
+    if (!bare.needsCode) fail('cup: a coded cup let somebody in with no code');
+    const wrong = cup.join(a, 'monday');
+    if (!wrong.needsCode) fail('cup: a coded cup accepted the wrong code');
+    // Typed the way people type: any case, stray spaces.
+    if (!cup.join(a, 'sunday').ok) fail('cup: the right code in the wrong case was refused');
+    if (!cup.join(b, '  SUNDAY ').ok) fail('cup: the right code with spaces round it was refused');
+    if (cup.currentCup()?.entrants.length !== 2) fail('cup: the coded door let the wrong number through');
+
+    // The one thing that would undo all of it.
+    const player = JSON.stringify(cup.publicView(c));
+    if (player.toLowerCase().includes('sunday')) fail('cup: the join code reached a player view');
+    if (cup.publicView(c).cup?.needsCode !== true) fail('cup: players were not told a code is needed');
+    // The owner does need it, to share it.
+    if (cup.ownerView().current?.joinCode !== 'Sunday') fail('cup: the owner cannot see the code they set');
+
+    // Clearing it opens the cup to everyone again.
+    cup.openCup({ name: 'Invite only', joinSeconds: 300, joinCode: '' });
+    if (!cup.join(c).ok) fail('cup: clearing the code did not open the cup');
+    if (cup.publicView(c).cup?.needsCode !== false) fail('cup: an open cup still claimed to need a code');
+    ok('a coded cup takes the code any way it is typed, refuses without it, and never shows it to a player');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {

@@ -234,7 +234,8 @@ app.get('/api/cup/bracket', (req, res) => {
 });
 
 app.post('/api/cup/join', (req, res) => {
-  const result = cup.join(String(req.body?.token || '').slice(0, 64));
+  const result = cup.join(String(req.body?.token || '').slice(0, 64),
+    String(req.body?.code || '').slice(0, 32));
   if (result.needsLogin) return res.status(401).json(result);
   if (result.error) return res.status(400).json(result);
   res.json(result);
@@ -718,6 +719,7 @@ app.post('/api/admin/cup', (req, res) => {
         // a wall-clock string, so the server never has to guess a timezone.
         opensAt: req.body.opensAt,
         maxPlayers: req.body.maxPlayers,
+        joinCode: req.body.joinCode,
       });
       if (result.ok) {
         const what = result.updated ? 'changed' : result.cup.state === 'scheduled' ? 'announced' : 'opened';

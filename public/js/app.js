@@ -1457,9 +1457,15 @@ let cupPollMs = 6000;
 
 function stopCupClock() { clearInterval(cupClock); cupClock = null; }
 
+// What the player has typed into the join-code box. The card repaints on a
+// poll every few seconds, and an input that empties itself while somebody is
+// typing into it is worse than no input at all.
+let cupCodeDraft = '';
+
 function paintCup(data) {
   const card = $('#cupCard');
   if (!card) return;
+  const codeHadFocus = document.activeElement === $('#cupCode');
   const cup = data?.enabled ? data.cup : null;
   if (!cup) { card.classList.add('hidden'); stopCupClock(); cupPollMs = 30000; return; }
   card.classList.remove('hidden');
@@ -1544,7 +1550,13 @@ function paintCup(data) {
              <button class="btn ghost small" id="cupPoster">${icon('question', 13)} How it works</button>
              <button class="btn ghost small" id="cupLeave">Leave</button>
            </div>`
-        : `<button class="btn gold wide wrap" id="cupJoin">${icon('trophy', 14)} Join</button>
+        : `${cup.needsCode ? `<div class="cup-code">
+               <input id="cupCode" placeholder="JOIN CODE" maxlength="16" autocomplete="off"
+                      value="${escapeHtml(cupCodeDraft)}" />
+               <button class="btn gold" id="cupJoin">${icon('trophy', 14)} Join</button>
+             </div>
+             <div class="cup-in">${icon('key', 13)} Invite only — you need the code from whoever set it up.</div>`
+          : `<button class="btn gold wide wrap" id="cupJoin">${icon('trophy', 14)} Join</button>`}
            <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`}`;
     const opened = cup.openedAt || cup.closesAt - 5 * 60 * 1000;
     const clock = () => {
@@ -1565,6 +1577,16 @@ function paintCup(data) {
     cupClock = setInterval(clock, 500);
     const join = $('#cupJoin');
     if (join) join.onclick = () => { sfx.click(); enterCup(); };
+    const codeBox = $('#cupCode');
+    if (codeBox) {
+      codeBox.oninput = () => { cupCodeDraft = codeBox.value; };
+      codeBox.onkeydown = (e) => { if (e.key === 'Enter') { sfx.click(); enterCup(); } };
+      // A repaint must not steal the caret from somebody mid-word.
+      if (codeHadFocus) {
+        codeBox.focus();
+        codeBox.setSelectionRange(codeBox.value.length, codeBox.value.length);
+      }
+    }
     const leave = $('#cupLeave');
     if (leave) leave.onclick = () => { sfx.click(); leaveCup(); };
     wireCupPoster(cup);
@@ -1667,14 +1689,21 @@ function roundName(r) {
 }
 
 async function enterCup() {
+  // An invite-only cup wants the code with the knock; the box is only drawn
+  // when the server said one is needed.
+  const code = $('#cupCode')?.value?.trim() || '';
   try {
     const res = await fetch(api('/api/cup/join'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, code }),
     });
     const out = await res.json();
     if (res.status === 401) return toast('Sign in first — a prize needs somebody to pay');
-    if (!res.ok || out.error) return toast(out.error || 'Could not enter', 'error');
+    if (!res.ok || out.error) {
+      if (out.needsCode) $('#cupCode')?.focus();
+      return toast(out.error || 'Could not join', 'error');
+    }
+    cupCodeDraft = '';
     toast('Joined — good luck');
     watchCup();
   } catch { toast('Could not reach the server', 'error'); }

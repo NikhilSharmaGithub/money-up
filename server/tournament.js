@@ -103,6 +103,9 @@ export function publicView(token) {
       closesAt: t.closesAt,
       entrants: t.entrants.length,
       maxPlayers: t.maxPlayers || 0,
+      // Whether a code is wanted, never the code itself: an invite-only cup
+      // whose code any client could read is not invite-only.
+      needsCode: !!t.joinCode,
       rounds: t.rounds.length,
       // The bracket, with names rather than identities.
       round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
@@ -268,6 +271,7 @@ function scrub(t) {
     state: t.state,
     prize: t.prize,
     maxPlayers: t.maxPlayers || 0,
+    joinCode: t.joinCode || '',
     openedAt: t.openedAt,
     closesAt: t.closesAt,
     endedAt: t.endedAt || null,
@@ -318,7 +322,7 @@ function money(v, fallback) {
  * owner presses a button is only ever played by whoever happens to be online
  * at that second; one announced for Sunday at eight can be turned up for.
  */
-export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers } = {}) {
+export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCode } = {}) {
   // A cup already under way cannot be re-opened, but one that has not started
   // playing yet can be changed. Moving the date used to be refused outright,
   // which meant cancelling and rebuilding it — and losing everybody who had
@@ -335,6 +339,8 @@ export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers } = {}) 
   const scheduled = wanted > now() + 60 * 1000;
   const opens = scheduled ? wanted : now();
   const cap = Math.max(0, Math.min(5000, Math.floor(Number(maxPlayers) || 0)));
+  // A code makes a cup invite-only. Empty means anyone signed in may join.
+  const code = String(joinCode ?? '').trim().slice(0, 16);
 
   if (editable) {
     live.name = String(name || live.name).slice(0, 40);
@@ -345,6 +351,7 @@ export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers } = {}) 
       third: money(prize?.third, live.prize.third),
     };
     live.maxPlayers = cap;
+    live.joinCode = code;
     live.openedAt = opens;
     live.closesAt = opens + secs * 1000;
     live.state = scheduled ? 'scheduled' : 'joining';
@@ -365,6 +372,7 @@ export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers } = {}) 
     // Nought means no limit. A cup with a limit stops taking entries when it
     // is full, which is the only way to promise a field of a given size.
     maxPlayers: cap,
+    joinCode: code,
     announcedAt: now(),
     openedAt: opens,
     closesAt: opens + secs * 1000,
@@ -420,7 +428,10 @@ export function markPaid(cupId, place) {
  * a private window, and a bracket paid in dollars is exactly the thing
  * somebody would open forty windows for.
  */
-export function join(token) {
+/** Codes are compared the way people type them: trimmed, any case. */
+const sameCode = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+export function join(token, code) {
   const t = state.current;
   if (!state.enabled || !t) return { error: 'No cup is open' };
   if (t.state === 'scheduled') {
@@ -434,6 +445,12 @@ export function join(token) {
   if (t.entrants.some((e) => e.token === token)) return { ok: true, already: true, entrants: t.entrants.length };
   if (t.maxPlayers && t.entrants.length >= t.maxPlayers) {
     return { error: 'This one is full', full: true };
+  }
+  if (t.joinCode && !sameCode(t.joinCode, code)) {
+    return {
+      error: code ? 'That code does not match' : 'This one needs a join code',
+      needsCode: true,
+    };
   }
   t.entrants.push({ token, code: p.code, name: p.name || 'Player', joinedAt: now() });
   save();

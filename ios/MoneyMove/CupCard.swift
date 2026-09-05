@@ -29,6 +29,9 @@ struct CupFeed: Decodable, Equatable {
         var entrants: Int
         /// Nought means no limit — see tournament.js.
         var maxPlayers: Int = 0
+        /// Whether a join code is wanted. Never the code itself — an
+        /// invite-only cup whose code the app could read is not invite-only.
+        var needsCode: Bool = false
         var rounds: Int
         var round: Round?
         var standings: Standings?
@@ -159,13 +162,14 @@ final class CupWatch: ObservableObject {
         return true
     }
 
-    func enter() async {
+    func enter(code: String = "") async {
         guard let store else { return }
         busy = true
         defer { busy = false }
         struct Reply: Decodable { var ok: Bool?; var error: String?; var needsLogin: Bool? }
         let reply: Reply? = try? await store.fetchJSON(
-            "/api/cup/join", method: "POST", body: ["token": store.token])
+            "/api/cup/join", method: "POST",
+            body: ["token": store.token, "code": code.trimmingCharacters(in: .whitespaces)])
         if reply?.ok == true {
             Haptics.turn()
             store.showToast("Joined — good luck")
@@ -250,6 +254,8 @@ struct CupCard: View {
 
     @State private var showChart = false
     @State private var showPoster = false
+    /// What the player typed into the code box, if the cup wants one.
+    @State private var codeDraft = ""
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -370,18 +376,52 @@ struct CupCard: View {
                             .disabled(busy)
                     }
                 } else {
-                    Button {
-                        Task { await watch.enter() }
-                    } label: {
+                    if cup.needsCode {
                         HStack(spacing: 8) {
-                            if busy { ProgressView().tint(P.accentInk) }
-                            else { Art.icon(.trophy, size: 18) }
-                            Text(busy ? "Joining…" : "Join")
+                            TextField("JOIN CODE", text: $codeDraft)
+                                .font(.system(size: 15, weight: .heavy, design: .monospaced))
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .padding(.horizontal, 13)
+                                .frame(height: 46)
+                                .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(P.rule, lineWidth: 1))
+                            Button {
+                                Task { await watch.enter(code: codeDraft) }
+                            } label: {
+                                HStack(spacing: 7) {
+                                    if busy { ProgressView().tint(P.accentInk) }
+                                    else { Art.icon(.trophy, size: 17) }
+                                    Text(busy ? "…" : "Join")
+                                }
+                                .padding(.horizontal, 4)
+                            }
+                            .buttonStyle(MMButtonStyle(kind: .gold))
+                            .disabled(busy)
                         }
-                        .frame(maxWidth: .infinity)
+                        HStack(spacing: 7) {
+                            Art.icon(.key, size: 13)
+                            Text("Invite only — you need the code from whoever set it up.")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Button {
+                            Task { await watch.enter() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if busy { ProgressView().tint(P.accentInk) }
+                                else { Art.icon(.trophy, size: 18) }
+                                Text(busy ? "Joining…" : "Join")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .gold))
+                        .disabled(busy)
                     }
-                    .buttonStyle(MMButtonStyle(kind: .gold))
-                    .disabled(busy)
                     moreButton("What is a cup?", .question, chart: false, P)
                 }
             }

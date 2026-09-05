@@ -213,6 +213,16 @@ export const adminPageHTML = `<!doctype html>
   .hint { font-size: 12px; color: #93a396; margin: -6px 0 10px; }
   .caption { font-size: 12px; color: #93a396; margin-top: 8px; }
   /* The people who joined, one to a line. */
+  .cupcodebox {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin-top: 10px; padding: 10px 13px; border-radius: 12px;
+    background: rgba(232, 181, 46, .07); border: 1px solid rgba(232, 181, 46, .3);
+  }
+  .cupcodebox span { font-size: 12px; color: #93a396; }
+  .cupcodebox b {
+    font-size: 20px; font-weight: 800; color: #e8b52e;
+    font-family: ui-monospace, monospace; letter-spacing: 2px;
+  }
   .cuplist { margin-top: 8px; max-height: 320px; overflow: auto; }
   .cuprow {
     display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
@@ -531,6 +541,7 @@ export const adminPageHTML = `<!doctype html>
           <div class="field"><label>Joining starts (leave blank to start now)</label><input id="cup-when" type="datetime-local" /></div>
           <div class="field"><label>Joining stays open for (minutes)</label><input id="cup-mins" type="number" value="5" min="1" /></div>
           <div class="field"><label>Player limit (0 = no limit)</label><input id="cup-max" type="number" value="0" min="0" /></div>
+          <div class="field"><label>Join code (blank = anyone can join)</label><input id="cup-code" placeholder="e.g. SUNDAY" maxlength="16" /></div>
           <div class="field"><label>1st prize</label><input id="cup-first" type="number" value="200" /></div>
           <div class="field"><label>2nd prize</label><input id="cup-second" type="number" value="100" /></div>
           <div class="field"><label>3rd prize</label><input id="cup-third" type="number" value="50" /></div>
@@ -2545,6 +2556,7 @@ export const adminPageHTML = `<!doctype html>
   if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
     var mins = Math.max(1, Number(document.getElementById('cup-mins').value) || 5);
     var cap = Math.max(0, Number(document.getElementById('cup-max').value) || 0);
+    var code = (document.getElementById('cup-code').value || '').trim();
     var when = cupWhenMs();
     var running = state.cup && state.cup.current;
     var ask = running
@@ -2562,6 +2574,7 @@ export const adminPageHTML = `<!doctype html>
       joinSeconds: mins * 60,
       opensAt: when,
       maxPlayers: cap,
+      joinCode: code,
       prize: {
         currency: document.getElementById('cup-cur').value,
         first: Number(document.getElementById('cup-first').value),
@@ -2798,6 +2811,7 @@ export const adminPageHTML = `<!doctype html>
     set('cup-name', c.name);
     set('cup-mins', Math.max(1, Math.round((c.closesAt - c.openedAt) / 60000)));
     set('cup-max', c.maxPlayers || 0);
+    set('cup-code', c.joinCode || '');
     set('cup-first', c.prize.first);
     set('cup-second', c.prize.second);
     set('cup-third', c.prize.third);
@@ -2899,6 +2913,12 @@ export const adminPageHTML = `<!doctype html>
       }
       // Who has actually joined. A comma-separated line was unreadable past
       // about six names, and this is the list the owner watches fill up.
+      if (c.joinCode) {
+        now += '<div class="cupcodebox"><span>Invite only — the code is</span>' +
+          '<b>' + esc(c.joinCode) + '</b></div>' +
+          '<div class="caption">Share it with whoever you want in. Nobody else can join, ' +
+          'and no player ever sees it from the app.</div>';
+      }
       now += '<div class="caption" style="margin-top:12px">Joined so far: <b>' + c.entrants.length +
         (c.maxPlayers ? ' of ' + c.maxPlayers : '') + '</b></div>';
       if (c.entrants.length) {
