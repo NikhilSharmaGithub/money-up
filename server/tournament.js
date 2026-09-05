@@ -405,12 +405,23 @@ function planOf(t, token) {
     players = Math.ceil(playersIn(r) / 2);
   }
   // And what is still to come, if this cup runs to a clock.
+  //
+  // Where the projection STARTS is the whole difficulty. A round is drawn the
+  // instant the one before it ends, and doorFor then asks for the first slot
+  // from a second ago — so a slot that has only just struck still counts.
+  // Asking from a minute in the FUTURE instead, as this did, put every
+  // unplayed round exactly one slot late: a sixteen-player cup with rounds at
+  // 15:54, 15:57, 16:00 and 16:03 promised its first round at 15:57 and then
+  // wrapped its final round round to the following day, so the last line of
+  // the timetable showed an earlier time than the first. This is the screen a
+  // player plans their evening around.
+  const windowMs = Math.max(1, Number(t.schedule?.windowMinutes) || 10) * 60000;
   let at = t.rounds.length
     ? (t.rounds[t.rounds.length - 1].opensAt || now())
-    : (t.state === 'joining' ? t.closesAt : now());
+    : ((t.state === 'joining' || t.state === 'scheduled' ? t.closesAt : now()) - 1000);
   let n = out.length;
   while (players > 1 && n < 12) {
-    at = t.schedule ? nextSlot(t.schedule, at + 60000) : at;
+    at = t.schedule ? nextSlot(t.schedule, at) : at;
     n++;
     out.push({
       n,
@@ -418,7 +429,10 @@ function planOf(t, token) {
         : players <= 8 ? 'Quarter-finals' : `Round of ${players}`,
       players,
       opensAt: t.schedule ? at : null,
-      closesAt: null,
+      // A projected round has a door as long as a real one. Leaving it null
+      // meant the plan could say when a round opened but never when it shut —
+      // and the window is the half of it somebody gets eliminated by.
+      closesAt: t.schedule ? at + windowMs : null,
       done: false,
       yours: false,
       projected: true,
