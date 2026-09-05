@@ -1901,8 +1901,9 @@ export const adminPageHTML = `<!doctype html>
     { id: 'freeCoins', label: 'Free coins', line: 'A small grant, for anyone who wants to sit through one.' },
   ];
   var AD_INPUTS = ['ad-dw-factor', 'ad-dw-cap', 'ad-fc-coins', 'ad-fc-cap',
+    'ad-pre-every',
     'ad-gap', 'ad-ceiling', 'ad-ttl', 'ad-window', 'ad-ssvwait',
-    'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc', 'ad-mob-net',
+    'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc', 'ad-mob-net', 'ad-mob-pre',
     'ad-h5-client', 'ad-h5-dw', 'ad-h5-fc'];
 
   // What each kind of client is told, in the words the desk should use for it.
@@ -2007,6 +2008,9 @@ export const adminPageHTML = `<!doctype html>
     var pv = a.provider || {};
     var today = a.today || {};
     var slots = s.placements || {};
+    var inters = s.interstitials || {};
+    var preGame = inters.preGame || {};
+    var interUnits = (s.admob && s.admob.interstitialUnits) || {};
     var dw = slots.doubleWin || {};
     var fc = slots.freeCoins || {};
 
@@ -2034,6 +2038,12 @@ export const adminPageHTML = `<!doctype html>
         adSeg('placement:' + slot.id, spec.enabled ? '1' : '0', [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
         '</div><div class="caption" style="max-width:260px">' + esc(slot.line) + '</div></div>';
     });
+    // The one break that pays nothing. Its own switch, because it is the one
+    // an owner is most likely to want off in a hurry.
+    sw += '<div><div class="field"><label>Pre-game break</label>' +
+      adSeg('interstitial:preGame', preGame.enabled ? '1' : '0',
+        [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
+      '</div><div class="caption" style="max-width:260px">A full-screen ad while a quick match is being found. Pays the player nothing — it is the only ad here that does not. iPhone only, and only with an interstitial unit id below.</div></div>';
     sw += '</div>';
     if (!s.enabled) {
       sw += '<div class="caption" style="margin-top:12px">Nothing pays out while ads are off: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> — so every client, including one already installed on a phone, draws no ad button until you switch it back on. It takes effect on the next screen a player opens; no redeploy, no app update.</div>';
@@ -2072,6 +2082,8 @@ export const adminPageHTML = `<!doctype html>
       adNum('ad-dw-cap', 'Double-ups a day', dw.dailyCap, '') +
       adNum('ad-fc-coins', 'Free coins a view', fc.coins, '') +
       adNum('ad-fc-cap', 'Free views a day', fc.dailyCap, '') +
+      adNum('ad-pre-every', 'Pre-game gap (min)', preGame.everyMinutes,
+        'The shortest wait between two pre-game breaks on one device. An ad before every single game is how an app gets deleted.') +
       '</div><hr class="divider">' +
       '<div class="mini-forms" style="gap:16px">' +
       adNum('ad-gap', 'Seconds between claims', caps.minIntervalSec, 'Longer than an ad, so hitting it takes effort.') +
@@ -2131,6 +2143,9 @@ export const adminPageHTML = `<!doctype html>
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
       adText('ad-mob-dw', 'Double-win rewarded unit', units.doubleWin, 'ca-app-pub-…/…', '') +
       adText('ad-mob-fc', 'Free-coins rewarded unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-mob-pre', 'Pre-game INTERSTITIAL unit', interUnits.preGame, 'ca-app-pub-…/…',
+        'A different kind of unit from the two above — make it as Interstitial in AdMob, not Rewarded.') +
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
       adText('ad-mob-net', 'Pin ad_network (optional)', mob.adNetworkId, '5450213213286189855',
         'Leave blank unless you have seen what arrives. Under mediation the callback names whoever filled the slot, and pinning the wrong one rejects your own revenue.') +
@@ -2479,6 +2494,12 @@ export const adminPageHTML = `<!doctype html>
       } else if (what.indexOf('placement:') === 0) {
         patch.placements = {};
         patch.placements[what.slice(10)] = { enabled: val === '1' };
+      } else if (what.indexOf('interstitial:') === 0) {
+        if (val === '1' && !confirm('Turn the pre-game break on?' + NL + NL +
+          'A full-screen ad while a quick match is being found. It pays the player nothing — ' +
+          'it is the one ad here that is purely revenue. Needs an interstitial unit id below.')) return;
+        patch.interstitials = {};
+        patch.interstitials[what.slice(13)] = { enabled: val === '1' };
       } else return;
       saveAds(patch, 'adsmsg');
       return;
@@ -2738,6 +2759,9 @@ export const adminPageHTML = `<!doctype html>
         doubleWin: { factor: adFieldNum('ad-dw-factor'), dailyCap: adFieldNum('ad-dw-cap') },
         freeCoins: { coins: adFieldNum('ad-fc-coins'), dailyCap: adFieldNum('ad-fc-cap') },
       },
+      interstitials: {
+        preGame: { everyMinutes: adFieldNum('ad-pre-every') },
+      },
       caps: {
         minIntervalSec: adFieldNum('ad-gap'),
         dailyCoinCap: adFieldNum('ad-ceiling'),
@@ -2756,6 +2780,7 @@ export const adminPageHTML = `<!doctype html>
       admob: {
         appId: adFieldText('ad-mob-app'),
         units: { doubleWin: adFieldText('ad-mob-dw'), freeCoins: adFieldText('ad-mob-fc') },
+        interstitialUnits: { preGame: adFieldText('ad-mob-pre') },
         adNetworkId: adFieldText('ad-mob-net'),
       },
       h5: {

@@ -98,6 +98,8 @@ struct LandingView: View {
             // sits on does the asking. It costs one GET, and only until a
             // server has answered "ads are off" once.
             await AdDesk.shared.refresh(store)
+            // Nothing reaches Google unless a break is due — see isDue.
+            InterstitialAd.shared.preload(AdDesk.shared.config)
             await loadAuthConfig()
             await refreshMe()
             cupWatch.start(store)
@@ -711,6 +713,12 @@ struct LandingView: View {
                     Haptics.tap()
                     SoundKit.shared.click()
                     store.quickPlay()
+                    // The break goes at the START of the wait, not the end: an
+                    // ad that lands in the last three seconds is one the
+                    // player is still closing while their first turn runs. The
+                    // search carries on behind it either way — nothing about
+                    // the game waits on this line.
+                    InterstitialAd.shared.showIfReady(AdDesk.shared.config)
                 } label: {
                     HStack(spacing: 9) {
                         if searching {

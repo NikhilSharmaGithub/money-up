@@ -60,7 +60,16 @@ struct AdsConfig: Decodable, Equatable {
     var enabled: Bool?
     var provider: String?
     var placements: [String: AdPlacement]?
+    /// Breaks that pay nothing — see InterstitialAd.swift. Only ever named
+    /// when ads are on, the slot is on and a unit exists to serve from.
+    var interstitials: [String: Interstitial]?
     var remaining: [String: Int]?
+
+    struct Interstitial: Decodable, Equatable {
+        var enabled: Bool?
+        var everyMinutes: Int?
+        var unitId: String?
+    }
 
     var live: Bool { enabled == true }
 

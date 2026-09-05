@@ -54,6 +54,21 @@ const ADMIN_KEY = process.env.ADMIN_KEY || 'moneymove-admin';
 export const PLACEMENTS = ['doubleWin', 'freeCoins'];
 
 /**
+ * Breaks that pay nothing.
+ *
+ * An interstitial is a different animal from everything else in this file: no
+ * ticket, no nonce, no server-side verification, no coin. Nobody is owed
+ * anything for having seen one, so there is nothing to defraud and nothing to
+ * check — which is exactly why it must stay outside the rewarded machinery
+ * rather than being bolted onto it.
+ *
+ * The only thing the server owns here is whether it may be shown at all and
+ * how often. The client obeys the interval; a client that lies shows itself
+ * more ads, which is its own punishment.
+ */
+export const INTERSTITIALS = ['preGame'];
+
+/**
  * The kinds of client that ask. Not an inventory of operating systems — an
  * inventory of ad surfaces, and the Android build is its own surface even
  * though it is a WebView around the same page money-up serves to Chrome.
@@ -82,6 +97,8 @@ const TEST_IDS = {
   admob: {
     appId: { ios: 'ca-app-pub-3940256099942544~1458002511', android: 'ca-app-pub-3940256099942544~3347511713' },
     unit: { ios: 'ca-app-pub-3940256099942544/1712485313', android: 'ca-app-pub-3940256099942544/5224354917' },
+    // Google's published interstitial test ids, from the same page.
+    interstitial: { ios: 'ca-app-pub-3940256099942544/4411468910', android: 'ca-app-pub-3940256099942544/1033173712' },
   },
   h5: { clientId: 'ca-pub-3940256099942544' },
 };
@@ -119,6 +136,15 @@ const defaults = () => ({
       description: 'A few coins for a view',
     },
   },
+  // Interstitials, by slot. `everyMinutes` is the shortest gap between two of
+  // them — an ad every single game is how an app gets deleted.
+  interstitials: {
+    preGame: {
+      enabled: false,
+      everyMinutes: 5,
+      description: 'One break while a quick match is being found',
+    },
+  },
   caps: {
     // Seconds between two paid claims. Longer than an ad, so the only way to
     // hit it is to be trying.
@@ -146,6 +172,11 @@ const defaults = () => ({
     units: {
       doubleWin: process.env.ADMOB_UNIT_DOUBLE_WIN || '',
       freeCoins: process.env.ADMOB_UNIT_FREE_COINS || '',
+    },
+    // Interstitial units are their own kind and their own ids: an AdMob
+    // rewarded unit will not serve one, and vice versa.
+    interstitialUnits: {
+      preGame: process.env.ADMOB_UNIT_PREGAME || '',
     },
     // The ad network id the callback should carry, if the owner wants it
     // pinned. Left blank on purpose: AdMob's own id is 5450213213286189855,
@@ -210,6 +241,17 @@ function merge(base, raw) {
     }
     out.placements[slot] = to;
   }
+  out.interstitials = { ...base.interstitials };
+  for (const slot of INTERSTITIALS) {
+    const from = raw.interstitials?.[slot];
+    if (!from || typeof from !== 'object') continue;
+    const to = { ...base.interstitials[slot] };
+    if (typeof from.enabled === 'boolean') to.enabled = from.enabled;
+    if (Number.isFinite(Number(from.everyMinutes))) {
+      to.everyMinutes = Math.max(0, Math.min(720, Number(from.everyMinutes)));
+    }
+    out.interstitials[slot] = to;
+  }
   out.caps = { ...base.caps };
   for (const key of Object.keys(base.caps)) {
     if (Number.isFinite(Number(raw.caps?.[key]))) out.caps[key] = Number(raw.caps[key]);
@@ -220,6 +262,9 @@ function merge(base, raw) {
     units: {
       doubleWin: str(raw.admob?.units?.doubleWin, base.admob.units.doubleWin),
       freeCoins: str(raw.admob?.units?.freeCoins, base.admob.units.freeCoins),
+    },
+    interstitialUnits: {
+      preGame: str(raw.admob?.interstitialUnits?.preGame, base.admob.interstitialUnits?.preGame || ''),
     },
     adNetworkId: str(raw.admob?.adNetworkId, base.admob.adNetworkId),
   };
@@ -483,6 +528,9 @@ const admobAppId = (platform) =>
 const admobUnit = (slot, platform) =>
   (settings.testMode ? TEST_IDS.admob.unit[platform === 'android' ? 'android' : 'ios'] : settings.admob.units[slot]) || '';
 const h5ClientId = () => (settings.testMode ? TEST_IDS.h5.clientId : settings.h5.clientId) || '';
+const admobInterstitial = (slot, platform) => (settings.testMode
+  ? TEST_IDS.admob.interstitial[platform === 'android' ? 'android' : 'ios']
+  : settings.admob.interstitialUnits?.[slot]) || '';
 
 /** The tag that rides to Google as user_id — derived from the nonce, never the token. */
 const ssvUserId = (nonce) =>
@@ -954,10 +1002,26 @@ export function configFor(token, platform = 'web', declared = true) {
         : live.id === 'h5' ? (settings.h5.slots[slot] || '') : '',
     };
   }
+  // Breaks that pay nothing. Only ever named when ads are on, the slot is on
+  // and there is a unit to serve from — a client with no unit shows nothing
+  // rather than falling back to a house ad, because there is nothing to fall
+  // back to: an interstitial the house serves would be an advert for itself.
+  const interstitials = {};
+  for (const slot of INTERSTITIALS) {
+    const spec = settings.interstitials?.[slot] || {};
+    const unitId = live.id === 'admob' ? admobInterstitial(slot, platform) : '';
+    interstitials[slot] = {
+      enabled: !!(settings.enabled && spec.enabled && unitId),
+      everyMinutes: Math.max(0, Number(spec.everyMinutes) || 0),
+      unitId,
+    };
+  }
+
   return {
     enabled: !!settings.enabled,
     provider: live.id,
     placements,
+    interstitials,
     remaining,
     coinsToday: state.coins || 0,
     dailyCoinCap: coinCeiling(),
@@ -1311,6 +1375,25 @@ adsRouter.post('/admin', (req, res) => {
     }
   }
 
+  // Breaks that pay nothing: on or off, and how rarely.
+  for (const slot of INTERSTITIALS) {
+    const from = body.interstitials?.[slot];
+    if (!from || typeof from !== 'object') continue;
+    const spec = settings.interstitials[slot];
+    if (typeof from.enabled === 'boolean' && from.enabled !== spec.enabled) {
+      spec.enabled = from.enabled;
+      changes.push(`${slot} interstitial ${from.enabled ? 'on' : 'off'}`);
+    }
+    if (from.everyMinutes !== undefined && from.everyMinutes !== '') {
+      const n = Number(from.everyMinutes);
+      if (!Number.isFinite(n) || n < 0 || n > 720) {
+        return res.status(400).json({ error: `${slot}.everyMinutes must be a number from 0 to 720` });
+      }
+      const v = Math.floor(n);
+      if (v !== spec.everyMinutes) { spec.everyMinutes = v; changes.push(`${slot} every ${v}m`); }
+    }
+  }
+
   const CAP_MAX = { minIntervalSec: 86400, dailyCoinCap: 10000, ticketTtlSec: 3600, winWindowMin: 1440, ssvWaitSec: 30 };
   for (const [key, max] of Object.entries(CAP_MAX)) {
     if (body.caps?.[key] === undefined || body.caps[key] === '') continue;
@@ -1336,6 +1419,13 @@ adsRouter.post('/admin', (req, res) => {
       if (typeof unit !== 'string' || unit.trim() === settings.admob.units[slot]) continue;
       settings.admob.units[slot] = unit.trim().slice(0, 120);
       changes.push(`admob ${slot} unit`);
+    }
+    settings.admob.interstitialUnits ??= {};
+    for (const slot of INTERSTITIALS) {
+      const unit = body.admob.interstitialUnits?.[slot];
+      if (typeof unit !== 'string' || unit.trim() === settings.admob.interstitialUnits[slot]) continue;
+      settings.admob.interstitialUnits[slot] = unit.trim().slice(0, 120);
+      changes.push(`admob ${slot} interstitial unit`);
     }
     if (typeof body.admob.adNetworkId === 'string' && body.admob.adNetworkId.trim() !== settings.admob.adNetworkId) {
       settings.admob.adNetworkId = body.admob.adNetworkId.trim().slice(0, 64);
