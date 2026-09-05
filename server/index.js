@@ -8,6 +8,7 @@ import { GameRoom, COLORS } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
 import { sendTurnPush } from './push.js';
 import * as cup from './tournament.js';
+import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, setPresence, clearPresence,
@@ -1116,6 +1117,12 @@ function sweepCupNoShows() {
     if (out?.roundComplete) seatCupMatches();
   }
 }
+
+// Today's exchange rates, so a prize written in dollars can be read in the
+// money the player actually uses. Once at boot and once a day after that;
+// until it lands, everybody simply sees the owner's own figure.
+refreshRates();
+setInterval(refreshRates, 6 * 60 * 60 * 1000).unref?.();
 
 // The join window closes on its own clock, and the moment it does the first
 // round needs tables.

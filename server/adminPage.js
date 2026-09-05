@@ -212,6 +212,14 @@ export const adminPageHTML = `<!doctype html>
   .ok { color: #4fd98b; }
   .hint { font-size: 12px; color: #93a396; margin: -6px 0 10px; }
   .caption { font-size: 12px; color: #93a396; margin-top: 8px; }
+  /* The switch is on and nothing is open — said plainly, because the tile
+     above reads CUPS ON and that is not the same thing. */
+  .cupnudge {
+    padding: 12px 14px; border-radius: 12px; font-size: 13px; line-height: 1.55;
+    color: #e8d9b0; background: rgba(232, 181, 46, .09);
+    border: 1px solid rgba(232, 181, 46, .38);
+  }
+  .cupnudge b { color: #e8b52e; }
   /* The join window, counting down for real — see cupClockText. */
   .cupclock {
     display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
@@ -2707,7 +2715,9 @@ export const adminPageHTML = `<!doctype html>
     var live = c ? (c.state === 'joining' ? 'DOORS OPEN' : c.state === 'running' ? 'RUNNING' : 'DONE') : 'NONE';
     swap('cuptiles',
       tileHtml(v.enabled ? 'CUPS ON' : 'CUPS OFF', 'tournaments',
-        v.enabled ? 'the card shows on the web' : 'hidden everywhere') +
+        !v.enabled ? 'hidden everywhere'
+          : c ? 'players can see this one'
+            : 'on, but nothing is open yet') +
       tileHtml(live, 'right now', c ? esc(c.name) : 'no cup open') +
       tileHtml(c ? fmtNum(c.entrants.length) : '0', 'entered', 'signed-in players') +
       tileHtml(c ? String(c.rounds.length) : '0', 'rounds drawn', '') +
@@ -2721,7 +2731,15 @@ export const adminPageHTML = `<!doctype html>
       '<div class="caption" style="max-width:520px;margin-top:8px">Off, and no player sees a cup at all — the card is not drawn and the join route refuses. This is the switch that keeps it hidden while you try it out.</div>');
 
     var now = '';
-    if (!c) now = '<div class="caption">No cup is open. Fill the form and open the doors.</div>';
+    if (!c) {
+      // The commonest confusion at this desk: the switch is on, the tile says
+      // CUPS ON, and nothing at all is happening because no cup was opened.
+      now = v.enabled
+        ? '<div class="cupnudge"><b>Nothing is running.</b> The switch is on, but players see ' +
+          'no cup until you fill the form beside this and press <b>Open the doors</b>.</div>'
+        : '<div class="caption">Cups are switched off — nobody sees anything. Turn them on, ' +
+          'then open the doors.</div>';
+    }
     else {
       now = '<div class="field"><label>' + esc(c.name) + '</label></div>' +
         '<div class="caption">State: <b>' + esc(c.state) + '</b> · ' + c.entrants.length + ' entered · prizes ' +

@@ -23,6 +23,7 @@ struct CupFeed: Decodable, Equatable {
         /// "joining" | "running" | "done"
         var state: String
         var prize: Prize
+        var local: Local?
         var openedAt: Double?
         var closesAt: Double?
         var entrants: Int
@@ -37,6 +38,17 @@ struct CupFeed: Decodable, Equatable {
 
     struct Prize: Decodable, Equatable {
         var currency: String?
+        var first: Int?
+        var second: Int?
+        var third: Int?
+    }
+
+    /// The same three prizes in the money the reader thinks in, when the
+    /// server knows a rate for the country they fly. Null otherwise, and the
+    /// owner's own figure is shown instead — nothing is ever invented.
+    struct Local: Decodable, Equatable {
+        var code: String?
+        var symbol: String?
         var first: Int?
         var second: Int?
         var third: Int?
@@ -187,6 +199,39 @@ final class CupWatch: ObservableObject {
     }
 }
 
+/// Which of the three prizes a caller means.
+enum CupPlace: String { case first, second, third }
+
+/// A cup prize written the way the reader reads money.
+///
+/// The owner sets one number in one currency; the server converts it for
+/// whoever asked, and only when it actually knows today's rate — see fx.js.
+/// A converted figure carries "≈" so nobody reads it as the sum they will be
+/// handed.
+func cupMoney(prize: CupFeed.Prize, local: CupFeed.Local?, place: CupPlace) -> String {
+    let localAmount: Int? = {
+        switch place {
+        case .first:  return local?.first
+        case .second: return local?.second
+        case .third:  return local?.third
+        }
+    }()
+    if let local, let amount = localAmount {
+        let unit = (local.symbol?.isEmpty == false) ? local.symbol! : "\(local.code ?? "") "
+        return "≈\(unit)\(amount.formatted(.number))"
+    }
+    let usd: Int? = {
+        switch place {
+        case .first:  return prize.first
+        case .second: return prize.second
+        case .third:  return prize.third
+        }
+    }()
+    let cur = prize.currency ?? "USD"
+    let amount = (usd ?? 0).formatted(.number)
+    return cur == "USD" ? "$\(amount)" : "\(cur) \(amount)"
+}
+
 // MARK: - the card
 
 struct CupCard: View {
@@ -246,7 +291,7 @@ struct CupCard: View {
     private func joiningFace(_ cup: CupFeed.Cup, _ P: Palette) -> some View {
         MMCard(padding: 16) {
             VStack(alignment: .leading, spacing: 12) {
-                head(cup, subtitle: "Knockout — last one standing takes \(money(cup, cup.prize.first))", P)
+                head(cup, subtitle: "Knockout — last one standing takes \(money(cup, .first))", P)
                 doorClock(cup, P)
                 prizes(cup, P)
 
@@ -327,11 +372,11 @@ struct CupCard: View {
                     head(cup, subtitle: s.first.map { "\($0.name ?? "Somebody") takes it" }
                          ?? "Nobody finished this one", P)
                     VStack(spacing: 6) {
-                        step("1st", s.first, money(cup, cup.prize.first),
+                        step("1st", s.first, money(cup, .first),
                              gold: true, mine: cup.you.placed == "first", P)
-                        step("2nd", s.second, money(cup, cup.prize.second),
+                        step("2nd", s.second, money(cup, .second),
                              gold: false, mine: cup.you.placed == "second", P)
-                        step("3rd", s.third, money(cup, cup.prize.third),
+                        step("3rd", s.third, money(cup, .third),
                              gold: false, mine: cup.you.placed == "third", P)
                     }
                     if cup.you.placed != nil {
@@ -445,11 +490,11 @@ struct CupCard: View {
     /// everybody is actually here for.
     private func prizes(_ cup: CupFeed.Cup, _ P: Palette) -> some View {
         HStack(spacing: 8) {
-            prizePill("1st", money(cup, cup.prize.first), tint: P.gold,
+            prizePill("1st", money(cup, .first), tint: P.gold,
                       fill: P.goldSoft, big: true, P)
-            prizePill("2nd", money(cup, cup.prize.second), tint: P.ink3,
+            prizePill("2nd", money(cup, .second), tint: P.ink3,
                       fill: P.sunken, big: false, P)
-            prizePill("3rd", money(cup, cup.prize.third), tint: Color(hex: 0xA2662A),
+            prizePill("3rd", money(cup, .third), tint: Color(hex: 0xA2662A),
                       fill: P.sunken, big: false, P)
         }
     }
@@ -498,10 +543,10 @@ struct CupCard: View {
 
     // MARK: - words
 
-    private func money(_ cup: CupFeed.Cup, _ n: Int?) -> String {
-        let cur = cup.prize.currency ?? "USD"
-        let amount = n ?? 0
-        return cur == "USD" ? "$\(amount)" : "\(cur) \(amount)"
+    /// A converted figure always carries its "≈": the prize is the owner's
+    /// number, and this is a reading aid rather than a promise.
+    private func money(_ cup: CupFeed.Cup, _ place: CupPlace) -> String {
+        cupMoney(prize: cup.prize, local: cup.local, place: place)
     }
 
     private func clock(_ seconds: TimeInterval) -> String {

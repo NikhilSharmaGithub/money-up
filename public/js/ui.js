@@ -2242,6 +2242,22 @@ const mapArt = (m) => (MAP_ART[m.id]
   ? icon(MAP_ART[m.id], 17)
   : groupFlag(m.icon, m.preview?.colors?.[1], 17));
 
+/**
+ * A cup prize, written the way the reader reads money.
+ *
+ * The owner sets one number and the server converts it for whoever asked —
+ * see fx.js. A converted figure always carries its "≈", because the prize is
+ * the owner's number and this is a reading aid, not a promise.
+ */
+export function cupMoney(cup, place) {
+  const local = cup?.local;
+  if (local && local[place] != null) {
+    return `≈${local.symbol || `${local.code} `}${Number(local[place]).toLocaleString('en-US')}`;
+  }
+  const cur = cup?.prize?.currency === 'USD' ? '$' : `${cup?.prize?.currency || ''} `;
+  return `${cur}${Number(cup?.prize?.[place] ?? 0).toLocaleString('en-US')}`;
+}
+
 // ─────────────────────────────────────────────────────────── the cup chart ──
 /**
  * The bracket, as a chart you can read your own run off.
@@ -2276,8 +2292,7 @@ export function openCupBracket(token) {
 }
 
 function chartHTML(b) {
-  const cur = b.prize?.currency === 'USD' ? '$' : `${b.prize?.currency || ''} `;
-  const money = (n) => `${cur}${n ?? 0}`;
+  const money = (place) => cupMoney(b, place);
   const num = (n) => (n == null ? '' : Number(n).toLocaleString('en-US'));
 
   // Your run, round by round. The one part of this that stays readable at any
@@ -2315,7 +2330,7 @@ function chartHTML(b) {
 
   const standing = (() => {
     if (!b.you) return `${b.entrants} entered`;
-    if (b.you.placed) return `You finished ${b.you.placed} — ${money(b.prize?.[b.you.placed])}`;
+    if (b.you.placed) return `You finished ${b.you.placed} — ${money(b.you.placed)}`;
     if (b.you.out) return `Knocked out after ${path.filter((p) => p.won).length} won`;
     const live = path[path.length - 1];
     return live ? `You are in the ${live.label.toLowerCase()}` : `${b.entrants} entered`;
@@ -2357,7 +2372,7 @@ function chartHTML(b) {
     return `<div class="cup-step ${place}">
           <span class="cup-place">${['1st', '2nd', '3rd'][i]}</span>
           <b>${who ? escapeHtml(who.name) : '—'}</b>
-          <span class="cup-won">${money(b.prize?.[place])}</span>
+          <span class="cup-won">${money(place)}</span>
         </div>`;
   }).join('')}
     </div>` : '';
@@ -2382,8 +2397,7 @@ function chartHTML(b) {
  * people out.
  */
 export function openCupPoster(cup) {
-  const cur = cup.prize?.currency === 'USD' ? '$' : `${cup.prize?.currency || ''} `;
-  const money = (n) => `${cur}${n ?? 0}`;
+  const money = (place) => cupMoney(cup, place);
   // The ladder a cup of this size actually runs: 100 → 50 → 25 → …
   const rungs = [];
   let left = Math.max(2, cup.entrants || 2);
@@ -2395,12 +2409,12 @@ export function openCupPoster(cup) {
       <div class="poster-top">
         <span class="poster-mark">${icon('trophy', 30, 'solo')}</span>
         <div class="poster-name">${escapeHtml(cup.name)}</div>
-        <div class="poster-tag">Knockout · winner takes ${money(cup.prize?.first)}</div>
+        <div class="poster-tag">Knockout · winner takes ${money('first')}</div>
       </div>
       <div class="poster-prizes">
-        <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money(cup.prize?.first)}</b></div>
-        <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money(cup.prize?.second)}</b></div>
-        <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money(cup.prize?.third)}</b></div>
+        <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money('first')}</b></div>
+        <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money('second')}</b></div>
+        <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money('third')}</b></div>
       </div>
       <div class="poster-rungs">
         ${rungs.map((n, i) => `<span class="rung ${i === rungs.length - 1 ? 'last' : ''}">${n === 1 ? '🏆' : n}</span>`)
@@ -2412,7 +2426,7 @@ export function openCupPoster(cup) {
         <li><b>Two seats, no bots.</b> A cup table cannot be filled with house players, and the link cannot seat a third.</li>
         <li><b>Come back for it.</b> A table nobody opens is given away after eight minutes.</li>
       </ul>
-      <p class="poster-foot">Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code.</p>
+      <p class="poster-foot">${cup.local ? `Prizes are set in ${escapeHtml(cup.prize?.currency || 'USD')} and shown here in your own money at today’s rate. ` : ''}Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code.</p>
     </div>`, (root) => {
     $('#posterClose', root).onclick = closeModal;
   }, 'poster-modal');

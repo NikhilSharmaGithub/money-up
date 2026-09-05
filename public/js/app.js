@@ -10,7 +10,7 @@ import {
   confetti, openDeedModal, openHelpModal, openStoreModal, openJoinNameModal,
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
-  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster,
+  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, cupMoney,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -1472,13 +1472,14 @@ function paintCup(data) {
     setTimeout(() => go(cup.you.roomId), 900);
   }
 
-  const money = (n) => `${cup.prize.currency === 'USD' ? '$' : `${cup.prize.currency} `}${n}`;
+  // The reader's own money where the server worked one out — see fx.js.
+  const money = (place) => cupMoney(cup, place);
   // Three places, three metals. The first is bigger than the others because
   // it is the thing everybody is actually here for.
   const prizes = `<div class="cup-prizes">
-      <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money(cup.prize.first)}</b></div>
-      <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money(cup.prize.second)}</b></div>
-      <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money(cup.prize.third)}</b></div>
+      <div class="cup-prize gold"><span class="cup-place">1st</span><b>${money('first')}</b></div>
+      <div class="cup-prize silver"><span class="cup-place">2nd</span><b>${money('second')}</b></div>
+      <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money('third')}</b></div>
     </div>`;
 
   if (cup.state === 'joining') {
@@ -1487,7 +1488,7 @@ function paintCup(data) {
         <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>
         <div class="cup-body">
           <div class="cup-title">${escapeHtml(cup.name)}</div>
-          <div class="cup-sub">Knockout — last one standing takes ${money(cup.prize.first)}</div>
+          <div class="cup-sub">Knockout — last one standing takes ${money('first')}</div>
         </div>
         <span class="cup-count"><b>${cup.entrants}</b> in</span>
       </div>
@@ -1578,7 +1579,7 @@ function paintCup(data) {
     const step = (place, who, label) => `<div class="cup-step ${place}${mine === place ? ' mine' : ''}">
         <span class="cup-place">${label}</span>
         <b>${who ? escapeHtml(who.name) : '—'}</b>
-        <span class="cup-won">${money(cup.prize[place])}</span>
+        <span class="cup-won">${money(place)}</span>
       </div>`;
     card.innerHTML = `<div class="cup-head">
         <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>

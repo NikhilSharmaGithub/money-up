@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profilesByToken } from './social.js';
+import { localiseFor } from './fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
@@ -92,6 +93,10 @@ export function publicView(token) {
       name: t.name,
       state: t.state,
       prize: t.prize,
+      // The same prize in the reader's own money, when we know a rate for
+      // the country they fly. Null for everybody else, and the card falls
+      // back to the owner's figure — see fx.js on why nothing is invented.
+      local: localPrize(t, token),
       // Both ends of the join window: the card draws a bar that drains, and a
       // bar needs to know how long the whole thing was.
       openedAt: t.openedAt,
@@ -176,6 +181,7 @@ export function bracketView(token) {
       name: t.name,
       state: t.state,
       prize: t.prize,
+      local: localPrize(t, token),
       entrants: t.entrants.length,
       you: mine ? { code: mine.code, name: mine.name, out: !!mine.out, placed: mine.placed || null }
         : null,
@@ -200,6 +206,15 @@ export function bracketView(token) {
       })),
     },
   };
+}
+
+/** The three prizes, converted for whoever is reading, or null. */
+function localPrize(t, token) {
+  const flag = token ? profilesByToken(token)?.flag : '';
+  if (!flag) return null;
+  return localiseFor(flag, {
+    first: t.prize.first, second: t.prize.second, third: t.prize.third,
+  }, t.prize.currency || 'USD');
 }
 
 function roundView(t, n) {

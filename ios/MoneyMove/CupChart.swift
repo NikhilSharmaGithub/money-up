@@ -20,6 +20,7 @@ struct CupBracketFeed: Decodable {
         var name: String
         var state: String
         var prize: CupFeed.Prize
+        var local: CupFeed.Local?
         var entrants: Int
         var you: You?
         var standings: CupFeed.Standings?
@@ -114,17 +115,17 @@ struct CupChartSheet: View {
 
     private func podium(_ b: CupBracketFeed.Bracket, _ P: Palette) -> some View {
         VStack(spacing: 6) {
-            row("1st", b.standings?.first, b.prize.first, gold: true, b, P)
-            row("2nd", b.standings?.second, b.prize.second, gold: false, b, P)
-            row("3rd", b.standings?.third, b.prize.third, gold: false, b, P)
+            row("1st", b.standings?.first, .first, gold: true, b, P)
+            row("2nd", b.standings?.second, .second, gold: false, b, P)
+            row("3rd", b.standings?.third, .third, gold: false, b, P)
         }
     }
 
-    private func row(_ place: String, _ who: CupFeed.Standings.Card?, _ amount: Int?,
+    private func row(_ label: String, _ who: CupFeed.Standings.Card?, _ place: CupPlace,
                      gold: Bool, _ b: CupBracketFeed.Bracket, _ P: Palette) -> some View {
         let mine = who?.code != nil && who?.code == b.you?.code
         return HStack(spacing: 9) {
-            Text(place.uppercased())
+            Text(label.uppercased())
                 .font(.system(size: 10, weight: .heavy, design: .rounded))
                 .foregroundStyle(gold ? P.gold : P.ink3)
                 .frame(width: 26, alignment: .leading)
@@ -133,7 +134,7 @@ struct CupChartSheet: View {
                 .foregroundStyle(P.ink)
                 .lineLimit(1)
             Spacer(minLength: 6)
-            Text(money(b, amount))
+            Text(money(b, place))
                 .font(.system(size: 13, weight: .heavy, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(gold ? P.gold : P.ink2)
@@ -310,9 +311,8 @@ struct CupChartSheet: View {
         .padding(.vertical, 4)
     }
 
-    private func money(_ b: CupBracketFeed.Bracket, _ n: Int?) -> String {
-        let cur = b.prize.currency ?? "USD"
-        return cur == "USD" ? "$\(n ?? 0)" : "\(cur) \(n ?? 0)"
+    private func money(_ b: CupBracketFeed.Bracket, _ place: CupPlace) -> String {
+        cupMoney(prize: b.prize, local: b.local, place: place)
     }
 
     private func load() async {
@@ -350,15 +350,15 @@ struct CupPosterSheet: View {
                             .font(.system(size: 23, weight: .black, design: .rounded))
                             .foregroundStyle(P.ink)
                             .multilineTextAlignment(.center)
-                        Text("Knockout · winner takes \(money(cup.prize.first))")
+                        Text("Knockout · winner takes \(money(.first))")
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
                             .foregroundStyle(P.ink2)
                     }
 
                     HStack(spacing: 8) {
-                        prize("1st", money(cup.prize.first), gold: true, P)
-                        prize("2nd", money(cup.prize.second), gold: false, P)
-                        prize("3rd", money(cup.prize.third), gold: false, P)
+                        prize("1st", money(.first), gold: true, P)
+                        prize("2nd", money(.second), gold: false, P)
+                        prize("3rd", money(.third), gold: false, P)
                     }
 
                     rungs(P)
@@ -374,7 +374,9 @@ struct CupPosterSheet: View {
                              "A table nobody opens is given away after eight minutes.", P)
                     }
 
-                    Text("Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code.")
+                    Text(cup.local == nil
+                         ? "Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code."
+                         : "Prizes are set in \(cup.prize.currency ?? "USD") and shown here in your own money at today\u{2019}s rate. Entering needs an account, because a prize needs somebody to pay.")
                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
                         .multilineTextAlignment(.center)
@@ -454,8 +456,7 @@ struct CupPosterSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
-    private func money(_ n: Int?) -> String {
-        let cur = cup.prize.currency ?? "USD"
-        return cur == "USD" ? "$\(n ?? 0)" : "\(cur) \(n ?? 0)"
+    private func money(_ place: CupPlace) -> String {
+        cupMoney(prize: cup.prize, local: cup.local, place: place)
     }
 }
