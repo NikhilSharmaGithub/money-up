@@ -11,7 +11,6 @@ struct LandingView: View {
 
     @State private var joinCode = ""
     @State private var addCode = ""
-    @State private var serverOpen = false
     @State private var selectedFlag = ""
     @State private var profile: ProfileInfo?
     @State private var me: MeInfo?
@@ -489,14 +488,6 @@ struct LandingView: View {
         // After the preferences, before the plumbing — the same rules the web
         // client's help modal reads out.
         HowToPlayCard()
-        // The server override is a workbench tool: it points the app at a
-        // machine on somebody's desk. On a phone from the App Store it is a
-        // row that can only break things — a mistyped address hides your
-        // friends, your coins and your history — so it ships only in a
-        // build made for developing against a local server.
-        #if DEBUG
-        serverCard(P)
-        #endif
         MMCard {
             Text("An original implementation of the classic property-trading board game. Not affiliated with any trademark holder.")
                 .font(.system(size: 11.5, weight: .medium, design: .rounded))
@@ -1048,36 +1039,6 @@ struct LandingView: View {
 
     // MARK: - server override
 
-    private func serverCard(_ P: Palette) -> some View {
-        MMCard {
-            DisclosureGroup(isExpanded: $serverOpen) {
-                VStack(alignment: .leading, spacing: 10) {
-                    // Nobody stumbling in here should have to guess what it
-                    // does, or why their friends suddenly can't see them.
-                    Text("Where this app looks for games. Leave it alone unless you are running your own server — pointing somewhere else hides your friends, coins and history.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(P.ink3)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    TextField("https://…", text: $store.serverURLString)
-                        .font(.system(size: 14, weight: .medium, design: .monospaced))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .padding(11)
-                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(P.rule, lineWidth: 1))
-
-                    Button("Reset") { store.serverURLString = GameStore.defaultServer }
-                        .buttonStyle(MMButtonStyle(kind: .ghost))
-                }
-                .padding(.top, 10)
-            } label: {
-                PanelTitle("Server")
-            }
-            .tint(P.ink3)
-        }
-    }
 
     // MARK: - friends
 

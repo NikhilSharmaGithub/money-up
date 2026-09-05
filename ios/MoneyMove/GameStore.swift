@@ -23,6 +23,12 @@ final class GameStore: ObservableObject {
 
     @AppStorage("mm.name") var nickname: String = ""
     @AppStorage("mm.flag") var flag: String = ""
+    /// Where the app looks for games. There is no longer a way to change
+    /// this from inside the app — it was a workbench control that could only
+    /// break things on a real phone. It stays stored so a development machine
+    /// can still point a simulator somewhere else by writing the default
+    /// directly, and so anybody carrying an old override is not stranded on it
+    /// — see the reset below.
     @AppStorage("mm.server") var serverURLString: String = GameStore.defaultServer
     /// Last room this device sat in — powers "Continue game" on the landing
     /// screen. The server holds seats (bots fill in) so rejoining just works.
@@ -303,6 +309,18 @@ final class GameStore: ObservableObject {
     private var toastTask: Task<Void, Never>?
 
     init() {
+        // Anybody who typed an address into the old Server row has no way to
+        // undo it now that the row is gone. On a phone, "localhost" means the
+        // phone itself, where nothing is listening — it can only ever be a
+        // leftover, so it goes back to the real server on the next launch.
+        // The simulator is left alone: there, localhost is a Mac with a
+        // development server on it, which is the whole point.
+        #if !targetEnvironment(simulator)
+        let stored = serverURLString.lowercased()
+        if stored.contains("localhost") || stored.contains("127.0.0.1") || stored.contains("[::1]") {
+            serverURLString = GameStore.defaultServer
+        }
+        #endif
         meId = token
         socket.onStatus = { [weak self] s in
             Task { @MainActor in self?.connection = s; self?.onSocketStatus(s) }
