@@ -1498,15 +1498,15 @@ function paintCup(data) {
       </div>
       <div class="cup-clock">
         <div class="cup-clock-line">
-          <span>Doors open in</span>
+          <span>Joining opens in</span>
           <b id="cupClockText">…</b>
         </div>
       </div>
       <div class="cup-when">${icon('snooze', 13)} ${escapeHtml(opens.toLocaleString([], {
     weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-  }))} · doors stay open ${Math.round((cup.closesAt - cup.openedAt) / 60000)} min</div>
+  }))} · open for ${Math.round((cup.closesAt - cup.openedAt) / 60000)} min</div>
       ${prizes}
-      <div class="cup-in">${icon('people', 14)} Come back then — entering takes one tap once the doors are open.</div>
+      <div class="cup-in">${icon('people', 14)} Come back then — joining takes one tap.</div>
       <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`;
     const clock = () => {
       const el = $('#cupClockText');
@@ -1528,23 +1528,23 @@ function paintCup(data) {
           <div class="cup-title">${escapeHtml(cup.name)}</div>
           <div class="cup-sub">Knockout — last one standing takes ${money('first')}</div>
         </div>
-        <span class="cup-count"><b>${cup.entrants}</b> in</span>
+        <span class="cup-count"><b>${cup.entrants}</b>${cup.maxPlayers ? `/${cup.maxPlayers}` : ''} joined</span>
       </div>
       <div class="cup-clock">
         <div class="cup-clock-line">
-          <span>Doors close in</span>
+          <span>Joining closes in</span>
           <b id="cupClockText">…</b>
         </div>
         <div class="cup-bar"><i id="cupBar" style="width:100%"></i></div>
       </div>
       ${prizes}
       ${cup.you.joined
-        ? `<div class="cup-in ok">${icon('people', 14)} You are in. Your first table opens when the doors close.</div>
+        ? `<div class="cup-in ok">${icon('people', 14)} Joined. Your first game starts when joining closes.</div>
            <div class="row-2">
              <button class="btn ghost small" id="cupPoster">${icon('question', 13)} How it works</button>
-             <button class="btn ghost small" id="cupLeave">Withdraw</button>
+             <button class="btn ghost small" id="cupLeave">Leave</button>
            </div>`
-        : `<button class="btn gold wide wrap" id="cupJoin">Enter the cup</button>
+        : `<button class="btn gold wide wrap" id="cupJoin">${icon('trophy', 14)} Join</button>
            <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`}`;
     const opened = cup.openedAt || cup.closesAt - 5 * 60 * 1000;
     const clock = () => {
@@ -1591,7 +1591,7 @@ function paintCup(data) {
           <div class="cup-title">${escapeHtml(cup.name)}</div>
           <div class="cup-sub">${r ? escapeHtml(roundName(r)) : 'Drawing the bracket…'}</div>
         </div>
-        <span class="cup-count"><b>${cup.entrants}</b> in</span>
+        <span class="cup-count"><b>${cup.entrants}</b>${cup.maxPlayers ? `/${cup.maxPlayers}` : ''} joined</span>
       </div>
       ${dots}
       ${prizes}
@@ -1675,7 +1675,7 @@ async function enterCup() {
     const out = await res.json();
     if (res.status === 401) return toast('Sign in first — a prize needs somebody to pay');
     if (!res.ok || out.error) return toast(out.error || 'Could not enter', 'error');
-    toast('You are in the cup');
+    toast('Joined — good luck');
     watchCup();
   } catch { toast('Could not reach the server', 'error'); }
 }

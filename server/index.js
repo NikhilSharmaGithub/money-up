@@ -717,11 +717,13 @@ app.post('/api/admin/cup', (req, res) => {
         // Epoch milliseconds. The desk sends an absolute instant rather than
         // a wall-clock string, so the server never has to guess a timezone.
         opensAt: req.body.opensAt,
+        maxPlayers: req.body.maxPlayers,
       });
       if (result.ok) {
-        audit('cup', result.cup.id, result.cup.state === 'scheduled'
-          ? `announced "${result.cup.name}" for ${new Date(result.cup.openedAt).toISOString()}`
-          : `opened "${result.cup.name}" — doors ${Math.round((result.cup.closesAt - Date.now()) / 1000)}s`);
+        const what = result.updated ? 'changed' : result.cup.state === 'scheduled' ? 'announced' : 'opened';
+        audit('cup', result.cup.id, `${what} "${result.cup.name}" — ${result.cup.state === 'scheduled'
+          ? `registration opens ${new Date(result.cup.openedAt).toISOString()}`
+          : `registration open for ${Math.round((result.cup.closesAt - Date.now()) / 60000)} min`}`);
       }
       break;
     case 'openNow':

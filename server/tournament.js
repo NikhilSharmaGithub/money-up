@@ -102,6 +102,7 @@ export function publicView(token) {
       openedAt: t.openedAt,
       closesAt: t.closesAt,
       entrants: t.entrants.length,
+      maxPlayers: t.maxPlayers || 0,
       rounds: t.rounds.length,
       // The bracket, with names rather than identities.
       round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
@@ -266,6 +267,7 @@ function scrub(t) {
     name: t.name,
     state: t.state,
     prize: t.prize,
+    maxPlayers: t.maxPlayers || 0,
     openedAt: t.openedAt,
     closesAt: t.closesAt,
     endedAt: t.endedAt || null,
@@ -316,15 +318,40 @@ function money(v, fallback) {
  * owner presses a button is only ever played by whoever happens to be online
  * at that second; one announced for Sunday at eight can be turned up for.
  */
-export function openCup({ name, joinSeconds, prize, opensAt } = {}) {
-  if (state.current && state.current.state !== 'done') {
-    return { error: 'A cup is already running — finish or cancel it first' };
+export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers } = {}) {
+  // A cup already under way cannot be re-opened, but one that has not started
+  // playing yet can be changed. Moving the date used to be refused outright,
+  // which meant cancelling and rebuilding it — and losing everybody who had
+  // already joined — to fix a typo in the hour.
+  const live = state.current;
+  const editable = live && (live.state === 'scheduled' || live.state === 'joining');
+  if (live && !editable && live.state !== 'done') {
+    return { error: 'This cup has already started playing — finish or cancel it first' };
   }
-  const secs = Math.max(30, Math.min(6 * 3600, Math.floor(Number(joinSeconds) || 300)));
+
+  const secs = Math.max(30, Math.min(30 * 86400, Math.floor(Number(joinSeconds) || 300)));
   const wanted = Number(opensAt) || 0;
   // A minute's grace, so "in a moment" is not an announcement nobody sees.
   const scheduled = wanted > now() + 60 * 1000;
   const opens = scheduled ? wanted : now();
+  const cap = Math.max(0, Math.min(5000, Math.floor(Number(maxPlayers) || 0)));
+
+  if (editable) {
+    live.name = String(name || live.name).slice(0, 40);
+    live.prize = {
+      currency: String(prize?.currency || live.prize.currency).slice(0, 4),
+      first: money(prize?.first, live.prize.first),
+      second: money(prize?.second, live.prize.second),
+      third: money(prize?.third, live.prize.third),
+    };
+    live.maxPlayers = cap;
+    live.openedAt = opens;
+    live.closesAt = opens + secs * 1000;
+    live.state = scheduled ? 'scheduled' : 'joining';
+    save();
+    return { ok: true, updated: true, cup: live };
+  }
+
   state.current = {
     id: id(),
     name: String(name || 'MoneyMove Cup').slice(0, 40),
@@ -335,6 +362,9 @@ export function openCup({ name, joinSeconds, prize, opensAt } = {}) {
       second: money(prize?.second, 100),
       third: money(prize?.third, 50),
     },
+    // Nought means no limit. A cup with a limit stops taking entries when it
+    // is full, which is the only way to promise a field of a given size.
+    maxPlayers: cap,
     announcedAt: now(),
     openedAt: opens,
     closesAt: opens + secs * 1000,
@@ -402,6 +432,9 @@ export function join(token) {
   const p = profilesByToken(token);
   if (!p || !p.login) return { error: 'Sign in to enter — a prize needs somebody to pay', needsLogin: true };
   if (t.entrants.some((e) => e.token === token)) return { ok: true, already: true, entrants: t.entrants.length };
+  if (t.maxPlayers && t.entrants.length >= t.maxPlayers) {
+    return { error: 'This one is full', full: true };
+  }
   t.entrants.push({ token, code: p.code, name: p.name || 'Player', joinedAt: now() });
   save();
   return { ok: true, entrants: t.entrants.length };

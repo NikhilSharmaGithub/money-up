@@ -212,6 +212,16 @@ export const adminPageHTML = `<!doctype html>
   .ok { color: #4fd98b; }
   .hint { font-size: 12px; color: #93a396; margin: -6px 0 10px; }
   .caption { font-size: 12px; color: #93a396; margin-top: 8px; }
+  /* The people who joined, one to a line. */
+  .cuplist { margin-top: 8px; max-height: 320px; overflow: auto; }
+  .cuprow {
+    display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, .05); font-size: 13px;
+  }
+  .cupnum { width: 26px; color: #6d7d70; font-variant-numeric: tabular-nums; }
+  .cupwho { flex: 1; min-width: 0; color: #dfe7e0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cupcode { color: #93a396; font-family: ui-monospace, monospace; font-size: 12px; }
+  .cupout { color: #e2566d; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
   /* The switch is on and nothing is open — said plainly, because the tile
      above reads CUPS ON and that is not the same thing. */
   .cupnudge {
@@ -514,22 +524,24 @@ export const adminPageHTML = `<!doctype html>
     </section>
     <div class="cards">
       <div class="card">
-        <h2>Open a cup</h2>
-        <p class="hint">Pick when the doors open and how long they stay open. Leave the date blank and they open now; set one and the cup is announced — everybody sees it and counts down to it, and it opens itself at the minute. Entering needs a signed-in account, because a prize needs somebody to pay.</p>
+        <h2>Set up a cup</h2>
+        <p class="hint">Three things decide a cup: when players can start joining, how long joining stays open, and what the winners get. Save it once and you can change any of it — the date included — right up until the games start.</p>
         <div class="mini-forms">
           <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
-          <div class="field"><label>Doors open at (blank = now)</label><input id="cup-when" type="datetime-local" /></div>
-          <div class="field"><label>Doors stay open (seconds)</label><input id="cup-secs" type="number" value="300" /></div>
-          <div class="field"><label>First</label><input id="cup-first" type="number" value="200" /></div>
-          <div class="field"><label>Second</label><input id="cup-second" type="number" value="100" /></div>
-          <div class="field"><label>Third</label><input id="cup-third" type="number" value="50" /></div>
-          <div class="field"><label>Currency</label><input id="cup-cur" value="USD" /></div>
+          <div class="field"><label>Joining starts (leave blank to start now)</label><input id="cup-when" type="datetime-local" /></div>
+          <div class="field"><label>Joining stays open for (minutes)</label><input id="cup-mins" type="number" value="5" min="1" /></div>
+          <div class="field"><label>Player limit (0 = no limit)</label><input id="cup-max" type="number" value="0" min="0" /></div>
+          <div class="field"><label>1st prize</label><input id="cup-first" type="number" value="200" /></div>
+          <div class="field"><label>2nd prize</label><input id="cup-second" type="number" value="100" /></div>
+          <div class="field"><label>3rd prize</label><input id="cup-third" type="number" value="50" /></div>
+          <div class="field"><label>Currency you pay in</label><input id="cup-cur" value="USD" /></div>
         </div>
         <div class="caption" id="cup-when-note"></div>
-        <div style="margin-top:14px"><button class="btn sm" id="cup-open">Open the doors</button>
-          <button class="btn sm ghost" id="cup-now">Open early</button>
-          <button class="btn sm ghost" id="cup-close">Close them now</button>
-          <button class="btn sm ghost" id="cup-cancel">Cancel the cup</button></div>
+        <div style="margin-top:14px"><button class="btn sm" id="cup-open">Save this cup</button>
+          <button class="btn sm ghost" id="cup-now">Start joining now</button>
+          <button class="btn sm ghost" id="cup-close">Stop joining and start the games</button>
+          <button class="btn sm ghost" id="cup-cancel">Delete this cup</button></div>
+        <p class="hint" style="margin-top:10px"><b>Save this cup</b> creates it, and saves your changes to it afterwards. <b>Start joining now</b> opens it ahead of the date. <b>Stop joining</b> shuts the list early and pairs everyone off.</p>
       </div>
       <div class="card">
         <h2>What is happening</h2>
@@ -2502,34 +2514,54 @@ export const adminPageHTML = `<!doctype html>
     var note = document.getElementById('cup-when-note');
     if (!note) return;
     var ms = cupWhenMs();
-    if (!ms) { note.textContent = 'Blank — the doors open the moment you press the button.'; return; }
+    if (!ms) { note.textContent = 'Blank — joining starts the moment you save.'; return; }
     var away = ms - Date.now();
-    if (away <= 60000) { note.textContent = 'That is now or in the past — the doors will just open.'; return; }
+    if (away <= 60000) { note.textContent = 'That time has passed — joining will just start now.'; return; }
     var mins = Math.round(away / 60000);
     var human = mins < 60 ? mins + ' minutes'
       : mins < 1440 ? (Math.round(mins / 6) / 10) + ' hours'
         : (Math.round(mins / 144) / 10) + ' days';
-    note.textContent = 'Announced for ' + new Date(ms).toLocaleString() + ' — ' + human +
-      ' from now. Players see it and count down; nobody can enter until then.';
+    note.textContent = 'Players will see this cup straight away and count down to ' +
+      new Date(ms).toLocaleString() + ' — ' + human + ' from now. Nobody can join until then.';
   }
   var cupWhenBox = document.getElementById('cup-when');
   if (cupWhenBox) { cupWhenBox.addEventListener('input', cupWhenNote); cupWhenNote(); }
 
+  // The button's own label follows the situation: nothing exists yet, or
+  // there is something to save changes to.
+  function cupButtonLabels() {
+    var running = state.cup && state.cup.current;
+    var save = document.getElementById('cup-open');
+    if (save) save.textContent = running ? 'Save changes' : 'Save this cup';
+    var early = document.getElementById('cup-now');
+    if (early) early.style.display = running && running.state === 'scheduled' ? '' : 'none';
+    var stop = document.getElementById('cup-close');
+    if (stop) stop.style.display = running && running.state === 'joining' ? '' : 'none';
+    var del = document.getElementById('cup-cancel');
+    if (del) del.style.display = running ? '' : 'none';
+  }
+
   var cupOpenBtn = document.getElementById('cup-open');
   if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
-    var secs = Number(document.getElementById('cup-secs').value) || 300;
+    var mins = Math.max(1, Number(document.getElementById('cup-mins').value) || 5);
+    var cap = Math.max(0, Number(document.getElementById('cup-max').value) || 0);
     var when = cupWhenMs();
-    var ask = when > Date.now() + 60000
-      ? 'Announce this cup for ' + new Date(when).toLocaleString() + '?' + NL + NL +
-        'Everybody sees it and counts down. The doors open themselves then, stay open ' +
-        secs + ' seconds, and the tables start when they shut.'
-      : 'Open the doors for ' + secs + ' seconds, starting now?' + NL + NL +
-        'When they shut, everyone who entered is paired off and the tables start.';
+    var running = state.cup && state.cup.current;
+    var ask = running
+      ? 'Save these changes to "' + running.name + '"?' + NL + NL +
+        'Everyone who has already joined stays joined.'
+      : when > Date.now() + 60000
+        ? 'Announce this cup for ' + new Date(when).toLocaleString() + '?' + NL + NL +
+          'Players see it now and count down. Joining opens by itself then, stays open ' +
+          mins + ' minutes, and the games start when it closes.'
+        : 'Open joining now, for ' + mins + ' minutes?' + NL + NL +
+          'When it closes, everyone who joined is paired off and the games start.';
     if (!confirm(ask)) return;
     cupPost('open', {
       name: document.getElementById('cup-name').value,
-      joinSeconds: secs,
+      joinSeconds: mins * 60,
       opensAt: when,
+      maxPlayers: cap,
       prize: {
         currency: document.getElementById('cup-cur').value,
         first: Number(document.getElementById('cup-first').value),
@@ -2540,17 +2572,17 @@ export const adminPageHTML = `<!doctype html>
   });
   var cupNowBtn = document.getElementById('cup-now');
   if (cupNowBtn) cupNowBtn.addEventListener('click', function () {
-    if (!confirm('Open the doors now, ahead of the announced time?')) return;
+    if (!confirm('Let people start joining right now, ahead of the date?')) return;
     cupPost('openNow', {});
   });
   var cupCloseBtn = document.getElementById('cup-close');
   if (cupCloseBtn) cupCloseBtn.addEventListener('click', function () {
-    if (!confirm('Close the doors now and draw the first round?')) return;
+    if (!confirm('Stop people joining now and start the games?')) return;
     cupPost('close', {});
   });
   var cupCancelBtn = document.getElementById('cup-cancel');
   if (cupCancelBtn) cupCancelBtn.addEventListener('click', function () {
-    if (!confirm('Cancel this cup?' + NL + NL + 'Everyone who entered is dropped and nothing is paid.')) return;
+    if (!confirm('Delete this cup?' + NL + NL + 'Everyone who joined is dropped and nothing is paid.')) return;
     cupPost('cancel', {});
   });
 
@@ -2752,13 +2784,44 @@ export const adminPageHTML = `<!doctype html>
     return (cur === 'USD' ? '$' : cur + ' ') + n;
   }
 
+  // The form is filled from the cup that exists, the first time we see it, so
+  // "change the date" is: open the panel, edit the box, press save. Only once
+  // per cup — refilling it every five seconds would fight whoever is typing.
+  var cupFormFilled = '';
+  function fillCupForm(c) {
+    if (!c || cupFormFilled === c.id) return;
+    cupFormFilled = c.id;
+    var set = function (id, value) {
+      var el = document.getElementById(id);
+      if (el) el.value = value;
+    };
+    set('cup-name', c.name);
+    set('cup-mins', Math.max(1, Math.round((c.closesAt - c.openedAt) / 60000)));
+    set('cup-max', c.maxPlayers || 0);
+    set('cup-first', c.prize.first);
+    set('cup-second', c.prize.second);
+    set('cup-third', c.prize.third);
+    set('cup-cur', c.prize.currency);
+    // datetime-local wants the browser's own wall clock, without a zone.
+    var d = new Date(c.openedAt);
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    set('cup-when', c.state === 'scheduled'
+      ? d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+        'T' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+      : '');
+    cupWhenNote();
+  }
+
   function renderCup() {
     var v = state.cup;
     if (!v) { swap('cuptiles', tileHtml('—', 'tournaments', 'loading')); return; }
     var c = v.current;
+    fillCupForm(c);
+    if (!c) cupFormFilled = '';
+    cupButtonLabels();
     var live = !c ? 'NONE'
       : c.state === 'scheduled' ? 'ANNOUNCED'
-        : c.state === 'joining' ? 'DOORS OPEN'
+        : c.state === 'joining' ? 'JOINING OPEN'
           : c.state === 'running' ? 'RUNNING' : 'DONE';
     swap('cuptiles',
       tileHtml(v.enabled ? 'CUPS ON' : 'CUPS OFF', 'tournaments',
@@ -2766,7 +2829,8 @@ export const adminPageHTML = `<!doctype html>
           : c ? (c.state === 'scheduled' ? 'announced — players are counting down' : 'players can see this one')
             : 'on, but nothing is open yet') +
       tileHtml(live, 'right now', c ? esc(c.name) : 'no cup open') +
-      tileHtml(c ? fmtNum(c.entrants.length) : '0', 'entered', 'signed-in players') +
+      tileHtml(c ? fmtNum(c.entrants.length) + (c.maxPlayers ? ' / ' + c.maxPlayers : '') : '0',
+        'joined', c && c.maxPlayers ? 'limit set' : 'signed-in players') +
       tileHtml(c ? String(c.rounds.length) : '0', 'rounds drawn', '') +
       tileHtml(fmtNum(v.history.length), 'finished', 'kept for a while'));
 
@@ -2782,26 +2846,29 @@ export const adminPageHTML = `<!doctype html>
       // The commonest confusion at this desk: the switch is on, the tile says
       // CUPS ON, and nothing at all is happening because no cup was opened.
       now = v.enabled
-        ? '<div class="cupnudge"><b>Nothing is running.</b> The switch is on, but players see ' +
-          'no cup until you fill the form beside this and press <b>Open the doors</b>.</div>'
+        ? '<div class="cupnudge"><b>No cup yet.</b> The switch is on, but players see nothing ' +
+          'until you fill in the form beside this and press <b>Save this cup</b>.</div>'
         : '<div class="caption">Cups are switched off — nobody sees anything. Turn them on, ' +
-          'then open the doors.</div>';
+          'then set one up.</div>';
     }
     else {
+      var plain = c.state === 'scheduled' ? 'waiting for its start time'
+        : c.state === 'joining' ? 'open for joining'
+          : c.state === 'running' ? 'games in progress' : 'finished';
       now = '<div class="field"><label>' + esc(c.name) + '</label></div>' +
-        '<div class="caption">State: <b>' + esc(c.state) + '</b> · ' + c.entrants.length + ' entered · prizes ' +
+        '<div class="caption">' + esc(plain) + ' · prizes ' +
         cupMoney(c, c.prize.first) + ' / ' + cupMoney(c, c.prize.second) + ' / ' + cupMoney(c, c.prize.third) + '</div>';
       // The clock, which ticks on its own between the five-second refreshes.
       // A countdown that only moves when the page reloads is not a countdown.
       if (c.state === 'scheduled') {
         cupClosesAt = c.openedAt;
-        now += '<div class="caption" style="margin-top:6px">Announced for <b>' +
-          esc(new Date(c.openedAt).toLocaleString()) + '</b>. Nobody can enter until then.</div>' +
-          '<div class="cupclock"><span>Doors open in</span>' +
+        now += '<div class="caption" style="margin-top:6px">Joining opens <b>' +
+          esc(new Date(c.openedAt).toLocaleString()) + '</b>. Players can see it and are counting down.</div>' +
+          '<div class="cupclock"><span>Joining opens in</span>' +
           '<b id="cup-clock">' + cupClockText() + '</b></div>';
       } else if (c.state === 'joining') {
         cupClosesAt = c.closesAt;
-        now += '<div class="cupclock"><span>Doors close in</span>' +
+        now += '<div class="cupclock"><span>Joining closes in</span>' +
           '<b id="cup-clock">' + cupClockText() + '</b></div>';
       } else {
         cupClosesAt = 0;
@@ -2830,10 +2897,22 @@ export const adminPageHTML = `<!doctype html>
           break;
         }
       }
+      // Who has actually joined. A comma-separated line was unreadable past
+      // about six names, and this is the list the owner watches fill up.
+      now += '<div class="caption" style="margin-top:12px">Joined so far: <b>' + c.entrants.length +
+        (c.maxPlayers ? ' of ' + c.maxPlayers : '') + '</b></div>';
       if (c.entrants.length) {
-        now += '<div class="caption" style="margin-top:8px">' +
-          c.entrants.slice(0, 40).map(function (e) { return esc(e.name) + ' (' + esc(e.code) + ')'; }).join(', ') +
-          (c.entrants.length > 40 ? ' and ' + (c.entrants.length - 40) + ' more' : '') + '</div>';
+        now += '<div class="cuplist">' + c.entrants.slice(0, 200).map(function (e, i) {
+          return '<div class="cuprow"><span class="cupnum">' + (i + 1) + '</span>' +
+            '<span class="cupwho">' + esc(e.name) + '</span>' +
+            '<span class="cupcode">' + esc(e.code) + '</span>' +
+            (e.out ? '<span class="cupout">out</span>' : '') + '</div>';
+        }).join('') + '</div>';
+        if (c.entrants.length > 200) {
+          now += '<div class="caption">and ' + (c.entrants.length - 200) + ' more</div>';
+        }
+      } else {
+        now += '<div class="caption">Nobody yet.</div>';
       }
     }
     swap('cupnow', now);

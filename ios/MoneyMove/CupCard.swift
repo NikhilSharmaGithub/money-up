@@ -27,6 +27,8 @@ struct CupFeed: Decodable, Equatable {
         var openedAt: Double?
         var closesAt: Double?
         var entrants: Int
+        /// Nought means no limit — see tournament.js.
+        var maxPlayers: Int = 0
         var rounds: Int
         var round: Round?
         var standings: Standings?
@@ -166,7 +168,7 @@ final class CupWatch: ObservableObject {
             "/api/cup/join", method: "POST", body: ["token": store.token])
         if reply?.ok == true {
             Haptics.turn()
-            store.showToast("You are in the cup")
+            store.showToast("Joined — good luck")
             await load()
         } else {
             store.showToast(reply?.error ?? "Could not enter the cup", isError: true)
@@ -302,7 +304,7 @@ struct CupCard: View {
                 if let opens = cup.openedDate {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         HStack(alignment: .firstTextBaseline) {
-                            Text("Doors open in")
+                            Text("Joining opens in")
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(P.ink3)
                             Spacer()
@@ -321,8 +323,7 @@ struct CupCard: View {
                     }
                 }
                 prizes(cup, P)
-                note("Come back then — entering takes one tap once the doors are open.",
-                     tone: P.ink3, P)
+                note("Come back then — joining takes one tap.", tone: P.ink3, P)
                 moreButton("What is a cup?", .question, chart: false, P)
             }
         }
@@ -330,7 +331,7 @@ struct CupCard: View {
 
     private func windowNote(_ cup: CupFeed.Cup) -> String {
         guard let opens = cup.openedAt, let closes = cup.closesAt else { return "" }
-        return " · doors stay open \(Int((closes - opens) / 60000)) min"
+        return " · open for \(Int((closes - opens) / 60000)) min"
     }
 
     /// "3d 4h", "5h 12m", "4:26" — whichever the wait deserves.
@@ -351,7 +352,7 @@ struct CupCard: View {
                 if !signedIn {
                     HStack(spacing: 7) {
                         Art.icon(.key, size: 14)
-                        Text("Sign in above to enter — a prize needs somebody to pay")
+                        Text("Sign in above to join — a prize needs somebody to pay")
                             .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                             .foregroundStyle(P.ink2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -360,10 +361,10 @@ struct CupCard: View {
                     .padding(10)
                     .background(P.sunken, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 } else if cup.you.joined == true {
-                    note("You are in. Your first table opens when the doors close.", tone: P.good, P)
+                    note("Joined. Your first game starts when joining closes.", tone: P.good, P)
                     HStack(spacing: 8) {
                         moreButton("How it works", .question, chart: false, P)
-                        Button("Withdraw") { Task { await watch.leave() } }
+                        Button("Leave") { Task { await watch.leave() } }
                             .buttonStyle(MMButtonStyle(kind: .ghost))
                             .frame(maxWidth: .infinity)
                             .disabled(busy)
@@ -375,7 +376,7 @@ struct CupCard: View {
                         HStack(spacing: 8) {
                             if busy { ProgressView().tint(P.accentInk) }
                             else { Art.icon(.trophy, size: 18) }
-                            Text(busy ? "Entering…" : "Enter the cup")
+                            Text(busy ? "Joining…" : "Join")
                         }
                         .frame(maxWidth: .infinity)
                     }
@@ -492,7 +493,7 @@ struct CupCard: View {
             }
             Spacer(minLength: 6)
 
-            Text(countLabel ?? "\(cup.entrants) in")
+            Text(countLabel ?? (cup.maxPlayers > 0 ? "\(cup.entrants)/\(cup.maxPlayers) joined" : "\(cup.entrants) joined"))
                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(countLabel == nil ? P.ink2 : P.gold)
@@ -513,7 +514,7 @@ struct CupCard: View {
                 let span = max(1, closes.timeIntervalSince(opened))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Doors close in")
+                        Text("Joining closes in")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(P.ink3)
                         Spacer()

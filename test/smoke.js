@@ -2246,6 +2246,49 @@ console.log('\n▶ tournaments');
     ok('a cup can be announced for later, is visible while it waits, refuses entries until it opens, and can be opened early');
   }
 
+  // An announced cup can be edited without losing the people already in it —
+  // moving the hour used to mean deleting the cup and starting again.
+  {
+    cup.cancelCup();
+    cup.openCup({ name: 'First go', joinSeconds: 300, opensAt: Date.now() + 3 * 3600 * 1000 });
+    cup.openDoorsNow();
+    for (let i = 0; i < 3; i++) {
+      const token = `edit-${i}`;
+      social.profileFor(token, { name: `E${i}` });
+      social.attachLogin(token, 'test', `ed-${i}`, `E${i}`);
+      cup.join(token);
+    }
+    const later = Date.now() + 5 * 86400 * 1000;
+    const moved = cup.openCup({ name: 'Second thoughts', joinSeconds: 900, opensAt: later, maxPlayers: 8 });
+    if (!moved.ok || !moved.updated) fail('cup: a cup that had not started playing could not be changed');
+    const t = cup.currentCup();
+    if (t?.name !== 'Second thoughts') fail('cup: the new name did not stick');
+    if (Math.abs((t?.openedAt || 0) - later) > 1000) fail('cup: the new date did not stick');
+    if ((t?.closesAt || 0) - (t?.openedAt || 0) !== 900 * 1000) fail('cup: the new window did not stick');
+    if (t?.state !== 'scheduled') fail('cup: moving the date into the future did not re-announce it');
+    if (t?.entrants.length !== 3) fail('cup: editing a cup threw away the people who had joined');
+
+    // A limit means full is full.
+    cup.openDoorsNow();
+    cup.openCup({ name: 'Second thoughts', joinSeconds: 900, maxPlayers: 4 });
+    for (let i = 3; i < 6; i++) {
+      const token = `edit-${i}`;
+      social.profileFor(token, { name: `E${i}` });
+      social.attachLogin(token, 'test', `ed-${i}`, `E${i}`);
+      const r = cup.join(token);
+      if (i === 3 && !r.ok) fail('cup: a cup with room refused the fourth player');
+      if (i > 3 && !r.full) fail('cup: a full cup took another player');
+    }
+    if (cup.currentCup()?.entrants.length !== 4) fail('cup: the player limit did not hold');
+    if (cup.publicView('edit-0').cup?.maxPlayers !== 4) fail('cup: players were not told the limit');
+
+    // A cup that is already being played cannot be edited out from under it.
+    cup.closeDoor();
+    const tooLate = cup.openCup({ name: 'No', joinSeconds: 300 });
+    if (!tooLate.error) fail('cup: a cup whose games had started was still editable');
+    ok('a cup can be edited — name, date, window, limit — until its games start, and a limit means full is full');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {
