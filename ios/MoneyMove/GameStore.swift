@@ -29,13 +29,16 @@ final class GameStore: ObservableObject {
     @AppStorage("mm.lastRoom") var lastRoom: String = ""
     @AppStorage("mm.lastGuests") var lastGuests: Int = 0
 
-    static var defaultServer: String {
-        #if targetEnvironment(simulator)
-        "http://localhost:3000"
-        #else
-        "https://moneymove-csk9.onrender.com"
-        #endif
-    }
+    /// The real server, on every build including the simulator.
+    ///
+    /// The simulator used to default to a machine on localhost, which is
+    /// convenient for exactly one person and baffling for everyone else: a
+    /// simulator with no server running looks like a broken app — matchmaking
+    /// fails, Google sign-in vanishes (the local server has no client id) and
+    /// the daily reward never arrives. Pointing somewhere else is now a
+    /// deliberate act, through the override in Settings, which only a
+    /// development build carries.
+    static var defaultServer: String { "https://moneymove-csk9.onrender.com" }
 
     var serverURL: URL? { URL(string: serverURLString.trimmingCharacters(in: .whitespaces)) }
 
