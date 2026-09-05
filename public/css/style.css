@@ -3133,3 +3133,98 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   .tile.slammed { animation: none; }
   .tile.slammed::after { animation: prisonFlash .85s ease-out forwards; }
 }
+
+/* ───────────────────────────────────────────────────────────── boards ── */
+/* The little drawing of a board: one cell per tile, laid out around the rim
+   in the grid the server sent. It has been in the markup since the map picker
+   was written and has never had a rule to its name — a <span> ignores every
+   grid property there is, so the thumbnails have been rendering as nothing at
+   all this whole time. */
+.mini-board {
+  display: grid; gap: 1px; width: 100%; aspect-ratio: 1;
+  background: var(--board-bg); border: 1px solid var(--rule);
+  border-radius: 7px; padding: 3px; overflow: hidden;
+}
+.mini-board i { border-radius: 1.5px; min-width: 0; min-height: 0; }
+
+/* The board shelf in the lobby: three boxes instead of a menu, because which
+   board you are playing is the one setting on this panel worth looking at. */
+.board-setting { display: block; }
+.board-setting .s-name { display: flex; align-items: center; gap: 7px; }
+.board-setting .s-desc { margin-bottom: 10px; }
+.board-pick { display: block; }
+
+.board-boxes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.board-boxes.loading { min-height: 118px; }
+.board-box {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 8px 6px 9px; cursor: pointer; text-align: center;
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: var(--r);
+  transition: border-color .16s, transform .16s var(--pop), background .16s;
+}
+.board-box:hover:not(:disabled) { border-color: var(--gold); transform: translateY(-2px); }
+.board-box.sel { border-color: var(--gold); background: var(--gold-soft); box-shadow: 0 0 0 2px rgba(169, 123, 29, .18); }
+.board-box.locked { border-style: dashed; }
+.board-box.locked .mini-board { opacity: .45; filter: saturate(.4); }
+.board-box:disabled { cursor: default; opacity: .75; }
+.bb-name {
+  font-size: 11.5px; font-weight: 850; line-height: 1.15;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.bb-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px; font-weight: 850; letter-spacing: .4px; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 999px; white-space: nowrap;
+}
+.bb-tag.free  { background: var(--paper-2); color: var(--ink-3); }
+.bb-tag.today { background: var(--good-soft); color: var(--good); }
+.bb-tag.owned { background: var(--gold-soft); color: var(--gold); }
+.bb-tag.locked { background: var(--paper-2); color: var(--gold); }
+
+.board-all {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; margin-top: 8px; padding: 9px 12px; cursor: pointer;
+  background: var(--paper-2); color: var(--ink); border: 1px solid var(--rule);
+  border-radius: var(--r); font-size: 12.5px; font-weight: 800;
+  transition: border-color .16s, background .16s;
+}
+.board-all:hover { border-color: var(--gold); background: var(--gold-soft); }
+.ba-meta { font-size: 11px; font-weight: 700; color: var(--ink-3); }
+.board-clock {
+  margin-top: 7px; text-align: center;
+  font-size: 10.5px; font-weight: 750; color: var(--ink-3);
+}
+
+/* A locked board in the full picker reads as a shop window, not a dead card. */
+.map-card { position: relative; }
+.map-card .mini-board { margin-bottom: 2px; }
+.map-card.locked { border-style: dashed; }
+.map-card.locked .mini-board { opacity: .45; filter: saturate(.4); }
+.map-card .bb-tag { margin-top: 3px; }
+
+/* Boards in the shop are wider than a piece — they are bought on the strength
+   of the drawing, so the drawing gets the room. */
+.board-store-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+.board-card { position: relative; gap: 6px; }
+.board-card .mini-board { margin-bottom: 1px; }
+.sc-flag {
+  position: absolute; top: 6px; right: 6px;
+  font-size: 8.5px; font-weight: 900; letter-spacing: .4px; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 999px;
+  background: var(--good); color: #fff;
+}
+
+@media (max-width: 380px) {
+  .bb-name { font-size: 10.5px; }
+  .bb-tag { font-size: 8.5px; padding: 2px 5px; }
+}
+
+/* Buying a board where you found it. */
+.buy-board { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.buy-board .mini-board { max-width: 230px; }
+.buy-board h2 { margin: 0; }
+.buy-board .sub { margin: 0; }
+.bb-stats { display: flex; gap: 16px; font-size: 12px; color: var(--ink-3); }
+.bb-stats b { font-size: 15px; color: var(--ink); }
+.bb-wallet { font-size: 11.5px; font-weight: 700; color: var(--ink-3); margin: 0; }

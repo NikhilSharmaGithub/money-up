@@ -135,7 +135,11 @@ enum Cosmetics {
             }
             if let coins = reply?.coins { store.wallet?.coins = coins }
         }
-        // buying auto-equips; tapping an equipped item takes it off
+        // Buying auto-equips; tapping an equipped item takes it off. A board
+        // is worn by the table rather than by the player, so it has no slot to
+        // go in — and asking the server to put one in a slot that does not
+        // exist is a round trip that can only ever come back an error.
+        guard item.kind == "token" || item.kind == "avatar" else { return true }
         return await wear(equipped ? nil : item.id, slot: item.kind, store: store)
     }
 }

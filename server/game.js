@@ -2,7 +2,7 @@
 // Every rule lives here; clients only send intents and render what comes back.
 
 import { createHash } from 'node:crypto';
-import { getMap, GROUPS } from './maps.js';
+import { getMap, GROUPS, MAPS } from './maps.js';
 import { buildDecks, shuffled } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
 import { quickIdentity } from './names.js';
@@ -343,6 +343,31 @@ export class GameRoom {
 
   updateSettings(id, patch) {
     if (id !== this.hostId || this.status !== 'lobby') return;
+    // A board is stock now. The host may pick the house board, either of the
+    // two the day is giving away, or anything they have bought — and nothing
+    // else. Hiding the locked ones in the picker is a courtesy to a player;
+    // this is the rule, and it lives here because updateSettings is the only
+    // door every client has to come through to change a board.
+    //
+    // Note what is NOT checked: whether the guests own it. They never need to.
+    // The host buys the board, the table plays on it, and a locked board is a
+    // reason to buy one of your own — not a reason to be turned away from
+    // someone else's table.
+    if (patch.mapId !== undefined) {
+      // Say what it is before asking whether they may have it. This used to
+      // store whatever arrived — an object, a megabyte of text — and ship it
+      // to every client at the table on the next push, while `getMap` quietly
+      // played Classic and the lobby claimed otherwise.
+      const want = String(patch.mapId).slice(0, 40);
+      // hasOwn, not truthiness: MAPS['__proto__'] and MAPS['constructor'] come
+      // back from Object.prototype, and the room would set this.map to that —
+      // a board with no tiles and no id, which is a table nobody can play.
+      if (want !== 'random' && !Object.hasOwn(MAPS, want)) return { error: 'No such board' };
+      if (this.hooks.mayUseBoard && !this.hooks.mayUseBoard(id, want)) {
+        return { error: 'That board is locked — unlock it in the store' };
+      }
+      patch.mapId = want;
+    }
     const allowed = Object.keys(DEFAULT_SETTINGS);
     for (const [k, v] of Object.entries(patch)) {
       if (!allowed.includes(k)) continue;
@@ -407,8 +432,38 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------ start --
+  /**
+   * Put the table on a board its CURRENT host is entitled to.
+   *
+   * The chair moves without anybody touching the settings — it is handed over,
+   * or the host closes the tab, or a house player is turfed out for a real
+   * one, or somebody presses Play again and becomes host by pressing it. Every
+   * one of those carries whatever board was chosen to whoever holds the chair
+   * now, and checking only at the moment of choosing let a bought board be
+   * inherited: sit in a lobby, wait for the host to leave, start. Rematch made
+   * it unbounded — the same table could replay a board it no longer had a
+   * claim to, forever, which is also what turned "one free game across
+   * midnight" into free access to the whole shelf for the price of nine
+   * parked tabs.
+   *
+   * This puts it back, and it COERCES rather than refuses. Two callers throw
+   * away what start() returns — the quick-match fuse and the cup auto-start —
+   * so an error here would be a table that silently never begins. Falling back
+   * to the house board is a table that plays.
+   */
+  settleBoard() {
+    const want = this.settings.mapId;
+    if (!this.hostId || !this.hooks.mayUseBoard) return false;
+    if (this.hooks.mayUseBoard(this.hostId, String(want || ''))) return false;
+    this.settings.mapId = 'classic';
+    this.map = getMap('classic');
+    this.say('That board is not unlocked for the new host — back to Classic', 'system');
+    return true;
+  }
+
   start(id) {
     if (id !== this.hostId || this.status !== 'lobby') return { error: 'Not allowed' };
+    this.settleBoard();
     if (this.settings.allowBots) {
       // Fill every empty seat the table was set for — six-player games included.
       while (this.players.length < this.settings.maxPlayers) this.addBot();
@@ -2180,6 +2235,10 @@ export class GameRoom {
       p.blockedLaps = 0; p.refused = [];
     });
     this.say('Back to the lobby — set up the next game', 'system');
+    // Whoever pressed Play again is the host now, and the board came with the
+    // room. Settle it here rather than at start(), so the lobby shows what it
+    // is actually going to play before anybody reaches for the button.
+    this.settleBoard();
     this.push();
     return { ok: true };
   }

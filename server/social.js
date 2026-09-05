@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomName } from './names.js';
+import { itemById } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Render's filesystem is wiped on every deploy — point DATA_DIR at a
@@ -340,6 +341,13 @@ export function equipItem(token, slot, itemId) {
   if (!p) return { error: 'Unknown player' };
   if (!['token', 'avatar'].includes(slot)) return { error: 'Unknown slot' };
   if (itemId && !p.owned.includes(itemId)) return { error: 'Not owned' };
+  // Owning a thing is not the same as it fitting the slot. The shelf sells
+  // boards now, and a board is bought into the same `owned` list as a piece —
+  // so without this a player could wear their board as their token and walk
+  // around the map as a tiny tricolour.
+  if (itemId && itemById(itemId)?.kind !== slot) {
+    return { error: `That is not ${slot === 'avatar' ? 'an avatar' : 'a token'}` };
+  }
   if (itemId) p.equipped[slot] = itemId;
   else delete p.equipped[slot];
   save();

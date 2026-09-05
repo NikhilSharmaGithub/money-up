@@ -9,8 +9,6 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
-    @State private var maps: [MapSummary] = []
-    @State private var mapsFailed = false
 
     /// Server-side defaults (server/game.js DEFAULT_SETTINGS) used only when
     /// a field is missing from the broadcast state.
@@ -48,7 +46,6 @@ struct SettingsSheet: View {
                         .tint(P.red)
                 }
             }
-            .task { await loadMaps() }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -73,97 +70,14 @@ struct SettingsSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
+    /// The same three boxes the lobby shows, so there is exactly one board
+    /// picker in the app. This used to be a second, independent list of all
+    /// nineteen — which meant the lobby could hide a locked board and this
+    /// sheet would offer it one tap away.
     private func boardSection(_ P: Palette) -> some View {
-        MMCard {
-            VStack(alignment: .leading, spacing: 10) {
-                PanelTitle("Board")
-                if maps.isEmpty {
-                    HStack(spacing: 8) {
-                        if mapsFailed {
-                            Image(systemName: "wifi.exclamationmark")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(P.bad)
-                            Text("Could not load the map list.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(P.ink3)
-                        } else {
-                            ProgressView().tint(P.red).scaleEffect(0.8)
-                            Text("Loading maps…")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(P.ink3)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                } else {
-                    // House boards first…
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(maps.filter { $0.country != true }) { map in
-                                mapCard(map, P)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-
-                    // …then the single-nation boards, each with its own
-                    // localized Treasure & Surprise deck.
-                    let custom = maps.filter { $0.country == true }
-                    if !custom.isEmpty {
-                        PanelTitle("Custom — pick your country")
-                            .padding(.top, 6)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(custom) { map in
-                                    mapCard(map, P)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
-                        Text("Country boards deal their own local Treasure & Surprise cards.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(P.ink3)
-                    }
-                }
-            }
-        }
-        .disabled(!canEdit)
+        MMCard { BoardBoxes(canEdit: canEdit) }
     }
 
-    private func mapCard(_ map: MapSummary, _ P: Palette) -> some View {
-        let selected = (store.state?.mapId ?? store.state?.settings.mapId) == map.id
-        return Button {
-            store.updateSettings(["mapId": map.id])
-        } label: {
-            VStack(spacing: 4) {
-                Art.icon(mapGlyph(map.icon), size: 28, tint: selected ? P.red : P.ink2)
-                Text(map.name)
-                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink)
-                    .lineLimit(1)
-                Text(mapCaption(map))
-                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(P.ink3)
-                    .lineLimit(1)
-            }
-            .frame(width: 108)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 6)
-            .background(selected ? P.redSoft : P.sunken,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selected ? P.red : P.rule, lineWidth: selected ? 2 : 1)
-            )
-            .opacity(canEdit ? 1 : 0.6)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func mapCaption(_ map: MapSummary) -> String {
-        var bits = ["\(map.size) tiles"]
-        if let streets = map.streets { bits.append("\(streets) streets") }
-        return bits.joined(separator: " · ")
-    }
 
     private func playersSection(_ P: Palette) -> some View {
         MMCard {
@@ -405,17 +319,5 @@ struct SettingsSheet: View {
                 store?.updateSettings([key: newValue])
             }
         )
-    }
-
-    // MARK: - maps
-
-    private func loadMaps() async {
-        do {
-            let fetched: [MapSummary] = try await store.fetchJSON("/api/maps")
-            maps = fetched
-            mapsFailed = false
-        } catch {
-            mapsFailed = true
-        }
     }
 }

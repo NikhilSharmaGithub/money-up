@@ -492,6 +492,186 @@ export function renderRightPanel(state, meId, el, actions) {
 
 const LOOK_COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
 
+// ─────────────────────────────────────────────────────────── board shelf ──
+// Boards are stock. Two are free every day, Classic is free forever, and the
+// rest are bought — so what the lobby can show is a question with an answer
+// only the server has, and it is asked once and kept here.
+//
+// The three boxes are always the same three things: today's two free boards,
+// and then whatever board this table is actually on. That last slot is the
+// point — a host who has bought Bharat sees Bharat, everyone else sees
+// Classic, and nobody has to open a menu to find out what they are playing.
+let boardShelf = null;      // { boards, free, until, ... } once it has loaded
+let boardLoading = null;    // the flight in progress, so two renders share one
+
+function loadBoardShelf(token, force = false) {
+  if (boardShelf && !force) return Promise.resolve(boardShelf);
+  if (boardLoading && !force) return boardLoading;
+  boardLoading = fetch(api(`/api/boards?token=${encodeURIComponent(token || '')}`))
+    .then((r) => r.json())
+    .then((d) => { boardShelf = d; return d; })
+    .catch(() => null)
+    .finally(() => { boardLoading = null; });
+  return boardLoading;
+}
+
+/** The board a table is on, by id, however the state happens to spell it. */
+const currentMapId = (state) => state.mapId || state.settings?.mapId || 'classic';
+
+/**
+ * The three: both of the day's free boards, then the one in play. When the
+ * table is already on a free board the third slot falls back to Classic, so
+ * the row never repeats itself and the house board is never more than a tap
+ * away.
+ */
+function boardTrio(state) {
+  if (!boardShelf) return [];
+  const by = (id) => boardShelf.boards.find((b) => b.id === id);
+  const out = [];
+  const add = (id) => {
+    const b = by(id);
+    if (b && !out.some((x) => x.id === b.id)) out.push(b);
+  };
+  (boardShelf.free || []).forEach(add);
+  add(currentMapId(state));
+  add(boardShelf.house || 'classic');
+  return out.slice(0, 3);
+}
+
+/** What a box says under its name — and it never says two things at once. */
+function boardTag(b) {
+  if (b.how === 'house') return '<span class="bb-tag free">Always free</span>';
+  if (b.how === 'today') return '<span class="bb-tag today">Free today</span>';
+  if (b.how === 'owned') return '<span class="bb-tag owned">Yours</span>';
+  return `<span class="bb-tag locked">${icon('coin', 10)} ${b.price}</span>`;
+}
+
+function boardBoxesHTML(state, isHost) {
+  if (!boardShelf) return '<div class="board-boxes loading"></div>';
+  const cur = currentMapId(state);
+  const trio = boardTrio(state);
+  const locked = boardShelf.boards.filter((b) => !b.playable).length;
+  const box = (b) => `<button class="board-box ${b.id === cur ? 'sel' : ''} ${b.playable ? '' : 'locked'}"
+      data-board="${b.id}" ${isHost ? '' : 'disabled'} title="${escapeHtml(b.description || b.name)}">
+      ${miniBoard(b.preview)}
+      <span class="bb-name">${escapeHtml(b.name)}</span>
+      ${boardTag(b)}
+    </button>`;
+  return `<div class="board-boxes">${trio.map(box).join('')}</div>
+    <button class="board-all" id="boardAll">
+      <span>All boards</span>
+      <span class="ba-meta">${boardShelf.boards.length} boards · ${locked} locked ›</span>
+    </button>
+    <div class="board-clock" id="boardClock"></div>`;
+}
+
+/** Paint the boxes into whatever lobby is on screen, and wire them. */
+function paintBoards(state, el, token, actions, isHost) {
+  const host = $('#boardPick', el);
+  if (!host) return;
+  if (!boardShelf) {
+    loadBoardShelf(token).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+    return;
+  }
+  host.innerHTML = boardBoxesHTML(state, isHost);
+
+  const clock = $('#boardClock', host);
+  if (clock && boardShelf.until) {
+    const tick = () => {
+      const left = boardShelf.until - Date.now();
+      if (left <= 0) {
+        // Midnight passed while this lobby sat open. Re-ask rather than
+        // guess: the server owns the calendar, and the two new boards are
+        // the only thing on this panel that changes without being touched.
+        clock.textContent = 'New boards…';
+        loadBoardShelf(token, true).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+        return;
+      }
+      clock.textContent = `Two new free boards in ${longCountdownText(left)}`;
+    };
+    tick();
+    const timer = setInterval(() => (host.isConnected ? tick() : clearInterval(timer)), 1000);
+  }
+
+  host.querySelectorAll('[data-board]').forEach((b) => {
+    b.onclick = () => {
+      sfx.click();
+      const id = b.dataset.board;
+      if (b.classList.contains('locked')) {
+        // Bought from the lobby: play it straight away. That is what they
+        // were reaching for when they tapped it.
+        return openBoardBuy(token, id, (bought) => {
+          if (isHost) actions.settings({ mapId: bought });
+          paintBoards(state, el, token, actions, isHost);
+        });
+      }
+      actions.settings({ mapId: id });
+    };
+  });
+  const all = $('#boardAll', host);
+  if (all) all.onclick = () => { sfx.click(); openBoardModal(state, actions, token, () => paintBoards(state, el, token, actions, isHost)); };
+}
+
+/**
+ * Buying a board where you found it.
+ *
+ * The shop is a long page and the board is near the bottom of it; sending
+ * somebody down there to spend six hundred coins, and then back, is three
+ * steps too many for a decision they have already made. So the price is paid
+ * here, next to the board it buys, with the board itself as the thing being
+ * looked at.
+ */
+export function openBoardBuy(token, boardId, onBought) {
+  const b = boardShelf?.boards.find((x) => x.id === boardId);
+  if (!b) return;
+  const coins = boardShelf.coins ?? 0;
+  const short = Math.max(0, b.price - coins);
+  openModal(`
+    <div class="buy-board">
+      ${miniBoard(b.preview)}
+      <h2>${escapeHtml(b.name)}</h2>
+      <p class="sub">${escapeHtml(b.description || '')}</p>
+      <div class="bb-stats">
+        <span><b>${b.size}</b> tiles</span>
+        <span><b>${b.streets}</b> streets</span>
+        <span><b>${b.countries}</b> sets</span>
+      </div>
+      <p class="sub">Buy it once and it is yours for good. Only the host needs to own a board —
+        everyone at your table plays it with you.</p>
+      <button class="btn primary big wide" id="bbGo" ${short ? 'disabled' : ''}>
+        ${icon('coin')} ${short ? `${short} more coins needed` : `Unlock for ${b.price}`}
+      </button>
+      <p class="bb-wallet">${short
+        ? `You have ${coins}. Win a game, collect the daily reward, or top up in the store.`
+        : `You have ${coins} coins.`}</p>
+      <div class="modal-actions"><button class="btn ghost" id="bbClose">Close</button></div>
+    </div>`, (root) => {
+    $('#bbClose', root).onclick = closeModal;
+    const go = $('#bbGo', root);
+    if (!go || short) return;
+    go.onclick = async () => {
+      go.disabled = true;
+      sfx.click();
+      try {
+        const res = await fetch(api('/api/store/buy'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, itemId: `brd-${boardId}` }),
+        }).then((r) => r.json());
+        if (res.error) { go.disabled = false; return toast(res.error, 'error'); }
+        sfx.buy();
+        toast(`${b.name} is yours!`);
+        closeModal();
+        await loadBoardShelf(token, true);
+        onBought?.(boardId);
+      } catch {
+        go.disabled = false;
+        toast('Store is unreachable', 'error');
+      }
+    };
+  });
+}
+
+
 // ────────────────────────────────────────────────────────── piece picker ──
 // The shop already sells pieces; this is the same shelf carried to the seat
 // you actually choose from. Sitting down and picking your token is one motion
@@ -757,10 +937,12 @@ function renderSettings(state, meId, el, actions) {
         </select>
       </div>
       ${state.settings.teams > 0 && isHost ? '<button class="btn small wide" id="balanceBtn">⇄ Balance teams</button>' : ''}
-      <div class="setting">
-        <span class="s-icon">${icon('map')}</span>
-        <div class="s-body"><div class="s-name">Board map</div><div class="s-desc">${escapeHtml(state.map.name)} · ${state.map.size} tiles</div></div>
-        <button class="btn small" id="mapBtn" ${dis}>Change ›</button>
+      <div class="setting board-setting">
+        <div class="s-body">
+          <div class="s-name">${icon('map')} Board</div>
+          <div class="s-desc">Two boards are free every day. The rest are yours once you buy them.</div>
+        </div>
+        <div id="boardPick" class="board-pick"></div>
       </div>
       <div class="setting">
         <span class="s-icon">${icon('cash')}</span>
@@ -803,8 +985,8 @@ function renderSettings(state, meId, el, actions) {
     };
   });
   wireLookPanel(state, meId, el, actions);
-  const mapBtn = $('#mapBtn', el);
-  if (mapBtn) mapBtn.onclick = () => { sfx.click(); openMapModal(state, actions); };
+  // A cup fixes its own board; the server refuses the change either way.
+  paintBoards(state, el, meId, actions, isHost && !state.cup);
   const balanceBtn = $('#balanceBtn', el);
   if (balanceBtn) balanceBtn.onclick = () => { sfx.click(); actions.balanceTeams(); };
   const startBtn = $('#startBtn', el);
@@ -1774,11 +1956,50 @@ export function showTurnBanner(player, isMe) {
 // that say the same thing — a coin, a note, a bank — in the app's own hand.
 const PACK_ART = { '🪙': 'coin', '💰': 'cash', '🏦': 'bank' };
 
-export function openStoreModal(token, onWallet, scrollTo = 0) {
+/**
+ * The board shelf inside the shop.
+ *
+ * Its own function rather than another `section(kind)` because a board is not
+ * a piece: it is sold on how it looks, so the card carries a drawing of the
+ * board instead of an emoji, and it says out loud when a board is free today
+ * — the shop's job is to sell one, not to sell one to somebody who could have
+ * had it for nothing this afternoon.
+ */
+function boardSection(items, wallet, coins, shelf) {
+  const boards = items.filter((i) => i.kind === 'board');
+  if (!boards.length) return '';
+  const byMap = new Map((shelf?.boards || []).map((b) => [b.id, b]));
+  const card = (i) => {
+    const owned = wallet.owned?.includes(i.id);
+    const m = byMap.get(i.mapId);
+    const freeNow = m?.how === 'today';
+    const short = !owned && coins < i.price;
+    return `<button class="store-card board-card ${owned ? 'owned' : ''} ${short ? 'locked' : ''}"
+        data-item="${i.id}" data-kind="board" data-owned="${owned ? 1 : 0}"
+        title="${owned ? 'Yours' : short ? `${i.price - coins} more coins needed` : escapeHtml(i.name)}">
+        ${m ? miniBoard(m.preview) : ''}
+        <span class="sc-name">${escapeHtml(m?.name || i.name)}</span>
+        <span class="sc-price">${owned ? '✓ Yours' : `${icon('coin', 13)} ${i.price}`}</span>
+        ${freeNow && !owned ? '<span class="sc-flag">Free today</span>' : ''}
+      </button>`;
+  };
+  return `
+    <h3 class="map-section">${icon('map')} Boards</h3>
+    <p class="sub">Classic is free forever and two more are free every day — buy one to keep it for good.
+      Only the host needs to own the board; everyone at the table plays it.</p>
+    <div class="store-grid board-store-grid">${boards.map(card).join('')}</div>`;
+}
+
+export function openStoreModal(token, onWallet, scrollTo = 0, focusItem = '') {
   Promise.all([
     fetch(api('/api/store')).then((r) => r.json()),
     fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json()),
-  ]).then(([storeData, wallet]) => {
+    // Boards are on this shelf too, and a board is sold on the strength of
+    // what it looks like — so the catalogue row is not enough. The shelf
+    // carries the thumbnail, and which two are free today, which is the one
+    // thing that can make a card here say "don't buy me yet".
+    loadBoardShelf(token, true),
+  ]).then(([storeData, wallet, shelf]) => {
     const items = storeData.items || [];
     const packs = storeData.packs || [];
     const coins = wallet.coins ?? 0;
@@ -1834,9 +2055,16 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
       ${packSection}
       ${section('token', `${icon('dice')} Token skins`, 'Your piece on the board.')}
       ${section('avatar', `${icon('people')} Avatars`, 'Your face in the player chip.')}
+      ${boardSection(items, wallet, coins, shelf)}
       <div class="modal-actions"><button class="btn ghost" id="stClose">Close</button></div>`, (root) => {
       const sheet = $('.modal', root);
       sheet.scrollTop = scrollTo;
+      // Arriving from a locked card somewhere else: the shop is long, and the
+      // thing they tapped is the only thing they came for. Scroll to it here
+      // rather than from the caller — the caller has no idea when this sheet
+      // finishes painting, and a timer that guesses gets it wrong on a slow
+      // connection every time.
+      if (focusItem) showPieceInStore(focusItem);
       onWallet?.(coins);
       $('#stClose', root).onclick = closeModal;
       // The shop is long enough that its only way out used to be a scroll away.
@@ -1866,6 +2094,14 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
           sfx.click();
           const id = card.dataset.item;
           const kind = card.dataset.kind;
+          if (kind === 'board' && card.dataset.owned !== '1') {
+            // The board shelf in the shop goes through the same sheet as the
+            // one in the lobby, so a board is bought one way in this app.
+            const at = sheet.scrollTop;
+            return openBoardBuy(token, id.slice(4),
+              () => openStoreModal(token, onWallet, at, focusItem));
+          }
+          if (kind === 'board') return;   // already yours; nothing to equip
           const owned = card.dataset.owned === '1';
           const equipped = card.classList.contains('equipped');
           const at = sheet.scrollTop;
@@ -1878,13 +2114,17 @@ export function openStoreModal(token, onWallet, scrollTo = 0) {
               if (res.error) return toast(res.error, 'error');
               sfx.buy();
             }
-            // buying auto-equips; tapping an equipped item takes it off
-            await fetch(api('/api/store/equip'), {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token, slot: kind, itemId: equipped ? null : id }),
-            });
+            // Buying auto-equips; tapping an equipped item takes it off. A
+            // board is worn by the table, not by the player, so it has no
+            // slot to go in and this step is simply not for it.
+            if (kind !== 'board') {
+              await fetch(api('/api/store/equip'), {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, slot: kind, itemId: equipped ? null : id }),
+              });
+            }
             closeModal();
-            openStoreModal(token, onWallet, at);   // re-render with fresh wallet
+            openStoreModal(token, onWallet, at, focusItem);   // re-render with fresh wallet
           } catch {
             toast('Store is unreachable', 'error');
           }
@@ -2630,31 +2870,77 @@ export function openCupPoster(cup) {
   }, 'poster-modal');
 }
 
-export function openMapModal(state, actions) {
-  fetch(api('/api/maps')).then((r) => r.json()).then((maps) => {
-    const card = (m) => `<button class="map-card ${m.id === state.mapId ? 'sel' : ''}" data-map="${m.id}">
+/**
+ * Every board there is, and what standing you have with each of them.
+ *
+ * Three shelves, in the order somebody actually shops: what is free right now,
+ * what they already own, and what is still behind a price. A locked card is a
+ * door into the shop rather than a dead one — the same manners the piece
+ * shelf keeps.
+ */
+export function openBoardModal(state, actions, token, onChange) {
+  loadBoardShelf(token, true).then((shelf) => {
+    if (!shelf) return toast('Boards are unreachable', 'error');
+    const cur = currentMapId(state);
+    const card = (m) => `<button class="map-card ${m.id === cur ? 'sel' : ''} ${m.playable ? '' : 'locked'}"
+          data-map="${m.id}" data-playable="${m.playable ? 1 : 0}">
           ${miniBoard(m.preview)}
           <span class="mn">${mapArt(m)} ${escapeHtml(m.name)}</span>
           <span class="md">${escapeHtml(m.description)}</span>
           <span class="mstats">
             <b>${m.size}</b> tiles · <b>${m.streets}</b> streets · <b>${m.countries}</b> sets
           </span>
+          ${boardTag(m)}
         </button>`;
-    const house = maps.filter((m) => !m.country);
-    const custom = maps.filter((m) => m.country);
+
+    const free = shelf.boards.filter((m) => m.how === 'house' || m.how === 'today');
+    const mine = shelf.boards.filter((m) => m.how === 'owned');
+    const locked = shelf.boards.filter((m) => m.how === 'locked');
+    const shelfOf = (list, title, sub) => (list.length ? `
+      <h3 class="map-section">${title}</h3>
+      <p class="sub">${sub}</p>
+      <div class="map-grid">${list.map(card).join('')}</div>` : '');
 
     openModal(`
-      <h2>Pick a board</h2>
-      <p class="sub">Every map has its own cities, prices and layout.</p>
-      <div class="map-grid">${house.map(card).join('')}</div>
-      <h3 class="map-section">${icon('map')} Custom — pick your country</h3>
-      <p class="sub">One nation per board, with its own regions and its own Treasure &amp; Surprise deck.</p>
-      <div class="map-grid">${custom.map(card).join('')}</div>
+      <div class="store-head">
+        <h2>Boards</h2>
+        <span class="coin-chip">${icon('coin')} ${shelf.coins ?? 0}</span>
+        <button class="icon-btn sheet-x" id="bdX" title="Close" aria-label="Close">✕</button>
+      </div>
+      <p class="sub" id="bdClock"></p>
+      ${shelfOf(free, `${icon('map')} Free to play`,
+        `Classic is always free. Two more rotate every day — every board comes round once every ${shelf.cycleDays} days.`)}
+      ${shelfOf(mine, `${icon('key')} Yours`, 'Bought and kept. Play them whenever you like.')}
+      ${shelfOf(locked, `${icon('coin')} In the store`,
+        'Buy one and it is yours for good. Everyone at your table plays it with you — only the host needs to own it.')}
       <div class="modal-actions"><button class="btn ghost" id="mClose">Close</button></div>`, (root) => {
+      const clock = $('#bdClock', root);
+      const tick = () => {
+        const left = shelf.until - Date.now();
+        if (left <= 0) return closeModal();
+        clock.textContent = `Today's free boards change in ${longCountdownText(left)}.`;
+      };
+      tick();
+      const timer = setInterval(() => (clock.isConnected ? tick() : clearInterval(timer)), 1000);
+
       root.querySelectorAll('[data-map]').forEach((c) => {
-        c.onclick = () => { sfx.click(); actions.settings({ mapId: c.dataset.map }); closeModal(); };
+        c.onclick = () => {
+          sfx.click();
+          const id = c.dataset.map;
+          if (c.dataset.playable !== '1') {
+            openBoardBuy(token, id, (bought) => {
+              actions.settings({ mapId: bought });
+              onChange?.();
+            });
+            return;
+          }
+          actions.settings({ mapId: id });
+          closeModal();
+          onChange?.();
+        };
       });
       $('#mClose', root).onclick = closeModal;
+      $('#bdX', root).onclick = closeModal;
     }, 'wide');
   });
 }

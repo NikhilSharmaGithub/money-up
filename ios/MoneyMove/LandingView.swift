@@ -197,7 +197,13 @@ struct LandingView: View {
         } else {
             storeSection(.dice, "Token skins", "Your piece on the board.", kind: "token", P: P)
             storeSection(.people, "Avatars", "Your face in the player chip.", kind: "avatar", P: P)
+            // Boards are the one thing on this shelf that is not a costume,
+            // so they get a shelf that shows the board rather than an emoji.
+            BoardStoreShelf()
         }
+        // The catalogue rows for boards are filtered out of the shelves above;
+        // BoardStoreShelf reads /api/boards instead, which is the only place
+        // that knows which two are free today.
     }
 
     /// The shelves take a moment to arrive, and they can fail. Either way the

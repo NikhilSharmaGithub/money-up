@@ -4,7 +4,12 @@
 // pays two coins, the day pays one to seven — so owning a piece means either a
 // long habit or a visit to the coin shop (see COIN_PACKS).
 
-export const STORE_ITEMS = [
+import { BOARD_ITEMS } from './boards.js';
+
+// Pieces and faces. Boards are sold on the same shelf but live in boards.js,
+// because what a board costs is bound up with which two are free today — and
+// that is a calendar, not a catalogue.
+export const COSMETIC_ITEMS = [
   // ---- token skins (your piece on the board) ----
   // Priced against the new economy: a regular player earns roughly 200 coins
   // a month, so a cheap piece is a fortnight's habit and the top of the shelf
@@ -50,6 +55,12 @@ export const STORE_ITEMS = [
   { id: 'av-dragonface', kind: 'avatar', name: 'Naag', emoji: '🐲', price: 1100 },
   { id: 'av-crownface', kind: 'avatar', name: 'Badshah', emoji: '🫅', price: 1400 },
 ];
+
+/**
+ * The whole shop. Boards come last so a client that renders the list in order
+ * shows pieces first, which is the order the shelves grew in.
+ */
+export const STORE_ITEMS = [...COSMETIC_ITEMS, ...BOARD_ITEMS];
 
 export const itemById = (id) => STORE_ITEMS.find((i) => i.id === id) || null;
 

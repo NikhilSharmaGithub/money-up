@@ -11,9 +11,6 @@ struct LobbyPanel: View {
     let openSettings: () -> Void
 
     @State private var nameDraft = ""
-    /// Single-nation boards for the Custom menu, loaded from /api/maps.
-    @State var countryBoards: [MapSummary] = []
-    @State var flagImages: [String: Image] = [:]
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -34,7 +31,12 @@ struct LobbyPanel: View {
 
                 if isCup { cupBanner(P) }
 
-                if store.isHost, !isCup { quickBoards(P) }
+                // The board, as three boxes with a drawing of each. Shown to
+                // everyone, not just the host: a guest still wants to know
+                // where they are sitting — they simply cannot change it.
+                if !isCup {
+                    MMCard { BoardBoxes(canEdit: store.isHost) }
+                }
 
                 // A cup table is set by the cup: two chairs, one board, no
                 // house players, and a second seat on this device would be
@@ -434,114 +436,5 @@ private struct TableTalkTicker: View {
             guard !Task.isCancelled else { break }
             withAnimation(.easeInOut(duration: 0.45)) { index += 1 }
         }
-    }
-}
-
-// MARK: - lobby extras
-
-extension LobbyPanel {
-    /// One-tap boards in the lobby: Classic, Worldwide, Death Valley — and
-    /// last, Custom: a menu of the single-nation boards (each with its own
-    /// regions and localized Treasure & Surprise deck) plus Shuffle, which
-    /// deals a brand new board every game.
-    /// The board, as one line.
-    ///
-    /// This used to be four chips the width of the screen — three house
-    /// boards and a Custom menu — for a choice most tables never change. It
-    /// is a row with the current board on the right and everything behind a
-    /// tap now: the same three, then every single-nation board under its own
-    /// flag, then Shuffle.
-    @ViewBuilder func quickBoards(_ P: Palette) -> some View {
-        let currentId = store.state?.mapId ?? store.state?.settings.mapId ?? "classic"
-        let house: [(String, Glyph, String)] = [
-            ("classic", .globe, "Classic"),
-            ("worldwide", .plane, "Worldwide"),
-            ("deathvalley", .skull, "Death Valley"),
-        ]
-        let country = countryBoards.first { $0.id == currentId }
-        let name = currentId == "random" ? "Shuffle"
-            : house.first { $0.0 == currentId }?.2
-            ?? country?.name
-            ?? store.state?.map.name
-            ?? "Classic"
-        let glyph: Glyph = currentId == "random" ? .dice
-            : house.first { $0.0 == currentId }?.1
-            ?? mapGlyph(country?.icon)
-
-        Menu {
-            ForEach(house, id: \.0) { id, _, label in
-                Button {
-                    SoundKit.shared.click()
-                    store.updateSettings(["mapId": id])
-                } label: {
-                    Label(label, systemImage: id == currentId ? "checkmark" : "globe")
-                }
-            }
-            if !countryBoards.isEmpty {
-                Divider()
-                ForEach(countryBoards) { map in
-                    Button {
-                        SoundKit.shared.click()
-                        store.updateSettings(["mapId": map.id])
-                    } label: {
-                        // A menu row takes an Image but not an arbitrary view,
-                        // so each flag is rendered once and handed over as one.
-                        Label {
-                            Text(map.name)
-                        } icon: {
-                            if map.id == currentId { Image(systemName: "checkmark") }
-                            else if let flag = flagImages[map.id] { flag }
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button {
-                SoundKit.shared.click()
-                store.updateSettings(["mapId": "random"])
-            } label: {
-                Label("Shuffle — a new board every game",
-                      systemImage: currentId == "random" ? "checkmark" : "dice")
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Art.icon(glyph, size: 19, tint: P.ink2)
-                Text("Board")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink2)
-                Spacer(minLength: 6)
-                Text(name)
-                    .font(.system(size: 14, weight: .heavy, design: .rounded))
-                    .foregroundStyle(P.ink)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(P.ink3)
-            }
-            .padding(.horizontal, 13)
-            .frame(maxWidth: .infinity, minHeight: 46)
-            .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
-        }
-        .task { await loadCountryBoards() }
-    }
-
-    /// The drawn flags, rasterised once so SwiftUI's menu can carry them.
-    @MainActor private func renderFlags() {
-        for map in countryBoards where flagImages[map.id] == nil {
-            let renderer = ImageRenderer(content:
-                GroupFlag(mark: map.icon ?? "", colour: .clear, size: 22))
-            renderer.scale = 3
-            if let ui = renderer.uiImage {
-                flagImages[map.id] = Image(uiImage: ui).renderingMode(.original)
-            }
-        }
-    }
-
-    private func loadCountryBoards() async {
-        guard countryBoards.isEmpty else { return }
-        let maps: [MapSummary]? = try? await store.fetchJSON("/api/maps")
-        countryBoards = (maps ?? []).filter { $0.country == true }
-        renderFlags()
     }
 }

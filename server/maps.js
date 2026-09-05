@@ -436,4 +436,9 @@ const summarise = (m) => ({
 export const mapList = () => [...Object.values(MAPS).map(summarise), summarise(generateRandomMap())];
 export const MAP_LIST = mapList();
 
-export const getMap = (id) => (id === 'random' ? generateRandomMap() : MAPS[id] || MAPS.classic);
+// hasOwn rather than a lookup: '__proto__' and 'constructor' are inherited off
+// Object.prototype, so `MAPS[id] || MAPS.classic` handed back Object.prototype
+// for either of them — a "board" with no tiles, no layout and no id.
+export const getMap = (id) => (id === 'random'
+  ? generateRandomMap()
+  : (Object.hasOwn(MAPS, id) ? MAPS[id] : MAPS.classic));

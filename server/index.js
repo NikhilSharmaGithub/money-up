@@ -10,6 +10,7 @@ import { sendTurnPush } from './push.js';
 import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
+import { boardAccess, mayUseBoard, BOARD_ITEMS, HOUSE_BOARD } from './boards.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
   inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
@@ -86,6 +87,31 @@ app.get('/app-ads.txt', (_req, res) => {
 
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
+
+/**
+ * The board shelf, as one wallet sees it: every board, whether it can be
+ * played and why, what it costs if not, and when the day's two free ones
+ * change hands.
+ *
+ * One endpoint rather than the client crossing /api/maps with /api/wallet,
+ * because the answer depends on the server's calendar and the server is the
+ * only honest clock in the building. A caller with no token gets the shelf a
+ * brand new player sees, which is exactly what a brand new player should see.
+ */
+app.get('/api/boards', (req, res) => {
+  const token = String(req.query?.token || '').slice(0, 64);
+  const owned = token ? (walletOf(token)?.owned || []) : [];
+  const access = boardAccess(owned);
+  res.json({
+    boards: mapList().map((m) => ({ ...m, ...access.state(m.id) })),
+    free: access.free,
+    until: access.until,
+    perDay: access.perDay,
+    cycleDays: access.cycleDays,
+    house: access.house,
+    coins: token ? (walletOf(token)?.coins || 0) : 0,
+  });
+});
 /**
  * Every public table, not just the ones still filling up. A game already in
  * progress can't be joined, but seeing it is the difference between "nobody
@@ -979,6 +1005,16 @@ function getRoom(id) {
   const room = new GameRoom(id, broadcast);
   // Walking out on a live table, or letting the clock run out, costs karma.
   room.hooks.karma = (token, delta) => bumpKarma(token, delta);
+  // Boards are stock. The wallet is read at the moment of the tap rather than
+  // cached on the room, because a board bought mid-lobby has to be usable in
+  // the same breath — the shop closes and the board is right there.
+  //
+  // The `_pN` strip is the pass-and-play seats: a second player on one phone
+  // gets a token derived from the owner's, and it is the same phone and the
+  // same wallet. Without this, buying a board and then handing the chair to
+  // Player 2 across the table locks the device out of what it paid for.
+  room.hooks.mayUseBoard = (token, mapId) =>
+    mayUseBoard(mapId, walletOf(String(token).replace(/_p\d+$/, ''))?.owned || []);
   // "Your turn", for somebody who is not looking at the game.
   //
   // Only when every tab and every phone of theirs has gone: a player staring
@@ -1438,7 +1474,10 @@ io.on('connection', (socket) => {
   socket.on('settings', guard((d = {}) => {
     // The cup sets its own table: two seats, no bots, private.
     if (room.cupMatch) return fail('A cup table is set by the cup');
-    room.updateSettings(playerId, d);
+    // A locked board comes back as an error rather than silently doing
+    // nothing, so a client that has fallen behind the day's rotation says
+    // why instead of appearing to ignore the tap.
+    ok(room.updateSettings(playerId, d));
   }));
   socket.on('addBot', guard(() => {
     if (playerId !== room.hostId) return fail('Only the host can add bots');
