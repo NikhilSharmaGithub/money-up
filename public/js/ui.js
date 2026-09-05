@@ -510,7 +510,10 @@ function loadBoardShelf(token, force = false) {
   boardLoading = fetch(api(`/api/boards?token=${encodeURIComponent(token || '')}`))
     .then((r) => r.json())
     .then((d) => { boardShelf = d; return d; })
-    .catch(() => null)
+    // A refresh that failed is not news that the shelf is empty. Keeping the
+    // last good one means a dropped packet costs a stale price, not a shop
+    // full of cards that do nothing when you tap them.
+    .catch(() => boardShelf)
     .finally(() => { boardLoading = null; });
   return boardLoading;
 }
@@ -655,7 +658,12 @@ function paintBoards(state, el, token, actions, isHost) {
  */
 export function openBoardBuy(token, boardId, onBought) {
   const b = boardShelf?.boards.find((x) => x.id === boardId);
-  if (!b) return;
+  // Nothing to open means the shelf never arrived. Silence here reads as a
+  // broken shop — the player taps the same card three times and gives up.
+  if (!b) {
+    loadBoardShelf(token, true);
+    return toast('Boards are unreachable — try again in a moment', 'error');
+  }
   const coins = boardShelf.coins ?? 0;
   const short = Math.max(0, b.price - coins);
   openModal(`
@@ -690,9 +698,17 @@ export function openBoardBuy(token, boardId, onBought) {
       try {
         const res = await fetch(api('/api/store/buy'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, itemId: `brd-${boardId}` }),
+          // The price we are agreeing to. The shelf turns over at midnight and
+          // the server refuses rather than quietly charging the new number.
+          body: JSON.stringify({ token, itemId: `brd-${boardId}`, expect: b.price }),
         }).then((r) => r.json());
-        if (res.error) { go.disabled = false; return toast(res.error, 'error'); }
+        if (res.error) {
+          go.disabled = false;
+          toast(res.error, 'error');
+          // Whatever it was, what is on screen is no longer to be trusted.
+          await loadBoardShelf(token, true);
+          return;
+        }
         sfx.buy();
         toast(`${b.name} is yours!`);
         closeModal();
@@ -2010,8 +2026,11 @@ function boardSection(items, wallet, coins, shelf) {
     const freeNow = m?.how === 'today';
     const price = m?.price ?? i.price;
     const short = !owned && coins < price;
+    // Worked out from the two numbers on the card rather than the headline
+    // rate: prices round to the nearest 25, so a flat "30% off" was wrong on
+    // six of the seven price points, overstating it on three.
     const flag = freeNow ? 'Free today'
-      : m?.was ? `${Math.round((shelf?.saleOff ?? 0.3) * 100)}% off` : '';
+      : m?.was ? `${Math.round((1 - price / m.was) * 100)}% off` : '';
     return `<button class="store-card board-card ${owned ? 'owned' : ''} ${short ? 'locked' : ''}"
         data-item="${i.id}" data-kind="board" data-owned="${owned ? 1 : 0}"
         title="${owned ? 'Yours' : short ? `${price - coins} more coins needed` : escapeHtml(i.name)}">

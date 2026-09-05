@@ -108,7 +108,11 @@ final class BoardShelf: ObservableObject {
 
     func load(_ store: GameStore, force: Bool = false) async {
         if feed != nil && !force { return }
-        if loading { return }
+        // A forced reload is somebody asking for the truth — after a purchase,
+        // or after midnight. It must not be swallowed because an ordinary poll
+        // happens to be in the air, or a board someone just bought stays drawn
+        // as locked until the app is restarted.
+        if loading && !force { return }
         loading = true
         defer { loading = false }
         let fresh: BoardShelfFeed? = try? await store.fetchJSON(
@@ -287,7 +291,16 @@ struct BoardBoxes: View {
                 BoardClock(until: until)
             }
         }
-        .task { await shelf.load(store) }
+        .task {
+            await shelf.load(store)
+            await shelf.rolloverIfDue(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            // A phone that was asleep through midnight is holding yesterday's
+            // shelf: yesterday's free pair, yesterday's sale. Ask again.
+            Task { await shelf.rolloverIfDue(store) }
+        }
         .sheet(isPresented: $showAll) {
             BoardPickerSheet(canEdit: canEdit)
                 .environmentObject(store)
@@ -556,7 +569,10 @@ struct BoardBuySheet: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        let coins = store.wallet?.coins ?? 0
+        // The same fallback the toolbar above uses. A wallet fetch that quietly
+        // failed used to leave this reading zero, so a player with nine hundred
+        // coins was told they needed five hundred more.
+        let coins = store.wallet?.coins ?? shelf.feed?.coins ?? 0
         let short = max(0, board.price - coins)
 
         NavigationStack {
@@ -660,6 +676,11 @@ struct BoardBuySheet: View {
             .background(P.page.ignoresSafeArea())
             .navigationTitle("Unlock a board")
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // The balance matters more here than anywhere else in the app.
+                store.refreshWallet()
+                await shelf.rolloverIfDue(store)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
             }
@@ -680,9 +701,12 @@ struct BoardBuySheet: View {
         SoundKit.shared.click()
         let reply: Reply? = try? await store.fetchJSON(
             "/api/store/buy", method: "POST",
-            body: ["token": store.token, "itemId": board.storeId])
+            body: ["token": store.token, "itemId": board.storeId, "expect": board.price])
         guard reply?.ok == true else {
             store.showToast(reply?.error ?? "Couldn't reach the shop — try again.", isError: true)
+            // Most likely the shelf turned over under them. Whatever it was,
+            // the numbers on screen are no longer to be trusted.
+            await shelf.load(store, force: true)
             return
         }
         SoundKit.shared.buy()
@@ -734,7 +758,14 @@ struct BoardStoreShelf: View {
                 ForEach(shelf.boards) { card($0, P) }
             }
         }
-        .task { await shelf.load(store) }
+        .task {
+            await shelf.load(store)
+            await shelf.rolloverIfDue(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task { await shelf.rolloverIfDue(store) }
+        }
         .sheet(item: $shopping) { pick in
             if let b = shelf.board(pick.id) {
                 BoardBuySheet(board: b) { _ in }.environmentObject(store)
@@ -763,8 +794,12 @@ struct BoardStoreShelf: View {
                             .padding(.vertical, 2.5).padding(.horizontal, 6)
                             .background(P.good, in: Capsule())
                             .padding(5)
-                    } else if b.was != nil {
-                        Text("\(Int((shelf.feed?.saleOff ?? 0.3) * 100))% OFF")
+                    } else if let was = b.was, was > 0 {
+                        // Worked out from the two numbers on the card, not from
+                        // the headline rate: prices round to the nearest 25, so
+                        // a flat "30% OFF" was wrong on six of the seven price
+                        // points — overstating the discount on three of them.
+                        Text("\(Int((1 - Double(b.price) / Double(was)) * 100))% OFF")
                             .font(.system(size: 8, weight: .black, design: .rounded))
                             .foregroundStyle(P.accentInk)
                             .padding(.vertical, 2.5).padding(.horizontal, 6)

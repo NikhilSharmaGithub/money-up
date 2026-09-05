@@ -344,7 +344,7 @@ app.post('/api/push/register', (req, res) => {
 });
 
 app.post('/api/store/buy', (req, res) => {
-  const { token, itemId } = req.body || {};
+  const { token, itemId, expect } = req.body || {};
   const item = itemById(String(itemId || ''));
   if (!item) return res.status(400).json({ error: 'Unknown item' });
   // Three boards are discounted every day, and the discount has to be real
@@ -353,6 +353,23 @@ app.post('/api/store/buy', (req, res) => {
   // it is the only place that needs to know about the sale.
   const mapId = mapIdOfItem(item.id);
   const charged = mapId ? { ...item, price: priceOn(mapId) } : item;
+  // And the price the player agreed to is the price they pay.
+  //
+  // The shelf turns over at midnight; a client that read it last night and
+  // taps this morning would otherwise be charged today's number without ever
+  // being shown it — silently, because a purchase at the wrong price still
+  // succeeds. So the client says what it is expecting, and a disagreement is
+  // a refusal rather than a surprise. Cosmetics send nothing and are
+  // unaffected: their price cannot move.
+  if (expect != null && Number(expect) !== charged.price) {
+    return res.status(409).json({
+      // True whichever way it happened: the shelf turned over under a client
+      // that read it last night, or a client asked for a price that was never
+      // on offer. Either way the screen is out of date and the number is here.
+      error: `The price has moved since that was drawn — it is ${charged.price} now.`,
+      price: charged.price,
+    });
+  }
   const result = buyItem(String(token || '').slice(0, 64), charged);
   if (result.error) return res.status(400).json(result);
   res.json(result);
