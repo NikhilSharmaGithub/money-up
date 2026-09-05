@@ -243,12 +243,27 @@ export const adminPageHTML = `<!doctype html>
   .cupstate.scheduled { color: #9fc4e8; background: rgba(159, 196, 232, .12); }
   /* The standard shape, at the top of the form. */
   .cupstd {
-    padding: 13px; margin-bottom: 14px; border-radius: 13px;
+    padding: 4px 15px 15px; margin-bottom: 14px; border-radius: 13px;
     background: rgba(232, 181, 46, .06); border: 1px solid rgba(232, 181, 46, .3);
-    display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
   }
-  .cupstd .field { margin: 0; }
-  .cupstd .caption { flex-basis: 100%; margin-top: 2px; line-height: 1.6; }
+  .cupstd .caption { margin-top: 10px; line-height: 1.6; }
+  .ok-line { color: #7ee2a8; font-weight: 700; }
+  .warn-line { font-weight: 700; }
+  /* The three steps of starting a tournament. */
+  .cupstep { padding: 10px 0 4px; }
+  .cupstep + .cupstep { border-top: 1px solid rgba(255, 255, 255, .06); }
+  .cupstep > b { display: inline-block; font-size: 13.5px; color: #dfe7e0; margin-bottom: 8px; }
+  .stepno {
+    display: inline-grid; place-items: center; width: 22px; height: 22px;
+    margin-right: 9px; border-radius: 99px; font-size: 12px; font-weight: 800;
+    color: #0c1310; background: #e8b52e;
+  }
+  .cupstd .btn { margin-top: 12px; }
+  .cupadv { margin-top: 14px; }
+  .cupadv summary {
+    cursor: pointer; font-size: 12.5px; color: #93a396; padding: 6px 0;
+  }
+  .cupadv summary:hover { color: #dfe7e0; }
   .warn-line { color: #e8b52e; }
   .cuplist { margin-top: 8px; max-height: 320px; overflow: auto; }
   .cuprow {
@@ -555,48 +570,71 @@ export const adminPageHTML = `<!doctype html>
     <section class="tiles" id="cuptiles"></section>
     <section class="card">
       <h2>Tournaments</h2>
-      <p class="hint">A cup is a join window and a knockout. Everyone who enters is paired off when the doors shut — a hundred entrants make fifty tables — and the winners play on until one is left. First, second and third are paid by you, by hand: this desk records who finished where and remembers which ones you have settled. It never moves money on its own.</p>
+      <p class="hint">People join, everyone is paired off, winners play on until one is left. You pay the top three by hand — this desk only keeps the list. One switch below shows or hides the whole thing for every player.</p>
       <div id="cupswitch"></div>
       <div class="msg" id="cupmsg"></div>
     </section>
     <div class="cards">
       <div class="card" style="grid-column:1 / -1">
         <h2>Your cups</h2>
-        <p class="hint">Up to six at once. Pick one to edit it below, or start a new one.</p>
+        <p class="hint">Click one to see and change it below.</p>
         <div id="cuplistall"></div>
         <div style="margin-top:12px"><button class="btn sm" id="cup-new">＋ New cup</button></div>
       </div>
       <div class="card">
-        <h2 id="cup-formtitle">Set up a cup</h2>
-        <!-- The standard shape, so every tournament this game runs is the
-             same tournament and a player only has to learn it once. -->
+        <h2 id="cup-formtitle">Start a tournament</h2>
+        <p class="hint">Pick a date, a size and the prizes — that is all. Every tournament runs the same way, so players learn it once: joining is open from the moment you press the button until round one; two rounds a night at 20:00 and 22:00; ten minutes to turn up; ninety-minute games.</p>
         <div class="cupstd">
-          <div class="field"><label>Starts on</label><input id="cup-start" type="date" /></div>
-          <div class="field"><label>Players</label><input id="cup-size" type="number" value="256" min="2" /></div>
-          <button class="btn sm" id="cup-standard">Build the standard tournament</button>
+          <div class="cupstep"><span class="stepno">1</span><b>When, and how big</b>
+            <div class="mini-forms">
+              <div class="field"><label>First evening</label><input id="cup-start" type="date" /></div>
+              <div class="field"><label>Players (powers of two only — a clean bracket, no byes)</label><select id="cup-size">
+                <option value="8">8 players — 3 rounds, 2 evenings</option>
+                <option value="16">16 players — 4 rounds, 2 evenings</option>
+                <option value="32">32 players — 5 rounds, 3 evenings</option>
+                <option value="64">64 players — 6 rounds, 3 evenings</option>
+                <option value="128">128 players — 7 rounds, 4 evenings</option>
+                <option value="256" selected>256 players — 8 rounds, 4 evenings</option>
+                <option value="512">512 players — 9 rounds, 5 evenings</option>
+                <option value="1024">1024 players — 10 rounds, 5 evenings</option>
+              </select></div>
+            </div>
+            <div class="caption" id="cup-server-advice"></div>
+          </div>
+          <div class="cupstep"><span class="stepno">2</span><b>The prizes</b>
+            <div class="mini-forms">
+              <div class="field"><label>1st</label><input id="cup-first" type="number" value="200" /></div>
+              <div class="field"><label>2nd</label><input id="cup-second" type="number" value="100" /></div>
+              <div class="field"><label>3rd</label><input id="cup-third" type="number" value="50" /></div>
+              <div class="field"><label>Currency</label><input id="cup-cur" value="USD" /></div>
+            </div>
+          </div>
+          <div class="cupstep"><span class="stepno">3</span><b>Name it — and lock it, if you want</b>
+            <div class="mini-forms">
+              <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
+              <div class="field"><label>Join code (blank = open to everyone)</label><input id="cup-code" placeholder="e.g. SUNDAY" maxlength="16" /></div>
+            </div>
+          </div>
           <div class="caption" id="cup-preview"></div>
+          <button class="btn" id="cup-standard">Create the tournament</button>
         </div>
-        <p class="hint">Three things decide a cup: when players can start joining, how long joining stays open, and what the winners get. Save it once and you can change any of it — the date included — right up until the games start.</p>
-        <div class="mini-forms">
-          <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
-          <div class="field"><label>Joining starts (leave blank to start now)</label><input id="cup-when" type="datetime-local" /></div>
-          <div class="field"><label>Joining stays open for (minutes)</label><input id="cup-mins" type="number" value="5" min="1" /></div>
-          <div class="field"><label>Player limit (0 = no limit)</label><input id="cup-max" type="number" value="0" min="0" /></div>
-          <div class="field"><label>Join code (blank = anyone can join)</label><input id="cup-code" placeholder="e.g. SUNDAY" maxlength="16" /></div>
-          <div class="field"><label>Match times each day (blank = back to back)</label><input id="cup-times" placeholder="20:00, 22:00" /></div>
-          <div class="field"><label>Each match window (minutes)</label><input id="cup-window" type="number" value="10" min="2" /></div>
-          <div class="field"><label>Game length (minutes)</label><input id="cup-length" type="number" value="90" min="5" /></div>
-          <div class="field"><label>1st prize</label><input id="cup-first" type="number" value="200" /></div>
-          <div class="field"><label>2nd prize</label><input id="cup-second" type="number" value="100" /></div>
-          <div class="field"><label>3rd prize</label><input id="cup-third" type="number" value="50" /></div>
-          <div class="field"><label>Currency you pay in</label><input id="cup-cur" value="USD" /></div>
-        </div>
-        <div class="caption" id="cup-when-note"></div>
+        <details class="cupadv">
+          <summary>Advanced — the dials the button above sets for you</summary>
+          <p class="hint">Only touch these for something non-standard: a quick test cup, different hours, a different game length.</p>
+          <div class="mini-forms">
+            <div class="field"><label>Joining starts (blank = now)</label><input id="cup-when" type="datetime-local" /></div>
+            <div class="field"><label>Joining open for (minutes)</label><input id="cup-mins" type="number" value="5" min="1" /></div>
+            <div class="field"><label>Player limit (0 = none)</label><input id="cup-max" type="number" value="0" min="0" /></div>
+            <div class="field"><label>Round times each day (blank = back to back)</label><input id="cup-times" placeholder="20:00, 22:00" /></div>
+            <div class="field"><label>Minutes to turn up</label><input id="cup-window" type="number" value="10" min="2" /></div>
+            <div class="field"><label>Game length (minutes)</label><input id="cup-length" type="number" value="90" min="5" /></div>
+          </div>
+          <div class="caption" id="cup-when-note"></div>
+        </details>
         <div style="margin-top:14px"><button class="btn sm" id="cup-open">Save this cup</button>
           <button class="btn sm ghost" id="cup-now">Start joining now</button>
           <button class="btn sm ghost" id="cup-close">Stop joining and start the games</button>
           <button class="btn sm ghost" id="cup-cancel">Delete this cup</button></div>
-        <p class="hint" style="margin-top:10px"><b>Save this cup</b> creates it, and saves your changes to it afterwards. <b>Start joining now</b> opens it ahead of the date. <b>Stop joining</b> shuts the list early and pairs everyone off.</p>
       </div>
       <div class="card">
         <h2>What is happening</h2>
@@ -2611,7 +2649,30 @@ export const adminPageHTML = `<!doctype html>
     return { rounds: rounds, evenings: Math.ceil(rounds / STD.times.length), steps: steps };
   }
 
+  /**
+   * Whether the box this runs on is up to the size chosen. The numbers are
+   * measured, not guessed: 1024 sockets across 512 live games cost ~300 MB
+   * and most of one core at kick-off, and the Render Starter plan is half a
+   * core and 512 MB.
+   */
+  function cupServerAdvice() {
+    var el = document.getElementById('cup-server-advice');
+    if (!el) return;
+    var size = Number((document.getElementById('cup-size') || {}).value) || 0;
+    if (size <= 256) {
+      el.innerHTML = '<span class="ok-line">Server: fine on the current Render plan.</span> ' +
+        'Round one is ' + (size / 2) + ' games at once — comfortably inside what this setup measured.';
+    } else if (size <= 512) {
+      el.innerHTML = '<span class="warn-line">Server: upgrade Render to Standard (1 CPU / 2 GB) for the first evening.</span> ' +
+        'Round one is 256 games at once — it will likely run on Starter, but with no headroom for anything going wrong.';
+    } else {
+      el.innerHTML = '<span class="warn-line">Server: upgrade Render to Standard (1 CPU / 2 GB) BEFORE this one.</span> ' +
+        'Round one is 512 games at once — measured at ~300 MB and most of a core, which is more than the Starter plan has. Upgrade for the evening, downgrade after.';
+    }
+  }
+
   function cupPreview() {
+    cupServerAdvice();
     var el = document.getElementById('cup-preview');
     if (!el) return;
     var size = Number((document.getElementById('cup-size') || {}).value) || 0;
@@ -2655,8 +2716,8 @@ export const adminPageHTML = `<!doctype html>
   function cupSchedule() {
     var raw = (document.getElementById('cup-times') || {}).value || '';
     var times = [];
-    raw.split(/[,\s]+/).forEach(function (bit) {
-      var m = /^(\d{1,2}):?(\d{2})?$/.exec(bit.trim());
+    raw.split(/[,\\s]+/).forEach(function (bit) {
+      var m = /^(\\d{1,2}):?(\\d{2})?$/.exec(bit.trim());
       if (!m) return;
       var h = Number(m[1]), mm = Number(m[2] || 0);
       if (h > 23 || mm > 59) return;
@@ -2694,7 +2755,9 @@ export const adminPageHTML = `<!doctype html>
   }
   ['cup-start', 'cup-size'].forEach(function (id) {
     var el = document.getElementById(id);
-    if (el) el.addEventListener('input', cupPreview);
+    if (!el) return;
+    el.addEventListener('input', cupPreview);
+    el.addEventListener('change', cupPreview);
   });
   cupPreview();
 
@@ -2703,7 +2766,7 @@ export const adminPageHTML = `<!doctype html>
   if (cupStdBtn) cupStdBtn.addEventListener('click', function () {
     var size = Number((document.getElementById('cup-size') || {}).value) || 0;
     var date = (document.getElementById('cup-start') || {}).value;
-    if (!size || !date) return alert('Pick a start date and a number of players first.');
+    if (!size || !date) return alert('Pick the first evening and a size first.');
     var shape = cupShape(size);
     var first = new Date(date + 'T00:00:00');
     first.setHours(Math.floor(STD.times[0] / 60), STD.times[0] % 60, 0, 0);
