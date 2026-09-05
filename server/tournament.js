@@ -304,23 +304,40 @@ function money(v, fallback) {
   return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
 }
 
-export function openCup({ name, joinSeconds, prize } = {}) {
+/**
+ * Open a cup, or announce one for later.
+ *
+ * `opensAt` is when the doors open. Left out, or already past, they open on
+ * the spot — the way this worked before. Set to a time in the future, the cup
+ * is announced instead: everybody can see it and count down to it, nobody can
+ * enter yet, and the doors open themselves when the moment arrives.
+ *
+ * Announcing matters more than it looks. A cup that opens the second the
+ * owner presses a button is only ever played by whoever happens to be online
+ * at that second; one announced for Sunday at eight can be turned up for.
+ */
+export function openCup({ name, joinSeconds, prize, opensAt } = {}) {
   if (state.current && state.current.state !== 'done') {
     return { error: 'A cup is already running — finish or cancel it first' };
   }
-  const secs = Math.max(30, Math.min(3600, Math.floor(Number(joinSeconds) || 300)));
+  const secs = Math.max(30, Math.min(6 * 3600, Math.floor(Number(joinSeconds) || 300)));
+  const wanted = Number(opensAt) || 0;
+  // A minute's grace, so "in a moment" is not an announcement nobody sees.
+  const scheduled = wanted > now() + 60 * 1000;
+  const opens = scheduled ? wanted : now();
   state.current = {
     id: id(),
     name: String(name || 'MoneyMove Cup').slice(0, 40),
-    state: 'joining',
+    state: scheduled ? 'scheduled' : 'joining',
     prize: {
       currency: String(prize?.currency || 'USD').slice(0, 4),
       first: money(prize?.first, 200),
       second: money(prize?.second, 100),
       third: money(prize?.third, 50),
     },
-    openedAt: now(),
-    closesAt: now() + secs * 1000,
+    announcedAt: now(),
+    openedAt: opens,
+    closesAt: opens + secs * 1000,
     entrants: [],
     rounds: [],
     standings: null,
@@ -328,6 +345,18 @@ export function openCup({ name, joinSeconds, prize } = {}) {
   };
   save();
   return { ok: true, cup: state.current };
+}
+
+/** Second thoughts: throw the doors open before the announced minute. */
+export function openDoorsNow() {
+  const t = state.current;
+  if (!t || t.state !== 'scheduled') return { error: 'No announced cup to open' };
+  const kept = t.closesAt - t.openedAt;   // the window keeps its length
+  t.openedAt = now();
+  t.closesAt = now() + kept;
+  t.state = 'joining';
+  save();
+  return { ok: true, cup: t };
 }
 
 export function cancelCup() {
@@ -364,6 +393,9 @@ export function markPaid(cupId, place) {
 export function join(token) {
   const t = state.current;
   if (!state.enabled || !t) return { error: 'No cup is open' };
+  if (t.state === 'scheduled') {
+    return { error: 'Not open yet — the doors open at the announced time', notYet: true };
+  }
   if (t.state !== 'joining') return { error: 'The door has closed on this one' };
   // No account at all and an account with no sign-in are the same answer to
   // the person reading it: a prize needs somebody it can actually be paid to.
@@ -701,6 +733,12 @@ const entrantCard = (t, token) => {
 export function tick() {
   const t = state.current;
   if (!state.enabled || !t) return { closed: false };
+  // An announced cup opens itself at the appointed minute.
+  if (t.state === 'scheduled' && now() >= t.openedAt) {
+    t.state = 'joining';
+    save();
+    console.log(`cup: "${t.name}" doors opened on schedule`);
+  }
   if (t.state === 'joining' && now() >= t.closesAt) return { closed: true, ...closeDoor() };
   return { closed: false };
 }

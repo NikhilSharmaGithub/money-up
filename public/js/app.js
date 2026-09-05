@@ -1482,6 +1482,44 @@ function paintCup(data) {
       <div class="cup-prize bronze"><span class="cup-place">3rd</span><b>${money('third')}</b></div>
     </div>`;
 
+  // Announced, not open. Everybody can see it and count down to it; nobody
+  // can enter yet. This is what makes a cup something to turn up for rather
+  // than something you had to happen to be online for.
+  if (cup.state === 'scheduled') {
+    cupPollMs = 30000;
+    const opens = new Date(cup.openedAt);
+    card.innerHTML = `<div class="cup-head">
+        <span class="cup-mark">${icon('trophy', 20, 'solo')}</span>
+        <div class="cup-body">
+          <div class="cup-title">${escapeHtml(cup.name)}</div>
+          <div class="cup-sub">Knockout — last one standing takes ${money('first')}</div>
+        </div>
+        <span class="cup-count soon">soon</span>
+      </div>
+      <div class="cup-clock">
+        <div class="cup-clock-line">
+          <span>Doors open in</span>
+          <b id="cupClockText">…</b>
+        </div>
+      </div>
+      <div class="cup-when">${icon('snooze', 13)} ${escapeHtml(opens.toLocaleString([], {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  }))} · doors stay open ${Math.round((cup.closesAt - cup.openedAt) / 60000)} min</div>
+      ${prizes}
+      <div class="cup-in">${icon('people', 14)} Come back then — entering takes one tap once the doors are open.</div>
+      <button class="btn ghost small wide" id="cupPoster">${icon('question', 13)} What is a cup?</button>`;
+    const clock = () => {
+      const el = $('#cupClockText');
+      if (!el) return;
+      el.textContent = longCountdown(cup.openedAt - Date.now());
+    };
+    clock();
+    stopCupClock();
+    cupClock = setInterval(clock, 1000);
+    wireCupPoster(cup);
+    return;
+  }
+
   if (cup.state === 'joining') {
     cupPollMs = 3000;
     card.innerHTML = `<div class="cup-head">
@@ -1601,6 +1639,14 @@ function paintCup(data) {
 
   cupPollMs = 20000;
   card.classList.add('hidden');
+}
+
+/** "3d 4h", "5h 12m", "4:26" — whichever the wait deserves. */
+function longCountdown(ms) {
+  const left = Math.max(0, Math.round(ms / 1000));
+  if (left >= 86400) return `${Math.floor(left / 86400)}d ${Math.floor((left % 86400) / 3600)}h`;
+  if (left >= 3600) return `${Math.floor(left / 3600)}h ${Math.floor((left % 3600) / 60)}m`;
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
 }
 
 function wireCupChart() {

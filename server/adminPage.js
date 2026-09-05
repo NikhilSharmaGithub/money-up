@@ -515,16 +515,19 @@ export const adminPageHTML = `<!doctype html>
     <div class="cards">
       <div class="card">
         <h2>Open a cup</h2>
-        <p class="hint">The doors stay open for as long as you say, then the draw happens on its own. Entering needs a signed-in account, because a prize needs somebody to pay.</p>
+        <p class="hint">Pick when the doors open and how long they stay open. Leave the date blank and they open now; set one and the cup is announced — everybody sees it and counts down to it, and it opens itself at the minute. Entering needs a signed-in account, because a prize needs somebody to pay.</p>
         <div class="mini-forms">
           <div class="field"><label>Name</label><input id="cup-name" value="MoneyMove Cup" /></div>
-          <div class="field"><label>Doors open (seconds)</label><input id="cup-secs" type="number" value="300" /></div>
+          <div class="field"><label>Doors open at (blank = now)</label><input id="cup-when" type="datetime-local" /></div>
+          <div class="field"><label>Doors stay open (seconds)</label><input id="cup-secs" type="number" value="300" /></div>
           <div class="field"><label>First</label><input id="cup-first" type="number" value="200" /></div>
           <div class="field"><label>Second</label><input id="cup-second" type="number" value="100" /></div>
           <div class="field"><label>Third</label><input id="cup-third" type="number" value="50" /></div>
           <div class="field"><label>Currency</label><input id="cup-cur" value="USD" /></div>
         </div>
+        <div class="caption" id="cup-when-note"></div>
         <div style="margin-top:14px"><button class="btn sm" id="cup-open">Open the doors</button>
+          <button class="btn sm ghost" id="cup-now">Open early</button>
           <button class="btn sm ghost" id="cup-close">Close them now</button>
           <button class="btn sm ghost" id="cup-cancel">Cancel the cup</button></div>
       </div>
@@ -2487,14 +2490,46 @@ export const adminPageHTML = `<!doctype html>
     state.drawerMsg = null;
     if (state.data) renderPlayers();
   }
+  // The date box is read as this browser's own wall clock and sent as an
+  // instant, so the server never has to guess which timezone the desk is in.
+  function cupWhenMs() {
+    var raw = (document.getElementById('cup-when') || {}).value;
+    if (!raw) return 0;
+    var t = new Date(raw).getTime();
+    return isFinite(t) ? t : 0;
+  }
+  function cupWhenNote() {
+    var note = document.getElementById('cup-when-note');
+    if (!note) return;
+    var ms = cupWhenMs();
+    if (!ms) { note.textContent = 'Blank — the doors open the moment you press the button.'; return; }
+    var away = ms - Date.now();
+    if (away <= 60000) { note.textContent = 'That is now or in the past — the doors will just open.'; return; }
+    var mins = Math.round(away / 60000);
+    var human = mins < 60 ? mins + ' minutes'
+      : mins < 1440 ? (Math.round(mins / 6) / 10) + ' hours'
+        : (Math.round(mins / 144) / 10) + ' days';
+    note.textContent = 'Announced for ' + new Date(ms).toLocaleString() + ' — ' + human +
+      ' from now. Players see it and count down; nobody can enter until then.';
+  }
+  var cupWhenBox = document.getElementById('cup-when');
+  if (cupWhenBox) { cupWhenBox.addEventListener('input', cupWhenNote); cupWhenNote(); }
+
   var cupOpenBtn = document.getElementById('cup-open');
   if (cupOpenBtn) cupOpenBtn.addEventListener('click', function () {
     var secs = Number(document.getElementById('cup-secs').value) || 300;
-    if (!confirm('Open the doors for ' + secs + ' seconds?' + NL + NL +
-      'When they shut, everyone who entered is paired off and the tables start.')) return;
+    var when = cupWhenMs();
+    var ask = when > Date.now() + 60000
+      ? 'Announce this cup for ' + new Date(when).toLocaleString() + '?' + NL + NL +
+        'Everybody sees it and counts down. The doors open themselves then, stay open ' +
+        secs + ' seconds, and the tables start when they shut.'
+      : 'Open the doors for ' + secs + ' seconds, starting now?' + NL + NL +
+        'When they shut, everyone who entered is paired off and the tables start.';
+    if (!confirm(ask)) return;
     cupPost('open', {
       name: document.getElementById('cup-name').value,
       joinSeconds: secs,
+      opensAt: when,
       prize: {
         currency: document.getElementById('cup-cur').value,
         first: Number(document.getElementById('cup-first').value),
@@ -2502,6 +2537,11 @@ export const adminPageHTML = `<!doctype html>
         third: Number(document.getElementById('cup-third').value),
       },
     });
+  });
+  var cupNowBtn = document.getElementById('cup-now');
+  if (cupNowBtn) cupNowBtn.addEventListener('click', function () {
+    if (!confirm('Open the doors now, ahead of the announced time?')) return;
+    cupPost('openNow', {});
   });
   var cupCloseBtn = document.getElementById('cup-close');
   if (cupCloseBtn) cupCloseBtn.addEventListener('click', function () {
@@ -2695,6 +2735,10 @@ export const adminPageHTML = `<!doctype html>
   function cupClockText() {
     if (!cupClosesAt) return '';
     var left = Math.max(0, Math.round((cupClosesAt - Date.now()) / 1000));
+    // Days and hours for an announcement, minutes and seconds for a door
+    // that is actually closing — mm:ss is useless at three days out.
+    if (left >= 86400) return Math.floor(left / 86400) + 'd ' + Math.floor((left % 86400) / 3600) + 'h';
+    if (left >= 3600) return Math.floor(left / 3600) + 'h ' + Math.floor((left % 3600) / 60) + 'm';
     var m = Math.floor(left / 60), s = left % 60;
     return m + ':' + (s < 10 ? '0' : '') + s;
   }
@@ -2712,11 +2756,14 @@ export const adminPageHTML = `<!doctype html>
     var v = state.cup;
     if (!v) { swap('cuptiles', tileHtml('—', 'tournaments', 'loading')); return; }
     var c = v.current;
-    var live = c ? (c.state === 'joining' ? 'DOORS OPEN' : c.state === 'running' ? 'RUNNING' : 'DONE') : 'NONE';
+    var live = !c ? 'NONE'
+      : c.state === 'scheduled' ? 'ANNOUNCED'
+        : c.state === 'joining' ? 'DOORS OPEN'
+          : c.state === 'running' ? 'RUNNING' : 'DONE';
     swap('cuptiles',
       tileHtml(v.enabled ? 'CUPS ON' : 'CUPS OFF', 'tournaments',
         !v.enabled ? 'hidden everywhere'
-          : c ? 'players can see this one'
+          : c ? (c.state === 'scheduled' ? 'announced — players are counting down' : 'players can see this one')
             : 'on, but nothing is open yet') +
       tileHtml(live, 'right now', c ? esc(c.name) : 'no cup open') +
       tileHtml(c ? fmtNum(c.entrants.length) : '0', 'entered', 'signed-in players') +
@@ -2746,7 +2793,13 @@ export const adminPageHTML = `<!doctype html>
         cupMoney(c, c.prize.first) + ' / ' + cupMoney(c, c.prize.second) + ' / ' + cupMoney(c, c.prize.third) + '</div>';
       // The clock, which ticks on its own between the five-second refreshes.
       // A countdown that only moves when the page reloads is not a countdown.
-      if (c.state === 'joining') {
+      if (c.state === 'scheduled') {
+        cupClosesAt = c.openedAt;
+        now += '<div class="caption" style="margin-top:6px">Announced for <b>' +
+          esc(new Date(c.openedAt).toLocaleString()) + '</b>. Nobody can enter until then.</div>' +
+          '<div class="cupclock"><span>Doors open in</span>' +
+          '<b id="cup-clock">' + cupClockText() + '</b></div>';
+      } else if (c.state === 'joining') {
         cupClosesAt = c.closesAt;
         now += '<div class="cupclock"><span>Doors close in</span>' +
           '<b id="cup-clock">' + cupClockText() + '</b></div>';

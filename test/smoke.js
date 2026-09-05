@@ -2207,6 +2207,45 @@ console.log('\n▶ tournaments');
     ok('the chart names every round, marks the reader\'s match in each, and carries scorelines but no tokens');
   }
 
+  // A cup can be announced for later: everybody sees it and counts down to
+  // it, and nobody gets in until the doors actually open.
+  {
+    cup.cancelCup();
+    const soon = Date.now() + 3 * 60 * 60 * 1000;
+    cup.openCup({ name: 'Sunday Cup', joinSeconds: 600, opensAt: soon });
+    const t = cup.currentCup();
+    if (t?.state !== 'scheduled') fail('cup: a cup announced for later did not wait');
+    if (Math.abs((t?.openedAt || 0) - soon) > 1000) fail('cup: the announced time was not kept');
+    if ((t?.closesAt || 0) - (t?.openedAt || 0) !== 600 * 1000) {
+      fail('cup: the join window was measured from the wrong end');
+    }
+    social.profileFor('early-bird', { name: 'Early' });
+    social.attachLogin('early-bird', 'test', 'early-sub', 'Early');
+    const knock = cup.join('early-bird');
+    if (!knock.notYet) fail('cup: somebody got into a cup whose doors had not opened');
+    if (!cup.closeDoor().error) fail('cup: an announced cup could be drawn before it opened');
+    // The players' view shows it, which is the whole point of announcing.
+    const seen = cup.publicView('early-bird');
+    if (seen.cup?.state !== 'scheduled') fail('cup: an announced cup was invisible to players');
+    if (!seen.cup?.openedAt) fail('cup: players were not told when the doors open');
+
+    // Second thoughts: the doors can be thrown open early, and the window
+    // keeps the length it was given.
+    const now = cup.openDoorsNow();
+    if (!now.ok) fail('cup: an announced cup could not be opened early');
+    const t2 = cup.currentCup();
+    if (t2?.state !== 'joining') fail('cup: opening early did not open the doors');
+    if ((t2?.closesAt || 0) - (t2?.openedAt || 0) !== 600 * 1000) {
+      fail('cup: opening early changed how long the doors stay open');
+    }
+    if (!cup.join('early-bird').ok) fail('cup: the doors were open and still refused an entry');
+    // And a cup opened without a time still opens on the spot.
+    cup.cancelCup();
+    cup.openCup({ name: 'Right now', joinSeconds: 60 });
+    if (cup.currentCup()?.state !== 'joining') fail('cup: a cup with no announced time did not open');
+    ok('a cup can be announced for later, is visible while it waits, refuses entries until it opens, and can be opened early');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {

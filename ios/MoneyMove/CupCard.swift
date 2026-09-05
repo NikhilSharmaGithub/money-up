@@ -141,6 +141,7 @@ final class CupWatch: ObservableObject {
             // A closing door and a live bracket are worth watching closely; a
             // server with tournaments switched off is worth barely asking.
             let gap: Double = feed?.enabled != true ? 60
+                : live?.state == "scheduled" ? 30
                 : live?.state == "joining" ? 3
                 : live?.state == "running" ? 4 : 20
             try? await Task.sleep(for: .seconds(gap))
@@ -253,6 +254,7 @@ struct CupCard: View {
         VStack(spacing: 0) {
             if let cup = live {
                 switch cup.state {
+                case "scheduled": announcedFace(cup, P)
                 case "joining":  joiningFace(cup, P)
                 case "running":  runningFace(cup, P)
                 case "done":     doneFace(cup, P)
@@ -287,6 +289,57 @@ struct CupCard: View {
     private var busy: Bool { watch.busy }
 
     // MARK: - faces
+
+    /// Announced, not open. Everybody can see it and count down to it, and
+    /// nobody can enter yet — which is the point: a cup that opens the second
+    /// the owner presses a button is only played by whoever happened to be
+    /// online at that second.
+    @ViewBuilder private func announcedFace(_ cup: CupFeed.Cup, _ P: Palette) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                head(cup, subtitle: "Knockout — last one standing takes \(money(cup, .first))",
+                     countLabel: "soon", P)
+                if let opens = cup.openedDate {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Doors open in")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                            Spacer()
+                            Text(longCountdown(opens.timeIntervalSinceNow))
+                                .font(.system(size: 17, weight: .heavy, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(P.gold)
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        Art.icon(.snooze, size: 13)
+                        Text(opens.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)
+                            .hour().minute()) + windowNote(cup))
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink2)
+                    }
+                }
+                prizes(cup, P)
+                note("Come back then — entering takes one tap once the doors are open.",
+                     tone: P.ink3, P)
+                moreButton("What is a cup?", .question, chart: false, P)
+            }
+        }
+    }
+
+    private func windowNote(_ cup: CupFeed.Cup) -> String {
+        guard let opens = cup.openedAt, let closes = cup.closesAt else { return "" }
+        return " · doors stay open \(Int((closes - opens) / 60000)) min"
+    }
+
+    /// "3d 4h", "5h 12m", "4:26" — whichever the wait deserves.
+    private func longCountdown(_ seconds: TimeInterval) -> String {
+        let left = Int(max(0, seconds).rounded())
+        if left >= 86400 { return "\(left / 86400)d \(left % 86400 / 3600)h" }
+        if left >= 3600 { return "\(left / 3600)h \(left % 3600 / 60)m" }
+        return String(format: "%d:%02d", left / 60, left % 60)
+    }
 
     private func joiningFace(_ cup: CupFeed.Cup, _ P: Palette) -> some View {
         MMCard(padding: 16) {
@@ -417,7 +470,8 @@ struct CupCard: View {
 
     // MARK: - pieces
 
-    private func head(_ cup: CupFeed.Cup, subtitle: String, _ P: Palette) -> some View {
+    private func head(_ cup: CupFeed.Cup, subtitle: String,
+                      countLabel: String? = nil, _ P: Palette) -> some View {
         HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 13, style: .continuous).fill(P.goldSoft)
@@ -438,14 +492,14 @@ struct CupCard: View {
             }
             Spacer(minLength: 6)
 
-            Text("\(cup.entrants) in")
+            Text(countLabel ?? "\(cup.entrants) in")
                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(P.ink2)
+                .foregroundStyle(countLabel == nil ? P.ink2 : P.gold)
                 .padding(.vertical, 4)
                 .padding(.horizontal, 9)
-                .background(P.sunken, in: Capsule())
-                .overlay(Capsule().stroke(P.rule, lineWidth: 1))
+                .background(countLabel == nil ? P.sunken : P.goldSoft, in: Capsule())
+                .overlay(Capsule().stroke(countLabel == nil ? P.rule : P.gold, lineWidth: 1))
         }
     }
 

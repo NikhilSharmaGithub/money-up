@@ -714,8 +714,19 @@ app.post('/api/admin/cup', (req, res) => {
         name: req.body.name,
         joinSeconds: req.body.joinSeconds,
         prize: req.body.prize,
+        // Epoch milliseconds. The desk sends an absolute instant rather than
+        // a wall-clock string, so the server never has to guess a timezone.
+        opensAt: req.body.opensAt,
       });
-      if (result.ok) audit('cup', result.cup.id, `opened "${result.cup.name}" — doors ${Math.round((result.cup.closesAt - Date.now()) / 1000)}s`);
+      if (result.ok) {
+        audit('cup', result.cup.id, result.cup.state === 'scheduled'
+          ? `announced "${result.cup.name}" for ${new Date(result.cup.openedAt).toISOString()}`
+          : `opened "${result.cup.name}" — doors ${Math.round((result.cup.closesAt - Date.now()) / 1000)}s`);
+      }
+      break;
+    case 'openNow':
+      result = cup.openDoorsNow();
+      if (result.ok) audit('cup', 'doors', 'opened early, by hand');
       break;
     case 'close':
       result = cup.closeDoor();
