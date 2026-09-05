@@ -1171,11 +1171,27 @@ const CUP_NO_SHOW_MS = 8 * 60 * 1000;
 function sweepCupNoShows() {
   const now = Date.now();
   for (const m of cup.playingMatches()) {
+    // A game still being played when the next round is due would hold up
+    // everybody else's evening. A tournament cannot wait on one table, so it
+    // is decided the way every timed sport decides one: whoever is ahead when
+    // the whistle goes. Net worth is this game's score.
+    const room = rooms.get(m.roomId);
+    if (m.decideAt && now >= m.decideAt && room?.status === 'playing') {
+      const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));
+      const standing = room.players.filter((p) => !p.bankrupt)
+        .sort((a, b) => worth(b) - worth(a));
+      const behind = standing[standing.length - 1];
+      if (behind && standing.length > 1) {
+        console.log(`cup: ${m.roomId} ran into the next round — decided on net worth`);
+        room.quit(behind.id);   // the normal game-end path records it in the cup
+      }
+      continue;
+    }
+
     // A scheduled round shuts its own door; everything else waits the flat
     // eight minutes it always did.
     const due = m.deadline ? now >= m.deadline : now - (m.startedAt || 0) >= CUP_NO_SHOW_MS;
     if (!due) continue;
-    const room = rooms.get(m.roomId);
     if (room && room.status !== 'lobby') continue;   // being played: not our business
     const came = [m.a, m.b].filter((token) => room?.player(token));
     if (came.length >= 2) continue;                  // both there, the table will start itself

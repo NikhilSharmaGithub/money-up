@@ -222,6 +222,9 @@ function cupView(t, token) {
     needsCode: !!t.joinCode,
     // When the rounds are played, if this cup runs to a clock.
     schedule: t.schedule || null,
+    // Every round this cup will take, with the nights they fall on. A player
+    // should never have to work out how many evenings they are signing up to.
+    plan: planOf(t, token),
     rounds: t.rounds.length,
     // The bracket, with names rather than identities.
     round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
@@ -354,6 +357,59 @@ function roundView(t, n) {
 }
 
 const nameOf = (t, token) => (token ? t.entrants.find((e) => e.token === token)?.name || '—' : 'bye');
+
+/**
+ * The whole shape of the cup, before it has happened.
+ *
+ * A knockout is completely predictable — every round halves the field and
+ * takes the next slot on the clock — so there is no reason to make a player
+ * guess how many nights this will take or when they need to be free. Rounds
+ * already drawn report their real times and counts; the rest are projected
+ * from the schedule, which is exact unless a round slips.
+ */
+function planOf(t, token) {
+  const out = [];
+  let players = t.entrants.length;
+  // What has actually been drawn.
+  for (let i = 0; i < t.rounds.length; i++) {
+    const r = t.rounds[i];
+    if (r.kind === 'thirdPlace') continue;   // played beside the final, not after it
+    const inIt = !!token && r.matches.some((m) => m.a === token || m.b === token);
+    out.push({
+      n: i + 1,
+      label: roundLabel(r),
+      players: playersIn(r),
+      opensAt: r.opensAt || null,
+      closesAt: r.closesAt || null,
+      done: r.matches.every((m) => m.state === 'done'),
+      yours: inIt,
+      projected: false,
+    });
+    players = Math.ceil(playersIn(r) / 2);
+  }
+  // And what is still to come, if this cup runs to a clock.
+  let at = t.rounds.length
+    ? (t.rounds[t.rounds.length - 1].opensAt || now())
+    : (t.state === 'joining' ? t.closesAt : now());
+  let n = out.length;
+  while (players > 1 && n < 12) {
+    at = t.schedule ? nextSlot(t.schedule, at + 60000) : at;
+    n++;
+    out.push({
+      n,
+      label: players === 2 ? 'Final' : players <= 4 ? 'Semi-finals'
+        : players <= 8 ? 'Quarter-finals' : `Round of ${players}`,
+      players,
+      opensAt: t.schedule ? at : null,
+      closesAt: null,
+      done: false,
+      yours: false,
+      projected: true,
+    });
+    players = Math.ceil(players / 2);
+  }
+  return out;
+}
 
 /**
  * The next thing that happens to this player: the match they are due to
@@ -854,6 +910,10 @@ export function playingMatches() {
           // when the table was made: everybody in that round gets the same
           // ten minutes, whichever minute their table happened to open.
           deadline: r.closesAt || 0,
+          // And the moment the NEXT round is due. A game still running then
+          // would hold up everybody else's evening, so it is decided on the
+          // board rather than left to finish — see the sweeper.
+          decideAt: r.opensAt && t.schedule ? nextSlot(t.schedule, r.opensAt + 60000) : 0,
         });
       }
     }

@@ -40,6 +40,10 @@ struct CupDetailSheet: View {
                         label("Final standings", P)
                         podium(s, P)
                     }
+                    if !live.plan.isEmpty {
+                        label("The whole plan", P)
+                        planList(P)
+                    }
                     chartButton(P)
                     rules(P)
                 }
@@ -357,6 +361,61 @@ struct CupDetailSheet: View {
         }
     }
 
+    // MARK: - the plan
+
+    /// Every round, with the night it falls on. A knockout is completely
+    /// predictable — each round halves the field and takes the next slot on
+    /// the clock — so there is no reason to make anybody guess how many
+    /// evenings they have signed up to, or which one they can miss.
+    private func planList(_ P: Palette) -> some View {
+        VStack(spacing: 6) {
+            ForEach(live.plan) { r in
+                HStack(spacing: 11) {
+                    Text("\(r.n)")
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(r.done ? P.ink3 : P.ink2)
+                        .frame(width: 22, height: 22)
+                        .background(r.yours ? P.goldSoft : P.card, in: Circle())
+                        .overlay(Circle().stroke(r.yours ? P.gold : P.rule, lineWidth: 1))
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r.label)
+                            .font(.system(size: 13, weight: .heavy, design: .rounded))
+                            .foregroundStyle(r.done ? P.ink3 : P.ink)
+                        Text("\(r.players) players → \(r.through) through")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
+                    Spacer(minLength: 6)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        if let d = r.opensDate {
+                            Text(d.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+                                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                .foregroundStyle(r.done ? P.ink3 : P.ink2)
+                        }
+                        if r.done {
+                            Text("played")
+                                .font(.system(size: 9.5, weight: .heavy, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                        } else if r.projected {
+                            Text("planned")
+                                .font(.system(size: 9.5, weight: .heavy, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                        }
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 11)
+                .opacity(r.done ? 0.6 : 1)
+                .background(r.yours && !r.done ? P.goldSoft : P.sunken,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(r.yours && !r.done ? P.gold : P.rule, lineWidth: 1))
+            }
+        }
+    }
+
     // MARK: - the rest
 
     private func chartButton(_ P: Palette) -> some View {
@@ -393,6 +452,9 @@ struct CupDetailSheet: View {
         if live.schedule?.times?.isEmpty == false {
             let w = live.schedule?.windowMinutes ?? 10
             out.append("Each round opens at its time and stays open \(w) minutes. Turn up inside that window or you are out — even if you would have won.")
+        }
+        if live.schedule?.times?.isEmpty == false {
+            out.append("A game still running when the next round is due is decided on net worth — whoever is ahead goes through, so one long game never holds up everybody else's evening.")
         }
         out.append("Prizes are paid by hand by whoever set the cup up. Keep your friend code.")
         return out

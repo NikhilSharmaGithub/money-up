@@ -49,6 +49,9 @@ struct CupFeed: Decodable, Equatable {
         var needsCode: Bool = false
         /// When the rounds are played, if this cup runs to a clock.
         var schedule: Schedule?
+        /// Every round this cup will take, with the nights they fall on — so
+        /// nobody has to work out how many evenings they are signing up to.
+        var plan: [PlanRound] = []
         var rounds: Int
         var round: Round?
         var standings: Standings?
@@ -132,6 +135,21 @@ struct CupFeed: Decodable, Equatable {
 
         var opensDate: Date? { opensAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
         var closesDate: Date? { closesAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+    }
+
+    struct PlanRound: Decodable, Equatable, Identifiable {
+        var n: Int
+        var label: String
+        var players: Int
+        var opensAt: Double?
+        var done: Bool = false
+        var yours: Bool = false
+        var projected: Bool = false
+
+        var id: Int { n }
+        var opensDate: Date? { opensAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+        /// How many come out the other side.
+        var through: Int { Int(ceil(Double(players) / 2)) }
     }
 
     struct Schedule: Decodable, Equatable {

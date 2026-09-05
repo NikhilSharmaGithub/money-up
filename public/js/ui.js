@@ -2362,11 +2362,25 @@ export function openCupDetail(cup, token, onJoin) {
         <span class="lad-body"><b>${escapeHtml(x.label)}</b><span>${x.line}</span></span>
       </li>`).join('')}</ol>` : ''}
     ${standings}
+    ${(cup.plan || []).length ? `<div class="chart-label">The whole plan</div>
+      <div class="cd-plan">${cup.plan.map((r) => {
+    const when = r.opensAt ? new Date(r.opensAt).toLocaleString([], {
+      weekday: 'short', hour: '2-digit', minute: '2-digit',
+    }) : '';
+    return `<div class="cd-round ${r.done ? 'done' : ''} ${r.yours && !r.done ? 'yours' : ''}">
+          <span class="cd-n">${r.n}</span>
+          <span class="cd-what"><b>${escapeHtml(r.label)}</b>
+            <span>${r.players} players → ${Math.ceil(r.players / 2)} through</span></span>
+          <span class="cd-at"><b>${escapeHtml(when)}</b>
+            <span>${r.done ? 'played' : r.projected ? 'planned' : ''}</span></span>
+        </div>`;
+  }).join('')}</div>` : ''}
     <button class="btn ghost small wide" id="cdChart">${icon('chart', 13)} See the whole chart</button>
     <div class="chart-label">How it works</div>
     <ul class="poster-rules">
       <li>Win your match and you go through. Lose it and you are out.</li>
       ${cup.schedule?.times?.length ? `<li>Each round opens at its time and stays open ${cup.schedule.windowMinutes} minutes. <b>Turn up inside that window or you are out</b> — even if you would have won.</li>` : ''}
+      ${cup.schedule?.times?.length ? '<li>A game still running when the next round is due is decided on net worth — whoever is ahead goes through, so one long game never holds up everybody else\'s evening.</li>' : ''}
       <li>Prizes are paid by hand by whoever set the cup up. Keep your friend code.</li>
     </ul>`, (root) => {
     $('#cdClose', root).onclick = closeModal;
