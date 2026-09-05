@@ -626,6 +626,24 @@ select { cursor: pointer; }
   flex: none; width: 9px; height: 9px; border-radius: 99px; background: var(--gold);
 }
 
+/* ---- the words under the fold ---- */
+/* Everything above this on the landing is buttons, and a page of buttons tells
+   a search engine nothing about what the game is. This is written for somebody
+   deciding whether to click — which is the same thing that makes it worth
+   indexing in the first place. */
+.prose {
+  max-width: 640px; margin: 46px auto 0; padding: 0 4px 10px;
+  text-align: left; color: var(--page-ink-2, var(--ink-2));
+}
+.prose h2 {
+  margin: 34px 0 8px; font-size: 19px; font-weight: 850; line-height: 1.3;
+  color: var(--page-ink, var(--ink));
+}
+.prose h2:first-child { margin-top: 0; }
+.prose p { margin: 0; font-size: 14.5px; line-height: 1.72; }
+.prose strong { color: var(--page-ink, var(--ink)); font-weight: 750; }
+.prose a { color: var(--page-accent, var(--red)); }
+
 /* ---- friends: a summary on the landing, a room behind it ---- */
 .friends-card {
   display: flex; align-items: center; gap: 12px; width: 100%;

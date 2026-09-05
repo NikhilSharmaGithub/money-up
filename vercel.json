@@ -3,12 +3,40 @@
   "outputDirectory": "public",
   "framework": null,
   "rewrites": [
-    { "source": "/room/:code", "destination": "/index.html" }
+    {
+      "source": "/room/:code",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
       "source": "/config.js",
-      "headers": [{ "key": "Cache-Control", "value": "no-store" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/sitemap.xml",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600"
+        }
+      ]
+    },
+    {
+      "source": "/robots.txt",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600"
+        }
+      ]
     }
-  ]
+  ],
+  "cleanUrls": true,
+  "trailingSlash": false
 }

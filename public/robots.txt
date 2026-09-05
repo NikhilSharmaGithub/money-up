@@ -1,0 +1,14 @@
+# MoneyMove — an online property trading game.
+#
+# Everything here is public and free to crawl. The only paths worth keeping
+# out of an index are the ones that are not pages at all: the JSON the app
+# talks to itself with, and a room link, which is a private table that stops
+# existing an hour after the game ends.
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /room/
+Disallow: /admin
+
+Sitemap: https://www.moneymove.live/sitemap.xml

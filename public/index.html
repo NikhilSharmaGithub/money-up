@@ -31,6 +31,62 @@
 <meta name="twitter:description" content="Buy streets, build hotels and bankrupt your friends. Free, no sign-up, up to 8 players across 19 boards." />
 <meta name="twitter:image" content="https://www.moneymove.live/og.png" />
 <meta name="twitter:image:alt" content="MoneyMove — buy streets, build hotels, bankrupt your friends" />
+<!-- The one address this page lives at. The apex redirects here and the
+     Vercel deploy host serves the same bytes, so without this Google has
+     three candidates for one page and picks for itself. -->
+<link rel="canonical" href="https://www.moneymove.live/" />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<meta property="og:locale" content="en_GB" />
+
+<!-- What this actually is, in the vocabulary a search engine reads. It is a
+     game you play in a browser, so it is both a VideoGame and a
+     WebApplication, and saying so is the difference between a blue link and
+     a result with a picture on it. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": ["VideoGame", "WebApplication"],
+      "@id": "https://www.moneymove.live/#game",
+      "name": "MoneyMove",
+      "url": "https://www.moneymove.live/",
+      "description": "A free online property trading board game. Buy streets, build hotels and bankrupt your friends — up to eight players, nineteen boards, no sign-up and nothing to install.",
+      "image": "https://www.moneymove.live/og.png",
+      "applicationCategory": "GameApplication",
+      "operatingSystem": "Any browser, iOS",
+      "genre": ["Board game", "Strategy", "Multiplayer"],
+      "playMode": ["MultiPlayer", "CoOp"],
+      "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 2, "maxValue": 8 },
+      "gamePlatform": ["Web browser", "iPhone", "iPad", "Android"],
+      "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock"
+      },
+      "publisher": { "@id": "https://www.moneymove.live/#publisher" }
+    },
+    {
+      "@type": "Organization",
+      "@id": "https://www.moneymove.live/#publisher",
+      "name": "MoneyMove",
+      "url": "https://www.moneymove.live/",
+      "logo": "https://www.moneymove.live/og.png"
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://www.moneymove.live/#website",
+      "url": "https://www.moneymove.live/",
+      "name": "MoneyMove",
+      "publisher": { "@id": "https://www.moneymove.live/#publisher" },
+      "inLanguage": "en"
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -139,7 +195,67 @@
       <div><b>∞</b><span>bankruptcies</span></div>
     </div>
     <p class="fineprint">An original implementation of the classic property-trading board game.<br />Not affiliated with any trademark holder.<br />
-      <a href="/support.html">Support</a> · <a href="/privacy.html">Privacy</a> · <a href="/app.html">iPhone app</a></p>
+      <a href="/how-to-play">How to play</a> · <a href="/boards">Boards</a> ·
+      <a href="/support">Support</a> · <a href="/privacy">Privacy</a> · <a href="/app">iPhone app</a></p>
+  </div>
+
+  <!-- Below the fold: the words. Everything above this is buttons, and a
+       page of buttons tells a search engine nothing about what it is for.
+       This is written for somebody deciding whether to click, which is the
+       same thing that makes it worth indexing. -->
+  <div class="prose">
+    <h2>An online property trading game you can start in one tap</h2>
+    <p>
+      MoneyMove is a free multiplayer board game for your browser and your phone.
+      Roll, move, buy the streets you land on, put houses and hotels on the sets
+      you complete, and charge everybody else rent until there is one player left
+      with money. Two to eight people, no download, no sign-up to play.
+    </p>
+
+    <h2>Play with friends, or with whoever is online</h2>
+    <p>
+      <strong>Play now</strong> puts you at a table with whoever else is looking
+      for a game — it takes about fifteen seconds to find people, and fills the
+      last seats so nobody waits forever. <strong>Create a game</strong> gives you
+      a private room and a link; anyone you send it to is at your table in one tap,
+      in a browser, with nothing to install. Swap friend codes and you can drop
+      into each other's games and message between them.
+    </p>
+
+    <h2>Nineteen boards, from the classic to the strange</h2>
+    <p>
+      The Classic board is the one everybody knows. Worldwide travels the planet,
+      Death Valley is a brutal short game, and there are single-nation boards for
+      India, Brazil, Germany, Japan and a dozen more — each with its own streets,
+      prices and sets. Shuffle picks a different one every game.
+      <a href="/boards">See all nineteen boards</a>.
+    </p>
+
+    <h2>The rules, honestly implemented</h2>
+    <p>
+      Auctions when somebody passes on a property, mortgages when they run short,
+      even-build on houses, double rent on a completed set, and a proper debt
+      system where money moves to the player who is owed it rather than vanishing.
+      Trades are free-form: streets, cash and jail cards in any combination, with
+      a counter-offer if the first one is cheeky.
+      <a href="/how-to-play">Read how to play</a>.
+    </p>
+
+    <h2>Tournaments</h2>
+    <p>
+      When a cup is running you can enter it from the Social tab. Everyone who
+      joins is paired off, winners go through, losers are out, and the last three
+      standing take the prizes. Rounds run at set times over a few evenings, so you
+      turn up, play your match and get on with your night.
+    </p>
+
+    <h2>Free, and honest about it</h2>
+    <p>
+      The game is free and always playable without spending anything. Coins buy
+      pieces and avatars — a top hat, a rickshaw, a dragon — and change nothing
+      about how the game plays. You earn them by winning and by turning up daily.
+      There is no pay-to-win here and there is not going to be.
+    </p>
   </div>
 </section>
 
@@ -149,7 +265,7 @@
   <!-- left column -->
   <aside class="col left">
     <div class="brand">
-      <h1 class="logo">MONEY<span>MOVE</span></h1>
+      <div class="logo" role="presentation">MONEY<span>MOVE</span></div>
       <div class="brand-actions">
         <button id="focusBtn" class="icon-btn" title="Hide the side panel and enlarge the board">⛶</button>
         <button id="themeBtn" class="icon-btn" title="Switch between light and dark"></button>
