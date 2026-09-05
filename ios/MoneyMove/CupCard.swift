@@ -47,6 +47,8 @@ struct CupFeed: Decodable, Equatable {
         /// Whether a join code is wanted. Never the code itself — an
         /// invite-only cup whose code the app could read is not invite-only.
         var needsCode: Bool = false
+        /// When the rounds are played, if this cup runs to a clock.
+        var schedule: Schedule?
         var rounds: Int
         var round: Round?
         var standings: Standings?
@@ -102,11 +104,40 @@ struct CupFeed: Decodable, Equatable {
     struct You: Decodable, Equatable {
         var joined: Bool?
         var code: String?
+        var name: String?
         var out: Bool?
         var placed: String?
         /// The table drawn for you, the moment there is one.
         var roomId: String?
         var opponent: String?
+        var survived: Int?
+        var round: Int?
+        var roundLabel: String?
+        var left: Int?
+        /// What happens next, and when — the whole reason the detail screen
+        /// exists. "You are in round three" is not what somebody wants at
+        /// nine in the evening; "you play Ravi at ten" is.
+        var next: NextMatch?
+    }
+
+    struct NextMatch: Decodable, Equatable {
+        var round: Int?
+        var label: String?
+        var opponent: String?
+        var opponentCode: String?
+        var opensAt: Double?
+        var closesAt: Double?
+        var open: Bool?
+        var roomId: String?
+
+        var opensDate: Date? { opensAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+        var closesDate: Date? { closesAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+    }
+
+    struct Schedule: Decodable, Equatable {
+        var times: [Int]?
+        var windowMinutes: Int?
+        var offsetMinutes: Int?
     }
 }
 
@@ -282,6 +313,8 @@ struct CupCard: View {
 
     @State private var showChart = false
     @State private var showPoster = false
+    /// The room behind the card: everything about this cup in one place.
+    @State private var showDetail = false
     /// What the player typed into the code box, if the cup wants one.
     @State private var codeDraft = ""
 
@@ -300,6 +333,9 @@ struct CupCard: View {
         }
         .animation(.spring(duration: 0.32), value: live)
         .sheet(isPresented: $showChart) { CupChartSheet().environmentObject(store) }
+        .sheet(isPresented: $showDetail) {
+            if let cup = live { CupDetailSheet(cup: cup, watch: watch).environmentObject(store) }
+        }
         .sheet(isPresented: $showPoster) {
             if let cup = live { CupPosterSheet(cup: cup) }
         }
@@ -310,7 +346,11 @@ struct CupCard: View {
     private func moreButton(_ title: String, _ glyph: Glyph, chart: Bool, _ P: Palette) -> some View {
         Button {
             Haptics.tap()
-            if chart { showChart = true } else { showPoster = true }
+            // "What is a cup?" before you are in one; the tournament room
+            // once you are, because by then the poster has nothing to add.
+            if chart { showChart = true }
+            else if live?.state == "joining" || live?.state == "scheduled" { showPoster = true }
+            else { showDetail = true }
         } label: {
             HStack(spacing: 7) {
                 Art.icon(glyph, size: 14)
@@ -481,7 +521,7 @@ struct CupCard: View {
                     }
                     .buttonStyle(MMButtonStyle(kind: .primary))
                 }
-                moreButton("See the chart", .chart, chart: true, P)
+                moreButton("Open the tournament", .chart, chart: false, P)
                 otherCups(P)
             }
         }
@@ -508,7 +548,7 @@ struct CupCard: View {
                         note("You finished \(cup.you.placed ?? ""). The prize is paid by hand — hold on to your friend code.",
                              tone: P.good, P)
                     }
-                    moreButton("See the chart", .chart, chart: true, P)
+                    moreButton("Open the tournament", .chart, chart: false, P)
                 }
                 otherCups(P)
             }
@@ -545,6 +585,10 @@ struct CupCard: View {
 
     private func head(_ cup: CupFeed.Cup, subtitle: String,
                       countLabel: String? = nil, _ P: Palette) -> some View {
+        Button {
+            Haptics.tap()
+            showDetail = true
+        } label: {
         HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 13, style: .continuous).fill(P.goldSoft)
@@ -565,6 +609,10 @@ struct CupCard: View {
             }
             Spacer(minLength: 6)
 
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(P.ink3)
+
             Text(countLabel ?? (cup.maxPlayers > 0 ? "\(cup.entrants)/\(cup.maxPlayers) joined" : "\(cup.entrants) joined"))
                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .monospacedDigit()
@@ -574,6 +622,8 @@ struct CupCard: View {
                 .background(countLabel == nil ? P.sunken : P.goldSoft, in: Capsule())
                 .overlay(Capsule().stroke(countLabel == nil ? P.rule : P.gold, lineWidth: 1))
         }
+        }
+        .buttonStyle(.plain)
     }
 
     /// The door, drawn as a bar that empties. A number on its own makes you do

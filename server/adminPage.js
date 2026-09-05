@@ -566,6 +566,8 @@ export const adminPageHTML = `<!doctype html>
           <div class="field"><label>Joining stays open for (minutes)</label><input id="cup-mins" type="number" value="5" min="1" /></div>
           <div class="field"><label>Player limit (0 = no limit)</label><input id="cup-max" type="number" value="0" min="0" /></div>
           <div class="field"><label>Join code (blank = anyone can join)</label><input id="cup-code" placeholder="e.g. SUNDAY" maxlength="16" /></div>
+          <div class="field"><label>Match times each day (blank = back to back)</label><input id="cup-times" placeholder="20:00, 22:00" /></div>
+          <div class="field"><label>Each match window (minutes)</label><input id="cup-window" type="number" value="10" min="2" /></div>
           <div class="field"><label>1st prize</label><input id="cup-first" type="number" value="200" /></div>
           <div class="field"><label>2nd prize</label><input id="cup-second" type="number" value="100" /></div>
           <div class="field"><label>3rd prize</label><input id="cup-third" type="number" value="50" /></div>
@@ -2573,6 +2575,31 @@ export const adminPageHTML = `<!doctype html>
     state.drawerMsg = null;
     if (state.data) renderPlayers();
   }
+  /**
+   * "20:00, 22:00" becomes minutes past local midnight, and the offset the
+   * desk is sitting in travels with it — so eight in the evening means eight
+   * where the owner is, not eight at Greenwich.
+   *
+   * Blank hands back an empty list, which the server reads as "no schedule":
+   * every round runs straight on from the last, the way it used to.
+   */
+  function cupSchedule() {
+    var raw = (document.getElementById('cup-times') || {}).value || '';
+    var times = [];
+    raw.split(/[,\s]+/).forEach(function (bit) {
+      var m = /^(\d{1,2}):?(\d{2})?$/.exec(bit.trim());
+      if (!m) return;
+      var h = Number(m[1]), mm = Number(m[2] || 0);
+      if (h > 23 || mm > 59) return;
+      times.push(h * 60 + mm);
+    });
+    return {
+      times: times,
+      windowMinutes: Number((document.getElementById('cup-window') || {}).value) || 10,
+      offsetMinutes: -new Date().getTimezoneOffset(),
+    };
+  }
+
   // The date box is read as this browser's own wall clock and sent as an
   // instant, so the server never has to guess which timezone the desk is in.
   function cupWhenMs() {
@@ -2648,6 +2675,7 @@ export const adminPageHTML = `<!doctype html>
     var mins = Math.max(1, Number(document.getElementById('cup-mins').value) || 5);
     var cap = Math.max(0, Number(document.getElementById('cup-max').value) || 0);
     var code = (document.getElementById('cup-code').value || '').trim();
+    var schedule = cupSchedule();
     var when = cupWhenMs();
     var running = cupPicked ? (state.cup.cups || []).find(function (x) { return x.id === cupPicked; }) : null;
     var ask = running
@@ -2667,6 +2695,7 @@ export const adminPageHTML = `<!doctype html>
       opensAt: when,
       maxPlayers: cap,
       joinCode: code,
+      schedule: schedule,
       prize: {
         currency: document.getElementById('cup-cur').value,
         first: Number(document.getElementById('cup-first').value),
@@ -2911,6 +2940,11 @@ export const adminPageHTML = `<!doctype html>
     set('cup-mins', Math.max(1, Math.round((c.closesAt - c.openedAt) / 60000)));
     set('cup-max', c.maxPlayers || 0);
     set('cup-code', c.joinCode || '');
+    var pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    set('cup-times', (c.schedule && c.schedule.times || []).map(function (m) {
+      return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+    }).join(', '));
+    set('cup-window', (c.schedule && c.schedule.windowMinutes) || 10);
     set('cup-first', c.prize.first);
     set('cup-second', c.prize.second);
     set('cup-third', c.prize.third);
@@ -3017,6 +3051,14 @@ export const adminPageHTML = `<!doctype html>
           '<b id="cup-clock">' + cupClockText() + '</b></div>';
       } else {
         cupClosesAt = 0;
+      }
+      if (c.schedule && c.schedule.times && c.schedule.times.length) {
+        now += '<div class="caption" style="margin-top:6px">Rounds at <b>' +
+          c.schedule.times.map(function (m) {
+            var h = Math.floor(m / 60), mm = m % 60;
+            return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+          }).join('</b>, <b>') + '</b> each day · ' + c.schedule.windowMinutes +
+          ' minute window · anybody who does not turn up is out.</div>';
       }
       // Every round, not only the latest: the whole bracket is the thing
       // worth watching while a cup runs.

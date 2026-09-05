@@ -754,6 +754,9 @@ const cupSettings = (body = {}) => ({
   opensAt: body.opensAt,
   maxPlayers: body.maxPlayers,
   joinCode: body.joinCode,
+  // { times: [minutes past local midnight], windowMinutes, offsetMinutes }.
+  // Undefined leaves whatever the cup has; null or an empty list clears it.
+  schedule: body.schedule,
 });
 
 app.post('/api/admin/cup', (req, res) => {
@@ -1168,7 +1171,10 @@ const CUP_NO_SHOW_MS = 8 * 60 * 1000;
 function sweepCupNoShows() {
   const now = Date.now();
   for (const m of cup.playingMatches()) {
-    if (now - (m.startedAt || 0) < CUP_NO_SHOW_MS) continue;
+    // A scheduled round shuts its own door; everything else waits the flat
+    // eight minutes it always did.
+    const due = m.deadline ? now >= m.deadline : now - (m.startedAt || 0) >= CUP_NO_SHOW_MS;
+    if (!due) continue;
     const room = rooms.get(m.roomId);
     if (room && room.status !== 'lobby') continue;   // being played: not our business
     const came = [m.a, m.b].filter((token) => room?.player(token));

@@ -43,6 +43,43 @@ const state = {
 /** As many cups as one person can sensibly run and pay out at once. */
 const MAX_LIVE_CUPS = 6;
 
+/**
+ * A cup with a schedule plays its rounds at set times of day rather than the
+ * moment the last one finishes.
+ *
+ * Two hundred people cannot be asked to sit at their phones for two straight
+ * hours while seven rounds grind through. They can be asked to turn up at
+ * eight and again at ten. So a round opens at its appointed minute, stays
+ * open for a short window, and anybody who does not turn up inside it is out
+ * — which is the only rule that makes a scheduled bracket finish at all.
+ */
+const DEFAULT_SCHEDULE = {
+  // Minutes past local midnight. Two a day, at eight and at ten.
+  times: [20 * 60, 22 * 60],
+  // How long a round's door stays open. Miss it and you are out.
+  windowMinutes: 10,
+  // The owner's own clock, so "20:00" means eight in the evening where they
+  // are rather than eight at Greenwich. Sent from the desk's browser.
+  offsetMinutes: 0,
+};
+
+/** The next scheduled slot strictly after `from`, as an instant. */
+function nextSlot(schedule, from) {
+  const sch = { ...DEFAULT_SCHEDULE, ...(schedule || {}) };
+  const times = (sch.times || []).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!times.length) return null;
+  const offset = Number(sch.offsetMinutes) || 0;
+  // Work in the owner's local minutes, then come back to an instant.
+  const local = from + offset * 60000;
+  const dayStart = Math.floor(local / 86400000) * 86400000;
+  const minutesIn = (local - dayStart) / 60000;
+  for (const t of times) {
+    if (t > minutesIn) return dayStart + t * 60000 - offset * 60000;
+  }
+  // Nothing left today: the first slot tomorrow.
+  return dayStart + 86400000 + times[0] * 60000 - offset * 60000;
+}
+
 // ─────────────────────────────────────────────────────────────── storage ──
 
 function load() {
@@ -183,6 +220,8 @@ function cupView(t, token) {
     // Whether a code is wanted, never the code itself: an invite-only cup
     // whose code any client could read is not invite-only.
     needsCode: !!t.joinCode,
+    // When the rounds are played, if this cup runs to a clock.
+    schedule: t.schedule || null,
     rounds: t.rounds.length,
     // The bracket, with names rather than identities.
     round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
@@ -200,6 +239,8 @@ function cupView(t, token) {
       // the whole story of a knockout from one player's seat, and it is
       // four numbers rather than the entire bracket.
       ...standing(t, token),
+      // The match in front of them: who, when its door opens, when it shuts.
+      next: nextMatchFor(t, token),
     } : { joined: false },
   };
 }
@@ -314,6 +355,38 @@ function roundView(t, n) {
 
 const nameOf = (t, token) => (token ? t.entrants.find((e) => e.token === token)?.name || '—' : 'bye');
 
+/**
+ * The next thing that happens to this player: the match they are due to
+ * play, whether its door is open yet, and when it opens and shuts.
+ *
+ * This is the whole reason the screen exists. "You are in round three" is
+ * not what somebody wants to know at nine in the evening; "you play Ravi at
+ * ten, and the door shuts at ten past" is.
+ */
+function nextMatchFor(t, token) {
+  if (!token) return null;
+  for (const r of t.rounds) {
+    for (const m of r.matches) {
+      if (m.state === 'done') continue;
+      if (m.a !== token && m.b !== token) continue;
+      const other = m.a === token ? m.b : m.a;
+      return {
+        round: t.rounds.indexOf(r) + 1,
+        label: roundLabel(r),
+        opponent: other ? nameOf(t, other) : null,
+        opponentCode: other ? codeOf(t, other) : null,
+        opensAt: r.opensAt || null,
+        closesAt: r.closesAt || null,
+        open: !r.opensAt || now() >= r.opensAt,
+        roomId: m.state === 'playing' ? m.roomId : null,
+      };
+    }
+  }
+  return null;
+}
+
+const codeOf = (t, token) => t.entrants.find((e) => e.token === token)?.code || null;
+
 /** The match this player is meant to be playing right now, if any. */
 function liveMatchFor(t, token) {
   for (const r of t.rounds) {
@@ -350,6 +423,7 @@ function scrub(t) {
     prize: t.prize,
     maxPlayers: t.maxPlayers || 0,
     joinCode: t.joinCode || '',
+    schedule: t.schedule || null,
     openedAt: t.openedAt,
     closesAt: t.closesAt,
     endedAt: t.endedAt || null,
@@ -400,7 +474,7 @@ function money(v, fallback) {
  * owner presses a button is only ever played by whoever happens to be online
  * at that second; one announced for Sunday at eight can be turned up for.
  */
-export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCode } = {}) {
+export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCode, schedule } = {}) {
   if (state.cups.length >= MAX_LIVE_CUPS) {
     return { error: `That is ${MAX_LIVE_CUPS} cups at once — finish or delete one first` };
   }
@@ -411,6 +485,9 @@ export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCod
     prize: { currency: 'USD', first: 200, second: 100, third: 50 },
     maxPlayers: 0,
     joinCode: '',
+    // Null means the old behaviour: every round opens the moment the last
+    // one finishes and stays open until somebody turns up.
+    schedule: null,
     announcedAt: now(),
     openedAt: now(),
     closesAt: now() + 300 * 1000,
@@ -420,7 +497,7 @@ export function openCup({ name, joinSeconds, prize, opensAt, maxPlayers, joinCod
     paid: {},
   };
   state.cups.push(t);
-  applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode });
+  applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode, schedule });
   save();
   return { ok: true, cup: t };
 }
@@ -442,7 +519,7 @@ export function updateCup(cupId, settings = {}) {
 }
 
 /** The settings a cup takes, in one place, so create and edit cannot drift. */
-function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode } = {}) {
+function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinCode, schedule } = {}) {
   const secs = Math.max(30, Math.min(30 * 86400, Math.floor(Number(joinSeconds) || 300)));
   const wanted = Number(opensAt) || 0;
   // A minute's grace, so "in a moment" is not an announcement nobody sees.
@@ -463,6 +540,19 @@ function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinC
   if (maxPlayers != null) t.maxPlayers = Math.max(0, Math.min(5000, Math.floor(Number(maxPlayers) || 0)));
   // A code makes a cup invite-only. Empty means anyone signed in may join.
   if (joinCode != null) t.joinCode = String(joinCode).trim().slice(0, 16);
+  if (schedule !== undefined) {
+    // An empty times list means "no schedule" — back to rounds that run
+    // straight on from each other.
+    const times = Array.isArray(schedule?.times)
+      ? schedule.times.map(Number).filter((n) => Number.isFinite(n) && n >= 0 && n < 1440)
+        .sort((a, b) => a - b).slice(0, 6)
+      : [];
+    t.schedule = times.length ? {
+      times,
+      windowMinutes: Math.max(2, Math.min(240, Math.floor(Number(schedule.windowMinutes) || 10))),
+      offsetMinutes: Math.max(-840, Math.min(840, Math.floor(Number(schedule.offsetMinutes) || 0))),
+    } : null;
+  }
   t.openedAt = opens;
   t.closesAt = opens + secs * 1000;
   t.state = scheduled ? 'scheduled' : 'joining';
@@ -633,7 +723,16 @@ function drawRound(t, tokens, kindHint) {
   // finish on, which is how a two-player cup used to hang forever.
   const kind = tokens.length === 2 ? 'final' : (kindHint || 'round');
   const { matches, bye } = pairUp(tokens, playedCounts(t));
-  t.rounds.push({ kind, matches, bye, at: now() });
+  // A scheduled cup gives the round a door: it opens at the next appointed
+  // minute and shuts a window later. An unscheduled one opens immediately and
+  // never shuts, which is how every cup behaved before schedules existed.
+  const opensAt = t.schedule ? nextSlot(t.schedule, now() + 60000) : now();
+  const windowMs = Math.max(1, Number(t.schedule?.windowMinutes) || 10) * 60000;
+  t.rounds.push({
+    kind, matches, bye, at: now(),
+    opensAt,
+    closesAt: t.schedule ? opensAt + windowMs : null,
+  });
   // A bye is a walkover: it is recorded as a match nobody had to play, so the
   // bracket reads honestly rather than quietly promoting somebody.
   if (bye) t.rounds[t.rounds.length - 1].matches.push({
@@ -647,6 +746,10 @@ export function matchesNeedingRooms() {
   for (const t of state.cups) {
     if (t.state !== 'running') continue;
     for (const r of t.rounds) {
+      // A round with a door does not open early. Its tables are made at the
+      // appointed minute, so a player who opens the app an hour before is
+      // told when to come back rather than dropped into an empty room.
+      if (r.opensAt && now() < r.opensAt) continue;
       for (const m of r.matches) {
         if (m.state === 'pending' && m.a && m.b) out.push(m);
       }
@@ -745,7 +848,13 @@ export function playingMatches() {
     if (t.state !== 'running') continue;
     for (const r of t.rounds) for (const m of r.matches) {
       if (m.state === 'playing' && m.roomId) {
-        out.push({ id: m.id, roomId: m.roomId, a: m.a, b: m.b, startedAt: m.startedAt || 0 });
+        out.push({
+          id: m.id, roomId: m.roomId, a: m.a, b: m.b, startedAt: m.startedAt || 0,
+          // A scheduled round's door is the deadline, not a fixed wait from
+          // when the table was made: everybody in that round gets the same
+          // ten minutes, whichever minute their table happened to open.
+          deadline: r.closesAt || 0,
+        });
       }
     }
   }

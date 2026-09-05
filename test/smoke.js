@@ -2421,6 +2421,57 @@ console.log('\n▶ tournaments');
     ok('a friend request waits to be answered, asking back accepts it, and only friends can be invited to a table');
   }
 
+  // A scheduled cup plays its rounds at set times: the door opens at the
+  // appointed minute, and turning up is what keeps you in.
+  {
+    while (cup.currentCup()) cup.cancelCup();
+    // Two slots a day, ten minutes each, in this machine's own clock.
+    const mins = (d) => d.getHours() * 60 + d.getMinutes();
+    const soon = new Date(Date.now() + 3 * 60000);
+    const later = new Date(Date.now() + 90 * 60000);
+    cup.openCup({
+      name: 'Nightly', joinSeconds: 60,
+      schedule: { times: [mins(soon), mins(later)], windowMinutes: 10,
+        offsetMinutes: -new Date().getTimezoneOffset() },
+    });
+    const t = cup.currentCup();
+    if (!t?.schedule) fail('cup: a schedule was not kept');
+    const tokens = [];
+    for (let i = 0; i < 4; i++) {
+      const token = `sched-${i}`;
+      social.profileFor(token, { name: `Sched${i}` });
+      social.attachLogin(token, 'test', `sd-${i}`, `Sched${i}`);
+      cup.join(token);
+      tokens.push(token);
+    }
+    cup.closeDoor(t.id);
+    const round = cup.currentCup()?.rounds[0];
+    if (!round?.opensAt) fail('cup: a scheduled round got no opening time');
+    if (round.opensAt <= Date.now()) fail('cup: a scheduled round opened in the past');
+    if (round.closesAt !== round.opensAt + 10 * 60000) fail('cup: the round window was the wrong length');
+    // Nothing is seated before the door opens.
+    if (cup.matchesNeedingRooms().length) fail('cup: tables were made before the round opened');
+    // And the player is told when to come back, and against whom.
+    const you = cup.publicView(tokens[0]).cup?.you;
+    if (!you?.next) fail('cup: a player was not told what their next match is');
+    if (you.next.open) fail('cup: a round that has not opened yet said it was open');
+    if (!you.next.opponent) fail('cup: the next match named no opponent');
+    if (you.next.opensAt !== round.opensAt) fail('cup: the next match named the wrong time');
+
+    // Wind the door open and the tables appear.
+    round.opensAt = Date.now() - 1000;
+    round.closesAt = Date.now() + 60000;
+    if (cup.matchesNeedingRooms().length !== 2) fail('cup: the open door did not seat its tables');
+    // The deadline every table in that round shares is the door, not a
+    // per-table timer.
+    for (const m of cup.matchesNeedingRooms()) cup.matchStarted(m.id, `s-${m.id}`);
+    const live = cup.playingMatches();
+    if (!live.every((m) => m.deadline === round.closesAt)) {
+      fail('cup: a scheduled table did not inherit the round deadline');
+    }
+    ok('a scheduled cup opens each round at its appointed minute, seats nothing early, and tells every player who they play and when');
+  }
+
   // A cup that vanishes the instant it is won never tells the winner they won
   // it, so a finished one stays on the players' screens for a while.
   {
