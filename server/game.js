@@ -267,8 +267,13 @@ export class GameRoom {
     p.connected = true;
     p.botControlled = false;
     this.say(wasBot ? `${p.name} is back and takes over from the bot` : `${p.name} reconnected`, 'join');
+    // Walking back in on your own turn puts you back on the clock. The seat had
+    // none while the house was covering it — a bot cannot run out of time — so
+    // without this a player could reconnect onto their own turn and hold the
+    // table for as long as they liked.
+    if (this.turn?.playerId === id) this.armTurnTimer();
     this.push();
-    // A table that froze when the last human left picks up where it stopped.
+    // A table that stopped when the last human left picks up where it stopped.
     this.maybeBot();
     return true;
   }
@@ -554,7 +559,12 @@ export class GameRoom {
     // courtesy the shot clock already extends to a player alone with their
     // own bots — so the seat simply stays theirs, and the room's own idle
     // reaper decides when the table is over.
-    if (!this.votersFor(p.id).length) {
+    // Nobody else here at all — not even somebody watching from the sidelines.
+    // Anyone with the app open is being kept waiting by this empty chair, out
+    // of the game or not, so a spectator is enough to start the clock. The old
+    // test asked for a player still in the running, which meant a table with
+    // only spectators left held the seat for ever and never resolved.
+    if (!this.present.some((x) => x.id !== p.id)) {
       seat.until = null;
       this.push();
       return;
@@ -2266,8 +2276,29 @@ export class GameRoom {
   }
 
   /** Is there a human here to see any of this? */
+  /**
+   * Everybody real with the app still open — including the ones who are out.
+   *
+   * Being knocked out does not make you furniture. Somebody reading "you're out
+   * of this game — watching how it ends" is at the table, is waiting, and is
+   * the whole reason the game has to keep playing.
+   */
+  get present() {
+    return this.players.filter((p) => !p.isBot && p.connected);
+  }
+
+  /**
+   * Is there anybody to play this out for?
+   *
+   * This used to demand a player who was still IN the game, which read as
+   * "nobody is here" the moment the last surviving player lost their
+   * connection — even with two people sitting there watching. runBot and
+   * maybeBot both stop dead on it, and an auto-played seat is never given a
+   * shot clock (a bot cannot run out of time), so the table simply stopped:
+   * clock on zero, nothing pending, nothing that would ever fire again.
+   */
   get watched() {
-    return this.players.some((p) => !p.isBot && !p.bankrupt && p.connected);
+    return this.present.length > 0;
   }
 
   maybeBot() {
