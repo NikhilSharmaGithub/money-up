@@ -663,7 +663,12 @@ function applySettings(t, { name, joinSeconds, prize, opensAt, maxPlayers, joinC
     // straight on from each other.
     const times = Array.isArray(schedule?.times)
       ? schedule.times.map(Number).filter((n) => Number.isFinite(n) && n >= 0 && n < 1440)
-        .sort((a, b) => a - b).slice(0, 6)
+        // Twelve, not six. Six was arbitrary and it blocked the very size the
+        // desk offers as its default: 256 players is eight rounds, so with a
+        // six-slot ceiling that cup could not be run inside one day however
+        // the owner scheduled it. Two a day is still the default — this only
+        // stops the server refusing a timetable somebody deliberately wrote.
+        .sort((a, b) => a - b).slice(0, 12)
       : [];
     t.schedule = times.length ? {
       times,
