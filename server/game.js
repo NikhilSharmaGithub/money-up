@@ -272,6 +272,15 @@ export class GameRoom {
     // without this a player could reconnect onto their own turn and hold the
     // table for as long as they liked.
     if (this.turn?.playerId === id) this.armTurnTimer();
+    // And re-open every seat that was held without a deadline because, at the
+    // moment it was vacated, there was nobody here to be kept waiting. There
+    // is somebody here now. Without this a table could be left with not one
+    // pending timer anywhere and no way back — the person who came to watch
+    // being the only one who could have started it, and having no button.
+    for (const q of this.players) {
+      if (q.isBot || q.connected || q.bankrupt) continue;
+      if (this.awaiting?.[q.id] && !this.awaiting[q.id].until) this.holdSeat(q, RECONNECT_GRACE_MS);
+    }
     this.push();
     // A table that stopped when the last human left picks up where it stopped.
     this.maybeBot();
@@ -846,7 +855,14 @@ export class GameRoom {
     // A shot clock exists so nobody is left waiting on an empty chair. Playing
     // against bots you added yourself, there is nobody to keep waiting — and
     // being hurried by your own bots would just be rude.
-    if (!this.quick && this.humans.length < 2) { this.turn.endsAt = null; return; }
+    // Anybody real in the room, not anybody still winning it. This asked for
+    // two surviving HUMANS, so a private table where everyone but one player
+    // had been knocked out switched its shot clock off entirely — and if that
+    // last player then put their phone down, the seat had no clock, no bot
+    // cover (a seat is only covered when the turn ARRIVES at an absent chair)
+    // and no grace, while the people they knocked out sat watching a board
+    // that would never move again.
+    if (!this.quick && this.present.length < 2) { this.turn.endsAt = null; return; }
 
     // Every turn carries a visible deadline, including the seats the house is
     // playing — a clock that blinks out on some turns reads as broken, and on
@@ -868,6 +884,13 @@ export class GameRoom {
     if (this.turn?.playerId !== id) return;
     const p = this.player(id);
     if (!p || p.bankrupt || this.autoPlayed(p)) return;
+    // Not while an auction is running. Sending a street to auction and then
+    // passing leaves you with nothing to do and no button to press, while
+    // every bid anybody else makes extends the auction another twelve seconds
+    // — so the shot clock, which is measuring your dawdling, was measuring
+    // somebody else's bidding war and throwing you out of the game for it.
+    // finishAuction hands the clock back the moment the hammer falls.
+    if (this.auction) return;
     this.say(`${p.name} ran out of time and was removed`, 'leave');
     this.removeFromPlay(p, 'timeout');
   }
@@ -1704,6 +1727,10 @@ export class GameRoom {
     clearTimeout(this.timers.auction);
     this.auction = null;
     this.auctionCaps = {};
+    // The player on turn was excused the shot clock while this ran. Give it
+    // back now, fresh — they have been sitting through somebody else's
+    // bidding war and should not lose their turn to the leftover of it.
+    if (this.status === 'playing' && this.turn) this.armTurnTimer();
     // A game that ended mid-countdown has nothing left to award.
     if (this.status !== 'playing') return { ok: true };
     const t = this.tile(a.tile);
@@ -2060,6 +2087,14 @@ export class GameRoom {
     this.trades.splice(idx, 1);
     const from = this.player(trade.from);
     const to = this.player(trade.to);
+    // One of them is no longer at the table. Every line below reads a name off
+    // both, and this runs from a bare setTimeout — so a null here was not a
+    // failed trade, it was an uncaught TypeError inside a timer, which in Node
+    // takes the process down and every live table on the box with it.
+    if (!from || !to) {
+      this.push();
+      return { error: 'They have left the table' };
+    }
     if (!accept) {
       // The asker remembers what they were refused, so the table doesn't spend
       // the rest of the game watching the same offer bounce back and forth.

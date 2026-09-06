@@ -1375,6 +1375,21 @@ setInterval(() => {
 
 // Reap idle rooms every couple of minutes — bots playing to an empty
 // theatre burn a timer a second for nobody.
+/**
+ * Is anything at all still due to happen to this table?
+ *
+ * Every way a game moves itself on is a timer hanging off the room: the shot
+ * clock, the bot, the auction countdown, a held seat. None pending, with the
+ * game still marked as playing, means it has stopped.
+ */
+function roomHasWork(room) {
+  if (room.auction) return true;
+  for (const t of Object.values(room.timers || {})) {
+    if (t && typeof t === 'object') return true;
+  }
+  return false;
+}
+
 setInterval(() => {
   // A socket that left without a goodbye would otherwise keep its last state
   // alive forever; io still knows who is actually in the building.
@@ -1384,11 +1399,41 @@ setInterval(() => {
   for (const [id, room] of rooms) {
     const live = socketsOf.get(id)?.size || 0;
     const idleFor = Date.now() - (room.lastSeen || room.createdAt);
+
+    // ---- the watchdog ----------------------------------------------------
+    // The turn loop stays alive by about eight conditions holding at once,
+    // spread across the shot clock, the bot driver, the auction and the seat
+    // grace. Each one is individually careful and the same mistake has now
+    // been found in four of them. So rather than trust all eight for ever,
+    // ask the only question that actually matters: is anything at all due to
+    // happen to this table?
+    //
+    // If a game is running, somebody is in the room, and there is not one
+    // pending timer anywhere on it, then nothing will ever move again. A bare
+    // nextTurn() is enough and it heals permanently — the turn landing on an
+    // absent chair is exactly what marks that chair bot-covered, which is the
+    // cover the seat could not be given before.
+    if (room.status === 'playing' && live > 0 && !roomHasWork(room)) {
+      const stuck = (room.stalledSince ||= Date.now());
+      if (Date.now() - stuck > 20_000) {
+        room.stalledSince = null;
+        console.warn(`room ${id}: nothing was due to happen — poking the turn on`);
+        try { room.nextTurn(); } catch (err) { console.error(`room ${id}: poke failed:`, err); }
+      }
+    } else {
+      room.stalledSince = null;
+    }
     // A table nobody is watching holds still by itself now, so letting it sit
     // costs nothing but the object. Give people a real chance to come back to
     // the game they were in — a lunch break, a train tunnel — and only then
     // call it over. The room itself lingers for the usual half hour.
-    if (live === 0 && room.status === 'playing' && idleFor > 10 * 60 * 1000) {
+    // Nobody who is actually IN this game is attached. Counting raw sockets
+    // meant a stranger who followed a link to a full table — seated nowhere,
+    // in none of the room's own collections — kept the room alive for ever,
+    // so the one table that had genuinely been abandoned was the one table
+    // that could never be cleaned up.
+    const anyPlayerHere = room.players.some((p) => !p.isBot && p.connected);
+    if (!anyPlayerHere && room.status === 'playing' && idleFor > 10 * 60 * 1000) {
       // A cup table cannot just be switched off. The result is recorded by
       // recordTransitions, which only ever runs from broadcast() — so ending
       // one here left its match "playing" for ever, invisible to the sweeper
