@@ -1276,6 +1276,8 @@ function seatCupMatches() {
  * empty table otherwise holds up every other player's evening.
  */
 const CUP_NO_SHOW_MS = 8 * 60 * 1000;
+/** How long before a door shuts anybody still missing gets one last nudge. */
+const CUP_LAST_CALL_MS = 3 * 60 * 1000;
 
 /**
  * Tables nobody opened. A match that has started playing is left completely
@@ -1317,6 +1319,21 @@ function sweepCupNoShows() {
       continue;
     }
 
+    // Three minutes before a scheduled door shuts, anybody not yet in their
+    // seat gets one last nudge. This is the only reminder that needs to know
+    // who is actually in the room, which is why it lives here and not with
+    // the others in the tournament's own calendar.
+    if (m.deadline && !m.toldLast && now >= m.deadline - CUP_LAST_CALL_MS && now < m.deadline) {
+      cup.noteLastCall(m.id);
+      const mins = Math.max(1, Math.round((m.deadline - now) / 60000));
+      for (const token of [m.a, m.b]) {
+        if (token && !room?.player(token)) {
+          sendTurnPush(token, `${mins} minute${mins === 1 ? '' : 's'} left to take your seat — miss it and you are out of the cup.`,
+            { collapseId: `cup:last:${m.roomId}` });
+        }
+      }
+    }
+
     // A scheduled round shuts its own door; everything else waits the flat
     // eight minutes it always did.
     const due = m.deadline ? now >= m.deadline : now - (m.startedAt || 0) >= CUP_NO_SHOW_MS;
@@ -1349,6 +1366,9 @@ setInterval(() => {
     // could seat four dead tables and void all four microseconds later.
     sweepCupNoShows();
     seatCupMatches();
+    // Then say whatever the calendar has to say: the draw, a quarter of an
+    // hour's warning, and how somebody's tournament ended.
+    for (const r of cup.remindersDue()) sendTurnPush(r.token, r.text, { collapseId: r.collapseId });
     cup.prune();
   } catch (e) { console.warn('cup tick:', e.message); }
 }, 5000).unref?.();

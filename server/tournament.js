@@ -1008,6 +1008,18 @@ export function matchFinished(roomId, winnerToken, worth = null) {
  * walkover, and a table neither of them opened is void — the entrants are
  * out and the bracket carries on a place short. Pass null for that.
  */
+/**
+ * Remember that the last call went out for a table, so it goes out once.
+ *
+ * Written on the match rather than held in memory: a redeploy in the last
+ * minutes of a window must not shout at everybody a second time.
+ */
+export function noteLastCall(matchId) {
+  for (const t of state.cups) for (const r of t.rounds) for (const m of r.matches) {
+    if (m.id === matchId) { m.toldLast = true; save(); return; }
+  }
+}
+
 export function forfeit(roomId, winnerToken = null) {
   const t = cupOfRoom(roomId);
   if (!t || t.state !== 'running') return null;
@@ -1017,6 +1029,139 @@ export function forfeit(roomId, winnerToken = null) {
   const winner = [m.a, m.b].includes(winnerToken) ? winnerToken : null;
   m.walkover = true;
   return decide(t, found, winner, { void: !winner });
+}
+
+// ─────────────────────────────────────────────────────────── reminders ──
+// A round's door is open for ten minutes and missing it puts you out of the
+// tournament. One message at the moment the table appears is not enough for
+// that — somebody whose phone is in a pocket has ten minutes to notice, and
+// the whole design rests on them noticing.
+//
+// So a cup speaks four times per round: when the draw is made and you learn
+// who and roughly when, a quarter of an hour before it opens, the moment your
+// table exists, and once more if the door is about to shut with you not in it.
+// Then once at the end, either way, because being knocked out is news too.
+//
+// Every line is RELATIVE — "in about 3 hours", "tomorrow". The cup's times are
+// set in the owner's clock and a player in London reading "20:00" for a cup run
+// from Delhi would be wrong by four and a half hours. The app has their own
+// local time on the card; a push only has to get them to it.
+
+/** How far off something is, in words anybody's timezone agrees with. */
+function awayText(ms) {
+  if (ms <= 60_000) return 'now';
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `in ${mins} minute${mins === 1 ? '' : 's'}`;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 20) return `in about ${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(ms / 86_400_000);
+  return days <= 1 ? 'tomorrow' : `in ${days} days`;
+}
+
+/** Fifteen minutes' warning before a door opens. */
+const REMIND_LEAD_MS = 15 * 60 * 1000;
+
+/**
+ * Everything the cup wants to say to somebody right now.
+ *
+ * Pure of the room map on purpose — this is the half that only needs the
+ * calendar. The one reminder that depends on who is actually sitting down (the
+ * last call before a door shuts) is sent from the sweeper, which is the only
+ * place that knows.
+ *
+ * What has been said is written on the cup itself rather than kept in memory,
+ * so a redeploy in the middle of a tournament does not tell three hundred
+ * people the same thing twice.
+ */
+export function remindersDue(when = now()) {
+  const out = [];
+  const say = (token, text, collapseId) => { if (token) out.push({ token, text, collapseId }); };
+
+  for (const t of state.cups) {
+    if (t.state !== 'running') continue;
+
+    for (let i = 0; i < t.rounds.length; i++) {
+      const r = t.rounds[i];
+      if (!r.opensAt) continue;
+      r.told ||= {};
+      const label = roundLabel(r) || 'match';
+
+      // A round already finished with is not news. Mark it said and move on,
+      // so shipping this into a cup mid-flight cannot shout about the past.
+      if ((r.closesAt && when > r.closesAt) || r.matches.every((m) => m.state === 'done')) {
+        r.told.drawn = true;
+        r.told.soon = true;
+        continue;
+      }
+
+      // 1. The draw is out: who, and roughly when.
+      if (!r.told.drawn) {
+        r.told.drawn = true;
+        for (const m of r.matches) {
+          if (m.walkover && !m.b) {
+            say(m.a, `A bye — you go straight through to the ${label.toLowerCase()}.`,
+              `cup:${t.id}:r${i}:draw`);
+            continue;
+          }
+          for (const token of [m.a, m.b]) {
+            const other = nameOf(t, m.a === token ? m.b : m.a) || 'your opponent';
+            say(token, i === 0
+              ? `The draw is out — your ${label} is ${awayText(r.opensAt - when)}, against ${other}. Miss the window and you are out.`
+              : `You are through! ${label} ${awayText(r.opensAt - when)}, against ${other}.`,
+              `cup:${t.id}:r${i}:draw`);
+          }
+        }
+      }
+
+      // 2. A quarter of an hour's warning.
+      if (!r.told.soon && when >= r.opensAt - REMIND_LEAD_MS && when < r.opensAt) {
+        r.told.soon = true;
+        const mins = Math.max(1, Math.round((r.opensAt - when) / 60000));
+        const shut = r.closesAt ? Math.round((r.closesAt - r.opensAt) / 60000) : 0;
+        for (const m of r.matches) {
+          if (m.state === 'done') continue;
+          for (const token of [m.a, m.b]) {
+            say(token, `Your ${label} starts in ${mins} minutes.`
+              + (shut ? ` The door is open ${shut} minutes — be in the app.` : ''),
+              `cup:${t.id}:r${i}:soon`);
+          }
+        }
+      }
+    }
+
+  }
+
+  // 3. It is over for you, one way or the other.
+  //
+  // Over the finished cups as well as the live ones, because a cup retires
+  // into history the instant its final is decided — so scanning only what is
+  // live meant the one person who most deserved a message, the winner, was
+  // the one person who never got one. Two hours' worth of history: enough to
+  // catch a cup that ended while the process was being redeployed, not enough
+  // to shout at somebody about a tournament from last week.
+  const recent = state.history.filter((h) => h.endedAt && when - h.endedAt < 2 * 60 * 60 * 1000);
+  for (const t of [...state.cups, ...recent]) {
+    for (const e of (t.entrants || [])) {
+      // A placing is checked first and swallows the elimination: losing the
+      // final and finishing second are the same event, and being told both
+      // reads as a machine talking rather than a tournament.
+      if (e.placed && !e.toldWon) {
+        e.toldWon = true;
+        e.toldOut = true;
+        say(e.token, e.placed === 'first'
+          ? `You won ${t.name}. The prize is paid by hand — keep your friend code.`
+          : `You finished ${e.placed} in ${t.name}. The prize is paid by hand — keep your friend code.`,
+          `cup:${t.id}:done`);
+      } else if (e.out && !e.toldOut) {
+        e.toldOut = true;
+        say(e.token, `You are out of ${t.name}. Thanks for playing — there will be another.`,
+          `cup:${t.id}:done`);
+      }
+    }
+  }
+
+  if (out.length) save();
+  return out;
 }
 
 /** Every playing match, with the time its table opened. For the sweeper. */
@@ -1035,6 +1180,8 @@ export function playingMatches() {
           // When this game must be over — the same number the player was
           // shown, from the same function.
           decideAt: whistleFor(t, r, m) || 0,
+          // Whether the "door is about to shut" nudge has already gone out.
+          toldLast: !!m.toldLast,
         });
       }
     }
