@@ -2289,19 +2289,39 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------- chat --
-  sendChat(id, text, channel) {
+  sendChat(id, text, channel, { auto = false } = {}) {
     const p = this.player(id);
     if (!p || !text) return;
     // The team channel only exists when teams do; anything else lands in 'all'.
     const ch = channel === 'team' && this.teamsOn && p.team != null ? 'team' : 'all';
     const msg = {
       id: Math.random().toString(36).slice(2), name: p.name, color: p.color, flag: p.flag || '',
+      // Who said it, by public friend code — so the reader can report or block
+      // them. Anything the server wrote itself gets a stand-in instead.
+      code: this.chatCodeOf(p, auto),
       text: cleanText(String(text).slice(0, 200)), at: Date.now(),
       channel: ch, team: ch === 'team' ? p.team : null,
     };
     this.chat.push(msg);
     if (this.chat.length > 100) this.chat.shift();
     this.push();
+  }
+
+  /**
+   * The code a chat line is signed with.
+   *
+   * A real player's line carries their friend code. A house player's line — and
+   * banter the server speaks for a seat it is covering — carries a stand-in that
+   * is stable for the table, so it can be reported or hidden like anyone else's,
+   * but it points at no real person: a human whose seat a bot was minding must
+   * not be blamed for words the server wrote. Real codes are drawn from an
+   * alphabet with no zero, so an H0 code can never collide with one.
+   */
+  chatCodeOf(p, auto = false) {
+    if (auto || p.isBot) {
+      return 'H0' + createHash('sha1').update(`${this.id}:${p.id}`).digest('hex').slice(0, 4).toUpperCase();
+    }
+    return this.hooks.codeOf?.(p.id) || null;
   }
 
   // -------------------------------------------------------------------- bots --
@@ -2441,7 +2461,7 @@ export class GameRoom {
     this.chatter.per[p.id] = now;
     // Typing takes a moment, and the pause is what sells it.
     const timer = setTimeout(() => {
-      if (this.player(p.id)) this.sendChat(p.id, line, 'all');
+      if (this.player(p.id)) this.sendChat(p.id, line, 'all', { auto: true });
     }, delay + Math.random() * 900);
     timer.unref?.();
   }

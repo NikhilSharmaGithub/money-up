@@ -694,7 +694,19 @@ export const adminPageHTML = `<!doctype html>
         <button class="danger" id="m-go">Ban this device</button>
         <div class="msg" id="modmsg"></div>
       </div>
+      <div class="card">
+        <h2>Delete an account</h2>
+        <p class="hint">For someone who emails asking. Removes their profile, coins, friends and messages for good; purchase records stay with the identity removed.</p>
+        <div class="field"><label for="del-code">Friend code</label><input id="del-code" autocomplete="off" spellcheck="false" placeholder="e.g. QK7M2X"></div>
+        <button class="danger" id="del-go">Delete this account</button>
+        <div class="msg" id="delmsg"></div>
+      </div>
     </div>
+    <section class="card">
+      <h2>Player reports <span class="count" id="reportcount"></span></h2>
+      <p class="hint">What players reported from chat, messages and friend requests. The quoted text is what the reporter says they saw. Apple expects reports to be acted on promptly.</p>
+      <div class="scroll" style="max-height:420px"><table><tbody id="reportsT"></tbody></table></div>
+    </section>
     <section class="card">
       <h2>Banned devices <span class="count" id="bancount"></span></h2>
       <div class="scroll" style="max-height:280px"><table><tbody id="bansT"></tbody></table></div>
@@ -2290,6 +2302,26 @@ export const adminPageHTML = `<!doctype html>
     if (!bans.length) html += '<tr><td colspan="5" class="dim">Nobody is banned.</td></tr>';
     swap('bansT', html);
 
+    var reports = mod.reports || [];
+    var open = reports.filter(function (r) { return r.status === 'open'; }).length;
+    document.getElementById('reportcount').textContent = open ? open + ' open' : (reports.length || '');
+    var rh = '<tr><th>when</th><th>reason</th><th>about</th><th>what they saw</th><th>from</th><th>status</th><th></th></tr>';
+    reports.forEach(function (r) {
+      var pill = r.status === 'open' ? 'bad' : (r.status === 'actioned' ? 'warn' : 'dim');
+      rh += '<tr><td>' + fmtWhen(r.at) + '</td>' +
+        '<td>' + esc(r.reason) + ' <span class="dim">in ' + esc(r.where) + '</span></td>' +
+        '<td class="mono">' + esc(r.about) + (r.aboutName ? ' <span class="dim">' + esc(r.aboutName) + '</span>' : '') + '</td>' +
+        '<td>' + esc(r.text || '—') + '</td>' +
+        '<td class="mono">' + esc(r.from) + '</td>' +
+        '<td><span class="pill ' + pill + '">' + esc(r.status) + '</span></td>' +
+        '<td>' + (r.status === 'open'
+          ? '<button class="danger sm" data-rban="' + esc(r.about) + '" data-rid="' + esc(r.id) + '">Ban</button> ' +
+            '<button class="btn ghost sm" data-rclose="' + esc(r.id) + '">Close</button>'
+          : '') + '</td></tr>';
+    });
+    if (!reports.length) rh += '<tr><td colspan="7" class="dim">No reports yet.</td></tr>';
+    swap('reportsT', rh);
+
     var audit = (mod.audit || []).slice().reverse();
     document.getElementById('auditcount').textContent = audit.length || '';
     var ah = '<tr><th>when</th><th>action</th><th>target</th><th>detail</th></tr>';
@@ -2481,6 +2513,24 @@ export const adminPageHTML = `<!doctype html>
       kickSeat(el.getAttribute('data-room'), el.getAttribute('data-kick'), function (r) {
         if (!(r && r.ok)) alert((r && r.error) || 'Kick failed.');
         refresh();
+      });
+      return;
+    }
+
+    el = t.closest('[data-rclose]');
+    if (el) {
+      post('/api/admin/reports/resolve', { id: el.getAttribute('data-rclose'), status: 'closed' }, function () { refresh(); });
+      return;
+    }
+
+    el = t.closest('[data-rban]');
+    if (el) {
+      var rcode = el.getAttribute('data-rban');
+      var rid = el.getAttribute('data-rid');
+      if (!confirm('Ban ' + rcode + ' because of this report?')) return;
+      banDevice(rcode, 'reported by players', function (r) {
+        setMsg('modmsg', r && r.ok ? 'Banned ' + rcode + '.' : ((r && r.error) || 'Ban failed.'), !!(r && r.ok));
+        post('/api/admin/reports/resolve', { id: rid, status: 'actioned' }, function () { refresh(); });
       });
       return;
     }
@@ -3094,6 +3144,19 @@ export const adminPageHTML = `<!doctype html>
         slots: { doubleWin: adFieldText('ad-h5-dw'), freeCoins: adFieldText('ad-h5-fc') },
       },
     }, 'adprovmsg');
+  });
+
+  document.getElementById('del-go').addEventListener('click', function () {
+    var code = document.getElementById('del-code').value.trim().toUpperCase();
+    if (!code) { setMsg('delmsg', 'Enter a friend code first.', false); return; }
+    if (!confirm('Permanently delete the account ' + code + '? This cannot be undone.')) return;
+    post('/api/admin/account/delete', { code: code }, function (r) {
+      if (r && r.ok && r.deleted) {
+        setMsg('delmsg', 'Deleted ' + code + '.', true);
+        document.getElementById('del-code').value = '';
+        refresh();
+      } else setMsg('delmsg', (r && r.error) || 'Nothing was deleted for ' + code + '.', false);
+    });
   });
 
   document.getElementById('m-go').addEventListener('click', function () {

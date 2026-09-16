@@ -1312,6 +1312,30 @@ function abandon(t) {
   save();
 }
 
+/**
+ * A player deleted their account. Their name and code come off every cup they
+ * were in — the live ones and the finished ones — while the token itself stays
+ * on the match, so a round they were drawn into still resolves as a no-show
+ * rather than breaking halfway through.
+ */
+export function forgetPlayer(token) {
+  if (!token) return;
+  let touched = false;
+  for (const t of [...state.cups, ...state.history]) {
+    const e = (t.entrants || []).find((x) => x.token === token);
+    if (!e) continue;
+    const oldCode = e.code;
+    e.name = 'Deleted player';
+    e.code = null;
+    for (const k of ['first', 'second', 'third']) {
+      const card = t.standings?.[k];
+      if (card && oldCode && card.code === oldCode) t.standings[k] = { ...card, code: null, name: 'Deleted player' };
+    }
+    touched = true;
+  }
+  if (touched) save();
+}
+
 const entrantCard = (t, token) => {
   const e = t.entrants.find((x) => x.token === token);
   return e ? { code: e.code, name: e.name } : null;

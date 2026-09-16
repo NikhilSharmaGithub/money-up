@@ -16,6 +16,7 @@ import {
   inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
   sendNotice, noticesFor, markNoticesRead, allNotices, dropNotice,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
+  blockPlayer, unblockPlayer, reportPlayer, reportsView, resolveReport, deleteAccount, guestTokensOf,
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
   ownedTally, dataFiles,
@@ -210,6 +211,64 @@ app.post('/api/notices/read', (req, res) => {
 app.post('/api/invite/clear', (req, res) => {
   res.json(clearInvite(String(req.body?.token || '').slice(0, 64)));
 });
+
+// ---- safety ---------------------------------------------------------------
+// Block and report, from chat, a message thread or a friends row. Both need
+// only a friend code: the app never learns anyone's device token, and the
+// server never sends one.
+app.post('/api/block', (req, res) => {
+  const result = blockPlayer(String(req.body?.token || '').slice(0, 64), req.body?.code);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/unblock', (req, res) => {
+  const result = unblockPlayer(String(req.body?.token || '').slice(0, 64), req.body?.code);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.post('/api/report', (req, res) => {
+  const { token, code, reason, where, text } = req.body || {};
+  const result = reportPlayer(String(token || '').slice(0, 64), code, { reason, where, text });
+  if (result.error) return res.status(400).json(result);
+  // The values the server stored, not the ones the client sent — a raw body
+  // field in a log line is a way to write fake lines into the log.
+  console.log(`report: ${result.id} — ${result.reason} in ${result.where}`);
+  audit('report', result.id, `${result.reason} in ${result.where}`);
+  res.json(result);
+});
+
+/** Delete this account, from inside the app. */
+app.post('/api/account/delete', (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 64);
+  if (!token) return res.status(400).json({ error: 'Missing identity' });
+  res.json(eraseAccount(token, 'a player deleted their account from the app'));
+});
+
+/**
+ * Everything deleting a person involves, in the order it has to happen.
+ *
+ * Out of any table first: a seat that outlives its account would award karma
+ * or a payout to it seconds later, and that is exactly how a deleted profile
+ * comes back. Then out of any cup still taking entries, then their name off
+ * every cup they were in, then the account itself — the owner's seats on this
+ * device and the pass & play guests alongside it.
+ */
+function eraseAccount(token, why) {
+  for (const t of [token, ...guestTokensOf(token)]) {
+    const live = rooms.get(roomOf(t) || '');
+    try { if (live?.player(t)) live.quit(t); } catch (err) { console.error('erase: quit failed', err); }
+    clearPresence(t);
+    for (const c of cup.liveCups()) {
+      if (c.state === 'joining' && c.entrants?.some((e) => e.token === t)) cup.leave(t, c.id);
+    }
+    cup.forgetPlayer(t);
+  }
+  const result = deleteAccount(token);
+  if (result.deleted) audit('account', 'deleted', why);
+  return result;
+}
 
 // ---- friend chat (DMs, polled) -------------------------------------------
 app.post('/api/dm', (req, res) => {
@@ -755,6 +814,8 @@ app.get('/api/admin/data', (req, res) => {
     moderation: {
       bans: bansView(),
       audit: auditLog.slice(-300),
+      // What players reported, newest first — codes only.
+      reports: reportsView(),
     },
     system: {
       uptimeSec: Math.floor(process.uptime()),
@@ -899,6 +960,32 @@ app.get('/api/admin/notices', (req, res) => {
   res.json({ notices: allNotices() });
 });
 
+/**
+ * Delete somebody's account on their behalf — the privacy page promises it to
+ * anyone who emails their friend code.
+ */
+app.post('/api/admin/account/delete', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  const token = tokenForCode(code);
+  if (!token) return res.status(400).json({ error: 'No player with that code' });
+  res.json({ ...eraseAccount(token, `deleted ${code} on request`), code });
+});
+
+/** What players have reported, newest first. Codes only, never tokens. */
+app.get('/api/admin/reports', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  res.json({ reports: reportsView() });
+});
+
+app.post('/api/admin/reports/resolve', (req, res) => {
+  if (!adminBodyGuard(req, res)) return;
+  const result = resolveReport(String(req.body?.id || ''), req.body?.status);
+  if (result.error) return res.status(400).json(result);
+  audit('report', String(req.body?.id || ''), `marked ${req.body?.status || 'closed'}`);
+  res.json({ ...result, reports: reportsView() });
+});
+
 /** Grant coins to a friend code — recorded in the ledger as provider 'admin'. */
 app.post('/api/admin/credit', (req, res) => {
   if (!adminBodyGuard(req, res)) return;
@@ -1032,6 +1119,9 @@ function getRoom(id) {
   const room = new GameRoom(id, broadcast);
   // Walking out on a live table, or letting the clock run out, costs karma.
   room.hooks.karma = (token, delta) => bumpKarma(token, delta);
+  // A chat line carries its sender's public friend code, so the person
+  // reading it can report or block them. The code, never the token.
+  room.hooks.codeOf = (token) => codeForToken(token);
   // Boards are stock. The wallet is read at the moment of the tap rather than
   // cached on the room, because a board bought mid-lobby has to be usable in
   // the same breath — the shop closes and the board is right there.

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomName } from './names.js';
 import { itemById } from './store.js';
+import { cleanText, isAllMasked } from './banter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Render's filesystem is wiped on every deploy — point DATA_DIR at a
@@ -30,6 +31,15 @@ const profiles = new Map();
 const byCode = new Map();
 /** token -> { roomId, at } */
 const presence = new Map();
+/**
+ * Every App Store transaction id that has ever paid out, on any profile.
+ *
+ * The dedupe used to live on the buyer's own profile, which is exactly the
+ * thing account deletion removes — so a player could buy a pack, delete their
+ * account, and redeem the same receipt again on the fresh identity the app
+ * hands them. It lives here now, outside any one player, and it outlives them.
+ */
+const redeemed = new Set();
 
 // ---------------------------------------------------------------- storage --
 function load() {
@@ -38,11 +48,20 @@ function load() {
     for (const p of raw.profiles || []) {
       profiles.set(p.token, p);
       byCode.set(p.code, p.token);
+      for (const txn of p.purchases || []) redeemed.add(txn);
+      // Names are filtered when they are written now; ones written before
+      // that are filtered once here, so an old slur doesn't stay on a board.
+      if (p.name) {
+        const clean = cleanText(String(p.name).slice(0, 16));
+        p.name = isAllMasked(clean) ? 'Player' : clean;
+      }
     }
+    for (const txn of raw.redeemed || []) redeemed.add(txn);
     for (const [key, thread] of Object.entries(raw.dms || {})) {
       dms.set(key, thread);
     }
     if (Array.isArray(raw.notices)) notices.push(...raw.notices);
+    if (Array.isArray(raw.reports)) reports.push(...raw.reports);
     console.log(`  social: restored ${profiles.size} profile(s)`);
   } catch {
     // first run, or the store was wiped by a redeploy — start fresh
@@ -59,6 +78,8 @@ function save() {
         profiles: [...profiles.values()],
         dms: Object.fromEntries(dms),
         notices: notices.slice(0, MAX_NOTICES),
+        reports: reports.slice(0, MAX_REPORTS),
+        redeemed: [...redeemed],
       }));
     } catch (err) {
       console.warn('social: could not persist profiles —', err.message);
@@ -146,7 +167,13 @@ export function profileFor(token, { name, flag } = {}) {
     profiles.set(token, p);
     byCode.set(code, token);
   }
-  if (name) p.name = String(name).slice(0, 16);
+  if (name) {
+    // The same filter the table chat uses. A name is shown to strangers on
+    // every board it sits at, so it is held to at least the standard a
+    // single chat line is.
+    const clean = cleanText(String(name).slice(0, 16));
+    p.name = isAllMasked(clean) ? 'Player' : clean;
+  }
   if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
   // The wallet rides on the profile: coins earned by winning, cosmetics
   // bought in the store, and what's currently equipped.
@@ -174,6 +201,10 @@ export function profileFor(token, { name, flag } = {}) {
 
 /** Politeness score, 0–100. Leaving a live game or timing out costs a point. */
 export function bumpKarma(token, delta) {
+  // Karma belongs to somebody who exists. A seat can outlive its account by a
+  // few seconds — a game still settling after its owner deleted themselves —
+  // and minting a profile here would bring the deleted account straight back.
+  if (!profiles.has(token)) return null;
   const p = profileFor(token);
   if (!p) return null;
   p.karma = Math.max(0, Math.min(KARMA_MAX, p.karma + delta));
@@ -210,10 +241,11 @@ export function creditPurchase(token, transactionId, coins, meta = {}) {
   if (!p) return { error: 'Unknown player' };
   const txn = String(transactionId || '');
   if (!txn) return { error: 'Missing transaction' };
-  if (p.purchases.includes(txn)) return { ok: true, coins: p.coins, duplicate: true };
+  if (p.purchases.includes(txn) || redeemed.has(txn)) return { ok: true, coins: p.coins, duplicate: true };
   const amount = Math.max(0, Math.floor(Number(coins) || 0));
   if (!amount) return { error: 'Nothing to credit' };
   p.purchases.push(txn);
+  redeemed.add(txn);
   if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
   p.coins += amount;
   appendLedger({
@@ -231,8 +263,10 @@ export function creditPurchase(token, transactionId, coins, meta = {}) {
 
 /** Winning pays out — a coin or two, longer games pay the bigger purse. */
 export function awardCoins(token, amount) {
+  // The same rule as karma: a payout never creates the person it pays.
+  if (!profiles.has(token) || amount <= 0) return null;
   const p = profileFor(token);
-  if (!p || amount <= 0) return null;
+  if (!p) return null;
   p.coins += amount;
   save();
   return p.coins;
@@ -833,7 +867,8 @@ export function sendDM(token, rawCode, text) {
   const them = themToken ? profiles.get(themToken) : null;
   if (!me || !them) return { error: 'Unknown player' };
   if (!me.friends.includes(code)) return { error: 'You can only message friends' };
-  const clean = String(text || '').slice(0, 300).trim();
+  if (blockedEitherWay(me, them)) return { error: 'You can only message friends' };
+  const clean = cleanText(String(text || '').slice(0, 300)).trim();
   if (!clean) return { error: 'Empty message' };
   const key = dmKey(me.code, code);
   const thread = dms.get(key) || [];
@@ -857,6 +892,173 @@ export function dmsWith(token, rawCode) {
 
 export function dmThreads() { return dms; }
 
+// ------------------------------------------------------- safety: block/report --
+//
+// Anybody who can talk to strangers needs two things the moment somebody is
+// unpleasant: a way to make them go away, and a way to tell whoever runs the
+// place. Blocking is the first and takes effect at once — no friendship, no
+// requests, no messages, and their chat hidden on your screen. Reporting is
+// the second, and it lands on the owner's desk with enough context to act on.
+
+/** Did either of these two block the other? Direction never matters here. */
+function blockedEitherWay(a, b) {
+  if (!a || !b) return false;
+  return (a.blocked || []).includes(b.code) || (b.blocked || []).includes(a.code);
+}
+
+export function blockPlayer(token, rawCode) {
+  const me = profileFor(token);
+  if (!me) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  if (!code || !isCode(code)) return { error: 'Pick a player' };
+  if (code === me.code) return { error: "You can't block yourself" };
+  me.blocked ??= [];
+  if (!me.blocked.includes(code)) me.blocked.push(code);
+  if (me.blocked.length > 500) me.blocked.splice(0, me.blocked.length - 500);
+  // Everything that connected the two of you goes, both ways.
+  pending(me);
+  me.friends = me.friends.filter((c) => c !== code);
+  me.wants = me.wants.filter((c) => c !== code);
+  me.asked = me.asked.filter((c) => c !== code);
+  const them = profiles.get(byCode.get(code));
+  if (them) {
+    pending(them);
+    them.friends = them.friends.filter((c) => c !== me.code);
+    them.wants = them.wants.filter((c) => c !== me.code);
+    them.asked = them.asked.filter((c) => c !== me.code);
+    if (invites.get(them.token)?.from === me.code) invites.delete(them.token);
+  }
+  if (invites.get(token)?.from === code) invites.delete(token);
+  save();
+  return { ok: true, blocked: [...me.blocked] };
+}
+
+export function unblockPlayer(token, rawCode) {
+  const me = profiles.get(token);
+  if (!me) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  me.blocked = (me.blocked || []).filter((c) => c !== code);
+  save();
+  return { ok: true, blocked: [...me.blocked] };
+}
+
+/** @type {{id:string, at:number, from:string, about:string, reason:string, where:string, text:string, status:string}[]} */
+const reports = [];        // newest first
+const MAX_REPORTS = 1000;
+const REPORT_REASONS = ['abuse', 'hate', 'sexual', 'spam', 'cheating', 'name', 'other'];
+
+/**
+ * Tell the owner. `text` is the message being reported, quoted as the
+ * reporter saw it; `where` is chat, dm, friend or name.
+ */
+export function reportPlayer(token, rawCode, { reason, where, text } = {}) {
+  // Somebody who has actually played — reading an existing profile rather
+  // than minting one, so a script with a thousand fresh tokens cannot fill
+  // the queue and push genuine reports out of it.
+  const me = token ? profiles.get(token) : null;
+  if (!me) return { error: 'Unknown player' };
+  const code = asCode(rawCode);
+  if (!code || !isCode(code) || code === me.code) return { error: 'Pick a player' };
+  // A report box is also a way to flood an inbox. Twenty a day is far more
+  // than anybody honestly needs.
+  const today = Date.now() - 24 * 60 * 60 * 1000;
+  if (reports.filter((r) => r.from === me.code && r.at > today).length >= 20) {
+    return { error: 'You have sent a lot of reports today — we are looking at them' };
+  }
+  const report = {
+    id: Math.random().toString(36).slice(2, 10),
+    at: Date.now(),
+    from: me.code,
+    about: code,
+    aboutName: profiles.get(byCode.get(code))?.name || '',
+    reason: REPORT_REASONS.includes(reason) ? reason : 'other',
+    where: ['chat', 'dm', 'friend', 'name'].includes(where) ? where : 'other',
+    text: String(text || '').slice(0, 400),
+    status: 'open',
+  };
+  reports.unshift(report);
+  // Over the cap, the oldest CLOSED report goes first; an open one is only
+  // dropped when there is nothing else left to drop.
+  while (reports.length > MAX_REPORTS) {
+    const i = reports.findLastIndex((r) => r.status !== 'open');
+    reports.splice(i >= 0 ? i : reports.length - 1, 1);
+  }
+  save();
+  return { ok: true, id: report.id, reason: report.reason, where: report.where };
+}
+
+/** The owner's view. Codes only — never a token. */
+export const reportsView = () => reports.slice(0, 200);
+
+export function resolveReport(id, status = 'closed') {
+  const r = reports.find((x) => x.id === id);
+  if (!r) return { error: 'No such report' };
+  r.status = ['open', 'closed', 'actioned'].includes(status) ? status : 'closed';
+  save();
+  return { ok: true };
+}
+
+// --------------------------------------------------------- account deletion --
+//
+// Signing in makes an account, so there has to be a way to unmake one from
+// inside the app. This removes the person, not just the login: the profile,
+// the wallet and everything bought with it, their place on every friends list,
+// their messages, their notes, and the push tokens that could still reach
+// their phone. What is kept is what has to be — the purchase ledger, with the
+// identity scrubbed out of it, because a sale is a record of money that
+// changed hands, and a ban, because deleting an account must not be a way to
+// wipe one.
+
+export function deleteAccount(token) {
+  // Pass & play seats on the same phone are profiles of their own
+  // (`<token>_p2`, `_p3`…), with names and codes on other people's lists.
+  // They belong to the same person and go with them.
+  for (const t of [...profiles.keys()]) {
+    if (t.startsWith(token + '_p') && /^_p\d+$/.test(t.slice(token.length))) deleteOne(t);
+  }
+  return deleteOne(token);
+}
+
+/** The guest seats of one device, for the route that has to unseat them. */
+export const guestTokensOf = (token) =>
+  [...profiles.keys()].filter((t) => t.startsWith(token + '_p') && /^_p\d+$/.test(t.slice(token.length)));
+
+function deleteOne(token) {
+  const me = profiles.get(token);
+  if (!me) return { ok: true, deleted: false };
+  const code = me.code;
+
+  for (const other of profiles.values()) {
+    if (other === me) continue;
+    if (other.friends?.length) other.friends = other.friends.filter((c) => c !== code);
+    if (other.wants?.length) other.wants = other.wants.filter((c) => c !== code);
+    if (other.asked?.length) other.asked = other.asked.filter((c) => c !== code);
+    if (invites.get(other.token)?.from === code) invites.delete(other.token);
+  }
+  invites.delete(token);
+  for (const key of [...dms.keys()]) {
+    if (key.split('|').includes(code)) dms.delete(key);
+  }
+  for (let i = notices.length - 1; i >= 0; i--) {
+    if (notices[i].to === code) notices.splice(i, 1);
+  }
+  for (const r of reports) {
+    if (r.from === code) r.from = 'deleted';
+    if (r.about === code) { r.aboutName = ''; }
+  }
+  for (const entry of ledger) {
+    // null, not a marker string: a string is a token somebody could claim.
+    if (entry.token === token) { entry.token = null; entry.code = null; }
+  }
+
+  profiles.delete(token);
+  byCode.delete(code);
+  presence.delete(token);
+  save();
+  saveLedger();
+  return { ok: true, deleted: true };
+}
+
 // ----------------------------------------------------------------- friends --
 //
 // Adding somebody used to put each of you straight on the other's list, on
@@ -866,7 +1068,9 @@ export function dmThreads() { return dms; }
 // request now, and the other person decides.
 
 /** Codes come off keyboards, so they are compared uppercased and trimmed. */
-const asCode = (raw) => String(raw || '').trim().toUpperCase();
+const asCode = (raw) => String(raw || '').trim().toUpperCase().slice(0, 12);
+/** A real friend code, or a house player's stand-in: six letters and digits. */
+const isCode = (c) => /^[A-Z0-9]{6}$/.test(c);
 
 /** The two lists every profile keeps besides its friends, made on demand. */
 function pending(p) {
@@ -886,6 +1090,10 @@ export function addFriend(token, rawCode) {
   if (!theirToken) return { error: 'No player with that code' };
   const them = pending(profiles.get(theirToken));
   pending(me);
+  // Blocked in either direction. The answer is deliberately the same one a
+  // wrong code gets: telling somebody "they have blocked you" is exactly the
+  // information a person being harassed does not want handed to the harasser.
+  if (blockedEitherWay(me, them)) return { error: 'No player with that code' };
 
   if (me.friends.includes(code)) return { error: 'You are already friends', already: true };
   if (me.friends.length >= MAX_FRIENDS) return { error: 'Your friends list is full' };
@@ -976,6 +1184,9 @@ export function socialOf(token) {
     friends: friendsOf(token),
     requests: me.asked.map(card).filter(Boolean),
     sent: me.wants.map(card).filter(Boolean),
+    // Codes rather than cards: a blocked player may since have deleted their
+    // account, and the app still has to hide what they wrote.
+    blocked: [...(me.blocked || [])],
   };
 }
 
@@ -1146,7 +1357,10 @@ export function attachLogin(token, provider, subject, preferred, { email, pictur
   // `preferred` is what the PLAYER is already calling themselves on this
   // device — never what Google or Apple call them. Somebody who typed a
   // nickname and then signed in keeps it; anyone else gets a game name.
-  if (!stored.name) stored.name = String(preferred || '').trim().slice(0, 16) || randomName();
+  if (!stored.name) {
+    const nick = cleanText(String(preferred || '').trim().slice(0, 16));
+    stored.name = nick && !isAllMasked(nick) ? nick : randomName();
+  }
   // The photo and address are display-only — they make the signed-in state
   // visible, they are never used to look anything up.
   if (email) stored.email = String(email).slice(0, 120);
