@@ -10,19 +10,23 @@
 // its own, and an HTTP/2 POST that node:http2 can make on its own — so a
 // dependency here would buy nothing and cost the usual.
 //
-// Dark until the environment carries all three of APNS_KEY (the .p8, either
-// inline or a path to it), APNS_KEY_ID and APNS_TEAM_ID. Until then it logs
+// Dark until the .p8 is found — pasted into APNS_KEY, a path in it, or the
+// Render secret file AuthKey_<APNS_KEY_ID>.p8 (the key and team ids default to
+// the team's own; see p8.js for how a pasted key is read). Until then it logs
 // what it would have sent, which is how the call site was tested before Apple
 // was involved at all. Android waits on an FCM key the same way.
 
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import http2 from 'node:http2';
+import { readP8 } from './p8.js';
 import { pushDevicesOf, forgetPushDevice } from './social.js';
 
 const TOPIC = process.env.APNS_TOPIC || 'com.moneymove.game';
-const KEY_ID = process.env.APNS_KEY_ID || '';
-const TEAM_ID = process.env.APNS_TEAM_ID || '';
+// The team's APNs key ("Pathsure Push") is team-scoped for every topic, so it
+// signs for MoneyMove as well. Neither id is a secret; the .p8 is, and lives
+// in Render's secret files as AuthKey_<key id>.p8.
+const KEY_ID = process.env.APNS_KEY_ID || 'LTT7HNR2DR';
+const TEAM_ID = process.env.APNS_TEAM_ID || 'HAK23MQ4FD';
 // Sandbox exists for builds signed with a development profile; the store's
 // build is signed production, so that is the default and the other is opt-in.
 const HOST = process.env.APNS_HOST
@@ -30,20 +34,17 @@ const HOST = process.env.APNS_HOST
 
 /**
  * The signing key, however the operator supplied it: the contents of the .p8
- * pasted into an environment variable (newlines intact or written as \n, both
- * survive), or a path to the file on disk.
+ * pasted into APNS_KEY, a path to the file in it, or — when that is empty or
+ * leads nowhere — the Render secret file /etc/secrets/AuthKey_<key id>.p8.
+ * p8.js reads all three and forgives what a paste does to a key.
  */
-const SIGNING_KEY = (() => {
-  const raw = process.env.APNS_KEY || '';
-  if (!raw) return '';
-  if (raw.includes('BEGIN PRIVATE KEY')) return raw.replace(/\\n/g, '\n');
-  try {
-    return fs.readFileSync(raw, 'utf8');
-  } catch {
-    console.warn('push: APNS_KEY is neither a key nor a readable file — staying dark');
-    return '';
-  }
-})();
+const SIGNING_KEY = readP8({
+  value: process.env.APNS_KEY || '',
+  varName: 'APNS_KEY',
+  keyId: KEY_ID,
+  tag: 'push',
+  dark: 'staying dark',
+});
 
 export const pushReady = !!(SIGNING_KEY && KEY_ID && TEAM_ID);
 

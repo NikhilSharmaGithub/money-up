@@ -36,6 +36,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readP8 } from './p8.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The same data dir social.js keeps the wallets in: the queue is as durable as
@@ -74,101 +75,22 @@ const refuse = (reason) => new Error(reason);
 // ------------------------------------------------------------ signing key --
 /**
  * The Sign in with Apple key, however the operator supplied it: the .p8's
- * contents in APPLE_SIWA_KEY (newlines intact or written as \n), a path to
- * the file in the same variable, or — with neither — the secret file Render
- * mounts at /etc/secrets/AuthKey_<key id>.p8.
+ * contents in APPLE_SIWA_KEY, a path to the file in the same variable, or the
+ * secret file Render mounts at /etc/secrets/AuthKey_<key id>.p8 — read, and
+ * forgiven whatever a paste did to it, by p8.js.
  *
  * It is loaded once and checked once. A key that will not parse, or parses as
  * something other than the P-256 key Apple issues, is a warning at boot and a
  * dark feature afterwards — not a stack trace on the first player who signs
  * out.
  */
-const SIGNING_KEY = (() => {
-  const raw = process.env.APPLE_SIWA_KEY || '';
-  let pem = '';
-  if (/PRIVATE\s+KEY/i.test(raw)) {
-    pem = raw.replace(/\\n/g, '\n');
-  } else if (raw) {
-    try {
-      pem = fs.readFileSync(raw, 'utf8');
-    } catch {
-      console.warn('appleid: APPLE_SIWA_KEY is neither a key nor a readable file — Apple tokens will not be kept or revoked');
-      return null;
-    }
-  } else if (/^[A-Za-z0-9]{1,32}$/.test(KEY_ID)) {
-    try {
-      pem = fs.readFileSync(`/etc/secrets/AuthKey_${KEY_ID}.p8`, 'utf8');
-    } catch {
-      console.warn('appleid: no Sign in with Apple key found (APPLE_SIWA_KEY or /etc/secrets) — Apple tokens will not be kept or revoked');
-      return null;
-    }
-  } else {
-    return null;
-  }
-  try {
-    return loadP256(pem);
-  } catch (err) {
-    console.warn(`appleid: the Sign in with Apple key would not load (${String(err.message).slice(0, 60)}; ${describePaste(pem)}) — Apple tokens will not be kept or revoked`);
-    return null;
-  }
-})();
-
-/**
- * The key as a P-256 private key, from whatever a dashboard's text box did to
- * the .p8 on the way in.
- *
- * The file itself parses as it is. What arrives after a copy and a paste often
- * does not: spaces in front of the first line, a byte-order mark, Windows line
- * endings, every line run into one, dashes a text editor "smartened" into en
- * or em dashes, or the \n escapes of an environment variable left as they
- * were. None of that changes the key — it is the same base64 inside the same
- * two marker lines — so when the text will not parse as given, the base64 is
- * lifted out from between the markers and read as the PKCS#8 bytes Apple
- * actually issued. Only a key that still will not read after that is refused.
- */
-function loadP256(text) {
-  const asP256 = (key) => {
-    if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
-      throw new Error('not a P-256 key');
-    }
-    return key;
-  };
-  try {
-    return asP256(crypto.createPrivateKey(text));
-  } catch (first) {
-    const der = Buffer.from(pastedBase64(text), 'base64');
-    if (der.length < 32) throw first;
-    try {
-      return asP256(crypto.createPrivateKey({ key: der, format: 'der', type: 'pkcs8' }));
-    } catch {
-      throw first;
-    }
-  }
-}
-
-/** The base64 body of a pasted PEM, with markers, escapes and whitespace gone. */
-function pastedBase64(text) {
-  return String(text || '')
-    .replace(/^\uFEFF/, '')
-    .replace(/\\[nr]/g, '\n')
-    .replace(/[-\u2010-\u2015\u2212]{2,}\s*(BEGIN|END)[^-\u2010-\u2015\u2212]*[-\u2010-\u2015\u2212]{2,}/gi, '\n')
-    .replace(/[^A-Za-z0-9+/=]/g, '');
-}
-
-/**
- * What the loaded text looked like, in counts only — enough to tell a
- * truncated paste from a mangled one in a log line, and nothing that is any
- * part of the key.
- */
-function describePaste(text) {
-  const t = String(text || '');
-  const lines = t.split(/\r?\n/).filter((l) => l.trim()).length;
-  const begin = /BEGIN\s+PRIVATE\s+KEY/i.test(t);
-  const end = /END\s+PRIVATE\s+KEY/i.test(t);
-  const odd = (t.match(/[^\x09\x0a\x0d\x20-\x7e]/g) || []).length;
-  return `${t.length} chars, ${lines} lines, begin marker ${begin ? 'yes' : 'no'}, end marker ${end ? 'yes' : 'no'}, `
-    + `${pastedBase64(t).length} base64 chars (a .p8 has 200), ${odd} unusual characters`;
-}
+const SIGNING_KEY = readP8({
+  value: process.env.APPLE_SIWA_KEY || '',
+  varName: 'APPLE_SIWA_KEY',
+  keyId: KEY_ID,
+  tag: 'appleid',
+  dark: 'Apple tokens will not be kept or revoked',
+});
 
 if (SIGNING_KEY && !KEY_ID) {
   console.warn('appleid: a Sign in with Apple key is set but APPLE_SIWA_KEY_ID is not — Apple tokens will not be kept or revoked');
