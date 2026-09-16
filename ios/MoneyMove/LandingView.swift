@@ -108,6 +108,8 @@ struct LandingView: View {
             InterstitialAd.shared.preload(AdDesk.shared.config)
             await loadAuthConfig()
             await refreshMe()
+            // Who this player has blocked, before any chat line can ping them.
+            await store.refreshSafety()
             cupWatch.start(store)
             noticeWatch.start(store)
         }
@@ -150,7 +152,10 @@ struct LandingView: View {
         accountCard(P)
         // Coins first, then the table: collecting is a two-second errand and
         // the reward reads as part of who you are, right under the account.
-        DailyRewardCard(onSignIn: { Task { await googleSignInTapped() } }, signingIn: signingIn)
+        // A sign-in button that cannot sign anyone in is a dead tap; until the
+        // server has said Google is set up, the card offers none.
+        DailyRewardCard(onSignIn: authConfig?.googleReady == true ? { Task { await googleSignInTapped() } } : nil,
+                        signingIn: signingIn)
         // The other way to a couple of coins, and a much quieter one: it draws
         // nothing until the server turns ads on, and nothing again once the
         // day's views are spent. It never plays by itself.
@@ -232,30 +237,36 @@ struct LandingView: View {
         }
     }
 
-    /// Paid top-ups. The server describes the packs; whether they can actually
-    /// be bought is StoreKit's call, and until the products exist in App Store
-    /// Connect the section says so quietly rather than throwing an error.
+    /// Paid top-ups. The packs are always listed — the app knows all three
+    /// without asking the server — and whether they can be bought is the App
+    /// Store's answer, shown honestly: checking, on sale, or a Try again.
     @ViewBuilder private func coinPacksSection(_ P: Palette) -> some View {
-        if !shop.packs.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Art.icon(.coin, size: 13)
-                    PanelTitle("Get coins")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Art.icon(.coin, size: 13)
+                PanelTitle("Get coins")
+            }
+            if shop.failed && !shop.loading {
+                HStack(spacing: 8) {
+                    Text("Couldn't reach the App Store.")
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                    Spacer(minLength: 6)
+                    Button("Try again") { Task { await shop.load(store) } }
+                        .buttonStyle(MMButtonStyle(kind: .ghost))
                 }
-                // Until the App Store answers the rows are dead, so promising a
-                // top-up would be a lie — say what is actually happening.
-                Text(!shop.checked ? "Checking the App Store…"
-                     : shop.onSale ? "Top up when the wins aren't coming fast enough."
-                     : "Coin packs aren't available yet.")
+            } else {
+                Text(shop.onSale ? "Top up when the wins aren't coming fast enough."
+                     : "Checking the App Store…")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(spacing: 8) {
-                ForEach(shop.packs) { pack in
-                    packRow(pack, P)
-                }
+        VStack(spacing: 8) {
+            ForEach(shop.packs) { pack in
+                packRow(pack, P)
             }
         }
     }
@@ -293,15 +304,15 @@ struct LandingView: View {
                     }
                 }
                 Spacer(minLength: 6)
-                if busy {
+                if busy || (!live && shop.loading) {
                     ProgressView().tint(P.red)
-                } else {
-                    Text(shop.priceLabel(for: pack))
+                } else if let price = shop.priceLabel(for: pack) {
+                    Text(price)
                         .font(.system(size: 13.5, weight: .heavy, design: .rounded))
-                        .foregroundStyle(live ? P.accentInk : P.ink3)
+                        .foregroundStyle(P.accentInk)
                         .padding(.vertical, 7)
                         .padding(.horizontal, 13)
-                        .background(live ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken), in: Capsule())
+                        .background(P.red, in: Capsule())
                 }
             }
             .padding(.vertical, 11)
@@ -383,13 +394,16 @@ struct LandingView: View {
     /// placeholder.
     private func loadStore() async {
         store.refreshWallet()
+        // The coin packs start at once, alongside the shelves rather than after
+        // them — they don't depend on anything the shelves need.
+        async let coins: Void = shop.load(store)
         if storeItems.isEmpty {
             storeItems = PieceCatalog.shared.items
             await PieceCatalog.shared.load(store)
             storeItems = PieceCatalog.shared.items
             storeFailed = storeItems.isEmpty
         }
-        await shop.load(store)
+        await coins
     }
 
     private func buyOrEquip(_ item: StoreItem, owned: Bool, equipped: Bool) async {
@@ -518,6 +532,9 @@ struct LandingView: View {
     @ViewBuilder private func settingsTab(_ P: Palette) -> some View {
         pageTitle("Settings", "Make the table yours.", P)
         profileCard(P)
+        // Account and help straight after the profile it belongs to, not at the
+        // bottom of the page where nobody looks for "Delete account".
+        AccountHelpCard(onDeleted: { Task { await refreshMe() } })
         themeCard(P)
         appearanceCard(P)
         soundCard(P)
@@ -1214,7 +1231,7 @@ struct LandingView: View {
         } else {
             MMCard(padding: 12) {
                 VStack(spacing: 8) {
-                    Text("Keep your name, coins and friends on every device")
+                    Text("Sign in to collect your daily coins")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1244,7 +1261,9 @@ struct LandingView: View {
                     }
 
                     SignInWithAppleButton(.signIn) { request in
-                        request.requestedScopes = [.fullName]
+                        // Nothing but the stable user id is used, so nothing
+                        // else is asked for.
+                        request.requestedScopes = []
                     } onCompletion: { result in
                         if case .success(let auth) = result,
                            let cred = auth.credential as? ASAuthorizationAppleIDCredential {

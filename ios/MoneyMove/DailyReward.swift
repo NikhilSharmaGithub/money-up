@@ -121,7 +121,7 @@ struct DailyRewardCard: View {
                 .buttonStyle(MMButtonStyle(kind: .gold, big: true))
                 .disabled(signingIn || onSignIn == nil)
 
-                Text("Your coins, your streak and your friends then follow you to any device.")
+                Text("Signing in unlocks the daily reward.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
             }

@@ -28,6 +28,8 @@ struct FriendsSheet: View {
     @State private var adding = false
     @State private var dmFriend: FriendEntry?
     @State private var removing: FriendEntry?
+    @State private var safetyChoose: SafetyTarget?
+    @State private var safetyReport: SafetyTarget?
     @State private var loaded = false
 
     var body: some View {
@@ -65,8 +67,12 @@ struct FriendsSheet: View {
             // Friendship is mutual here, and people are surprised by that.
             Text("You will both drop off each other's list.")
         }
+        .safetyDialogs(choose: $safetyChoose, report: $safetyReport) { _ in
+            Task { await refresh() }
+        }
         .task {
             await refresh()
+            await store.refreshSafety()
             loaded = true
             // While this is open, keep it live: a friend who sits down at a
             // table should show up as joinable without a pull-to-refresh.
@@ -213,16 +219,33 @@ struct FriendsSheet: View {
                             Spacer(minLength: 4)
                             Button("Accept") { Task { await answer(r, yes: true) } }
                                 .buttonStyle(MMButtonStyle(kind: .gold))
-                            Button {
-                                Task { await answer(r, yes: false) }
+                            // A request is how a stranger first reaches you, so
+                            // the way to stop them is right next to it.
+                            Menu {
+                                Button {
+                                    Task { await answer(r, yes: false) }
+                                } label: {
+                                    Label("Decline", systemImage: "xmark")
+                                }
+                                Button {
+                                    safetyReport = SafetyTarget(code: r.code, name: r.name, place: "name")
+                                } label: {
+                                    Label("Report \(r.name)…", systemImage: "exclamationmark.bubble")
+                                }
+                                Button(role: .destructive) {
+                                    safetyChoose = SafetyTarget(code: r.code, name: r.name, place: "friend")
+                                } label: {
+                                    Label("Block \(r.name)", systemImage: "hand.raised")
+                                }
                             } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 12, weight: .bold))
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 13, weight: .bold))
                                     .foregroundStyle(P.ink3)
                                     .frame(width: 28, height: 28)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Decline, report or block \(r.name)")
                         }
                         .padding(10)
                         .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -365,9 +388,22 @@ struct FriendsSheet: View {
                 }
                 Spacer(minLength: 4)
 
-                Button {
-                    removing = entry
-                    Haptics.tap()
+                Menu {
+                    Button {
+                        removing = entry
+                    } label: {
+                        Label("Remove friend", systemImage: "person.badge.minus")
+                    }
+                    Button {
+                        safetyReport = SafetyTarget(code: entry.code, name: entry.name, place: "friend")
+                    } label: {
+                        Label("Report \(entry.name)…", systemImage: "exclamationmark.bubble")
+                    }
+                    Button(role: .destructive) {
+                        safetyChoose = SafetyTarget(code: entry.code, name: entry.name, place: "friend")
+                    } label: {
+                        Label("Block \(entry.name)", systemImage: "hand.raised")
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 14, weight: .bold))
@@ -376,7 +412,7 @@ struct FriendsSheet: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Remove \(entry.name)")
+                .accessibilityLabel("More for \(entry.name)")
             }
 
             HStack(spacing: 8) {

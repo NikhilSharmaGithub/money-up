@@ -17,42 +17,69 @@ final class CoinShop: ObservableObject {
     static let shared = CoinShop()
 
     /// The catalogue as the server describes it — names, coin counts, bonuses.
-    @Published private(set) var packs: [CoinPack] = []
+    @Published private(set) var packs: [CoinPack] = CoinShop.builtIn
     /// productId -> the StoreKit product that is actually on sale.
     @Published private(set) var products: [String: Product] = [:]
     /// The pack being bought right now, so its card can show a spinner.
     @Published private(set) var buying: String?
-    /// A products lookup has come back, however empty it was.
+    /// The App Store has answered, successfully, at least once.
     @Published private(set) var checked = false
+    /// The last App Store lookup failed or came back empty — the shop offers a
+    /// Try again instead of rows that cannot be tapped.
+    @Published private(set) var failed = false
+    /// A lookup is in the air right now.
+    @Published private(set) var loading = false
 
-    /// Are the packs live in App Store Connect yet? Until they are, the section
-    /// shows what's coming instead of pretending it can sell anything.
+    /// Are the packs purchasable right now?
     var onSale: Bool { !products.isEmpty }
 
     private var watcher: Task<Void, Never>?
 
+    /// The three packs, as the app itself knows them.
+    ///
+    /// The server's catalogue adds names and bonuses, but it is not allowed to
+    /// decide whether the coin packs exist. Build 8 hid the whole "Get coins"
+    /// section whenever the server was slow to answer — and a free server that
+    /// has gone to sleep is slow to answer — which to an App Store reviewer is
+    /// an app that refers to a Store with nothing in it.
+    static let builtIn: [CoinPack] = [
+        CoinPack(id: "coins.small", productId: "com.moneymove.game.coins.small", coins: 500,
+                 price: "4.99", emoji: "🪙", name: "Pocket change", bonus: 0),
+        CoinPack(id: "coins.mid", productId: "com.moneymove.game.coins.mid", coins: 1100,
+                 price: "9.99", emoji: "💰", name: "Deep pockets", bonus: 10),
+        CoinPack(id: "coins.large", productId: "com.moneymove.game.coins.large", coins: 2500,
+                 price: "19.99", emoji: "🏦", name: "Tycoon chest", bonus: 25),
+    ]
+
     // MARK: - catalogue
 
     func load(_ store: GameStore) async {
-        if packs.isEmpty {
-            struct Catalog: Decodable { var packs: [CoinPack]? }
-            let catalog: Catalog? = try? await store.fetchJSON("/api/store")
-            packs = catalog?.packs ?? []
+        // The App Store first, asked with the ids the app already knows. The
+        // purchase path never waits on our own server — which, on a free plan,
+        // can take most of a minute to wake up.
+        if products.isEmpty, !loading {
+            loading = true
+            do {
+                let found = try await Product.products(for: Self.builtIn.map(\.productId))
+                products = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                failed = found.isEmpty
+                checked = !found.isEmpty
+            } catch {
+                failed = true
+            }
+            loading = false
         }
-        guard !packs.isEmpty else { return }
-        // One successful lookup is enough — re-asking the App Store every time
-        // the tab opens just blocks on the network for the same answer. A
-        // lookup that came back empty is still worth retrying.
-        guard products.isEmpty else { return }
-        let found = (try? await Product.products(for: packs.map(\.productId))) ?? []
-        products = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        checked = true
+        // Then the server's copy — names and bonuses — whenever it answers.
+        struct Catalog: Decodable { var packs: [CoinPack]? }
+        let catalog: Catalog? = try? await store.fetchJSON("/api/store")
+        if let served = catalog?.packs, !served.isEmpty { packs = served }
     }
 
-    /// What to print on the card: Apple's localised price once the product
-    /// exists, the server's plain number until then.
-    func priceLabel(for pack: CoinPack) -> String {
-        products[pack.productId]?.displayPrice ?? "$\(pack.price)"
+    /// What to print on the card. Only ever Apple's own localised price — a
+    /// hard-coded dollar figure is wrong in every other country and, on a row
+    /// that cannot be tapped, reads as a broken shop.
+    func priceLabel(for pack: CoinPack) -> String? {
+        products[pack.productId]?.displayPrice
     }
 
     // MARK: - buying

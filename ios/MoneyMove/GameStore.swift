@@ -13,7 +13,8 @@ final class GameStore: ObservableObject {
     // MARK: - identity & config
 
     /// Stable per-install identity; the server keys the player's seat off it.
-    let token: String = {
+    /// Only ever replaced by `startFresh()`, after the account is deleted.
+    private(set) var token: String = {
         let key = "mm.token"
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }
         let fresh = "u_ios_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
@@ -22,6 +23,29 @@ final class GameStore: ObservableObject {
     }()
 
     @AppStorage("mm.name") var nickname: String = ""
+
+    /// Friend codes this player has blocked. Their chat lines are hidden and
+    /// the server refuses friend requests and messages across the block.
+    @Published var blockedCodes: Set<String> = []
+    /// This player's own public code, so their own chat lines are not offered
+    /// a Report button.
+    @Published var myCode: String = ""
+
+    /// The account is gone on the server; become somebody new on this device.
+    ///
+    /// Keeping the old token would quietly mint a fresh profile under it on the
+    /// very next request — the same identity the player just asked to delete.
+    func startFresh() {
+        let fresh = "u_ios_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        UserDefaults.standard.set(fresh, forKey: "mm.token")
+        token = fresh
+        nickname = ""
+        lastRoom = ""
+        lastGuests = 0
+        blockedCodes = []
+        myCode = ""
+        refreshWallet()
+    }
     @AppStorage("mm.flag") var flag: String = ""
     /// Where the app looks for games. There is no longer a way to change
     /// this from inside the app — it was a workbench control that could only
@@ -902,10 +926,17 @@ final class GameStore: ObservableObject {
     /// team channels only guest seats' sockets receive. Deduped by the server's
     /// message id — a guest on the primary's own team hears those lines twice.
     var chatFeed: [ChatMessage] {
-        let base = state?.chat ?? []
+        // Somebody this player blocked is not somebody they read, hear, or get
+        // an unread badge for — so the filter sits at the source every chat
+        // surface draws from, not in one of them.
+        let unblocked: (ChatMessage) -> Bool = { msg in
+            guard let code = msg.code else { return true }
+            return !self.blockedCodes.contains(code)
+        }
+        let base = (state?.chat ?? []).filter(unblocked)
         guard !guestTeamChat.isEmpty else { return base }
         let known = Set(base.map(\.id))
-        let extras = guestTeamChat.filter { !known.contains($0.id) }
+        let extras = guestTeamChat.filter { !known.contains($0.id) }.filter(unblocked)
         guard !extras.isEmpty else { return base }
         return (base + extras).sorted { $0.at < $1.at }
     }

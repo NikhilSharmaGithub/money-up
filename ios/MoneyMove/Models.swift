@@ -287,6 +287,9 @@ struct ChatMessage: Codable, Equatable, Identifiable {
     var name: String
     var color: String
     var flag: String?
+    /// The sender's public friend code, so the line can be reported or its
+    /// author blocked. Absent for house players and older servers.
+    var code: String?
     var text: String
     var at: Double
     var channel: String?                    // "all" | "team"

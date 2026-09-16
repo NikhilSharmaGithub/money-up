@@ -385,8 +385,8 @@ struct CupPosterSheet: View {
                     }
 
                     Text(cup.local == nil
-                         ? "Entering needs an account, because a prize needs somebody to pay. Prizes are paid by hand — keep your friend code."
-                         : "Prizes are set in \(cup.prize.currency ?? "USD") and shown here in your own money at today\u{2019}s rate. Entering needs an account, because a prize needs somebody to pay.")
+                         ? "Free to enter; an account is needed so a prize can be paid. Prizes are paid by hand by MoneyMove — keep your friend code. Apple is not a sponsor of this tournament and is not involved in any way."
+                         : "Prizes are set in \(cup.prize.currency ?? "USD") and shown here in your own money at today\u{2019}s rate. Free to enter; an account is needed so a prize can be paid. Apple is not a sponsor of this tournament and is not involved in any way.")
                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         .foregroundStyle(P.ink3)
                         .multilineTextAlignment(.center)

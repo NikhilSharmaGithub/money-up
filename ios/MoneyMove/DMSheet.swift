@@ -19,6 +19,9 @@ struct DMSheet: View {
     @State private var messages: [DMessage] = []
     @State private var myCode = ""
     @State private var draft = ""
+    @State private var safetyChoose: SafetyTarget?
+    @State private var safetyReport: SafetyTarget?
+    @AppStorage("mm.rulesAgreed") private var rulesAgreed = false
 
     private struct DMReply: Decodable {
         var messages: [DMessage]?
@@ -58,6 +61,12 @@ struct DMSheet: View {
                     }
                 }
 
+                if !rulesAgreed {
+                    CommunityRulesCard()
+                        .padding(.horizontal, 12)
+                        .padding(.top, 6)
+                }
+
                 HStack(spacing: 8) {
                     TextField("Message \(friend.name)…", text: $draft)
                         .font(.system(size: 15, weight: .medium, design: .rounded))
@@ -85,6 +94,8 @@ struct DMSheet: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+                .disabled(!rulesAgreed)
+                .opacity(rulesAgreed ? 1 : 0.45)
             }
             .background(P.sheet.ignoresSafeArea())
             .navigationTitle("\(friend.flag?.isEmpty == false ? "\(friend.flag!) " : "")\(friend.name)")
@@ -93,6 +104,28 @@ struct DMSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button {
+                            safetyReport = SafetyTarget(code: friend.code, name: friend.name, place: "dm",
+                                                        quote: messages.last(where: { $0.from != myCode })?.text ?? "")
+                        } label: {
+                            Label("Report \(friend.name)…", systemImage: "exclamationmark.bubble")
+                        }
+                        Button(role: .destructive) {
+                            safetyChoose = SafetyTarget(code: friend.code, name: friend.name, place: "dm")
+                        } label: {
+                            Label("Block \(friend.name)", systemImage: "hand.raised")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Report or block")
+                }
+            }
+            .safetyDialogs(choose: $safetyChoose, report: $safetyReport) { _ in
+                // Blocked means no longer friends, so there is no thread left.
+                dismiss()
             }
         }
         .presentationDetents([.medium, .large])
@@ -118,6 +151,17 @@ struct DMSheet: View {
                 .background(mine ? AnyShapeStyle(P.red) : AnyShapeStyle(P.card),
                             in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             if !mine { Spacer(minLength: 50) }
+        }
+        .contextMenu {
+            if !mine {
+                Button {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        safetyReport = SafetyTarget(code: friend.code, name: friend.name, place: "dm", quote: msg.text)
+                    }
+                } label: {
+                    Label("Report this message…", systemImage: "exclamationmark.bubble")
+                }
+            }
         }
     }
 

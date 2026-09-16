@@ -456,7 +456,11 @@ struct CupDetailSheet: View {
         if live.schedule?.times?.isEmpty == false {
             out.append("A game still running when the next round is due is decided on net worth — whoever is ahead goes through, so one long game never holds up everybody else's evening.")
         }
-        out.append("Prizes are paid by hand by whoever set the cup up. Keep your friend code.")
+        out.append("Free to enter — no coins, no purchase, no payment of any kind.")
+        out.append("Prizes are awarded and paid by hand by MoneyMove, the organiser. Keep your friend code.")
+        // Guideline 5.3.2: a contest in an app has to say plainly that Apple
+        // has nothing to do with it.
+        out.append("Apple is not a sponsor of this tournament and is not involved in it in any way.")
         return out
     }
 

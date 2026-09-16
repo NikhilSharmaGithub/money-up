@@ -18,6 +18,10 @@ struct ChatLogSheet: View {
     /// Whoever picked up the composer by hand. Ignored the moment that seat
     /// leaves the game, so a message can never go out wearing a ghost's name.
     @State private var chosenSeat: String?
+    /// Somebody this player is reporting or blocking from a chat line.
+    @State private var safetyChoose: SafetyTarget?
+    @State private var safetyReport: SafetyTarget?
+    @AppStorage("mm.rulesAgreed") private var rulesAgreed = false
 
     init(initialTab: Int = 0) {
         self.initialTab = initialTab
@@ -55,6 +59,25 @@ struct ChatLogSheet: View {
         return all.filter { $0.isTeam && $0.team == team }
     }
 
+    /// Names this device speaks with — its own seat and any pass & play guests.
+    private var ownVoices: Set<String> {
+        Set((store.state?.players ?? []).filter { store.isLocal($0.id) }.map(\.name))
+    }
+
+    /// Everyone else who has said something at this table, most recent first,
+    /// with the last thing they said — what the Report menu offers.
+    private var reportableSenders: [(code: String, name: String, lastLine: String)] {
+        var seen = Set<String>()
+        var out: [(code: String, name: String, lastLine: String)] = []
+        for msg in store.chatFeed.reversed() {
+            guard let code = msg.code, !code.isEmpty, code != store.myCode,
+                  !ownVoices.contains(msg.name), !seen.contains(code) else { continue }
+            seen.insert(code)
+            out.append((code: code, name: msg.name, lastLine: msg.text))
+        }
+        return out
+    }
+
     private var myTeam: TeamInfo? {
         store.state?.player(speakingSeat)?.team.flatMap { store.state?.teamInfo?[safe: $0] }
     }
@@ -81,6 +104,35 @@ struct ChatLogSheet: View {
             .background(P.sheet)
             .navigationTitle(tab == 0 ? "Chat" : "Game log")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Reporting should not depend on knowing to long-press. Anyone
+                // who has said something here is one tap away from it.
+                if tab == 0, !reportableSenders.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            ForEach(reportableSenders, id: \.code) { sender in
+                                Menu(sender.name) {
+                                    Button {
+                                        safetyReport = SafetyTarget(code: sender.code, name: sender.name, place: "chat",
+                                                                    quote: sender.lastLine)
+                                    } label: {
+                                        Label("Report \(sender.name)…", systemImage: "exclamationmark.bubble")
+                                    }
+                                    Button(role: .destructive) {
+                                        Task { await store.block(SafetyTarget(code: sender.code, name: sender.name, place: "chat")) }
+                                    } label: {
+                                        Label("Block \(sender.name)", systemImage: "hand.raised")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label("Report", systemImage: "exclamationmark.bubble")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .accessibilityLabel("Report or block a player")
+                    }
+                }
+            }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -136,10 +188,28 @@ struct ChatLogSheet: View {
                 }
             }
 
+            if !rulesAgreed {
+                CommunityRulesCard()
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+            }
             emoteRow(P)
             seatSwitcher(P)
+            // Free text waits until the rules have been read and agreed to.
+            // The reactions don't: they are a fixed set nobody can abuse.
             inputBar(P)
+                .disabled(!rulesAgreed)
+                .opacity(rulesAgreed ? 1 : 0.45)
+            if rulesAgreed {
+                Text("Long-press a message, or tap Report, to report or block someone.")
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 6)
+            }
         }
+        .safetyDialogs(choose: $safetyChoose, report: $safetyReport)
+        .task { await store.refreshSafety() }
         // A pick can't outlive its team channel: handing the composer to a
         // seat with no team while "Team only" is up would show an empty room.
         .onChange(of: speakingSeat) { _, seat in
@@ -232,6 +302,24 @@ struct ChatLogSheet: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(P.rule, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contextMenu {
+            // Anybody real who is not this player can be reported or blocked
+            // from anything they said. House players have no code.
+            if let code = msg.code, !code.isEmpty, code != store.myCode, !ownVoices.contains(msg.name) {
+                let target = SafetyTarget(code: code, name: msg.name, place: "chat", quote: msg.text)
+                Button {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { safetyReport = target }
+                } label: {
+                    Label("Report \(msg.name)…", systemImage: "exclamationmark.bubble")
+                }
+                Button(role: .destructive) {
+                    Task { await store.block(target) }
+                } label: {
+                    Label("Block \(msg.name)", systemImage: "hand.raised")
+                }
+            }
+        }
     }
 
     /// Quick reactions first — one tap sends the emoji as a normal message, so
