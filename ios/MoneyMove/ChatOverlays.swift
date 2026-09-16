@@ -18,9 +18,6 @@ struct ChatLogSheet: View {
     /// Whoever picked up the composer by hand. Ignored the moment that seat
     /// leaves the game, so a message can never go out wearing a ghost's name.
     @State private var chosenSeat: String?
-    /// Somebody this player is reporting or blocking from a chat line.
-    @State private var safetyChoose: SafetyTarget?
-    @State private var safetyReport: SafetyTarget?
     @AppStorage("mm.rulesAgreed") private var rulesAgreed = false
 
     init(initialTab: Int = 0) {
@@ -112,12 +109,8 @@ struct ChatLogSheet: View {
                         Menu {
                             ForEach(reportableSenders, id: \.code) { sender in
                                 Menu(sender.name) {
-                                    Button {
-                                        safetyReport = SafetyTarget(code: sender.code, name: sender.name, place: "chat",
-                                                                    quote: sender.lastLine)
-                                    } label: {
-                                        Label("Report \(sender.name)…", systemImage: "exclamationmark.bubble")
-                                    }
+                                    reportMenu(SafetyTarget(code: sender.code, name: sender.name, place: "chat",
+                                                            quote: sender.lastLine), store: store)
                                     Button(role: .destructive) {
                                         Task { await store.block(SafetyTarget(code: sender.code, name: sender.name, place: "chat")) }
                                     } label: {
@@ -208,7 +201,6 @@ struct ChatLogSheet: View {
                     .padding(.bottom, 6)
             }
         }
-        .safetyDialogs(choose: $safetyChoose, report: $safetyReport)
         .task { await store.refreshSafety() }
         // A pick can't outlive its team channel: handing the composer to a
         // seat with no team while "Team only" is up would show an empty room.
@@ -308,11 +300,7 @@ struct ChatLogSheet: View {
             // from anything they said. House players have no code.
             if let code = msg.code, !code.isEmpty, code != store.myCode, !ownVoices.contains(msg.name) {
                 let target = SafetyTarget(code: code, name: msg.name, place: "chat", quote: msg.text)
-                Button {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { safetyReport = target }
-                } label: {
-                    Label("Report \(msg.name)…", systemImage: "exclamationmark.bubble")
-                }
+                reportMenu(target, store: store)
                 Button(role: .destructive) {
                     Task { await store.block(target) }
                 } label: {

@@ -107,59 +107,23 @@ extension GameStore {
     }
 }
 
-// MARK: - the dialogs
+// MARK: - the menus
 
-/// Report and block, from anywhere.
+/// Report, as a submenu of reasons.
 ///
-/// `choose` asks what to do about somebody; `report` goes straight to the
-/// reasons — a long-press menu that already offered "Report" should not ask
-/// twice.
-struct SafetyDialogs: ViewModifier {
-    @Binding var choose: SafetyTarget?
-    @Binding var report: SafetyTarget?
-    var onBlocked: (SafetyTarget) -> Void = { _ in }
-
-    @EnvironmentObject var store: GameStore
-
-    func body(content: Content) -> some View {
-        content
-            .confirmationDialog(
-                choose.map { "\($0.name)" } ?? "",
-                isPresented: Binding(get: { choose != nil }, set: { if !$0 { choose = nil } }),
-                titleVisibility: .visible,
-                presenting: choose
-            ) { target in
-                Button("Report \(target.name)…") {
-                    // One dialog has to finish leaving before the next arrives.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { report = target }
-                }
-                Button("Block \(target.name)", role: .destructive) {
-                    Task { if await store.block(target) { onBlocked(target) } }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Blocking hides their messages, removes them from your friends and stops them contacting you.")
-            }
-            .confirmationDialog(
-                "Why are you reporting \(report?.name ?? "them")?",
-                isPresented: Binding(get: { report != nil }, set: { if !$0 { report = nil } }),
-                titleVisibility: .visible,
-                presenting: report
-            ) { target in
-                ForEach(ReportReason.allCases) { reason in
-                    Button(reason.label) { Task { await store.report(target, reason: reason) } }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Reports go to the MoneyMove team. We review every one and remove players who abuse others.")
-            }
-    }
-}
-
-extension View {
-    func safetyDialogs(choose: Binding<SafetyTarget?>, report: Binding<SafetyTarget?>,
-                       onBlocked: @escaping (SafetyTarget) -> Void = { _ in }) -> some View {
-        modifier(SafetyDialogs(choose: choose, report: report, onBlocked: onBlocked))
+/// Reporting used to open a dialog from whatever menu the player was in. Inside
+/// a detented sheet — the chat, a message thread — SwiftUI simply never
+/// presented it: no warning, no dialog, a Report button that did nothing. A
+/// submenu has no presentation step to lose, so every menu that offers Report
+/// offers the reasons right there.
+@MainActor @ViewBuilder
+func reportMenu(_ target: SafetyTarget, store: GameStore) -> some View {
+    Menu {
+        ForEach(ReportReason.allCases) { reason in
+            Button(reason.label) { Task { await store.report(target, reason: reason) } }
+        }
+    } label: {
+        Label("Report \(target.name)…", systemImage: "exclamationmark.bubble")
     }
 }
 

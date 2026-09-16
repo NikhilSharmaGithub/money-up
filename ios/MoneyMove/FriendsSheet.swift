@@ -27,9 +27,6 @@ struct FriendsSheet: View {
     @State private var addCode = ""
     @State private var adding = false
     @State private var dmFriend: FriendEntry?
-    @State private var removing: FriendEntry?
-    @State private var safetyChoose: SafetyTarget?
-    @State private var safetyReport: SafetyTarget?
     @State private var loaded = false
 
     var body: some View {
@@ -54,21 +51,6 @@ struct FriendsSheet: View {
         }
         .sheet(item: $dmFriend) { friend in
             DMSheet(friend: friend).environmentObject(store)
-        }
-        .confirmationDialog("Remove this friend?",
-                            isPresented: Binding(get: { removing != nil },
-                                                 set: { if !$0 { removing = nil } }),
-                            titleVisibility: .visible) {
-            Button("Remove \(removing?.name ?? "")", role: .destructive) {
-                if let entry = removing { Task { await drop(entry) } }
-            }
-            Button("Keep", role: .cancel) { removing = nil }
-        } message: {
-            // Friendship is mutual here, and people are surprised by that.
-            Text("You will both drop off each other's list.")
-        }
-        .safetyDialogs(choose: $safetyChoose, report: $safetyReport) { _ in
-            Task { await refresh() }
         }
         .task {
             await refresh()
@@ -227,13 +209,13 @@ struct FriendsSheet: View {
                                 } label: {
                                     Label("Decline", systemImage: "xmark")
                                 }
-                                Button {
-                                    safetyReport = SafetyTarget(code: r.code, name: r.name, place: "name")
-                                } label: {
-                                    Label("Report \(r.name)…", systemImage: "exclamationmark.bubble")
-                                }
+                                reportMenu(SafetyTarget(code: r.code, name: r.name, place: "name"), store: store)
                                 Button(role: .destructive) {
-                                    safetyChoose = SafetyTarget(code: r.code, name: r.name, place: "friend")
+                                    Task {
+                                        if await store.block(SafetyTarget(code: r.code, name: r.name, place: "friend")) {
+                                            await refresh()
+                                        }
+                                    }
                                 } label: {
                                     Label("Block \(r.name)", systemImage: "hand.raised")
                                 }
@@ -389,18 +371,24 @@ struct FriendsSheet: View {
                 Spacer(minLength: 4)
 
                 Menu {
-                    Button {
-                        removing = entry
+                    // A submenu is the confirmation: two deliberate taps, and
+                    // no dialog that a sheet can fail to present.
+                    Menu {
+                        Button(role: .destructive) {
+                            Task { await drop(entry) }
+                        } label: {
+                            Label("Remove \(entry.name) — you both drop off each other's list", systemImage: "person.badge.minus")
+                        }
                     } label: {
                         Label("Remove friend", systemImage: "person.badge.minus")
                     }
-                    Button {
-                        safetyReport = SafetyTarget(code: entry.code, name: entry.name, place: "friend")
-                    } label: {
-                        Label("Report \(entry.name)…", systemImage: "exclamationmark.bubble")
-                    }
+                    reportMenu(SafetyTarget(code: entry.code, name: entry.name, place: "friend"), store: store)
                     Button(role: .destructive) {
-                        safetyChoose = SafetyTarget(code: entry.code, name: entry.name, place: "friend")
+                        Task {
+                            if await store.block(SafetyTarget(code: entry.code, name: entry.name, place: "friend")) {
+                                await refresh()
+                            }
+                        }
                     } label: {
                         Label("Block \(entry.name)", systemImage: "hand.raised")
                     }
@@ -533,7 +521,6 @@ struct FriendsSheet: View {
     }
 
     private func drop(_ entry: FriendEntry) async {
-        removing = nil
         friends.removeAll { $0.code == entry.code }
         struct Reply: Decodable { var ok: Bool? }
         let _: Reply? = try? await store.fetchJSON(

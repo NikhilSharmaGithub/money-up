@@ -44,6 +44,11 @@ final class GameStore: ObservableObject {
         lastGuests = 0
         blockedCodes = []
         myCode = ""
+        // Tables the old identity was sitting at. The seats belong to an
+        // account that no longer exists, so "Continue game" would only lead
+        // somewhere this device can no longer sit down.
+        unfinishedGames = []
+        UserDefaults.standard.removeObject(forKey: "mm.unfinished")
         refreshWallet()
     }
     @AppStorage("mm.flag") var flag: String = ""

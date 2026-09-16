@@ -19,8 +19,6 @@ struct DMSheet: View {
     @State private var messages: [DMessage] = []
     @State private var myCode = ""
     @State private var draft = ""
-    @State private var safetyChoose: SafetyTarget?
-    @State private var safetyReport: SafetyTarget?
     @AppStorage("mm.rulesAgreed") private var rulesAgreed = false
 
     private struct DMReply: Decodable {
@@ -106,14 +104,17 @@ struct DMSheet: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button {
-                            safetyReport = SafetyTarget(code: friend.code, name: friend.name, place: "dm",
-                                                        quote: messages.last(where: { $0.from != myCode })?.text ?? "")
-                        } label: {
-                            Label("Report \(friend.name)…", systemImage: "exclamationmark.bubble")
-                        }
+                        reportMenu(SafetyTarget(code: friend.code, name: friend.name, place: "dm",
+                                                quote: messages.last(where: { $0.from != myCode })?.text ?? ""),
+                                   store: store)
                         Button(role: .destructive) {
-                            safetyChoose = SafetyTarget(code: friend.code, name: friend.name, place: "dm")
+                            Task {
+                                // Blocked means no longer friends, so there is
+                                // no thread left to sit in.
+                                if await store.block(SafetyTarget(code: friend.code, name: friend.name, place: "dm")) {
+                                    dismiss()
+                                }
+                            }
                         } label: {
                             Label("Block \(friend.name)", systemImage: "hand.raised")
                         }
@@ -122,10 +123,6 @@ struct DMSheet: View {
                     }
                     .accessibilityLabel("Report or block")
                 }
-            }
-            .safetyDialogs(choose: $safetyChoose, report: $safetyReport) { _ in
-                // Blocked means no longer friends, so there is no thread left.
-                dismiss()
             }
         }
         .presentationDetents([.medium, .large])
@@ -154,13 +151,8 @@ struct DMSheet: View {
         }
         .contextMenu {
             if !mine {
-                Button {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        safetyReport = SafetyTarget(code: friend.code, name: friend.name, place: "dm", quote: msg.text)
-                    }
-                } label: {
-                    Label("Report this message…", systemImage: "exclamationmark.bubble")
-                }
+                reportMenu(SafetyTarget(code: friend.code, name: friend.name, place: "dm", quote: msg.text),
+                           store: store)
             }
         }
     }

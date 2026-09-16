@@ -32,6 +32,77 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+/// Toasts get a window of their own, above every sheet.
+///
+/// A toast hung on the root view is drawn underneath any sheet, and the things
+/// a player does inside sheets — report, block, buy — are exactly the ones that
+/// need a word back. A report that says nothing reads as a Report button that
+/// does nothing. So toasts live in a window over everything that never takes
+/// a touch: whatever is underneath stays fully usable while one is showing.
+@MainActor
+final class ToastWindow {
+    static let shared = ToastWindow()
+    private var window: UIWindow?
+
+    func install(_ store: GameStore) {
+        guard window == nil else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        else { return }
+        let host = UIHostingController(rootView: ToastLayer().environmentObject(store))
+        host.view.backgroundColor = .clear
+        let w = UIWindow(windowScene: scene)
+        w.rootViewController = host
+        w.backgroundColor = .clear
+        w.windowLevel = .alert + 1
+        // Hit-testing skips a window that ignores touches, so taps fall
+        // straight through to the app below.
+        w.isUserInteractionEnabled = false
+        w.isHidden = false
+        window = w
+    }
+}
+
+private struct ToastLayer: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.clear
+            toast
+        }
+        .animation(.spring(duration: 0.35), value: store.toast)
+    }
+
+    @ViewBuilder private var toast: some View {
+        let P = Palette.current(scheme)
+        if let toast = store.toast {
+            HStack(spacing: 8) {
+                // A toast with a subject of its own draws it; the rest keep
+                // the plain info/warning mark.
+                if let glyph = toast.glyph {
+                    Art.icon(glyph, size: 17, tint: .white)
+                } else {
+                    Image(systemName: toast.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                }
+                Text(toast.text).lineLimit(2)
+            }
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.vertical, 11)
+            .padding(.horizontal, 17)
+            .background(toast.isError ? P.redDeep : P.ink.opacity(scheme == .light ? 1 : 0.25), in: Capsule())
+            .background(.ultraThinMaterial, in: Capsule())
+            // The hub's floating tab bar sits about 45pt above the safe area,
+            // and a toast landing behind it is a message nobody reads.
+            .padding(.bottom, store.roomId == nil ? 78 : 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .id(toast.id)
+        }
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -93,7 +164,6 @@ struct RootView: View {
             inviteWatch.start(store)
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
-        .overlay(alignment: .bottom) { toastOverlay }
         .overlay { cardPopupOverlay }
         .overlay { reliefOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
@@ -110,7 +180,10 @@ struct RootView: View {
         // Sheets are their own presentations and on some iOS versions keep
         // following the system despite the preference above — the UIKit
         // override underneath moves every layer, open sheets included.
-        .onAppear { applyAppearance() }
+        .onAppear {
+            ToastWindow.shared.install(store)
+            applyAppearance()
+        }
         .onChange(of: appearanceID) { applyAppearance() }
     }
 
@@ -124,33 +197,6 @@ struct RootView: View {
     }
 
     // MARK: - overlays
-
-    @ViewBuilder private var toastOverlay: some View {
-        let P = Palette.current(scheme)
-        if let toast = store.toast {
-            HStack(spacing: 8) {
-                // A toast with a subject of its own draws it; the rest keep
-                // the plain info/warning mark.
-                if let glyph = toast.glyph {
-                    Art.icon(glyph, size: 17, tint: .white)
-                } else {
-                    Image(systemName: toast.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                }
-                Text(toast.text).lineLimit(2)
-            }
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
-            .padding(.vertical, 11)
-            .padding(.horizontal, 17)
-            .background(toast.isError ? P.redDeep : P.ink.opacity(scheme == .light ? 1 : 0.25), in: Capsule())
-            .background(.ultraThinMaterial, in: Capsule())
-            // The hub's floating tab bar sits about 45pt above the safe area,
-            // and a toast landing behind it is a message nobody reads.
-            .padding(.bottom, store.roomId == nil ? 78 : 24)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .id(toast.id)
-        }
-    }
 
     @ViewBuilder private var cardPopupOverlay: some View {
         let P = Palette.current(scheme)
