@@ -289,6 +289,8 @@ async function main() {
   const A = await startServer('keyed', {
     APPLE_SIWA_KEY: siwaPem.replace(/\n/g, '\\n'), // the escaped form an env panel produces
     APPLE_SIWA_KEY_ID: KEY_ID,
+    // Off by default; this server exercises the old path too.
+    APPLE_UNVERIFIED_SIGNIN: 'on',
   });
 
   section('configuration');
@@ -736,7 +738,7 @@ async function main() {
     const r = await post(A, '/api/auth/apple', { token: dev, userId: '000111.legacylegacylegacy.0001', nickname: 'Old' });
     const m = await me(A, dev);
     PASS(r.status === 200 && r.json?.ok === true && m?.provider === 'apple' && m?.appleRevocable === false,
-      'accepted while APPLE_UNVERIFIED_SIGNIN is on (the default)', r.text);
+      'accepted while APPLE_UNVERIFIED_SIGNIN=on', r.text);
     PASS(/UNVERIFIED sign-in/.test(A.log), 'and warned about in the log');
     const missing = await post(A, '/api/auth/apple', { token: dev });
     PASS(missing.status === 400, 'no identityToken and no userId is still a 400', `${missing.status}`);
@@ -770,6 +772,9 @@ async function main() {
     ]));
     const C = await startServer('restart', { APPLE_SIWA_KEY: siwaPem, APPLE_SIWA_KEY_ID: KEY_ID }, { dataDir: dir });
     PASS(/3 Sign in with Apple revocation\(s\) waiting/.test(C.log), 'all three entries are read back at boot');
+    PASS(/unverified \(pre-build-11\) Sign in with Apple is off/.test(C.log), 'with APPLE_UNVERIFIED_SIGNIN unset, the old path is off');
+    const unsetLegacy = await post(C, '/api/auth/apple', { token: await newProfile(C, 'unset-legacy'), userId: '000111.unsetunsetunset.0003' });
+    PASS(unsetLegacy.status === 401, 'and a bare userId is refused by default', `${unsetLegacy.status}`);
     PASS(!!(await until(() => okRevokesOf(waiting).length > 0, 8000)), 'a revocation queued before a restart is sent after it');
     const emptied = await until(() => {
       const left = queuedTokens(C);
@@ -817,8 +822,8 @@ async function main() {
   {
     const dir = fs.mkdtempSync(path.join(tmpRoot, 'switch-'));
     const keyed = { APPLE_SIWA_KEY: siwaPem, APPLE_SIWA_KEY_ID: KEY_ID };
-    const D1 = await startServer('switch-on', keyed, { dataDir: dir });
-    PASS(/unverified \(pre-build-11\) Sign in with Apple is ON/.test(D1.log), 'unset, the boot log says unverified sign-in is on');
+    const D1 = await startServer('switch-on', { ...keyed, APPLE_UNVERIFIED_SIGNIN: 'on' }, { dataDir: dir });
+    PASS(/unverified \(pre-build-11\) Sign in with Apple is ON/.test(D1.log), 'switched on, the boot log says unverified sign-in is on');
     const LSUB = '000111.claimedclaimedclaimed.0002';
     const VSUB = '001234.v5v5v5v5v5v5v5v5v5v5v5v5v5v5v5v5.1101';
     const legacy = await newProfile(D1, 'sw-legacy');

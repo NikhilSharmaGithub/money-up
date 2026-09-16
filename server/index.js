@@ -614,28 +614,28 @@ app.post('/api/auth/logout', (req, res) => {
 
 /**
  * Builds 10 and earlier sent Apple's user id and nothing Apple signed, which
- * is a claim anybody can type. None of those builds reached the store, but
- * a TestFlight phone may still be running one, so they are let in — loudly,
- * one warning per request — until build 11 is what people have. Then set
- * APPLE_UNVERIFIED_SIGNIN=off and the only way to be signed in with Apple is
- * to have actually signed in with Apple; the next boot also signs out every
- * Apple login that was let in this way (dropUnverifiedAppleLogins).
+ * is a claim anybody can type. None of those builds ever reached the store —
+ * build 11 is the first that goes out, and it sends a signed identity token —
+ * so the old path is closed by default: the only way to be signed in with
+ * Apple is to have actually signed in with Apple, and every boot signs out any
+ * Apple login that was let in the old way (dropUnverifiedAppleLogins).
  *
- * Unset, blank, or on/1/true/yes keeps the old path open. Anything else
- * closes it — an operator who typed "disabled" meant off, and a switch that
- * guards a way to forge a sign-in should fail closed, not open. The state is
- * written to the log once at boot so nobody has to guess.
+ * APPLE_UNVERIFIED_SIGNIN=on (or 1/true/yes) opens it again, loudly — one
+ * warning per request — for the day an old TestFlight phone has to be let in.
+ * Anything else, unset included, keeps it closed: a switch that guards a way
+ * to forge a sign-in fails closed, and an operator who typed "disabled" meant
+ * off. The state is written to the log once at boot so nobody has to guess.
  */
 const APPLE_UNVERIFIED_SIGNIN = (() => {
   const raw = String(process.env.APPLE_UNVERIFIED_SIGNIN ?? '').trim().toLowerCase();
-  if (raw === '' || ['1', 'on', 'true', 'yes'].includes(raw)) return true;
-  if (!['0', 'off', 'false', 'no'].includes(raw)) {
+  if (['1', 'on', 'true', 'yes'].includes(raw)) return true;
+  if (raw && !['0', 'off', 'false', 'no'].includes(raw)) {
     console.warn(`apple: APPLE_UNVERIFIED_SIGNIN=${JSON.stringify(raw.slice(0, 20))} is neither on nor off — treating it as off`);
   }
   return false;
 })();
 console.log(`  apple: unverified (pre-build-11) Sign in with Apple is ${APPLE_UNVERIFIED_SIGNIN
-  ? 'ON — set APPLE_UNVERIFIED_SIGNIN=off once build 11 is live' : 'off'}`);
+  ? 'ON — APPLE_UNVERIFIED_SIGNIN lets builds 10 and earlier in unverified' : 'off'}`);
 
 /**
  * Take this profile's Apple token off it, and hand it back to Apple if that
