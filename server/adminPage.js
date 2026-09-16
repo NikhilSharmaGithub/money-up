@@ -1764,7 +1764,12 @@ export const adminPageHTML = `<!doctype html>
       fact('coins', fmtNum(p.coins)) +
       fact('karma', fmtNum(p.karma)) +
       fact('friends', fmtNum(p.friends)) +
-      fact('sign-in', p.login ? p.login.provider + (p.email ? ' · ' + p.email : '') : 'anonymous') +
+      // An Apple login a pre-build-11 app claimed with a bare user id says so:
+      // it is somebody's word, not Apple's (see APPLE_UNVERIFIED_SIGNIN).
+      fact('sign-in', p.login
+        ? p.login.provider + (p.login.provider === 'apple' && p.login.verified !== true ? ' (unverified)' : '') +
+          (p.email ? ' · ' + p.email : '')
+        : 'anonymous') +
       fact('first game', p.real
         ? fmtWhen(p.firstPlayed) + (p.firstPlayedExact ? '' : ' (est. from birthdate)')
         : 'never') +

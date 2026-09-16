@@ -49,6 +49,11 @@ final class GameStore: ObservableObject {
         // somewhere this device can no longer sit down.
         unfinishedGames = []
         UserDefaults.standard.removeObject(forKey: "mm.unfinished")
+        // The Apple sign-in belonged to the deleted account too. Left behind,
+        // the next launch would ask Apple about it, find it revoked by the
+        // deletion, and go asking the server to sign the brand-new identity
+        // out of something it never signed in to.
+        UserDefaults.standard.removeObject(forKey: GameStore.appleUserKey)
         refreshWallet()
     }
     @AppStorage("mm.flag") var flag: String = ""

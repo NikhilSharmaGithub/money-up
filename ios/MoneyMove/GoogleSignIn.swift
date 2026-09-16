@@ -93,6 +93,12 @@ struct MeInfo: Decodable, Equatable {
     var provider: String?
     var email: String?
     var picture: String?
+    /// True only for an Apple sign-in the server holds a token for, which is
+    /// what it needs to revoke MoneyMove's access when the account goes. False
+    /// (or missing, from an older server) means deleting has to ask Apple for
+    /// a fresh code first — see appleCodeForDeletion. The token never leaves
+    /// the server; this yes-or-no is all anybody is told about it.
+    var appleRevocable: Bool?
 
     var signedIn: Bool { provider != nil }
 }

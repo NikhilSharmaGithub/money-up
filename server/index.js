@@ -22,7 +22,13 @@ import {
   ownedTally, dataFiles,
   dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
   registerPushDevice, realCounts, roomOf,
+  loginOf, takeAppleRefresh, appleSubjectLinkedElsewhere, forgetAppleSubject,
+  appleLoginVerified, passAppleRefreshOn, dropUnverifiedAppleLogins,
 } from './social.js';
+import {
+  verifyIdentityToken, exchangeCode, queueRevocation, verifyServerNotification,
+  startAppleRevocationRetries, appleRevokeReady, withdrawQueuedRevocations,
+} from './appleid.js';
 import { noteGameDay, daySeries, bucketByDay, lastDayKeys } from './dayStats.js';
 import {
   startBackups, backupInfo, streamDataBackup,
@@ -239,11 +245,26 @@ app.post('/api/report', (req, res) => {
   res.json(result);
 });
 
-/** Delete this account, from inside the app. */
-app.post('/api/account/delete', (req, res) => {
+/**
+ * Delete this account, from inside the app.
+ *
+ * `appleCode` is a fresh authorization code, sent only by a player who signed
+ * in with Apple but has no token on file to revoke (they signed in before the
+ * server kept one, or while it could not). The app gets it by running Sign in
+ * with Apple once more at the moment of deletion; see eraseAccount for what
+ * happens to it, why that is bounded, and why it happens before the account
+ * is touched rather than after.
+ */
+app.post('/api/account/delete', async (req, res) => {
   const token = String(req.body?.token || '').slice(0, 64);
   if (!token) return res.status(400).json({ error: 'Missing identity' });
-  res.json(eraseAccount(token, 'a player deleted their account from the app'));
+  try {
+    res.json(await eraseAccount(token, 'a player deleted their account from the app',
+      { appleCode: req.body?.appleCode }));
+  } catch (err) {
+    console.error('erase: failed', err);
+    res.status(500).json({ error: 'Could not delete the account — try again' });
+  }
 });
 
 /**
@@ -254,8 +275,32 @@ app.post('/api/account/delete', (req, res) => {
  * comes back. Then out of any cup still taking entries, then their name off
  * every cup they were in, then the account itself — the owner's seats on this
  * device and the pass & play guests alongside it.
+ *
+ * Then Apple. Somebody who signed in with Apple and deletes their account is
+ * owed the end of MoneyMove's access to their Apple ID too — Apple's rules say
+ * so and so does common sense — which takes the refresh token kept at
+ * sign-in. It is lifted off the profile just before the profile goes, and
+ * revoked whatever other devices are signed in with the same Apple ID: this
+ * is the person saying, as plainly as the app lets them, that they are done.
+ *
+ * With no token on file, a fresh code from the app is exchanged for one. That
+ * exchange is the only thing here that waits, and it happens FIRST, before
+ * anything is touched: once deleteAccount has run, nothing may await before
+ * the reply, because a request landing in that gap — a profile save, a buy, a
+ * DM, a push registration — goes through profileFor and mints the account
+ * again under the same friend code. The exchange is bounded by its own
+ * timeout, so a slow or absent Apple costs the reply a few seconds at worst
+ * and never the deletion. A code that turns out to belong to a different
+ * Apple ID than the one this profile signed in with is not revoked: that
+ * would be ending somebody else's access on this person's word.
  */
-function eraseAccount(token, why) {
+async function eraseAccount(token, why, { appleCode } = {}) {
+  const asked = loginOf(token);
+  const exchanged = asked?.provider === 'apple' && appleCode
+    ? await appleRefreshFromCode(appleCode, asked.subject, 'account deletion', { acceptUnknownSubject: true })
+    : null;
+
+  // From here to the return: no awaits.
   for (const t of [token, ...guestTokensOf(token)]) {
     const live = rooms.get(roomOf(t) || '');
     try { if (live?.player(t)) live.quit(t); } catch (err) { console.error('erase: quit failed', err); }
@@ -265,8 +310,24 @@ function eraseAccount(token, why) {
     }
     cup.forgetPlayer(t);
   }
+  const login = loginOf(token);
+  const held = takeAppleRefresh(token);
   const result = deleteAccount(token);
   if (result.deleted) audit('account', 'deleted', why);
+
+  if (held) queueRevocation(held.token, 'account deleted', held.subject || login?.subject || '');
+  // Revoking the held token already ends the authorization the exchanged one
+  // belongs to when both are for the same Apple ID; only a token that is not
+  // provably that needs sending as well.
+  // An exchanged token whose Apple ID could not be read is queued with no
+  // subject, which means no later sign-in can call it off: nobody can prove
+  // it was theirs.
+  if (exchanged && !(held && exchanged.sub && held.subject === exchanged.sub)) {
+    queueRevocation(exchanged.refreshToken, 'account deleted', exchanged.sub);
+  }
+  if (!held && !exchanged && (login?.provider === 'apple' || asked?.provider === 'apple')) {
+    console.warn('erase: an Apple sign-in was deleted with no Apple token to revoke');
+  }
   return result;
 }
 
@@ -489,6 +550,9 @@ app.get('/api/auth/config', (_req, res) => {
     google: !!GOOGLE_CLIENT_ID,
     googleClientId: GOOGLE_CLIENT_ID || null,
     googleIosClientId: GOOGLE_CLIENT_ID ? GOOGLE_IOS_CLIENT_ID : null,
+    // Whether this server can revoke Sign in with Apple — a yes or a no, and
+    // nothing about the key that makes it one.
+    appleRevoke: appleRevokeReady,
   });
 });
 
@@ -500,6 +564,10 @@ app.post('/api/auth/google', async (req, res) => {
     const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
       .then((r) => r.json());
     if (!GOOGLE_AUDIENCES.has(info.aud)) return res.status(401).json({ error: 'Token was not issued for this app' });
+    // Google taking the place of an Apple login on this profile: the Apple
+    // token it was holding is handed back, unless the same Apple ID is still
+    // in use on another device.
+    retireAppleRefresh(String(token).slice(0, 64), 'replaced by a Google sign-in');
     // info.name is deliberately unused: the play name comes from the player,
     // not from their Google account. The address and photo are kept — the
     // profile card is the only place they appear, and only to their owner.
@@ -515,8 +583,6 @@ app.post('/api/auth/google', async (req, res) => {
   }
 });
 
-// The native flow on iOS: Apple has already authenticated the user on-device;
-// we record the stable user id against this install's identity token.
 /** Who am I — drives the profile chip. Includes the sign-in state. */
 app.get('/api/me', (req, res) => {
   const me = meView(String(req.query.token || '').slice(0, 64));
@@ -524,17 +590,244 @@ app.get('/api/me', (req, res) => {
   res.json(me);
 });
 
+/**
+ * Sign out. The device identity, the wallet and the friends all stay; only
+ * the link to Google or Apple goes — and with an Apple link, MoneyMove's
+ * access to that Apple ID goes back to Apple as well, unless another device
+ * is still signed in with it (see retireAppleRefresh).
+ */
 app.post('/api/auth/logout', (req, res) => {
-  res.json(detachLogin(String(req.body?.token || '').slice(0, 64)));
+  const token = String(req.body?.token || '').slice(0, 64);
+  retireAppleRefresh(token, 'signed out');
+  res.json(detachLogin(token));
 });
 
-app.post('/api/auth/apple', (req, res) => {
+// ---- sign in with apple -----------------------------------------------------
+// The talking to Apple lives in appleid.js. What lives here is the lifecycle
+// of the one Apple token a profile can hold: when a sign-in brings a new one,
+// when an old one has to be handed back, and when it must not be.
+//
+// The rule that shapes all of it: revoking ANY token for an Apple ID ends
+// MoneyMove's authorization for that Apple ID as a whole — every token, on
+// every device, including one issued a second ago. So a token is only handed
+// back when nothing still signed in could be relying on the authorization.
+
+/**
+ * Builds 10 and earlier sent Apple's user id and nothing Apple signed, which
+ * is a claim anybody can type. None of those builds reached the store, but
+ * a TestFlight phone may still be running one, so they are let in — loudly,
+ * one warning per request — until build 11 is what people have. Then set
+ * APPLE_UNVERIFIED_SIGNIN=off and the only way to be signed in with Apple is
+ * to have actually signed in with Apple; the next boot also signs out every
+ * Apple login that was let in this way (dropUnverifiedAppleLogins).
+ *
+ * Unset, blank, or on/1/true/yes keeps the old path open. Anything else
+ * closes it — an operator who typed "disabled" meant off, and a switch that
+ * guards a way to forge a sign-in should fail closed, not open. The state is
+ * written to the log once at boot so nobody has to guess.
+ */
+const APPLE_UNVERIFIED_SIGNIN = (() => {
+  const raw = String(process.env.APPLE_UNVERIFIED_SIGNIN ?? '').trim().toLowerCase();
+  if (raw === '' || ['1', 'on', 'true', 'yes'].includes(raw)) return true;
+  if (!['0', 'off', 'false', 'no'].includes(raw)) {
+    console.warn(`apple: APPLE_UNVERIFIED_SIGNIN=${JSON.stringify(raw.slice(0, 20))} is neither on nor off — treating it as off`);
+  }
+  return false;
+})();
+console.log(`  apple: unverified (pre-build-11) Sign in with Apple is ${APPLE_UNVERIFIED_SIGNIN
+  ? 'ON — set APPLE_UNVERIFIED_SIGNIN=off once build 11 is live' : 'off'}`);
+
+/**
+ * Take this profile's Apple token off it, and hand it back to Apple if that
+ * is safe.
+ *
+ * `keepSubject` is for a sign-in with the same Apple ID the token belongs to:
+ * that token is returned to the caller to store again, untouched — revoking
+ * it would take the brand new sign-in down with it.
+ *
+ * Otherwise it is revoked, unless another profile is signed in (verified)
+ * with the same Apple ID. That device's authorization is the same
+ * authorization and still in use, so the token is not revoked — but it is
+ * not simply dropped either. If that device holds no token of its own it
+ * inherits this one, so that whichever device is last to sign out or be
+ * deleted can still end the authorization. Only when every other device
+ * already holds a token is this one let go, because nothing is lost.
+ */
+function retireAppleRefresh(token, why, keepSubject = null) {
+  const held = takeAppleRefresh(token);
+  if (!held) return null;
+  if (keepSubject && held.subject === keepSubject) return held;
+  if (appleSubjectLinkedElsewhere(held.subject, token)) {
+    if (passAppleRefreshOn(held, token)) {
+      console.log(`apple: ${why} — the Apple ID is still signed in on another device, which now holds its token`);
+    } else {
+      console.log(`apple: ${why} — the Apple ID is still signed in on another device with its own token, so its access stays`);
+    }
+    return null;
+  }
+  queueRevocation(held.token, why, held.subject);
+  return null;
+}
+
+/**
+ * Exchange an authorization code for a refresh token, or come back empty.
+ *
+ * Empty is an answer, not an error: no code, no key configured, Apple slow or
+ * saying no — the sign-in or the deletion carries on regardless, and the log
+ * says which (Apple's error code only; never the code or a token). A code
+ * whose Apple ID is not `subject` is refused here, so neither caller ever
+ * stores or revokes a token for somebody it was not asked about. An empty
+ * `subject` accepts whoever the code belongs to.
+ *
+ * `acceptUnknownSubject` is for deletion only. Apple can issue a token whose
+ * id_token will not read, leaving its Apple ID unknown (sub ''); the code was
+ * minted on the deleting player's own phone a moment ago, and revoking that
+ * token is better than losing it. A sign-in never stores one it cannot place.
+ */
+async function appleRefreshFromCode(rawCode, subject, when, { acceptUnknownSubject = false } = {}) {
+  const code = typeof rawCode === 'string' ? rawCode.trim().slice(0, 1024) : '';
+  if (!code || !appleRevokeReady) return null;
+  try {
+    const got = await exchangeCode(code);
+    if (!got.sub && acceptUnknownSubject) return got;
+    if (subject && got.sub !== subject) {
+      console.warn(`apple: ${when} — the authorization code ${got.sub
+        ? 'belongs to a different Apple ID' : 'came back without a readable Apple ID'}; not using it`);
+      return null;
+    }
+    return got;
+  } catch (err) {
+    console.warn(`apple: ${when} — could not exchange the authorization code (${String(err?.message).slice(0, 40)})`);
+    return null;
+  }
+}
+
+/**
+ * Sign in with Apple, from the app.
+ *
+ * Body: token, identityToken (the JWT), authorizationCode, nonce (the raw one
+ * — its SHA-256 is what the token carries), nickname, and userId, which is
+ * only ever checked against what Apple signed and never believed on its own.
+ *
+ * The order matters. Nothing about the profile changes until the identity
+ * token has been verified. The code is exchanged next, while it is still
+ * good. Only then, synchronously and all at once, is the old token dealt with
+ * and the login written — so there is no moment in which a request that
+ * arrived during the awaits (a sign-out, a deletion) sees half of a sign-in.
+ */
+app.post('/api/auth/apple', async (req, res) => {
   // `name` still arrives from older apps — it is Apple's copy of the player's
   // real name, and it is ignored. `nickname` is what they call themselves.
-  const { token, userId } = req.body || {};
+  const body = req.body || {};
+  const token = String(body.token || '').slice(0, 64);
+  const userId = body.userId == null ? '' : String(body.userId);
+  const identityToken = typeof body.identityToken === 'string' ? body.identityToken : '';
+  if (!identityToken) return legacyAppleSignIn(res, token, userId.slice(0, 128), body.nickname);
+  if (!token) return res.status(400).json({ error: 'Missing token' });
+
+  try {
+    const existed = !!codeForToken(token);
+    let who;
+    try {
+      who = await verifyIdentityToken(identityToken, {
+        nonce: typeof body.nonce === 'string' ? body.nonce.slice(0, 256) : '',
+      });
+    } catch (err) {
+      console.warn(`apple: refused a sign-in (${String(err?.message).slice(0, 60)})`);
+      return res.status(401).json({ error: 'Could not verify the Apple sign-in' });
+    }
+    if (userId && userId !== who.sub) {
+      console.warn('apple: refused a sign-in (userId does not match the identity token)');
+      return res.status(401).json({ error: 'Could not verify the Apple sign-in' });
+    }
+
+    const fresh = await appleRefreshFromCode(body.authorizationCode, who.sub, 'sign-in');
+
+    // Deleted while Apple was being asked. Writing the login now would bring
+    // the account straight back, so it is not written — and a token that was
+    // just issued for it has nobody left to hold it.
+    if (existed && !codeForToken(token)) {
+      if (fresh) queueRevocation(fresh.refreshToken, 'account deleted during sign-in', who.sub);
+      return res.status(409).json({ error: 'This account was just deleted' });
+    }
+
+    // A revocation still waiting for this Apple ID (Apple was down when they
+    // signed out, say) would, delivered later, end the authorization this
+    // sign-in stands on. It is called off. With no token of its own from this
+    // sign-in, the newest one withdrawn is kept instead — same authorization,
+    // and the next sign-out or deletion can still revoke it.
+    const pending = withdrawQueuedRevocations(who.sub);
+    const kept = retireAppleRefresh(token, 'signed in with a different Apple ID', who.sub);
+    const appleRefresh = fresh ? { token: fresh.refreshToken, subject: who.sub }
+      : kept || (pending[0] ? { token: pending[0], subject: who.sub } : null);
+    const linked = attachLogin(token, 'apple', who.sub, body.nickname, { appleRefresh, verified: true });
+    res.json({ ok: true, name: linked?.name || '', code: linked?.code });
+  } catch (err) {
+    console.error('apple: sign-in failed —', String(err?.message).slice(0, 80));
+    res.status(500).json({ error: 'Sign in with Apple failed — try again' });
+  }
+});
+
+/**
+ * The pre-build-11 shape: a bare user id. See APPLE_UNVERIFIED_SIGNIN.
+ *
+ * The login it writes is marked unverified, so it can be told apart from a
+ * real one later — except when this very profile is already verified as that
+ * same Apple ID (an old TestFlight build on a phone that has since signed in
+ * properly), which a repeat of the same claim does not downgrade. It never
+ * withdraws a queued revocation: a typed user id must not be able to cancel
+ * one.
+ */
+function legacyAppleSignIn(res, token, userId, nickname) {
   if (!token || !userId) return res.status(400).json({ error: 'Missing token or userId' });
-  const linked = attachLogin(String(token).slice(0, 64), 'apple', String(userId).slice(0, 128), req.body?.nickname);
+  if (!APPLE_UNVERIFIED_SIGNIN) {
+    return res.status(401).json({ error: 'Update MoneyMove to sign in with Apple' });
+  }
+  console.warn('apple: accepted an UNVERIFIED sign-in from a pre-build-11 app (APPLE_UNVERIFIED_SIGNIN is on)');
+  const prev = loginOf(token);
+  const stillVerified = prev?.provider === 'apple' && prev.subject === userId && appleLoginVerified(token);
+  const kept = retireAppleRefresh(token, 'signed in with a different Apple ID', userId);
+  const linked = attachLogin(token, 'apple', userId, nickname, { appleRefresh: kept, verified: stillVerified });
   res.json({ ok: true, name: linked?.name || '', code: linked?.code });
+}
+
+/**
+ * Apple's server-to-server notifications, for the endpoint registered against
+ * the app's Sign in with Apple configuration.
+ *
+ * Apple posts a signed JWT whenever a player stops using Sign in with Apple
+ * for MoneyMove from Apple's side — removing the app under their Apple ID
+ * settings (consent-revoked) or deleting the Apple ID (account-deleted).
+ * Apple's current documentation names that last one "account-deleted"; older
+ * copies of it said "account-delete", so both are accepted. All of
+ * them mean the same thing here: every profile signed in with that Apple ID is
+ * signed out, and the token it held is dropped without being revoked, since
+ * Apple has already done that. The email relay events change nothing we
+ * keep and are acknowledged and ignored.
+ *
+ * Anything that does not verify is a 400. Apple sends JSON; the text parser
+ * is only there so a body that arrives under some other content type is
+ * still read rather than silently seen as empty.
+ */
+const APPLE_UNLINK_EVENTS = new Set(['consent-revoked', 'account-deleted', 'account-delete']);
+
+app.post('/api/auth/apple/notifications', express.text({ type: () => true, limit: '16kb' }), async (req, res) => {
+  let payload = req.body?.payload;
+  if (typeof req.body === 'string') {
+    try { payload = JSON.parse(req.body).payload; } catch { payload = req.body.trim(); }
+  }
+  let event;
+  try {
+    event = await verifyServerNotification(typeof payload === 'string' ? payload : '');
+  } catch (err) {
+    console.warn(`apple: refused a server notification (${String(err?.message).slice(0, 60)})`);
+    return res.status(400).json({ error: 'Invalid notification' });
+  }
+  if (APPLE_UNLINK_EVENTS.has(event.type)) {
+    const changed = forgetAppleSubject(event.sub, { before: event.eventTime });
+    console.log(`apple: ${event.type} — signed out ${changed} profile(s)`);
+  }
+  res.json({ ok: true });
 });
 
 // ---- master admin ---------------------------------------------------------
@@ -550,6 +843,16 @@ const WEBHOOK_HEALTH_FILE = path.join(DATA_DIR, 'webhook-health.json');
 // something breaks, and "the day something breaks" is not announced.
 initWebhookHealth(DATA_DIR);
 startBackups(DATA_DIR);
+// And any Sign in with Apple revocation that did not get through before the
+// last restart picks up where it left off — see the queue in appleid.js.
+startAppleRevocationRetries();
+// With unverified Apple sign-in switched off, the logins it let in while it
+// was on go too — otherwise closing the door would leave everybody who came
+// through it signed in for good.
+if (!APPLE_UNVERIFIED_SIGNIN) {
+  const n = dropUnverifiedAppleLogins();
+  if (n) console.warn(`apple: signed out ${n} profile(s) whose Apple sign-in was never verified`);
+}
 
 // Every admin POST leaves a line here. The dashboard shows the tail; the file
 // is the memory — an operator action that isn't written down didn't happen.
@@ -963,13 +1266,22 @@ app.get('/api/admin/notices', (req, res) => {
 /**
  * Delete somebody's account on their behalf — the privacy page promises it to
  * anyone who emails their friend code.
+ *
+ * Apple access is revoked here exactly as it is from the app when a token is
+ * on file. When one is not, there is no second sign-in to ask an email for,
+ * so the account goes all the same and the log says what could not be done.
  */
-app.post('/api/admin/account/delete', (req, res) => {
+app.post('/api/admin/account/delete', async (req, res) => {
   if (!adminBodyGuard(req, res)) return;
   const code = String(req.body?.code || '').trim().toUpperCase();
   const token = tokenForCode(code);
   if (!token) return res.status(400).json({ error: 'No player with that code' });
-  res.json({ ...eraseAccount(token, `deleted ${code} on request`), code });
+  try {
+    res.json({ ...(await eraseAccount(token, `deleted ${code} on request`)), code });
+  } catch (err) {
+    console.error('erase: failed', err);
+    res.status(500).json({ error: 'Could not delete the account' });
+  }
 });
 
 /** What players have reported, newest first. Codes only, never tokens. */

@@ -1348,12 +1348,37 @@ export function allProfiles() {
  * is given a name off the same list the dice button uses. The real name is
  * not stored anywhere: the profile card shows the photo and the address,
  * which only its owner ever sees.
+ *
+ * An Apple login can bring the refresh token Apple issued for it, which is
+ * what revoking the login later takes — see the Sign in with Apple block
+ * below. This only ever writes one; the route decides beforehand what
+ * happens to any token the profile was already holding, because whether that
+ * one gets revoked depends on who else is signed in with it, and that is not
+ * a question for the function that stores things.
+ *
+ * An Apple login also says whether it was `verified` — made from an identity
+ * token whose signature checked out — or merely claimed, by a pre-build-11
+ * app that sent a bare user id. Both unlock the same things while unverified
+ * sign-in is allowed at all, but only a verified one is believed about which
+ * Apple ID it is (see appleSubjectLinkedElsewhere), and the unverified ones
+ * are signed out once that door is closed (dropUnverifiedAppleLogins).
+ * Google logins are always checked against Google and carry no flag.
  */
-export function attachLogin(token, provider, subject, preferred, { email, picture } = {}) {
+export function attachLogin(token, provider, subject, preferred, { email, picture, appleRefresh, verified } = {}) {
   const p = profileFor(token);
   if (!p) return null;
   const stored = profiles.get(token);
-  stored.login = { provider, subject, at: Date.now() };
+  stored.login = {
+    provider, subject, at: Date.now(),
+    ...(provider === 'apple' ? { verified: verified === true } : {}),
+  };
+  if (provider === 'apple' && appleRefresh?.token) {
+    stored.appleRefresh = {
+      token: String(appleRefresh.token),
+      subject: String(appleRefresh.subject || subject || ''),
+      at: appleRefresh.at || Date.now(),
+    };
+  }
   // `preferred` is what the PLAYER is already calling themselves on this
   // device — never what Google or Apple call them. Somebody who typed a
   // nickname and then signed in keeps it; anyone else gets a game name.
@@ -1369,15 +1394,172 @@ export function attachLogin(token, provider, subject, preferred, { email, pictur
   return { code: stored.code, name: stored.name, picture: stored.picture || '' };
 }
 
-/** Unlink the provider — the anonymous device identity stays untouched. */
+/**
+ * Unlink the provider — the anonymous device identity stays untouched.
+ *
+ * An Apple refresh token is deliberately NOT dropped here. A caller that
+ * wants it gone takes it first (takeAppleRefresh) and decides whether Apple
+ * should hear about it; a token left behind by one that did not is still on
+ * the profile when the account is deleted, and is revoked then. Losing one
+ * silently is the only outcome ruled out.
+ */
 export function detachLogin(token) {
   const stored = profiles.get(token);
   if (!stored) return { ok: true };
+  unlink(stored);
+  saveSoon();
+  return { ok: true };
+}
+
+function unlink(stored) {
   delete stored.login;
   delete stored.email;
   delete stored.picture;
-  saveSoon();
-  return { ok: true };
+}
+
+// ------------------------------------------------------ sign in with apple --
+// The refresh token Apple issues when a sign-in's authorization code is
+// exchanged. It exists for one purpose — handing it back to Apple, which
+// ends MoneyMove's access to that Apple ID — so it lives in its own field,
+// `appleRefresh`, beside the login rather than inside it: `login` is copied
+// wholesale into the admin dashboard's player rows, and this must never be.
+// No view in this file reads it except to say whether one is on file.
+//
+// Everything here is bookkeeping. Talking to Apple is appleid.js's job, and
+// deciding when to is the routes'.
+
+/** The provider and subject this profile is signed in with, if any. */
+export function loginOf(token) {
+  const login = token ? profiles.get(token)?.login : null;
+  return login ? { provider: login.provider, subject: login.subject || '', verified: login.verified === true } : null;
+}
+
+/** Whether this profile's Apple login came from an identity token that verified. */
+export function appleLoginVerified(token) {
+  const login = token ? profiles.get(token)?.login : null;
+  return login?.provider === 'apple' && login.verified === true;
+}
+
+/**
+ * Remove this profile's Apple refresh token and hand it to the caller, who is
+ * now the only holder and is expected to revoke it or knowingly let it go.
+ */
+export function takeAppleRefresh(token) {
+  const stored = token ? profiles.get(token) : null;
+  const held = stored?.appleRefresh;
+  if (!held) return null;
+  delete stored.appleRefresh;
+  save();
+  return { token: held.token, subject: held.subject || '', at: held.at || 0 };
+}
+
+/**
+ * Is some other profile still signed in with this Apple ID?
+ *
+ * Logins are keyed on the device, not the Apple ID, so one person with a
+ * phone and an iPad is two profiles carrying the same subject. Revoking any
+ * token of theirs ends the app's authorization for the Apple ID as a whole —
+ * the other device included — so signing out of one must not do it while the
+ * other is still using it.
+ *
+ * Only verified logins count. An unverified one is somebody's say-so about
+ * whose Apple ID it is, and anyone who learned a player's Apple user id could
+ * otherwise link a throwaway profile to it and make sure that player's
+ * sign-out never revoked anything.
+ */
+export function appleSubjectLinkedElsewhere(subject, exceptToken) {
+  if (!subject) return false;
+  for (const p of profiles.values()) {
+    if (p.token === exceptToken) continue;
+    if (isVerifiedAppleLogin(p, subject)) return true;
+  }
+  return false;
+}
+
+const isVerifiedAppleLogin = (p, subject) =>
+  p.login?.provider === 'apple' && p.login.verified === true && p.login.subject === subject;
+
+/**
+ * Hand a token that is coming off one profile to another profile signed in
+ * with the same Apple ID that holds none, so the last device to sign out (or
+ * be deleted) still has something to revoke.
+ *
+ * Without this, a phone signed in before tokens were kept — or whose code
+ * exchange failed — and a tablet holding the only token would lose it the
+ * moment the tablet signed out: not revoked, because the phone still relies
+ * on the authorization, and not kept, because nothing held it. The phone's
+ * own sign-out or deletion would then have nothing to hand back to Apple, and
+ * MoneyMove's access to that Apple ID would outlive everything.
+ *
+ * The heir is the most recent such sign-in, and only a verified one: a bare
+ * user id typed into an old app must not be able to collect a real player's
+ * token, and with it the power to end their authorization by signing out.
+ * Returns true if somebody took it; false when every other device already
+ * holds a token for the same authorization, and letting this one go loses
+ * nothing.
+ */
+export function passAppleRefreshOn(held, exceptToken) {
+  if (!held?.token || !held.subject) return false;
+  let heir = null;
+  for (const p of profiles.values()) {
+    if (p.token === exceptToken || p.appleRefresh?.token) continue;
+    if (!isVerifiedAppleLogin(p, held.subject)) continue;
+    if (!heir || (p.login.at || 0) > (heir.login.at || 0)) heir = p;
+  }
+  if (!heir) return false;
+  heir.appleRefresh = { token: String(held.token), subject: held.subject, at: held.at || Date.now() };
+  save();
+  return true;
+}
+
+/**
+ * Sign out every Apple login that was never verified. Called at boot once
+ * unverified sign-in has been switched off: the logins it let in while it was
+ * on — pre-build-11 phones, and anybody who typed a user id — would otherwise
+ * stay signed in for good, daily coin and cup seat included. Those players
+ * sign in again with a build that sends a real identity token.
+ *
+ * A refresh token on such a profile is left where it is, for the same reason
+ * detachLogin leaves one: it is still revoked when the account is deleted.
+ * Returns how many profiles were signed out.
+ */
+export function dropUnverifiedAppleLogins() {
+  let dropped = 0;
+  for (const p of profiles.values()) {
+    if (p.login?.provider !== 'apple' || p.login.verified === true) continue;
+    unlink(p);
+    dropped++;
+  }
+  if (dropped) save();
+  return dropped;
+}
+
+/**
+ * Apple says this Apple ID has stopped using the app — the player removed it
+ * under Settings, or deleted the Apple ID. Every profile signed in with it is
+ * signed out, and its refresh token is dropped without being revoked: Apple
+ * already did that, which is what the notification is telling us.
+ *
+ * `before` is when Apple says it happened. A login made after that is a
+ * player who came back and signed in again, and a late (or redelivered)
+ * notice about the old authorization is no reason to throw out the new one.
+ *
+ * Returns how many profiles changed.
+ */
+export function forgetAppleSubject(subject, { before = null } = {}) {
+  if (!subject) return 0;
+  let changed = 0;
+  for (const p of profiles.values()) {
+    const linked = p.login?.provider === 'apple' && p.login.subject === subject;
+    const holds = p.appleRefresh?.subject === subject;
+    if (!linked && !holds) continue;
+    if (before != null && linked && (p.login.at || 0) > before) continue;
+    if (holds) delete p.appleRefresh;
+    if (linked) unlink(p);
+    changed++;
+  }
+  if (changed) save();
+  return changed;
 }
 
 /** Who this device is, for the profile chip: sign-in state included. */
@@ -1385,7 +1567,10 @@ export function meView(token) {
   // Same read-only rule as walletOf — the profile chip asks on every visit.
   if (!token) return null;
   if (!profiles.get(token)) {
-    return { code: '', name: '', flag: '', coins: 0, karma: KARMA_MAX, provider: null, email: '', picture: '' };
+    return {
+      code: '', name: '', flag: '', coins: 0, karma: KARMA_MAX, provider: null, email: '', picture: '',
+      appleRevocable: false,
+    };
   }
   const p = profileFor(token);
   const stored = profiles.get(token);
@@ -1398,6 +1583,10 @@ export function meView(token) {
     provider: stored.login?.provider || null,
     email: stored.email || '',
     picture: stored.picture || '',
+    // One bit about the Apple token, never the token: whether deleting this
+    // account can revoke Apple access on its own, or the app has to ask the
+    // player to sign in with Apple once more so there is something to revoke.
+    appleRevocable: stored.login?.provider === 'apple' && !!stored.appleRefresh?.token,
   };
 }
 

@@ -16,6 +16,9 @@ struct LandingView: View {
     @State private var me: MeInfo?
     @State private var authConfig: AuthConfig?
     @State private var signingIn = false
+    /// The raw nonce of the Apple sheet currently up. Its hash went to Apple;
+    /// this is what the server hashes to check the token came from that sheet.
+    @State private var appleNonce = ""
     @State private var friends: [FriendEntry] = []
     /// People waiting on an answer. The summary row leads with them, because
     /// a request is the one thing here that somebody else is waiting on.
@@ -120,6 +123,11 @@ struct LandingView: View {
             for: UIApplication.willEnterForegroundNotification)) { _ in
             cupWatch.reload()
             Task { await noticeWatch.load() }
+        }
+        // Signed out from outside this screen — Apple access removed in the
+        // Settings app. The card would otherwise keep showing the old name.
+        .onReceive(NotificationCenter.default.publisher(for: .mmAccountChanged)) { _ in
+            Task { await refreshMe() }
         }
     }
 
@@ -1262,12 +1270,18 @@ struct LandingView: View {
 
                     SignInWithAppleButton(.signIn) { request in
                         // Nothing but the stable user id is used, so nothing
-                        // else is asked for.
+                        // else is asked for. A fresh nonce per tap: its hash
+                        // goes to Apple inside the request, the raw value
+                        // waits here until the server needs to check it.
+                        let nonce = AppleNonce.make()
+                        appleNonce = nonce.raw
                         request.requestedScopes = []
+                        request.nonce = nonce.hashed
                     } onCompletion: { result in
                         if case .success(let auth) = result,
                            let cred = auth.credential as? ASAuthorizationAppleIDCredential {
-Task { await appleLinked(userId: cred.user) }
+                            let rawNonce = appleNonce
+                            Task { await appleLinked(cred, rawNonce: rawNonce) }
                         }
                     }
                     .signInWithAppleButtonStyle(scheme == .light ? .black : .white)
@@ -1334,22 +1348,35 @@ Task { await appleLinked(userId: cred.user) }
         }
     }
 
-    private func appleLinked(userId: String) async {
-        struct Reply: Decodable { var ok: Bool?; var name: String? }
-        let reply: Reply? = try? await store.fetchJSON(
-            "/api/auth/apple", method: "POST",
-            body: ["token": store.token, "userId": userId, "nickname": store.nickname])
-        if reply?.ok == true {
-            if let n = reply?.name, !n.isEmpty { store.nickname = n }
-            store.showToast("Signed in with Apple")
-            await refreshMe()
-        }
+    /// The sheet said yes; the server still has to. linkApple does the asking
+    /// and owns the failure toast, so this only reports the good news.
+    private func appleLinked(_ cred: ASAuthorizationAppleIDCredential, rawNonce: String) async {
+        guard await store.linkApple(cred, rawNonce: rawNonce) else { return }
+        store.showToast("Signed in with Apple")
+        await refreshMe()
     }
 
     private func signOut() async {
         struct Reply: Decodable { var ok: Bool? }
-        let _: Reply? = try? await store.fetchJSON(
+        let reply: Reply? = try? await store.fetchJSON(
             "/api/auth/logout", method: "POST", body: ["token": store.token])
+        guard reply?.ok == true else {
+            // The server never heard it, so nothing changed there: the Apple
+            // sign-in (and the token kept to revoke it) still stands, and so
+            // must the id the credential check watches. The card keeps showing
+            // what is true rather than a signed-out state that is not — which
+            // is also why there is no refreshMe here: offline, it would blank
+            // the card and look exactly like a sign-out that worked.
+            store.showToast("Couldn't sign out — check your connection and try again.", isError: true)
+            return
+        }
+        // Signing out on purpose is not Apple taking access away, so the
+        // credential check has nothing left to watch for. Only now, though: if
+        // the reply was lost after the server did sign out, the id stays, and
+        // when Apple later reports that sign-in revoked the check finds the
+        // server already signed out and simply forgets it — no second logout,
+        // no toast.
+        UserDefaults.standard.removeObject(forKey: GameStore.appleUserKey)
         store.showToast("Signed out — coins and friends stay with this device")
         await refreshMe()
     }

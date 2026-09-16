@@ -162,6 +162,10 @@ struct RootView: View {
             // refreshes it for anyone who has already granted permission.
             PushRegistrar.shared.adopt(store)
             inviteWatch.start(store)
+            // Access to the Apple ID can be taken away from the Settings app
+            // with the game closed; this notices, at launch and on every
+            // return to the front, and signs this device out of Apple.
+            AppleCredentialWatch.shared.start(store)
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay { cardPopupOverlay }

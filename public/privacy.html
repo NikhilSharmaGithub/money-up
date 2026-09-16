@@ -44,7 +44,9 @@
     <li><b>Friends and direct messages.</b> Friend connections, friend requests, and the messages
     you exchange with friends, so both of you can read the thread.</li>
     <li><b>Optional sign-in.</b> If you choose Sign in with Apple, we store Apple's anonymous user
-    identifier. If you choose Google, we store Google's user identifier, your email address and
+    identifier. We also keep a token Apple issues, solely so we can revoke MoneyMove's access to
+    your Apple ID when you sign out or delete your account; it is deleted once it has been revoked.
+    If you choose Google, we store Google's user identifier, your email address and
     your profile photo, which are shown only to you on your own profile card. We never store or
     display your real name. Signing in is never required to play.</li>
     <li><b>Coin purchases.</b> Coin packs are charged entirely by the App Store. We receive and keep

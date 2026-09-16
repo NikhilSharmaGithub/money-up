@@ -93,10 +93,18 @@ extension GameStore {
     }
 
     /// Delete the account on the server, then become somebody new here.
+    ///
+    /// An account signed in with Apple also has MoneyMove's access to that
+    /// Apple ID revoked on the way out, which the server can only do with a
+    /// token from Apple. If it never got one, Apple's sheet is shown once to
+    /// fetch a code it can trade for one; cancelling that sheet still deletes
+    /// the account. See appleCodeForDeletion.
     func deleteAccount() async -> Bool {
         struct Reply: Decodable { var ok: Bool? }
+        var body: [String: Any] = ["token": token]
+        if let appleCode = await appleCodeForDeletion() { body["appleCode"] = appleCode }
         let reply: Reply? = try? await fetchJSON(
-            "/api/account/delete", method: "POST", body: ["token": token])
+            "/api/account/delete", method: "POST", body: body)
         guard reply?.ok == true else {
             showToast("Couldn't delete your account — check your connection and try again.", isError: true)
             return false
