@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- Safari on iPhone and iPad turns this into the strip at the top of the
+     page with a GET button on it — the shortest path from "someone landed
+     here on a phone" to "the app is on their home screen". Every other
+     browser ignores it, which is why the page carries its own button too. -->
+<meta name="apple-itunes-app" content="app-id=6806881798" />
 <!-- The browser chrome takes the table's own colour. There are fourteen of them
      — seven palettes, each with a light and a dark — and which one is on is a
      choice kept in this browser's storage, so a media query here could only
@@ -60,6 +65,25 @@
       "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 2, "maxValue": 8 },
       "gamePlatform": ["Web browser", "iPhone", "iPad", "Android"],
       "inLanguage": "en",
+      "isAccessibleForFree": true,
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "availability": "https://schema.org/InStock"
+      },
+      "publisher": { "@id": "https://www.moneymove.live/#publisher" },
+      "sameAs": ["https://apps.apple.com/app/id6806881798"],
+      "installUrl": "https://apps.apple.com/app/id6806881798"
+    },
+    {
+      "@type": "MobileApplication",
+      "@id": "https://www.moneymove.live/#ios-app",
+      "name": "MoneyMove: Property Board Game",
+      "url": "https://apps.apple.com/app/id6806881798",
+      "installUrl": "https://apps.apple.com/app/id6806881798",
+      "applicationCategory": "GameApplication",
+      "operatingSystem": "iOS 17.0 or later",
       "isAccessibleForFree": true,
       "offers": {
         "@type": "Offer",
@@ -127,6 +151,29 @@
     <button id="helpBtnLanding" class="icon-btn help-float" title="How to play" aria-label="How to play" data-ico="question"></button>
     <h1 class="logo xl">MONEY<span>MOVE</span></h1>
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
+
+    <!-- The game runs in this browser and always will. But somebody who likes
+         it enough to come back wants it on their home screen, and on a phone
+         the app is the better table: no address bar, push when it is your turn.
+         Safari puts its own strip at the top of the page (see the
+         apple-itunes-app tag above); this is the same offer for everyone else,
+         and for anyone who has already dismissed the strip. -->
+    <a class="app-cta" href="https://apps.apple.com/app/id6806881798"
+       target="_blank" rel="noopener">
+      <svg class="app-cta-ico" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+        <rect x="8.5" y="2.5" width="15" height="27" rx="3.6" fill="currentColor" opacity=".18"/>
+        <rect x="8.5" y="2.5" width="15" height="27" rx="3.6" stroke="currentColor" stroke-width="2"/>
+        <path d="M13.4 5.6h5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="16" cy="25.8" r="1.5" fill="currentColor"/>
+        <path d="M16 11v8.2M12.4 15.6 16 19.2l3.6-3.6" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="app-cta-text">
+        <strong>Download for iPhone</strong>
+        <small>Free on the App Store</small>
+      </span>
+      <span class="app-cta-go" aria-hidden="true">&rsaquo;</span>
+    </a>
 
     <!-- Today's coins, above the table: app.js fills it in and keeps it hidden
          until the server has actually said there is something to collect. -->

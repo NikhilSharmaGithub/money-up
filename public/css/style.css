@@ -432,6 +432,43 @@ select { cursor: pointer; }
 .logo.xl { font-size: clamp(42px, 9vw, 64px); line-height: 1.02; }
 .tagline { color: var(--page-ink-2); margin: 12px 0 28px; font-size: 15.5px; }
 
+/* The App Store offer, under the wordmark.
+   A row rather than a plain button: the line that matters ("Download for
+   iPhone") reads first, and the price — free — sits under it where a doubt
+   would otherwise sit. It wears the table's own accent so it belongs to the
+   page instead of arriving from Apple, and it stays a link, so a long press
+   still offers copy and share the way a link should. */
+.app-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin: -12px 0 26px;
+  padding: 10px 16px 10px 13px;
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+  transition: transform .12s var(--pop), box-shadow .16s, border-color .16s, color .16s;
+}
+.app-cta:hover { border-color: var(--red); color: var(--red-deep); transform: translateY(-1px); }
+.app-cta:active { transform: translateY(1px) scale(.99); }
+.app-cta-ico { width: 30px; height: 30px; flex: none; color: var(--red); }
+.app-cta:hover .app-cta-ico { color: var(--red-deep); }
+.app-cta-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+.app-cta-text strong { font-size: 15px; font-weight: 800; letter-spacing: .01em; }
+.app-cta-text small { font-size: 12.5px; color: var(--page-ink-3); font-weight: 600; }
+.app-cta:hover .app-cta-text small { color: inherit; }
+.app-cta-go { font-size: 22px; line-height: 1; color: var(--page-ink-3); margin-left: 2px; }
+
+/* On a phone the row is the widest thing on the screen, so it stops being a
+   pill that floats and becomes a full-width shelf like every other control. */
+@media (max-width: 480px) {
+  .app-cta { display: flex; width: min(100%, 340px); border-radius: var(--r-sm); justify-content: flex-start; }
+  .app-cta-go { margin-left: auto; }
+}
+
 .landing-card {
   background: var(--card);
   border: 1px solid var(--rule);
