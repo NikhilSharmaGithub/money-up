@@ -462,6 +462,10 @@ select { cursor: pointer; }
 .app-cta:hover .app-cta-text small { color: inherit; }
 .app-cta-go { font-size: 22px; line-height: 1; color: var(--page-ink-3); margin-left: 2px; }
 
+/* Safari is already offering the app at the top of the page — see the script
+   in the head that sets this. One offer is enough. */
+html[data-smart-banner="yes"] .app-cta { display: none; }
+
 /* On a phone the row is the widest thing on the screen, so it stops being a
    pill that floats and becomes a full-width shelf like every other control. */
 @media (max-width: 480px) {

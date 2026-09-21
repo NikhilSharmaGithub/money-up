@@ -119,6 +119,17 @@ const defaults = () => ({
     rewarded: true,
     interstitial: true,
   },
+  // And one switch per kind of client, under the master and over everything
+  // else. The phone and the browser are not the same product: on the phone an
+  // ad is a normal part of a free game, and on the web it is a stranger asking
+  // the player to watch something in the middle of a page that has never asked
+  // them for anything. The browser is off, and stays off until somebody says
+  // otherwise from the desk.
+  platforms: {
+    ios: true,
+    android: true,
+    web: false,
+  },
   // Which adapter the owner has chosen. 'house' needs nothing configured;
   // 'google' means the real networks — AdMob on the phone, H5 in the browser —
   // and each falls back to the house on its own until its ids are filled in.
@@ -218,7 +229,8 @@ function load() {
   try {
     const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
     settings = merge(defaults(), raw);
-    console.log(`  ads: settings restored — ${settings.enabled ? 'ON' : 'dark'}, provider ${settings.provider}`);
+    const served = PLATFORMS.filter((p) => settings.platforms?.[p] !== false).join(', ') || 'nothing';
+    console.log(`  ads: settings restored — ${settings.enabled ? 'ON' : 'dark'}, provider ${settings.provider}, serving ${served}`);
   } catch {
     // No file yet: the env vars are the whole configuration, and the first
     // admin change writes one.
@@ -242,6 +254,10 @@ function merge(base, raw) {
   out.kinds = { ...base.kinds };
   for (const kind of ['rewarded', 'interstitial']) {
     if (typeof raw.kinds?.[kind] === 'boolean') out.kinds[kind] = raw.kinds[kind];
+  }
+  out.platforms = { ...base.platforms };
+  for (const platform of PLATFORMS) {
+    if (typeof raw.platforms?.[platform] === 'boolean') out.platforms[platform] = raw.platforms[platform];
   }
   out.placements = { ...base.placements };
   for (const slot of PLACEMENTS) {
@@ -997,21 +1013,33 @@ function remainingFor(token, now = Date.now()) {
  * because an old app on someone's phone still reads it; everything new is a
  * field alongside, never a field moved.
  */
+/**
+ * The master switch, read through the client asking. Everything that can hand
+ * a player an ad — the config they read, the offer they ask for, the claim
+ * that pays — goes through here, so a platform that is off is off in fact and
+ * not merely absent from the page.
+ */
+export const adsOnFor = (platform) =>
+  !!settings.enabled && settings.platforms?.[platform] !== false;
+
 export function configFor(token, platform = 'web', declared = true) {
   // A dark server is on the house and says so. Every client checks `enabled`
   // before it reads any of this, so answering 'house' here is belt on top of
   // braces — but it is the belt that keeps a switched-off server from naming a
   // network, publishing an account id, or talking any client, present or
   // future, into fetching a third-party script.
-  const live = settings.enabled ? adapterFor(platform, declared) : ADAPTERS.house;
+  const on = adsOnFor(platform);
+  const live = on ? adapterFor(platform, declared) : ADAPTERS.house;
   const state = adsStateOf(token);
-  const remaining = remainingFor(token);
+  // A client that is not being offered ads is told nothing is left, rather
+  // than a count it could do nothing with.
+  const remaining = on ? remainingFor(token) : Object.fromEntries(PLACEMENTS.map((slot) => [slot, 0]));
   const placements = {};
   for (const slot of PLACEMENTS) {
     const spec = settings.placements[slot];
     placements[slot] = {
       ...spec,
-      enabled: settings.enabled && settings.kinds?.rewarded !== false && !!spec.enabled,
+      enabled: on && settings.kinds?.rewarded !== false && !!spec.enabled,
       remaining: remaining[slot],
       // `unitId` is the field the first shipped clients read and it still
       // means the same thing: the id this client hands its SDK for this slot.
@@ -1030,14 +1058,14 @@ export function configFor(token, platform = 'web', declared = true) {
     const spec = settings.interstitials?.[slot] || {};
     const unitId = live.id === 'admob' ? admobInterstitial(slot, platform) : '';
     interstitials[slot] = {
-      enabled: !!(settings.enabled && settings.kinds?.interstitial !== false && spec.enabled && unitId),
+      enabled: !!(on && settings.kinds?.interstitial !== false && spec.enabled && unitId),
       everyMinutes: Math.max(0, Number(spec.everyMinutes) || 0),
       unitId,
     };
   }
 
   return {
-    enabled: !!settings.enabled,
+    enabled: on,
     // Echoed so a client can tell "ads are off" from "this kind is off", and
     // so a future surface has one field to read rather than four.
     kinds: { ...(settings.kinds || { rewarded: true, interstitial: true }) },
@@ -1083,6 +1111,11 @@ adsRouter.post('/offer', (req, res) => {
   const token = cleanToken(req.body?.token);
   const slot = cleanSlot(req.body?.placement);
   if (!slot) return res.status(400).json({ error: 'Unknown placement' });
+  // The config told this client there was nothing here; a POST that arrives
+  // anyway is either an old page left open across the switch or somebody
+  // trying the door, and both get the same answer.
+  const { platform, declared } = platformOf(req);
+  if (!adsOnFor(platform)) return res.status(403).json({ error: 'Ads are not enabled for this client' });
   const check = eligible(token, slot);
   if (check.error) {
     return res.status(check.status || 400).json({
@@ -1098,7 +1131,6 @@ adsRouter.post('/offer', (req, res) => {
     return res.status(503).json({ error: 'Too many ads in flight right now — try again in a minute.' });
   }
 
-  const { platform, declared } = platformOf(req);
   const live = adapterFor(platform, declared);
   const { ticket, nonce, exp } = issueTicket(token, slot, check.ref, {
     platform, network: live.id, test: settings.testMode,
@@ -1121,7 +1153,9 @@ adsRouter.post('/offer', (req, res) => {
  * proves the ad actually played. Both, or nothing moves.
  */
 adsRouter.post('/reward', async (req, res) => {
-  if (!settings.enabled) return res.status(403).json({ error: 'Ads are not enabled on this server' });
+  if (!adsOnFor(platformOf(req).platform)) {
+    return res.status(403).json({ error: 'Ads are not enabled on this server' });
+  }
   const token = cleanToken(req.body?.token);
   if (!token) return res.status(400).json({ error: 'Missing identity' });
 
@@ -1338,7 +1372,10 @@ adsRouter.get('/admin', (req, res) => {
     // What each kind of client is being told right now, which is the thing the
     // per-platform provider makes hard to hold in your head otherwise.
     platforms: PLATFORMS.map((platform) => ({
-      platform, network: adapterFor(platform).id, would: NETWORK_FOR[platform],
+      platform,
+      on: settings.platforms?.[platform] !== false,
+      network: adsOnFor(platform) ? adapterFor(platform).id : 'off',
+      would: NETWORK_FOR[platform],
     })),
     boot: {
       adsEnabledEnv: process.env.ADS_ENABLED === '1',
@@ -1376,6 +1413,16 @@ adsRouter.post('/admin', (req, res) => {
     if (body.testMode) {
       console.warn('admin: ads TEST MODE is on — Google test ids are serving and rewards pay without server-side verification.');
     }
+  }
+
+  // Which clients are served at all. `platforms: { web: true }` from the desk
+  // turns the browser back on; nothing else here can.
+  settings.platforms ??= { ios: true, android: true, web: false };
+  for (const platform of PLATFORMS) {
+    const want = body.platforms?.[platform];
+    if (typeof want !== 'boolean' || want === settings.platforms[platform]) continue;
+    settings.platforms[platform] = want;
+    changes.push(`${platform} ${want ? 'ON' : 'off'}`);
   }
 
   settings.kinds ??= { rewarded: true, interstitial: true };

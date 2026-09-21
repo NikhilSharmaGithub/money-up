@@ -130,6 +130,27 @@
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
     if (pal && pal !== 'felt') document.documentElement.dataset.palette = pal;
   })();
+
+  // Safari on iPhone and iPad draws its own strip at the top of this page with
+  // GET on it (the apple-itunes-app tag above). Where that strip can appear,
+  // the page's own Download button is the same offer twice, so it is taken
+  // off — before paint, so it never flashes in and out. Every other browser,
+  // including Chrome and Firefox on a phone, keeps the button, because there
+  // the strip never comes.
+  //
+  // A page added to the home screen is its own app already: Safari draws no
+  // strip there, so the button stays.
+  (function () {
+    var ua = navigator.userAgent || '';
+    var iOS = /iPhone|iPad|iPod/.test(ua)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // Every iOS browser says "Safari"; only the ones that are not it add a
+    // mark of their own, and so do the in-app browsers that borrow the engine.
+    var notSafari = /CriOS|FxiOS|EdgiOS|OPiOS|Brave|DuckDuckGo|GSA|FBAN|FBAV|Instagram|Line|Snapchat|Twitter|LinkedIn/i.test(ua);
+    var standalone = window.navigator.standalone === true
+      || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    if (iOS && !notSafari && !standalone) document.documentElement.dataset.smartBanner = 'yes';
+  })();
 </script>
 </head>
 <body>
