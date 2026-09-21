@@ -126,6 +126,10 @@ final class GameStore: ObservableObject {
     /// priciest streets this game!" — shown as it arrives.
     @Published var reveal: String?
     private var revealTask: Task<Void, Never>?
+    /// Rooms this run of the app has walked in on with the board still
+    /// untouched. Only AdSignal cares: it is what stops a reconnect loop in
+    /// the opening seconds of a game from reporting the same game twice.
+    private var walkedInto: Set<String> = []
     @Published var joinError: String?
     /// A Quick Play match request is in flight. It only ever dims the Play now
     /// button — create and join stay usable, so a slow server is never a wall.
@@ -626,6 +630,39 @@ final class GameStore: ObservableObject {
             logFloor = (old ?? new).log.last?.at ?? 0
             timedOut = false
             SoundKit.shared.shuffleDeal()
+            // A game this device is playing, counted once. Guarded on a seat
+            // of ours being at the table: a game this device is only watching
+            // is not this device playing.
+            //
+            // This transition on its own would count too many. `old` is nil
+            // whenever state was cleared, which is every join — including the
+            // one behind the Continue card — so a match walked back into is
+            // indistinguishable from a match dealt in, and somebody whose
+            // connection drops four times would look like four players. With
+            // no previous state to compare against the board has to vouch for
+            // itself: a table that has genuinely just been dealt owns nothing
+            // and has nobody off START. A rematch keeps its room id, so id
+            // alone cannot tell the two apart — but a rematch does go back
+            // through its lobby with us watching, which is why the plain
+            // transition still counts.
+            if new.players.contains(where: { localIds.contains($0.id) }) {
+                let dealtInHere: Bool
+                if old != nil {
+                    dealtInHere = true
+                } else {
+                    let untouched = new.ownership.isEmpty && new.players.allSatisfy { $0.pos == 0 }
+                    dealtInHere = untouched && walkedInto.insert(new.id).inserted
+                }
+                if dealtInHere {
+                    // "With people" means somebody at this table is not on this
+                    // phone and is not the house — pass & play against bots is
+                    // still one person alone with the app, and reads differently.
+                    let withPeople = new.players.contains {
+                        !localIds.contains($0.id) && !($0.isBot ?? false) && !$0.id.hasPrefix("bot:")
+                    }
+                    AdSignal.playedGame(withPeople: withPeople)
+                }
+            }
             if let top = new.map.tiles.filter({ $0.type == "property" }).max(by: { ($0.price ?? 0) < ($1.price ?? 0) }),
                let g = top.group, let info = new.groups[g] {
                 revealTask?.cancel()
@@ -672,7 +709,14 @@ final class GameStore: ObservableObject {
             // table. They decide when the app has earned the right to ask for
             // a review, and for permission to notify — the result sheet does
             // the asking, this only keeps the score.
-            if localSeatWon(new) { ReviewPrompt.noteWin() }
+            if localSeatWon(new) {
+                ReviewPrompt.noteWin()
+                // …and the same moment is the one a paid install is bought
+                // towards. Only the first win moves anything — a stranger
+                // turning into a player is news, the tenth win is not — and
+                // AdSignal is where that is decided.
+                AdSignal.wonGame()
+            }
             if new.players.contains(where: { localIds.contains($0.id) }) {
                 PushRegistrar.noteFinishedGame()
             }

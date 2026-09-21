@@ -166,6 +166,11 @@ struct RootView: View {
             // with the game closed; this notices, at launch and on every
             // return to the front, and signs this device out of Apple.
             AppleCredentialWatch.shared.start(store)
+            // Registers this install with SKAdNetwork, so a paid install can
+            // be attributed to the ad that bought it. Nothing identifying
+            // leaves the device — see AdSignal.swift for why that is the whole
+            // measurement stack.
+            AdSignal.start()
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay { cardPopupOverlay }

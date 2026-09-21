@@ -123,7 +123,11 @@ final class CoinShop: ObservableObject {
             store.showToast("That purchase couldn't be verified.", isError: true)
             return
         }
-        struct Reply: Decodable { var ok: Bool?; var error: String?; var coins: Int? }
+        // `duplicate` is the server saying it has already paid this
+        // transaction out and is answering ok only so the client stops
+        // retrying. The coins are right either way; what it changes is whether
+        // this counts as a sale, and it is not one.
+        struct Reply: Decodable { var ok: Bool?; var error: String?; var coins: Int?; var duplicate: Bool? }
         let reply: Reply? = try? await store.fetchJSON(
             "/api/store/redeem", method: "POST",
             body: ["token": store.token, "signedTransaction": result.jwsRepresentation]
@@ -135,6 +139,16 @@ final class CoinShop: ObservableObject {
             return
         }
         await transaction.finish()
+        // Counted as a sale only from here — past Apple's signature, past the
+        // server's own re-check, and past the duplicate branch. A transaction
+        // that was already redeemed reaches this code again whenever the app
+        // dies between the credit and finish(): StoreKit re-delivers it on the
+        // next launch, the server pays out nothing, and an ad network told
+        // about it a second time would bid up against revenue that only ever
+        // happened once.
+        if reply?.duplicate != true {
+            AdSignal.boughtCoins(productId: transaction.productID)
+        }
         SoundKit.shared.buy()
         store.refreshWallet()
         store.showToast("Coins added — go spend them.", glyph: .coin)

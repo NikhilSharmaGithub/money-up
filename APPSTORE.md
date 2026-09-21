@@ -62,17 +62,39 @@ something you control, e.g. `com.nikhilsharma.moneymove`, and keep it forever.
 >
 > MAKE IT YOURS — seven table styles with light and dark looks, win coins in
 > every victory and spend them on token skins and avatars. Pure style, never
-> pay-to-win. No ads, no tracking, no real-money purchases.
+> pay-to-win.
 >
 > Friends, chat, match history and a game that holds your seat if you
 > disconnect. Pull up a chair.
 
 ## Review questionnaire cheatsheet
 
-- **Price:** Free. **In-App Purchases:** none (coins are earned, never bought).
-- **App Privacy → Data collection:** "Data not linked to you": Identifiers
-  (a random device token), User Content (nickname, chat), Gameplay Content.
-  No tracking. Phone number field stays on-device — do not list it.
+- **Price:** Free. **In-App Purchases:** three consumable coin packs
+  (`coins.small` / `.mid` / `.large`), approved and live since 1.0 build 11.
+  This line used to say "none" — it was written before the packs existed.
+- **App Privacy → Data collection:** the answers below are what the *shipped*
+  binary actually does. Anything the app links against declares its own
+  collection in a privacy manifest, Xcode folds those manifests into the
+  build, and App Store Connect shows you the aggregate — so the label has to
+  cover the SDKs too, not just our own code.
+  - From the game itself, "not linked to you": Identifiers (a random device
+    token), User Content (nickname, chat), Gameplay Content. The phone number
+    field never leaves the device — do not list it.
+  - From Google Mobile Ads (live since build 11):
+    `GoogleMobileAds.framework/PrivacyInfo.xcprivacy` declares Device ID
+    **linked** and Tracking = true for Third-Party Advertising, plus Coarse
+    Location, Advertising Data, Product Interaction, Performance and Crash
+    Data. Answer Apple's "used to track" question the way Google's own
+    publisher guidance tells you to for an app that never asks for ATT, and
+    make the label match — do not leave it reading "no tracking" while the
+    build's privacy report says otherwise.
+  - There is **no ATT prompt** and no `NSUserTrackingUsageDescription`, so no
+    advertiser id (IDFA) is ever read.
+- **Attribution for paid installs:** SKAdNetwork only — `AdSignal.swift` posts
+  a conversion value and Apple sends the postback to the ad network. No
+  identifier leaves the device and nothing is added to the label by it. Meta's
+  own SDK was wired in and removed again; `docs/META-ADS.md` has the evidence
+  and what it would take to change that decision.
 - **Age rating questionnaire:** everything "None" → lands at 4+ (there is
   simulated property auctioning, not gambling — answer gambling: No).
 - **Sign in with Apple:** already implemented ✓ (required because Google
