@@ -21,3 +21,10 @@ data/stats.json
 # which lives in ~/.appstoreconnect and has never been in here, but there is
 # no reason for a public repo to carry them either.
 data/*
+
+# Android build output and per-machine Gradle state
+android/build/
+android/app/build/
+android/.gradle/
+android/.kotlin/
+android/local.properties

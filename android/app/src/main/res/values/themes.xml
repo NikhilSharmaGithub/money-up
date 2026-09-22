@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MoneyMove" parent="Theme.AppCompat.NoActionBar">
+    <!--
+      The app draws itself in Compose, so this theme exists only for the frame
+      around it: the window behind the first frame, and the system bars. Every
+      colour a player actually sees comes from Theme.kt, which carries all
+      seven table styles in both light and dark.
+    -->
+    <style name="Theme.MoneyMove" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/felt</item>
-        <item name="android:statusBarColor">@color/felt</item>
-        <item name="android:navigationBarColor">@color/felt</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
-    <!-- Shown while the WebView boots, so the app never flashes white. -->
+    <!-- Shown while the app boots, so it never flashes white. -->
     <style name="Theme.MoneyMove.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/felt</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_die</item>
