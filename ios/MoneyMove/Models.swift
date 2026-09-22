@@ -15,6 +15,9 @@ struct GameState: Codable, Equatable {
     var cup: Bool?
     /// Epoch ms the matchmade table deals itself in; nil once it has.
     var quickStartAt: Double?
+    /// What a matchmade table dealt itself — board and house rules. Nobody at
+    /// one of these tables picked them, so they get shown before the dice.
+    var quickRoll: QuickRoll?
     var settings: GameSettings
     var mapId: String?
     var map: MapData
@@ -79,6 +82,18 @@ struct GameState: Codable, Equatable {
     var isQuickWaiting: Bool { isLobby && quick == true && quickStartAt != nil }
     var isPlaying: Bool { status == "playing" }
     var isEnded: Bool { status == "ended" }
+}
+
+/// The house rules a Quick Play table rolled for itself.
+///
+/// `parts` arrives already written — "Japan", "$1,500 to start", "auctions on"
+/// — because the server phrases it once and a phone and a browser at the same
+/// table then cannot describe it differently. `keys` names which settings were
+/// rolled rather than defaulted; nothing on this screen needs it yet.
+struct QuickRoll: Codable, Equatable {
+    var at: Double?
+    var keys: [String]?
+    var parts: [String]?
 }
 
 struct GameSettings: Codable, Equatable {
@@ -491,6 +506,12 @@ struct Wallet: Codable {
     var equipped: [String: String]          // slot -> item id
     /// 0...100, docked when someone walks out on a live table.
     var karma: Int?
+    /// Every coin this wallet has ever been paid, spends never taken off. The
+    /// balance alone cannot say whether a number just read is news — a poll
+    /// repeats it, a purchase moves it the other way — and this only ever goes
+    /// up, so a credit is exactly the moments it moves. Optional: a server
+    /// that predates the field simply never moves the counter.
+    var earned: Int?
 }
 
 /// One paid top-up from GET /api/store. `productId` is what StoreKit sells.

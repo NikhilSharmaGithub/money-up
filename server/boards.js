@@ -31,6 +31,16 @@ export const HOUSE_BOARD = 'classic';
 /** How many of the rest are free on any given day. */
 export const FREE_PER_DAY = 2;
 
+/**
+ * And the third door: one coin buys one game on a locked board.
+ *
+ * A flat price, not a fraction of the sticker — what is being sold is an
+ * evening, and an evening on Japan is worth exactly what an evening on Spain
+ * is. The book of who has paid for which game lives in social.js, beside the
+ * wallet it comes out of; this file only names the price.
+ */
+export const RENT_PRICE = 1;
+
 // ---------------------------------------------------------------- the shelf --
 // What a board costs is set against what a board IS, and nothing else.
 //
@@ -212,6 +222,11 @@ export function shelfOrderOn(when = Date.now()) {
  * asks before it lets a board be chosen. An unknown id is a yes: `getMap`
  * falls back to Classic for anything it does not recognise, so refusing here
  * would only turn a harmless typo into a locked door.
+ *
+ * It is not the whole answer any more. A board can also be rented for one
+ * game, and a rent is a wallet fact rather than a calendar one — so the hook
+ * in index.js asks this first and the rental book second. Keeping the two
+ * apart is what lets this file stay a pure function of the date.
  */
 export function mayUseBoard(mapId, owned = [], when = Date.now()) {
   const id = String(mapId || '');
@@ -221,12 +236,20 @@ export function mayUseBoard(mapId, owned = [], when = Date.now()) {
   return freeBoardsOn(when).includes(id);
 }
 
+/** Is this id a board the shop actually sells? The house board is not. */
+export const isBoardForSale = (mapId) => SELLABLE.includes(String(mapId || ''));
+
 /**
  * The whole shelf as one wallet sees it, for the picker and the shop.
  *
  * `free` is why it is playable, not merely that it is: a board that is free
  * today reads differently from one that is paid for, and the client is told
  * which so it can say so.
+ *
+ * `rentable` says the other thing a locked board can be: not yours, but one
+ * coin away from one game. Whether a rent has actually been paid for is a
+ * wallet question and is answered in index.js — all that is claimed here is
+ * that this board is the kind of thing that can be rented at all.
  */
 export function boardAccess(owned = [], when = Date.now()) {
   const free = freeBoardsOn(when);
@@ -241,11 +264,11 @@ export function boardAccess(owned = [], when = Date.now()) {
     return now < base ? { price: now, was: base } : { price: now };
   };
   const state = (id) => {
-    if (id === HOUSE_BOARD) return { playable: true, how: 'house', price: 0, shelf: -1 };
-    const at = { shelf: order.indexOf(id) };
+    if (id === HOUSE_BOARD) return { playable: true, how: 'house', price: 0, shelf: -1, rentable: false };
+    const at = { shelf: order.indexOf(id), rentable: false };
     if (owned.includes(boardItemId(id))) return { playable: true, how: 'owned', ...money(id), ...at };
     if (free.includes(id)) return { playable: true, how: 'today', ...money(id), ...at };
-    return { playable: false, how: 'locked', ...money(id), ...at };
+    return { playable: false, how: 'locked', ...money(id), ...at, rentable: isBoardForSale(id) };
   };
   return {
     free,
@@ -255,6 +278,7 @@ export function boardAccess(owned = [], when = Date.now()) {
     perDay: FREE_PER_DAY,
     saleOff: SALE_OFF,
     house: HOUSE_BOARD,
+    rentPrice: RENT_PRICE,
     state,
   };
 }

@@ -1104,6 +1104,46 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
   100% { transform: none; box-shadow: 0 0 0 0 transparent; }
 }
 
+/* ---- coins landing in the counter ---- */
+/* The discs thrown at the chip when the server pays. The stage is a fixed
+   sheet over everything that takes no clicks; each coin is placed by two
+   custom properties and travels on the compositor, so a phone animates
+   transform and opacity and nothing else. */
+.coin-fly { position: fixed; inset: 0; z-index: 95; pointer-events: none; }
+.coin-fly i {
+  position: absolute; top: 0; left: 0; display: block; width: 22px; height: 22px;
+  margin: -11px 0 0 -11px;                 /* the point given is the coin's middle */
+  color: var(--gold);
+  filter: drop-shadow(0 2px 4px rgba(60, 30, 35, .35));
+  animation: coinFly .62s cubic-bezier(.34, .16, .2, 1) var(--d, 0ms) both;
+}
+.coin-fly i .ico { width: 22px; height: 22px; display: block; }
+@keyframes coinFly {
+  0%   { transform: translate3d(var(--x0), var(--y0), 0) scale(.5); opacity: 0; }
+  18%  { transform: translate3d(var(--x0), var(--y0), 0) scale(1); opacity: 1; }
+  /* A shallow arc: the coin lifts on its way across rather than sliding. */
+  60%  { transform: translate3d(calc((var(--x0) + var(--x1)) / 2), calc(var(--y0) - 46px), 0) scale(.92); opacity: 1; }
+  100% { transform: translate3d(var(--x1), var(--y1), 0) scale(.42); opacity: .1; }
+}
+
+/* The stand-in counter: the landing's chip is off screen during a game, and a
+   payout still has to land somewhere the eye already looks. Same chip, same
+   corner, gone a couple of seconds later. */
+.coin-purse {
+  position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px; z-index: 94;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 15px; padding: 6px 13px;
+  background: var(--card); box-shadow: var(--shadow);
+  opacity: 0; transform: translateY(-8px);
+  transition: opacity .28s var(--ease), transform .28s var(--pop);
+}
+.coin-purse.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .coin-fly { display: none; }
+  .coin-purse { transition: none; }
+}
+
 /* ---- leaderboard: five on the landing, fifty in the sheet ---- */
 .leader-card { margin-top: 14px; padding: 18px; }
 .lb-list { display: grid; gap: 5px; margin-top: 10px; text-align: left; }
@@ -2398,6 +2438,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 /* lobby centre */
 .lobby-head { margin-bottom: 10px; }
 .lobby-map { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; font-weight: 600; }
+/* What a matchmade table dealt itself, under the board it dealt. Wrapped
+   rather than clipped: four people are about to play by these rules and a
+   cut-off sentence is no use to any of them. */
+.lobby-rolled {
+  font-size: 11.5px; color: var(--ink-3); font-weight: 600;
+  margin-top: 3px; line-height: 1.4;
+}
 /* The seats a table is still waiting on. Faces rather than dots, so a player
    sitting through the countdown can watch the table assemble. */
 /* The regional boards mark their groups with a pictograph rather than a flag;
@@ -2806,6 +2853,16 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 }
 .quick-seat.open { background: transparent; border-style: dashed; }
 .qs-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The same roll again in the side panel, one phrase per chip, because a run-on
+   line of seven rules is something nobody reads twice. */
+.rolled-rules { display: flex; flex-wrap: wrap; gap: 5px; }
+.rolled-chip {
+  font-size: 11.5px; font-weight: 700; color: var(--ink-2);
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.rolled-chip:first-child { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 45%, var(--rule)); }
 
 /* ── player chips: live position, and a nudge for whoever plays next ── */
 .prank {
@@ -3221,6 +3278,8 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .bb-tag.free  { background: var(--paper-2); color: var(--ink-3); }
 .bb-tag.today { background: var(--good-soft); color: var(--good); }
 .bb-tag.owned { background: var(--gold-soft); color: var(--gold); }
+/* Paid for, and good for exactly one game at this table. */
+.bb-tag.rented { background: var(--gold-soft); color: var(--gold); }
 .bb-tag.locked { background: var(--paper-2); color: var(--gold); }
 
 .board-all {

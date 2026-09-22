@@ -306,12 +306,53 @@ struct QuickMatchPanel: View {
                 .font(.system(size: 12.5, weight: .bold, design: .rounded))
                 .foregroundStyle(P.ink2)
 
+            rolledRules(P)
+
             TableTalkTicker()
 
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)
+    }
+
+    /// What this table dealt itself: the board, the bankroll, and every house
+    /// rule that was rolled rather than assumed.
+    ///
+    /// Nobody sitting at a matchmade table picked any of it, so it belongs on
+    /// screen before the dice start — not left to be worked out from the log
+    /// once somebody is already paying rent they did not expect. The phrases
+    /// come written from the server, which is the same thing the web lobby
+    /// shows, word for word.
+    @ViewBuilder
+    private func rolledRules(_ P: Palette) -> some View {
+        let parts = store.state?.quickRoll?.parts ?? []
+        if !parts.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Art.icon(.dice, size: 14, tint: P.ink3)
+                    Text("THIS TABLE ROLLED")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .kerning(1)
+                        .foregroundStyle(P.ink3)
+                }
+                // However many rules there are, on as many lines as they need.
+                FlowRow(spacing: 6) {
+                    ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
+                        Text(part)
+                            .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                            // The board leads, and reads like it.
+                            .foregroundStyle(i == 0 ? P.gold : P.ink2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(P.card, in: Capsule())
+                            .overlay(Capsule().stroke(i == 0 ? P.gold.opacity(0.5) : P.rule, lineWidth: 1))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 2)
+        }
     }
 
     /// Counts down to the server's deadline the same way the turn clock does,

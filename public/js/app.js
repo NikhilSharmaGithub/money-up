@@ -18,6 +18,7 @@ import {
   api, connect, isSplitDeploy, SERVER, useServer, forgetServer, PROTO, onState,
 } from './net.js';
 import { initSocial, stopSocial } from './social.js';
+import { noteWallet, setCoins } from './coins.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -168,14 +169,18 @@ function showLanding() {
 }
 
 // ---- store, coins & karma ------------------------------------------------
-let knownCoins = null;
+// The chip is not painted here any more. Every read of the wallet goes to
+// coins.js, which holds the server's earned watermark and so is the only thing
+// that can tell a payout from the same number read twice — this one is made on
+// every trip back to the landing, when a game ends, and six times over after a
+// card payment, and only some of those are news. The number is written either
+// way; the coins only fly when it moved because somebody was paid.
 
-async function refreshWallet({ celebrate = false } = {}) {
+async function refreshWallet() {
   try {
     const w = await fetch(api(`/api/wallet?token=${encodeURIComponent(token)}`)).then((r) => r.json());
     if (typeof w.coins !== 'number') return;
-    const chip = $('#coinChip');
-    if (chip) chip.innerHTML = `${icon('coin')} ${w.coins}`;
+    noteWallet(w);
     // Karma only ever goes down by walking out, so it sits beside the coins as
     // a reminder rather than a score to chase.
     const karma = $('#karmaChip');
@@ -184,43 +189,15 @@ async function refreshWallet({ celebrate = false } = {}) {
       karma.classList.toggle('low', w.karma < 60);
       karma.classList.remove('hidden');
     }
-    if (celebrate && knownCoins != null && w.coins > knownCoins) {
-      toast(`+${w.coins - knownCoins} coin${w.coins - knownCoins > 1 ? 's' : ''} earned — spend them in the Store!`);
-    }
-    knownCoins = w.coins;
   } catch { /* server nap — the chip just stays put */ }
 }
 
 $('#storeBtn').addEventListener('click', () => {
   sfx.click();
-  // Spending in the shop has to show on the chip you spent it from.
-  openStoreModal(token, (coins) => {
-    knownCoins = coins;
-    const chip = $('#coinChip');
-    if (chip) chip.innerHTML = `${icon('coin')} ${coins}`;
-  });
+  // Spending in the shop has to show on the chip you spent it from — and a
+  // spend is the one wallet change that must never throw coins at the counter.
+  openStoreModal(token, (coins) => setCoins(coins));
 });
-
-/**
- * Coins landing in your hand, rather than a number that was one thing and is
- * now another. A repaint reads as the page reloading; a count-up reads as pay.
- */
-function countCoinChip(from, to) {
-  const chip = $('#coinChip');
-  if (!chip) return;
-  const paint = (n) => { chip.innerHTML = `${icon('coin')} ${n}`; };
-  // Someone who asked for less motion gets the number, not the ride.
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches || from === to) return paint(to);
-  chip.classList.add('minted');
-  setTimeout(() => chip.classList.remove('minted'), 900);
-  const started = performance.now();
-  const step = (now) => {
-    const t = Math.min(1, (now - started) / 700);
-    paint(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
-    if (t < 1) requestAnimationFrame(step);
-  };
-  return requestAnimationFrame(step);
-}
 
 // ---- the daily reward ----------------------------------------------------
 // A card that only ever speaks when it has something to say: coins waiting, or
@@ -379,8 +356,7 @@ async function claimDaily() {
       return;
     }
     sfx.gain();
-    countCoinChip(knownCoins ?? Math.max(0, out.coins - out.amount), out.coins);
-    knownCoins = out.coins;
+    noteWallet(out);
     toast(out.streak > 1
       ? `+${coinWord(out.amount)} — ${out.streak} days in a row`
       : `+${coinWord(out.amount)} collected`);
@@ -782,7 +758,7 @@ $('#joinForm').addEventListener('submit', (e) => {
     if (outcome === 'purchased') {
       toast('Payment received — your coins are on the way in');
       let tries = 0;
-      const tick = () => { refreshWallet({ celebrate: true }); if (++tries < 6) setTimeout(tick, 2500); };
+      const tick = () => { refreshWallet(); if (++tries < 6) setTimeout(tick, 2500); };
       setTimeout(tick, 1500);
     } else if (outcome === 'cancelled') {
       toast('Payment cancelled — nothing was charged');
@@ -1030,7 +1006,7 @@ function render() {
     confetti();
     setTimeout(() => showGameOver(state, meId, actions), 700);
     // did the win pay out? the wallet knows
-    setTimeout(() => refreshWallet({ celebrate: true }), 1200);
+    setTimeout(refreshWallet, 1200);
   }
   if (state.status !== 'ended') { winnerShown = false; matchSavedFor = null; }
 }

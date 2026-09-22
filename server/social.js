@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomName } from './names.js';
 import { itemById } from './store.js';
+import { RENT_PRICE } from './boards.js';
 import { cleanText, isAllMasked } from './banter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -182,12 +183,24 @@ export function profileFor(token, { name, flag } = {}) {
   p.equipped ??= {};
   // Transaction ids already credited — a receipt can never pay out twice.
   p.purchases ??= [];
+  // One-game passes on boards this wallet does not own — see "renting a
+  // board" below. Unspent ones are money, so they are minted here with
+  // everything else rather than only when the first one is bought.
+  p.rentals ??= [];
   // Karma is a politeness score: everyone starts full, walking out on a live
   // game or letting the clock run out costs a point.
   p.karma ??= KARMA_MAX;
   // Profiles older than this field get their last sighting as a birthdate —
   // wrong, but wrong in the least misleading direction available.
   p.created ??= p.seen || Date.now();
+  // Every coin this wallet has ever been paid, and nothing it has spent. The
+  // balance alone cannot tell a client whether a number it just read is news:
+  // a poll repeats it, a purchase moves it the other way, and a win followed
+  // by a spend can land it back where it started. This only ever goes up, so
+  // "it moved" and "coins arrived" are the same sentence — which is what the
+  // counter animation on both clients hangs off. A wallet that predates the
+  // field starts at nought; it is a watermark, not a lifetime statistic.
+  p.earned ??= 0;
   // The coin economy was rescaled 50x when paid packs arrived; old wallets
   // are converted once so nobody's balance silently shrinks in value.
   if (p.econ !== ECON_VERSION) {
@@ -220,15 +233,31 @@ const publicView = (p) => ({
 });
 
 // ------------------------------------------------------------ store wallet --
+/**
+ * The one line that adds coins to a wallet.
+ *
+ * Four things pay out — a purchase, a win, the daily, a rewarded view — and
+ * each of them used to do `p.coins += amount` on its own. They go through
+ * here now so the earned watermark cannot be forgotten by whatever pays out
+ * next: a credit that skipped it would land in the balance and never be
+ * announced to the player it belongs to.
+ */
+function credit(p, amount) {
+  const coins = Math.max(0, Math.floor(Number(amount) || 0));
+  p.coins += coins;
+  p.earned = (p.earned || 0) + coins;
+  return p.coins;
+}
+
 export function walletOf(token) {
   // Reading a wallet must not mint one: every page load asks, and so does
   // every crawler that executes our JS. The profile is born the first time
   // the visitor actually DOES something — joins a table, sets a name, buys.
   if (!token) return null;
   const p = profiles.get(token);
-  if (!p) return { coins: 0, owned: [], equipped: {}, karma: KARMA_MAX };
+  if (!p) return { coins: 0, owned: [], equipped: {}, karma: KARMA_MAX, earned: 0 };
   profileFor(token);   // it exists — freshen seen/migrations as before
-  return { coins: p.coins, owned: p.owned, equipped: p.equipped, karma: p.karma };
+  return { coins: p.coins, owned: p.owned, equipped: p.equipped, karma: p.karma, earned: p.earned || 0 };
 }
 
 /**
@@ -241,13 +270,15 @@ export function creditPurchase(token, transactionId, coins, meta = {}) {
   if (!p) return { error: 'Unknown player' };
   const txn = String(transactionId || '');
   if (!txn) return { error: 'Missing transaction' };
-  if (p.purchases.includes(txn) || redeemed.has(txn)) return { ok: true, coins: p.coins, duplicate: true };
+  if (p.purchases.includes(txn) || redeemed.has(txn)) {
+    return { ok: true, coins: p.coins, earned: p.earned, duplicate: true };
+  }
   const amount = Math.max(0, Math.floor(Number(coins) || 0));
   if (!amount) return { error: 'Nothing to credit' };
   p.purchases.push(txn);
   redeemed.add(txn);
   if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
-  p.coins += amount;
+  credit(p, amount);
   appendLedger({
     at: Date.now(),
     provider: String(meta.provider || 'unknown'),
@@ -258,7 +289,7 @@ export function creditPurchase(token, transactionId, coins, meta = {}) {
     txn,
   });
   save();
-  return { ok: true, coins: p.coins };
+  return { ok: true, coins: p.coins, earned: p.earned };
 }
 
 /** Winning pays out — a coin or two, longer games pay the bigger purse. */
@@ -267,7 +298,7 @@ export function awardCoins(token, amount) {
   if (!profiles.has(token) || amount <= 0) return null;
   const p = profileFor(token);
   if (!p) return null;
-  p.coins += amount;
+  credit(p, amount);
   save();
   return p.coins;
 }
@@ -367,7 +398,7 @@ export function buyItem(token, item) {
   p.coins -= item.price;
   p.owned.push(item.id);
   save();
-  return { ok: true, coins: p.coins, owned: p.owned };
+  return { ok: true, coins: p.coins, earned: p.earned, owned: p.owned };
 }
 
 export function equipItem(token, slot, itemId) {
@@ -386,6 +417,125 @@ export function equipItem(token, slot, itemId) {
   else delete p.equipped[slot];
   save();
   return { ok: true, equipped: p.equipped };
+}
+
+// --------------------------------------------------------- renting a board --
+// A third door onto a locked board, beside free-today and bought-outright:
+// one coin, one game.
+//
+// What gets written down is a pass, and a pass names two things — the board it
+// is good for and the one table it is good at. The table is the whole trick.
+// Without it a single coin would open ten lobbies at once; with it, a second
+// table is a second pass and a second coin.
+//
+// An unspent pass is never eaten. Renting while you already hold one that has
+// not been played MOVES it to the new table and the new board rather than
+// charging again, so the coin always buys the game it promised — tonight, or
+// whenever the table it was bought for finally happens. Only dealing the cards
+// spends it, and that is stamped in exactly one place: recordTransitions in
+// server/index.js, the moment a room turns from lobby to playing.
+//
+// Spent passes are kept a day as a record and then swept. Unspent ones are
+// never swept, because an unspent pass IS the coin.
+
+/** Pass-and-play seats derive their token from the phone's — one wallet, one book. */
+const baseToken = (t) => String(t || '').replace(/_p\d+$/, '');
+
+const RENTAL_KEEP_MS = 24 * 60 * 60 * 1000;
+const RENTAL_MAX = 20;
+
+/**
+ * The book, swept on the way out.
+ *
+ * The cap only ever trims from the front, which is the oldest end, and the
+ * unspent pass is always the newest entry — renting again moves that one
+ * rather than pushing another — so the sweep can never cost anybody a game
+ * they have paid for.
+ */
+function rentalBook(p) {
+  p.rentals ??= [];
+  const cutoff = Date.now() - RENTAL_KEEP_MS;
+  p.rentals = p.rentals.filter((r) => !r.startedAt || r.startedAt > cutoff);
+  if (p.rentals.length > RENTAL_MAX) p.rentals.splice(0, p.rentals.length - RENTAL_MAX);
+  return p.rentals;
+}
+
+/** The one unspent pass this wallet is holding, if it is holding one. */
+export function rentalOf(token) {
+  const p = profiles.get(baseToken(token));
+  if (!p) return null;
+  return rentalBook(p).find((r) => !r.startedAt) || null;
+}
+
+/**
+ * Was a pass for this board, at this table, bought and then actually played?
+ *
+ * Only the log of what happened — nothing is decided by it. It exists so that
+ * a table which loses its board can be told the true reason instead of being
+ * told the host changed, which after a rented game is wrong every time: the
+ * same host is standing there and the pass they paid for has simply been used.
+ */
+export function rentalSpent(token, mapId, roomId) {
+  const p = profiles.get(baseToken(token));
+  if (!p) return false;
+  const map = String(mapId || '');
+  const room = String(roomId || '');
+  return rentalBook(p).some((r) => r.startedAt && r.mapId === map && r.roomId === room);
+}
+
+/** Is this table, on this board, covered by a pass that has not been played? */
+export function hasLiveRental(token, mapId, roomId) {
+  const open = rentalOf(token);
+  return !!open && open.mapId === String(mapId || '') && open.roomId === String(roomId || '');
+}
+
+/**
+ * Pay for one game on a board you do not own.
+ *
+ * Whether the board is locked at all is the calendar's business and is settled
+ * by the caller (see /api/boards/rent) — this end only knows wallets. It is
+ * idempotent by construction: a second tap on the same board and table finds
+ * the same unspent pass and charges nothing.
+ */
+export function rentBoard(token, mapId, roomId) {
+  const base = baseToken(token);
+  const map = String(mapId || '').slice(0, 40);
+  const room = String(roomId || '').slice(0, 12);
+  if (!base || !map || !room) return { error: 'Missing player, board or table' };
+  const p = profileFor(base);
+  if (!p) return { error: 'Unknown player' };
+  const book = rentalBook(p);
+  const open = book.find((r) => !r.startedAt);
+  if (open) {
+    const moved = (open.mapId === map && open.roomId === room)
+      ? null : { mapId: open.mapId, roomId: open.roomId };
+    open.mapId = map;
+    open.roomId = room;
+    open.at = Date.now();
+    save();
+    return { ok: true, coins: p.coins, charged: 0, mapId: map, roomId: room, movedFrom: moved };
+  }
+  if (p.coins < RENT_PRICE) return { error: 'Not enough coins' };
+  p.coins -= RENT_PRICE;
+  book.push({ mapId: map, roomId: room, at: Date.now(), coins: RENT_PRICE, startedAt: null });
+  save();
+  return { ok: true, coins: p.coins, charged: RENT_PRICE, mapId: map, roomId: room, movedFrom: null };
+}
+
+/**
+ * Stamp a pass used. One table, one game: after this the board falls back to
+ * Classic anywhere else, including this table's own rematch.
+ */
+export function consumeRental(token, mapId, roomId) {
+  const p = profiles.get(baseToken(token));
+  if (!p) return false;
+  const map = String(mapId || '');
+  const room = String(roomId || '');
+  const open = rentalBook(p).find((r) => !r.startedAt && r.mapId === map && r.roomId === room);
+  if (!open) return false;
+  open.startedAt = Date.now();
+  save();
+  return true;
 }
 
 // ------------------------------------------------------------ daily reward --
@@ -472,7 +622,7 @@ export function claimDaily(token) {
   d.streak = d.last === yesterdayKey() ? d.streak + 1 : 1;
   d.last = today;
   const amount = dailyAmount(d.streak);
-  p.coins += amount;
+  credit(p, amount);
   appendLedger({
     at: Date.now(),
     provider: 'daily',
@@ -484,7 +634,7 @@ export function claimDaily(token) {
     note: `day ${d.streak} of the streak`,
   });
   save();
-  return { ok: true, amount, coins: p.coins, streak: d.streak, nextAt: nextMidnight() };
+  return { ok: true, amount, coins: p.coins, earned: p.earned, streak: d.streak, nextAt: nextMidnight() };
 }
 
 // ------------------------------------------------------------ rewarded ads --
@@ -543,7 +693,7 @@ export function creditAdReward(token, rewardId, coins, { placement, note } = {})
   if (!amount) return { error: 'Nothing to credit' };
   p.purchases.push(id);
   if (p.purchases.length > 500) p.purchases.splice(0, p.purchases.length - 500);
-  p.coins += amount;
+  credit(p, amount);
   const book = adsBook(p);
   const slot = String(placement || 'unknown');
   book.views[slot] = (book.views[slot] || 0) + 1;
@@ -560,7 +710,10 @@ export function creditAdReward(token, rewardId, coins, { placement, note } = {})
     note: String(note || '').slice(0, 140),
   });
   save();
-  return { ok: true, coins: p.coins, awarded: amount, views: { ...book.views }, adCoins: book.coins };
+  return {
+    ok: true, coins: p.coins, earned: p.earned, awarded: amount,
+    views: { ...book.views }, adCoins: book.coins,
+  };
 }
 
 /**

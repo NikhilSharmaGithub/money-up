@@ -56,10 +56,12 @@ struct BoardSummary: Codable, Identifiable, Hashable {
     /// The three dearest streets — the recognisable end of the board.
     var headline: [String]?
 
-    /// Playable right now — free, free today, or bought.
+    /// Playable right now — free, free today, bought, or rented for this game.
     var playable: Bool = true
-    /// Why: "house" | "today" | "owned" | "locked".
+    /// Why: "house" | "today" | "owned" | "rented" | "locked".
     var how: String = "house"
+    /// Locked, but the kind of board one coin can borrow for a single game.
+    var rentable: Bool = false
     var price: Int = 0
     /// The sticker price, present only while this board is discounted.
     var was: Int?
@@ -78,6 +80,18 @@ struct BoardSummary: Codable, Identifiable, Hashable {
     var storeId: String { "brd-\(id)" }
 }
 
+/// What one game on a locked board costs, and whether this wallet is already
+/// holding one it paid for and never played.
+struct BoardRentInfo: Codable {
+    var price: Int = 1
+    var holding: BoardRentHold?
+}
+
+struct BoardRentHold: Codable {
+    var mapId: String
+    var roomId: String
+}
+
 struct BoardShelfFeed: Codable {
     var boards: [BoardSummary] = []
     var free: [String] = []
@@ -88,6 +102,7 @@ struct BoardShelfFeed: Codable {
     var perDay: Int = 2
     var cycleDays: Int = 9
     var house: String = "classic"
+    var rent: BoardRentInfo?
     var coins: Int = 0
 }
 
@@ -102,12 +117,18 @@ final class BoardShelf: ObservableObject {
 
     @Published private(set) var feed: BoardShelfFeed?
     private var loading = false
+    /// Which table the kept shelf was asked about. A board can be rented for
+    /// one game at one table, so the same wallet gets a different answer in a
+    /// different lobby — and an answer fetched with no table in hand must not
+    /// be handed to a lobby as if it knew about this one.
+    private var loadedRoom: String?
 
     var boards: [BoardSummary] { feed?.boards ?? [] }
     func board(_ id: String) -> BoardSummary? { boards.first { $0.id == id } }
 
     func load(_ store: GameStore, force: Bool = false) async {
-        if feed != nil && !force { return }
+        let room = store.roomId ?? ""
+        if feed != nil && !force && loadedRoom == room { return }
         // A forced reload is somebody asking for the truth — after a purchase,
         // or after midnight. It must not be swallowed because an ordinary poll
         // happens to be in the air, or a board someone just bought stays drawn
@@ -116,8 +137,11 @@ final class BoardShelf: ObservableObject {
         loading = true
         defer { loading = false }
         let fresh: BoardShelfFeed? = try? await store.fetchJSON(
-            "/api/boards?token=\(store.token)", raw: true)
-        if let fresh { feed = fresh }
+            "/api/boards?token=\(store.token)" + (room.isEmpty ? "" : "&room=\(room)"), raw: true)
+        if let fresh {
+            feed = fresh
+            loadedRoom = room
+        }
     }
 
     /// Midnight came round while somebody was looking at it.
@@ -197,6 +221,9 @@ private struct BoardTag: View {
             case "house": return ("ALWAYS FREE", P.ink3, P.sunken)
             case "today": return ("FREE TODAY", P.good, P.good.opacity(0.14))
             case "owned": return ("YOURS", P.gold, P.goldSoft)
+            // Paid for, and good for this table only. It says how long it
+            // lasts, because that is the whole difference from the one above.
+            case "rented": return ("ONE GAME", P.gold, P.goldSoft)
             default:      return ("\(board.price)", P.gold, board.was == nil ? P.sunken : P.goldSoft)
             }
         }()
@@ -399,7 +426,7 @@ struct BoardPickerSheet: View {
 
     var body: some View {
         let P = Palette.current(scheme)
-        let free = shelf.boards.filter { $0.how == "house" || $0.how == "today" }
+        let free = shelf.boards.filter { $0.how == "house" || $0.how == "today" || $0.how == "rented" }
         let mine = shelf.boards.filter { $0.how == "owned" }
         let locked = shelf.boards.filter { $0.how == "locked" }
 
@@ -410,11 +437,11 @@ struct BoardPickerSheet: View {
                         BoardClock(until: until)
                             .padding(.top, 2)
                     }
-                    shelfOf(free, "Free to play",
+                    shelfOf(free, "Playable now",
                             "Classic is free forever. Two more rotate every day — every board comes round once every \(shelf.feed?.cycleDays ?? 9) days.", P)
                     shelfOf(mine, "Yours", "Bought and kept. Play them whenever you like.", P)
                     shelfOf(locked, "In the store",
-                            "Buy one and it is yours for good. Only the host needs to own a board — everyone at the table plays it.", P)
+                            "Buy one and it is yours for good — or pay \(shelf.feed?.rent?.price ?? 1) coin to play it once at this table. Only the host needs it; everyone plays it with you.", P)
                 }
                 .padding(16)
             }
@@ -542,12 +569,17 @@ func freeBoardCountdown(_ seconds: TimeInterval) -> String {
 
 // MARK: - unlocking one
 
-/// Buying a board where you found it.
+/// Buying a board where you found it — or borrowing it for one game.
 ///
 /// The shop is a whole tab away, and bouncing somebody out of the lobby, into
 /// a tab, down a page and back again to spend six hundred coins is four steps
 /// too many. So the price is paid here, next to the board it buys, with the
 /// board itself as the thing being looked at.
+///
+/// The second button is the one-coin door: one game, at this table. It is
+/// offered only from a lobby this player is hosting, because a pass is good at
+/// one table and the board is only ever read against the host's wallet —
+/// anywhere else the coin would buy nothing.
 struct BoardBuySheet: View {
     let board: BoardSummary
     /// Called once the wallet has actually moved, so the lobby can play it.
@@ -559,12 +591,59 @@ struct BoardBuySheet: View {
     @Environment(\.colorScheme) private var scheme
 
     @State private var busy = false
+    @State private var renting = false
 
     private struct Reply: Decodable {
         var ok: Bool?
         var error: String?
         var coins: Int?
         var owned: [String]?
+    }
+
+    private struct RentReply: Decodable {
+        var ok: Bool?
+        var error: String?
+        var coins: Int?
+        /// 0 when an unplayed game moved here instead of a new one being sold.
+        var charged: Int?
+    }
+
+    /// The table a rent would be good at — a lobby, with this player hosting.
+    ///
+    /// A cup table is set by the cup and refuses every board change for as
+    /// long as it exists, so a pass bought at one could never be spent there.
+    /// The server turns the rent down for the same reason; this is so nobody
+    /// is invited to reach for a coin button that cannot work.
+    private var rentRoom: String? {
+        guard let room = store.roomId, !room.isEmpty else { return nil }
+        guard store.state?.status == "lobby", store.isHost else { return nil }
+        guard store.state?.cup != true, store.state?.quick != true else { return nil }
+        return room
+    }
+
+    private var rentPrice: Int { shelf.feed?.rent?.price ?? 1 }
+
+    /// A game already paid for and never played. It moves rather than being
+    /// charged for twice — the server decides that; this only reads it.
+    private var holding: BoardRentHold? { shelf.feed?.rent?.holding }
+
+    private var movingHere: Bool {
+        guard let h = holding else { return false }
+        return !(h.mapId == board.id && h.roomId == (rentRoom ?? ""))
+    }
+
+    private var rentLabel: String {
+        guard holding != nil else { return "Play one game — \(rentPrice) coin" }
+        return movingHere ? "Move your unplayed game here" : "Play this game — already paid"
+    }
+
+    private var rentLine: String {
+        guard holding != nil else {
+            return "\(rentPrice) coin plays one game here, on this table. Unplayed, it keeps: rent a different board and the same game moves with you."
+        }
+        return movingHere
+            ? "You have a game you paid for and never played. It moves to this table and this board — nothing more to pay."
+            : "Paid for and waiting. It is spent when this table deals, and only then."
     }
 
     var body: some View {
@@ -669,6 +748,31 @@ struct BoardBuySheet: View {
                            : "You have \(coins) coins.")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
+
+                    // One coin, one game. Offered under the price rather than
+                    // beside it: buying the board is still the thing this
+                    // sheet is for, and this is the cheaper way in.
+                    if board.rentable, rentRoom != nil, coins >= rentPrice || holding != nil {
+                        Button {
+                            Task { await rent() }
+                        } label: {
+                            HStack(spacing: 7) {
+                                if renting { ProgressView().tint(P.ink) }
+                                else { Art.icon(.coin, size: 15) }
+                                Text(rentLabel)
+                                    .font(.system(size: 14.5, weight: .heavy, design: .rounded))
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(MMButtonStyle(kind: .ghost))
+                        .disabled(busy || renting)
+
+                        Text(rentLine)
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(18)
                 .frame(maxWidth: .infinity)
@@ -715,6 +819,33 @@ struct BoardBuySheet: View {
         if store.wallet?.owned.contains(board.storeId) == false {
             store.wallet?.owned.append(board.storeId)
         }
+        store.refreshWallet()
+        await shelf.load(store, force: true)
+        onBought(board.id)
+        dismiss()
+    }
+
+    /// One game on a board nobody at this table owns. The server charges it,
+    /// or moves an unplayed one here for nothing, and says which it did.
+    private func rent() async {
+        guard !renting, let room = rentRoom else { return }
+        renting = true
+        defer { renting = false }
+        SoundKit.shared.click()
+        let reply: RentReply? = try? await store.fetchJSON(
+            "/api/boards/rent", method: "POST",
+            body: ["token": store.token, "mapId": board.id, "roomId": room, "expect": rentPrice])
+        guard reply?.ok == true else {
+            store.showToast(reply?.error ?? "Couldn't reach the shop — try again.", isError: true)
+            // Whatever it was, the numbers on screen are no longer to be trusted.
+            await shelf.load(store, force: true)
+            return
+        }
+        SoundKit.shared.buy()
+        store.showToast((reply?.charged ?? 0) > 0
+            ? "\(board.name) for one game — good at this table"
+            : "Your unplayed game moved to \(board.name)")
+        if let c = reply?.coins { store.wallet?.coins = c }
         store.refreshWallet()
         await shelf.load(store, force: true)
         onBought(board.id)

@@ -287,7 +287,29 @@ final class GameStore: ObservableObject {
 
     @Published var wallet: Wallet?
 
-    func refreshWallet(celebrate: Bool = false) {
+    /// Coins that have just been paid, for the counter in the top right to
+    /// catch. Set only when the server's earned watermark actually moved.
+    struct CoinCredit: Identifiable, Equatable {
+        let id = UUID()
+        /// What just landed, and what the wallet came to once it had.
+        let amount: Int
+        let total: Int
+    }
+    @Published var coinCredit: CoinCredit?
+
+    /// The watermark this session has already shown. Nil until the first read,
+    /// which is what keeps the app from throwing coins at the screen for a
+    /// wallet it is merely seeing for the first time.
+    private var shownEarned: Int?
+
+    /// Re-reads the wallet and, when the reading is a payout rather than the
+    /// same number again, hands it to the counter.
+    ///
+    /// Every credit in the app comes back through here — a win, the daily, a
+    /// rewarded view, a coin pack — because each of those already re-reads the
+    /// wallet rather than trusting its own reply. So this is the only place
+    /// that has to know what a payout looks like.
+    func refreshWallet() {
         Task { [weak self] in
             guard let self else { return }
             guard let base = serverURL,
@@ -297,13 +319,24 @@ final class GameStore: ObservableObject {
             guard let url = comps.url,
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let fresh = try? JSONDecoder().decode(Wallet.self, from: data) else { return }
-            if celebrate, let old = wallet?.coins, fresh.coins > old {
-                let earned = fresh.coins - old
-                showToast("+\(earned) coin\(earned > 1 ? "s" : "") earned — spend them in the Store!",
-                          glyph: .coin)
-            }
-            wallet = fresh
+            note(fresh)
         }
+    }
+
+    /// The wallet as the server just reported it. A spend leaves the watermark
+    /// where it was and passes quietly; a payout moves it and is announced.
+    ///
+    /// Three credits at once: two that land between two reads arrive here as
+    /// one jump and are announced as their sum. Three that arrive as three
+    /// separate reads each set a fresh credit, and the counter re-aims at the
+    /// newest total from whatever it is showing — it never counts backwards.
+    private func note(_ fresh: Wallet) {
+        defer { wallet = fresh }
+        guard let earned = fresh.earned else { return }
+        guard let seen = shownEarned else { shownEarned = earned; return }
+        shownEarned = earned
+        guard earned > seen else { return }
+        coinCredit = CoinCredit(amount: earned - seen, total: fresh.coins)
     }
 
     private let socket = SocketIOClient()
@@ -699,7 +732,7 @@ final class GameStore: ObservableObject {
         }
 
         // game over sheet, once — the result lands in History and the win
-        // may have paid out coins, so check the wallet with a celebration
+        // may have paid out coins, so the wallet is worth another look
         if new.isEnded && old?.isEnded != true {
             showGameOver = true
             SoundKit.shared.win()
@@ -722,7 +755,9 @@ final class GameStore: ObservableObject {
             }
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(1))
-                self?.refreshWallet(celebrate: true)
+                // A win pays out on the server a beat after the table settles;
+                // whatever it came to, the counter catches it.
+                self?.refreshWallet()
             }
         }
         if !new.isEnded { showGameOver = false }

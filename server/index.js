@@ -4,18 +4,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
-import { GameRoom, COLORS } from './game.js';
+import { GameRoom, COLORS, rollQuickSettings } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
 import { sendTurnPush } from './push.js';
 import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
-import { boardAccess, mayUseBoard, priceOn, mapIdOfItem } from './boards.js';
+import {
+  boardAccess, mayUseBoard, priceOn, mapIdOfItem, freeBoardsOn, HOUSE_BOARD,
+  isBoardForSale, RENT_PRICE,
+} from './boards.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
   inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
   sendNotice, noticesFor, markNoticesRead, allNotices, dropNotice,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
+  rentBoard, rentalOf, hasLiveRental, consumeRental, rentalSpent,
   blockPlayer, unblockPlayer, reportPlayer, reportsView, resolveReport, deleteAccount, guestTokensOf,
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
@@ -96,6 +100,13 @@ app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
 
 /**
+ * Pass-and-play seats derive their token from the phone's — `abc_p2` is the
+ * second chair on `abc`'s device. It is the same phone, the same wallet and
+ * the same rental book, so anything that reads money strips the suffix first.
+ */
+const baseToken = (t) => String(t || '').replace(/_p\d+$/, '');
+
+/**
  * The board shelf, as one wallet sees it: every board, whether it can be
  * played and why, what it costs if not, and when the day's two free ones
  * change hands.
@@ -104,14 +115,33 @@ app.get('/api/maps', (_req, res) => res.json(mapList()));
  * because the answer depends on the server's calendar and the server is the
  * only honest clock in the building. A caller with no token gets the shelf a
  * brand new player sees, which is exactly what a brand new player should see.
+ *
+ * `room` is optional and it is what makes a rented board readable. A pass is
+ * good at one table, so "may I play this?" has no answer until the caller
+ * says which table they are asking about. Asked from the shop, with no table
+ * in hand, a locked board simply reads as locked and rentable — which is the
+ * honest answer there.
  */
 app.get('/api/boards', (req, res) => {
   const token = String(req.query?.token || '').slice(0, 64);
+  const roomId = String(req.query?.room || '').toLowerCase().slice(0, 12);
   const owned = token ? (walletOf(token)?.owned || []) : [];
   const access = boardAccess(owned);
+  // The unplayed pass this wallet is holding, wherever it is pointed. Read
+  // once and answered from, rather than asked again for every board on the
+  // shelf. The client is told about it so it can say "your unplayed game
+  // moves here" instead of asking for a coin it is not going to charge.
+  const holding = token ? rentalOf(token) : null;
+  const rented = (id) => !!roomId && holding?.mapId === id && holding?.roomId === roomId;
   res.json({
     boards: mapList()
-      .map((m) => ({ ...m, ...access.state(m.id) }))
+      .map((m) => {
+        const state = access.state(m.id);
+        // A rental beats the calendar: it was paid for, and it is good here.
+        return rented(m.id)
+          ? { ...m, ...state, playable: true, how: 'rented', rentable: false }
+          : { ...m, ...state };
+      })
       .sort((a, b) => a.shelf - b.shelf),
     free: access.free,
     sale: access.sale,
@@ -120,6 +150,10 @@ app.get('/api/boards', (req, res) => {
     perDay: access.perDay,
     cycleDays: access.cycleDays,
     house: access.house,
+    rent: {
+      price: access.rentPrice,
+      holding: holding ? { mapId: holding.mapId, roomId: holding.roomId } : null,
+    },
     coins: token ? (walletOf(token)?.coins || 0) : 0,
   });
 });
@@ -491,6 +525,56 @@ app.post('/api/store/buy', (req, res) => {
     });
   }
   const result = buyItem(String(token || '').slice(0, 64), charged);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+/**
+ * One coin, one game, on a board you do not own.
+ *
+ * The shop sells a board for good; this sells an evening on it. The table is
+ * named because a pass is good at exactly one table — that is what keeps a
+ * single coin from opening ten lobbies — so the checks here are about the
+ * table as much as the board: it has to exist, it has to still be a lobby,
+ * and the caller has to be the host, because the host is the only seat whose
+ * entitlement the board is ever read against. Renting from any other chair
+ * would be a coin spent on nothing.
+ *
+ * What the wallet does about it is social.js's business, including the part
+ * where an unplayed pass moves rather than being bought twice.
+ */
+app.post('/api/boards/rent', (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 64);
+  const mapId = String(req.body?.mapId || '').slice(0, 40);
+  const roomId = String(req.body?.roomId || '').toLowerCase().slice(0, 12);
+  const expect = req.body?.expect;
+  // The same price-agreement the shop keeps: a client showing an old number
+  // is refused rather than quietly charged a new one.
+  if (expect != null && Number(expect) !== RENT_PRICE) {
+    return res.status(409).json({ error: `A game costs ${RENT_PRICE} coin.`, price: RENT_PRICE });
+  }
+  if (!token) return res.status(400).json({ error: 'Missing identity' });
+  if (!isBoardForSale(mapId)) return res.status(400).json({ error: 'No such board' });
+  const base = baseToken(token);
+  if (mayUseBoard(mapId, walletOf(base)?.owned || [])) {
+    return res.status(400).json({ error: 'You can already play that one' });
+  }
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: 'That table is gone' });
+  if (room.status !== 'lobby') return res.status(409).json({ error: 'That table has already started' });
+  // A cup table is set by the cup, and the socket that changes a board says so
+  // too. Without the same guard here the coin was taken for a board this table
+  // will refuse for as long as it exists — the pass is recoverable, it moves
+  // free of charge to any other table, but nobody should be charged and then
+  // told something that is not true.
+  if (room.cupMatch) return res.status(409).json({ error: 'A cup table is set by the cup' });
+  // And a matchmade table deals its own board, for the same reason: a coin
+  // spent on a board this table will never accept is a coin spent on nothing.
+  if (room.quick) return res.status(409).json({ error: 'A matchmade table sets itself' });
+  if (baseToken(room.hostId || '') !== base) {
+    return res.status(403).json({ error: 'Only the host picks the board' });
+  }
+  const result = rentBoard(base, mapId, roomId);
   if (result.error) return res.status(400).json(result);
   res.json(result);
 });
@@ -903,6 +987,19 @@ function recordTransitions(room) {
   if (room.status === 'playing' && prev !== 'playing') {
     stats.gamesStarted++;
     saveStats();
+    // One coin, one game — and this is the one moment a game begins, which
+    // makes it the one place a pass is spent. Not at start(), which a rematch
+    // walks through again, and not at the moment the board was picked, which
+    // costs somebody a coin for a table that never dealt.
+    //
+    // Only when the pass is what let this board be dealt. A host who rented
+    // Japan on Monday and bought it on Tuesday plays on what they own, and
+    // keeps the pass for another night.
+    const host = baseToken(room.hostId || '');
+    const mapId = String(room.settings?.mapId || '');
+    if (host && !mayUseBoard(mapId, walletOf(host)?.owned || [])) {
+      consumeRental(host, mapId, room.id);
+    }
   }
   if (room.status === 'ended' && prev === 'playing') {
     stats.gamesEnded++;
@@ -1395,6 +1492,14 @@ app.post('/api/admin/broadcast', (req, res) => {
 
 app.get(/^\/room\/.*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
+/**
+ * How far back "it was free a moment ago" reaches, for the one sentence a
+ * table gets when the calendar turns over under an open lobby. A day, because
+ * the rotation is a day wide: anything that was free before that went away for
+ * a reason that has nothing to do with midnight.
+ */
+const ROLLOVER_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
 /** @type {Map<string, GameRoom>} */
 const rooms = new Map();
 const socketsOf = new Map();  // roomId -> Set(socketId)
@@ -1442,8 +1547,39 @@ function getRoom(id) {
   // gets a token derived from the owner's, and it is the same phone and the
   // same wallet. Without this, buying a board and then handing the chair to
   // Player 2 across the table locks the device out of what it paid for.
-  room.hooks.mayUseBoard = (token, mapId) =>
-    mayUseBoard(mapId, walletOf(String(token).replace(/_p\d+$/, ''))?.owned || []);
+  //
+  // Owned-or-free first, then the rental book: a one-coin pass is good for one
+  // game at THIS table, which is why the room's own id is the second half of
+  // the question. Everywhere else the same pass answers no.
+  room.hooks.mayUseBoard = (token, mapId) => {
+    const base = baseToken(token);
+    return mayUseBoard(mapId, walletOf(base)?.owned || [])
+      || hasLiveRental(base, mapId, id);
+  };
+  // And, when the answer is no, why — because the table is told exactly one
+  // sentence about it and "the new host" was wrong more often than it was
+  // right. Every rented game ended with the rematch lobby blaming a host
+  // change that never happened, when the real answer was that the one-game
+  // pass had been played, which is the thing the player paid a coin for and
+  // is owed a straight account of.
+  //
+  // Asked here rather than in game.js because all three answers are things
+  // only this file knows: the rental book is social.js's and the calendar is
+  // boards.js's. An empty string means none of them — the chair really did
+  // change hands, which is what settleBoard says by default.
+  room.hooks.boardGone = (token, mapId) => {
+    const base = baseToken(token);
+    const map = String(mapId || '');
+    if (rentalSpent(base, map, id)) return 'spent';
+    const held = rentalOf(base);
+    // A pass is good at one table on one board; holding one that is not this
+    // pair is the whole reason this board just went away.
+    if (held) return held.roomId === id ? 'other' : 'moved';
+    // Nothing to do with a pass, and it was free yesterday: the lobby simply
+    // sat across midnight and the rotation moved on under it.
+    if (freeBoardsOn(Date.now() - ROLLOVER_LOOKBACK_MS).includes(map)) return 'rollover';
+    return '';
+  };
   // "Your turn", for somebody who is not looking at the game.
   //
   // Only when every tab and every phone of theirs has gone: a player staring
@@ -1491,6 +1627,11 @@ function dressCupTable(room, matchId) {
  * Find the quick-match table a player should drop into: the one that already
  * has people waiting (fullest first, so tables fill instead of fragmenting),
  * otherwise a fresh one on a 20-second fuse.
+ *
+ * A fresh one is also dealt its own house rules — see the roll below. An
+ * existing one is not re-rolled: the people sitting in it have already read
+ * the table they are waiting for, and changing it under them would make the
+ * lobby a thing not worth reading.
  */
 function quickMatchRoom() {
   // Seats are counted in people: the house players filling a quick lobby give
@@ -1507,7 +1648,19 @@ function quickMatchRoom() {
     return room;
   }
   const room = getRoom(newRoomId());
-  room.makeQuickMatch();
+  // A quick game should not be the same game every time. The board is drawn
+  // from what everybody can actually sit down on today — the house board and
+  // the two the calendar is giving away — and the house rules are shuffled
+  // from the ones the engine already has.
+  //
+  // Rolled here rather than inside the room because the shelf's calendar
+  // lives in boards.js, and game.js does not know what day it is. Only a
+  // board that is free for everyone can be dealt: nobody is host yet, and a
+  // table strangers cannot join is not a quick match.
+  room.makeQuickMatch(
+    GameRoom.QUICK_FUSE_SECONDS,
+    rollQuickSettings([HOUSE_BOARD, ...freeBoardsOn()]),
+  );
   return room;
 }
 

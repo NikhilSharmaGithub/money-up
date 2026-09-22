@@ -5,6 +5,10 @@ import { createHash } from 'node:crypto';
 import { getMap, GROUPS, MAPS } from './maps.js';
 import { buildDecks, shuffled } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
+import {
+  planReply, REPLY_DELAY_MIN, REPLY_DELAY_MAX,
+  REPLY_GAP_TABLE, REPLY_GAP_BOT, REPLY_GAP_ADDRESSED, REPLY_WINDOW, REPLY_WINDOW_MAX,
+} from './botchat.js';
 import { quickIdentity } from './names.js';
 
 export const COLORS = [
@@ -39,10 +43,151 @@ export const DEFAULT_SETTINGS = {
   deadlockRelief: true,
 };
 
+// ------------------------------------------------------- quick-match roll --
+// Every matchmade table deals itself its own house rules, so two quick games
+// in a row are not the same game twice. Only settings the engine already
+// understands, and only values it already accepts — nothing here is invented.
+//
+// What is missing matters as much as what is in it. `mortgage` stays on:
+// with it off, autoLiquidate can do nothing but raze houses, and an ordinary
+// rent bill turns into a bankruptcy — not a rule to spring on four strangers.
+// `deadlockRelief` stays on because it is the anti-stall valve. `teams` stays
+// at nobody's side, because a matchmade table cannot ask strangers to pick
+// one. `turnSeconds` stays at ninety, because a shorter clock on people who
+// never agreed to it means timeouts, and a timeout costs the player karma.
+// And the seats, the privacy and the house players belong to quick play
+// itself, which sets them a moment later.
+const QUICK_ROLL = {
+  // The two he named, and three above them. Below a thousand, four players
+  // spend the first lap in the red rather than buying anything.
+  startingCash: [1000, 1500, 2000, 2500, 3000],
+  x2rent: [true, false],
+  vacationCash: [true, false],
+  auction: [true, false],
+  noRentInPrison: [true, false],
+  evenBuild: [true, false],
+};
+
+/** The rules a quick table rolls, board aside. Exported so a test can read them. */
+export const QUICK_ROLL_KEYS = Object.keys(QUICK_ROLL);
+
+/** The values each of those rules may land on. A copy: callers may keep it. */
+export const quickRollValues = (key) => [...(QUICK_ROLL[key] || [])];
+
+/**
+ * Deal one quick table's house rules.
+ *
+ * `boards` is whatever the caller says every player can sit down on today.
+ * The calendar lives in boards.js and this file has no idea what day it is,
+ * so the list is handed in rather than looked up; an empty one leaves the
+ * board where it was, which is the house board.
+ */
+export function rollQuickSettings(boards = [], rnd = Math.random) {
+  const pick = (list) => list[Math.min(list.length - 1, Math.floor(rnd() * list.length))];
+  const rolled = {};
+  for (const key of QUICK_ROLL_KEYS) rolled[key] = pick(QUICK_ROLL[key]);
+  // A board nobody can play is worse than no roll at all, so an id this build
+  // does not have is dropped rather than dealt.
+  //
+  // Shuffle is the exception that proves the rule: it is in the rotation like
+  // any other board, but it has no entry in MAPS because getMap builds it
+  // fresh every game. Testing for MAPS alone quietly threw it out on the two
+  // days in nine it is free — which meant the one board that is a different
+  // board every single game was the one board quick play would never deal.
+  const playable = boards.filter((id) => id === 'random' || Object.hasOwn(MAPS, id));
+  if (playable.length) rolled.mapId = pick(playable);
+  return rolled;
+}
+
+/**
+ * The rolled rules in the words a player would use, in reading order.
+ *
+ * Word for word the names the settings panel uses on both clients, and not a
+ * second set of phrases meaning the same thing. "No rent from jail" read as a
+ * rule about the player in prison; it is a rule about the OWNER in prison, who
+ * collects nothing while they sit there. That is a rule about money, told to
+ * four strangers who never agreed to it, in the one place they get to read it.
+ */
+const QUICK_ROLL_LABELS = {
+  x2rent: 'x2 rent on full sets',
+  vacationCash: 'vacation cash',
+  auction: 'auctions',
+  noRentInPrison: 'no rent while jailed',
+  evenBuild: 'even build',
+};
+
+/**
+ * What this table is, one phrase at a time: the board, the bankroll, then
+ * every rolled rule and whether it is on.
+ *
+ * Written on the server so a phone and a browser sitting at the same table
+ * never describe it differently, and read off the live settings rather than
+ * the roll — if anything moved the board afterwards, this says what is
+ * actually about to be played.
+ */
+export function quickRollParts(settings = {}, mapName = '') {
+  return [
+    String(mapName || 'Classic'),
+    `$${Number(settings.startingCash || 0).toLocaleString('en-US')} to start`,
+    ...Object.entries(QUICK_ROLL_LABELS).map(([k, label]) => `${label} ${settings[k] ? 'on' : 'off'}`),
+  ];
+}
+
+/**
+ * Why a table just lost the board it was set to — one sentence each.
+ *
+ * settleBoard used to say "the new host" whatever had happened, which after
+ * a rented game was wrong every single time: the host had not changed, the
+ * one-game pass had simply been played. A board can now go away for four
+ * quite different reasons and a player is owed the right one, because the
+ * difference between them is the difference between "you spent your coin"
+ * and "somebody took your board away".
+ */
+const BOARD_GONE = {
+  host: 'That board is not unlocked for the new host — back to Classic',
+  spent: 'That one-game pass has been used — back to Classic',
+  moved: 'That one-game pass moved to another table — back to Classic',
+  other: 'That one-game pass is for a different board — back to Classic',
+  rollover: 'The day turned over and that board is no longer free — back to Classic',
+};
+
 /** Laps a blocked player walks before the board hands them a way out. */
 const RELIEF_LAPS = 4;
 /** What that way out costs — well over the odds, because it is a forced sale. */
 const RELIEF_MULTIPLIER = 1.7;
+
+/**
+ * How long a bot is allowed to think, stated as counts rather than a clock.
+ *
+ * Every loop in the bot brain is bounded here instead of being "short in
+ * practice", because a bot runs inside the same tick as everybody else's
+ * socket: a search that grows with the board would stall a live table, and a
+ * table that stalls is the one bug this game cannot afford. The trade search
+ * is the only part that could ever grow — it looks at each rival's deeds — so
+ * it gets a hard packet count and stops mid-scan when it is spent.
+ *
+ * The package count is worth the cost it buys: at 40 a bot on a crowded board
+ * ran out of budget before it had looked at everybody, and the tables that
+ * would not resolve were exactly the ones where the deal it needed was sitting
+ * with the rival it never reached. Ninety-six covers four rivals a turn, and
+ * the rest are picked up on the next one.
+ *
+ * Measured on a full eight-seat board with every street owned: one bot's whole
+ * turn of thinking — unmortgage, build and the trade search — costs about nine
+ * tenths of a millisecond, against the half-second or more between bot turns.
+ * test/smart-bots.mjs asserts the ceiling rather than trusting this note.
+ */
+const BOT_TRADE_PACKAGES = 96;
+const BOT_BUILD_STEPS = 24;
+const BOT_UNMORTGAGE_STEPS = 12;
+/**
+ * Turns before a bot knocks on the same door again, and before it makes any
+ * offer at all. Two numbers rather than one: without the per-target wait a
+ * bot with a single obvious target asks that one player every few turns for
+ * the rest of the game, which is how a helpful bot becomes a pest.
+ */
+const BOT_ASK_COOLDOWN = 9;
+const BOT_OFFER_GAP = 4;
 
 const AUCTION_SECONDS = 20;
 const JAIL_FINE = 50;
@@ -114,6 +259,10 @@ export class GameRoom {
     this.turnCount = 0;
     this.lastCard = null;
     this.lastMove = null;
+    // The last deed to change hands, and who took it. Kept only so the bots
+    // have something true to talk about — a reply that names what actually
+    // just happened is the difference between a table and a noticeboard.
+    this.lastBuy = null;
     // Every position change of the current action, in execution order —
     // one dice roll can move a piece twice (walk onto Surprise, then the
     // card sends it elsewhere), and one lastMove can't tell that story.
@@ -357,6 +506,21 @@ export class GameRoom {
 
   updateSettings(id, patch) {
     if (id !== this.hostId || this.status !== 'lobby') return;
+    // A matchmade table is nobody's table.
+    //
+    // Whoever tapped Play Now first is host here only because somebody had to
+    // hold the chair, and the three strangers matchmaking funnelled in behind
+    // them were shown what the table rolled and agreed to that. Rewriting it
+    // under them is not a host's privilege, it is a stranger changing the
+    // rules of a game already in front of you.
+    //
+    // The clock is the sharp end and the reason this is a rule rather than a
+    // courtesy: a five-second turn on somebody who never asked for one is a
+    // timeout, and a timeout takes them out of the game AND costs them karma.
+    // Both clients already say the settings here belong to nobody; this is
+    // the server finally agreeing. It lives in updateSettings rather than in
+    // the socket handler because that is the one door every client uses.
+    if (this.quick) return { error: 'A matchmade table sets itself' };
     // A board is stock now. The host may pick the house board, either of the
     // two the day is giving away, or anything they have bought — and nothing
     // else. Hiding the locked ones in the picker is a courtesy to a player;
@@ -388,6 +552,17 @@ export class GameRoom {
       this.settings[k] = v;
     }
     this.settings.maxPlayers = Math.max(2, Math.min(8, Number(this.settings.maxPlayers) || 4));
+    // The bankroll and the clock arrive as numbers from a picker, which is to
+    // say they arrive as whatever a socket feels like sending. Both are then
+    // written straight onto real seats — startingCash onto everybody's money,
+    // turnSeconds onto a timer that knocks a player out and docks their karma
+    // when it fires — so both are pinned to the ranges the pickers actually
+    // offer. A clock of zero is "off", which is a real choice and stays one.
+    this.settings.startingCash = Math.max(100, Math.min(50_000,
+      Math.floor(Number(this.settings.startingCash)) || DEFAULT_SETTINGS.startingCash));
+    const clock = Math.floor(Number(this.settings.turnSeconds));
+    if (!Number.isFinite(clock)) this.settings.turnSeconds = DEFAULT_SETTINGS.turnSeconds;
+    else this.settings.turnSeconds = clock <= 0 ? 0 : Math.max(30, Math.min(600, clock));
     if (patch.mapId) this.map = getMap(this.settings.mapId);
     if (patch.teams !== undefined) {
       this.settings.teams = Math.max(0, Math.min(4, Number(this.settings.teams) || 0));
@@ -464,14 +639,21 @@ export class GameRoom {
    * away what start() returns — the quick-match fuse and the cup auto-start —
    * so an error here would be a table that silently never begins. Falling back
    * to the house board is a table that plays.
+   *
+   * What it says while doing it is the other half of the job. mayUseBoard only
+   * ever answers no, and "no" has four quite different causes now; the one
+   * sentence the table gets had better be the true one, so the reason is asked
+   * for rather than assumed — see the hook in server/index.js, which is where
+   * the wallet and the calendar both live.
    */
   settleBoard() {
-    const want = this.settings.mapId;
+    const want = String(this.settings.mapId || '');
     if (!this.hostId || !this.hooks.mayUseBoard) return false;
-    if (this.hooks.mayUseBoard(this.hostId, String(want || ''))) return false;
+    if (this.hooks.mayUseBoard(this.hostId, want)) return false;
     this.settings.mapId = 'classic';
     this.map = getMap('classic');
-    this.say('That board is not unlocked for the new host — back to Classic', 'system');
+    const why = this.hooks.boardGone?.(this.hostId, want) || '';
+    this.say(BOARD_GONE[why] || BOARD_GONE.host, 'system');
     return true;
   }
 
@@ -757,12 +939,42 @@ export class GameRoom {
   /** The stretch at the end of the fuse in which house players may arrive. */
   static get QUICK_BOT_WINDOW_MS() { return 5000; }
 
-  makeQuickMatch(seconds = GameRoom.QUICK_FUSE_SECONDS) {
+  makeQuickMatch(seconds = GameRoom.QUICK_FUSE_SECONDS, rolled = null) {
     this.quick = true;
+    // The deal comes first, so the log line that announces it is the first
+    // thing in the room and the fuse starts on a table that already knows
+    // what it is. Quick play's own three settings go on top of it — they are
+    // not up for rolling, and this order says so.
+    if (rolled) this.applyQuickRoll(rolled);
     this.settings.isPrivate = false;
     this.settings.allowBots = true;
     this.settings.maxPlayers = 4;
     this.armQuickStart(seconds);
+  }
+
+  /**
+   * Take the deal: write the rolled rules onto the table and say what they
+   * are, out loud, in the log. Nobody at a matchmade table chose these, so
+   * the least the table can do is tell them before the dice start.
+   *
+   * Only keys DEFAULT_SETTINGS knows are written. The roll is made in this
+   * process and could be trusted, but the rule that the default settings are
+   * the whole vocabulary is worth having in one place rather than two.
+   */
+  applyQuickRoll(rolled) {
+    const allowed = Object.keys(DEFAULT_SETTINGS);
+    const keys = [];
+    for (const [k, v] of Object.entries(rolled || {})) {
+      if (!allowed.includes(k)) continue;
+      this.settings[k] = v;
+      keys.push(k);
+    }
+    if (!keys.length) return;
+    // Same move updateSettings makes: the board is a setting AND an object,
+    // and a lobby showing one while the table holds the other is a lie.
+    if (keys.includes('mapId')) this.map = getMap(this.settings.mapId);
+    this.quickRoll = { at: Date.now(), keys };
+    this.say(`This table rolled: ${quickRollParts(this.settings, this.map.name).join(' · ')}`, 'system');
   }
 
   armQuickStart(seconds) {
@@ -1193,7 +1405,9 @@ export class GameRoom {
   /** Charge a non-current player: auto-liquidate, then bankrupt if still short. */
   forcePay(p, amount, creditor) {
     while (p.money < amount) {
-      if (!this.autoLiquidate(p)) break;
+      // What is still owed goes with the ask, so a $50 card cannot cost
+      // somebody the dearest deed they own — see autoLiquidate.
+      if (!this.autoLiquidate(p, amount - p.money)) break;
     }
     if (p.money >= amount) {
       p.money -= amount;
@@ -1205,15 +1419,58 @@ export class GameRoom {
     return false;
   }
 
-  /** Sell one house, or mortgage one property. Returns true if cash was raised. */
-  autoLiquidate(p) {
+  /**
+   * Raise cash for somebody who is short, one asset at a time. Returns true
+   * while there is still something left to sell.
+   *
+   * The order is the whole point. This used to raze buildings first and only
+   * then reach for the mortgage book, which meant a player with one hotel and
+   * six spare streets paid a rent bill by knocking down the only thing earning
+   * them anything — and then, three bills later, went bankrupt holding a pile
+   * of unmortgaged deeds. Same assets, wrong sequence.
+   *
+   * So: strays first (a street outside a colour collects base rent and is worth
+   * more in the bank than on the board). Then buildings, cheapest colour first,
+   * so the expensive engine is the last thing dismantled. Then, only when
+   * nothing else is left, the bare sets themselves.
+   *
+   * Within the strays it is the SMALLEST sale that settles the bill, and the
+   * price ladder is only climbed when nothing smaller is enough. `need` is
+   * what is still owed — this is called for human seats too (forcePay, and any
+   * chair the house is minding while a connection is down), and a player who
+   * never chose any of this should not lose a $400 deed to a $50 card and then
+   * be handed a $221 bill to buy it back. Dearest-first only gives up "the
+   * least earning power" when the bill is big enough to need it, and when it
+   * is, that is exactly the order this falls into anyway.
+   *
+   * Every step goes through mortgage()/sellHouse(), so the even-build rule and
+   * the mortgage setting still decide what is actually legal — a step that is
+   * refused simply falls through to the next candidate rather than reading as
+   * "this player is out of road", which is what sends them bankrupt.
+   */
+  autoLiquidate(p, need = 0) {
     const mine = this.tilesOf(p.id);
-    const withHouses = mine.filter((i) => (this.own(i).houses || 0) > 0)
-      .sort((a, b) => this.own(b).houses - this.own(a).houses);
-    if (withHouses.length) return this.sellHouse(p.id, withHouses[0], true);
-    const unmortgaged = mine.filter((i) => !this.own(i).mortgaged)
+    const bare = (i) => !(this.own(i).houses > 0) && !this.own(i).mortgaged;
+    const inSet = (i) => {
+      const t = this.tile(i);
+      return t.type === 'property' && this.ownsFullGroup(p.id, t.group);
+    };
+
+    const strays = mine.filter((i) => bare(i) && !inSet(i))
       .sort((a, b) => this.tile(a).price - this.tile(b).price);
-    if (unmortgaged.length) return this.mortgage(p.id, unmortgaged[0], true);
+    // Enough on its own to end this, cheapest first; then whatever is left,
+    // dearest first, because if nothing covers it the most cash per deed sold
+    // is the fewest deeds sold.
+    const covers = (i) => Math.floor(this.tile(i).price / 2) >= need;
+    const ladder = [...strays.filter(covers), ...strays.filter((i) => !covers(i)).reverse()];
+    for (const i of ladder) if (this.mortgage(p.id, i, true)) return true;
+
+    const built = mine.filter((i) => (this.own(i).houses || 0) > 0)
+      .sort((a, b) => this.tile(a).price - this.tile(b).price);
+    for (const i of built) if (this.sellHouse(p.id, i, true)) return true;
+
+    const rest = mine.filter(bare).sort((a, b) => this.tile(a).price - this.tile(b).price);
+    for (const i of rest) if (this.mortgage(p.id, i, true)) return true;
     return false;
   }
 
@@ -1625,6 +1882,7 @@ export class GameRoom {
     p.money -= t.price;
     this.ownership[pend.tile] = { owner: p.id, houses: 0, mortgaged: false };
     if (t.type === 'property') this.statFor(p).streetsBought++;
+    this.lastBuy = { by: p.id, tile: pend.tile, at: Date.now() };
     this.say(`${p.name} bought ${t.name} for ${t.price}`, 'buy');
     this.turn.pending = null;
     this.turn.phase = this.afterActionPhase(p);
@@ -1739,6 +1997,7 @@ export class GameRoom {
       const winner = this.player(a.leader);
       this.ownership[a.tile] = { owner: winner.id, houses: 0, mortgaged: false };
       this.statFor(winner).auctionsWon++;
+      this.lastBuy = { by: winner.id, tile: a.tile, at: Date.now() };
       this.say(`${winner.name} won ${t.name} at auction for ${a.bid}`, 'auction');
     } else {
       this.say(`Nobody bid on ${t.name} — it stays with the bank`, 'auction');
@@ -2052,6 +2311,27 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------- trade --
+  /**
+   * A deed cannot change hands while its colour is carrying buildings —
+   * anywhere in the colour, not only on that deed.
+   *
+   * The board sits at 0,1,1 quite legally the moment somebody razes one house
+   * to pay a bill, and checking only the deed in the envelope let the
+   * house-free member of the group be traded out from under the two that were
+   * still built: houses left standing on a colour its owner no longer owns,
+   * which is not a rule anywhere and which the invariant check calls out as
+   * corruption. mortgage() has always read the rule this way; this is that
+   * same rule, said once for both doors.
+   */
+  tradeBlocked(index) {
+    const o = this.own(index);
+    if (!o) return false;
+    if ((o.houses || 0) > 0) return true;
+    const t = this.tile(index);
+    if (t?.type !== 'property') return false;
+    return (this.map.groups[t.group] || []).some((i) => (this.own(i)?.houses || 0) > 0);
+  }
+
   proposeTrade(id, { to, give, get }) {
     const from = this.player(id);
     const target = this.player(to);
@@ -2068,8 +2348,8 @@ export class GameRoom {
       && !offer.get.money && !offer.get.tiles.length && !offer.get.cards) {
       return { error: 'Empty trade' };
     }
-    // A property with buildings cannot be traded.
-    const blocked = [...offer.give.tiles, ...offer.get.tiles].some((i) => (this.own(i).houses || 0) > 0);
+    // A property whose colour carries buildings cannot be traded.
+    const blocked = [...offer.give.tiles, ...offer.get.tiles].some((i) => this.tradeBlocked(i));
     if (blocked) return { error: 'Sell the buildings first' };
 
     this.trades.push(offer);
@@ -2119,8 +2399,8 @@ export class GameRoom {
     // owner, move buildings, or push prison cards negative.
     const stale =
       from.bankrupt || to.bankrupt
-      || trade.give.tiles.some((i) => this.own(i)?.owner !== from.id || (this.own(i)?.houses || 0) > 0)
-      || trade.get.tiles.some((i) => this.own(i)?.owner !== to.id || (this.own(i)?.houses || 0) > 0)
+      || trade.give.tiles.some((i) => this.own(i)?.owner !== from.id || this.tradeBlocked(i))
+      || trade.get.tiles.some((i) => this.own(i)?.owner !== to.id || this.tradeBlocked(i))
       || from.getOutCards < trade.give.cards
       || to.getOutCards < trade.get.cards;
     if (stale) {
@@ -2269,6 +2549,9 @@ export class GameRoom {
     this.auction = null;
     this.trades = [];
     this.vacationPot = 0;
+    // Last game's purchase belongs to last game; a bot must not open the
+    // rematch talking about a deed nobody at this board owns any more.
+    this.lastBuy = null;
     this.log = [];
     this.reliefCard = null;
     this.reliefExplained = false;
@@ -2277,7 +2560,9 @@ export class GameRoom {
       p.pos = 0; p.jail = false; p.jailTurns = 0; p.getOutCards = 0;
       p.bankrupt = false; p.skipTurns = 0;
       p.timedOut = false; p.removedFor = null; p.botControlled = false;
-      p.blockedLaps = 0; p.refused = [];
+      // A new game is a clean slate for the bot brain too: who turned it down
+      // last game, and whose door it already knocked on, are last game's.
+      p.blockedLaps = 0; p.refused = []; p.askedAt = {}; p.lastAskedAt = undefined;
     });
     this.say('Back to the lobby — set up the next game', 'system');
     // Whoever pressed Play again is the host now, and the board came with the
@@ -2305,6 +2590,12 @@ export class GameRoom {
     this.chat.push(msg);
     if (this.chat.length > 100) this.chat.shift();
     this.push();
+    // Somebody real said something out loud, so somebody should answer. The
+    // guard is also the loop guard: a bot's own line arrives here with
+    // auto:true and a house seat is p.isBot, so nothing the server wrote can
+    // ever provoke another reply. The filtered text is what gets read, not the
+    // raw one — a masked word should not be answered as if it had landed.
+    if (!auto && !p.isBot) this.maybeBotReply(p, msg.text, ch);
   }
 
   /**
@@ -2322,6 +2613,221 @@ export class GameRoom {
       return 'H0' + createHash('sha1').update(`${this.id}:${p.id}`).digest('hex').slice(0, 4).toUpperCase();
     }
     return this.hooks.codeOf?.(p.id) || null;
+  }
+
+  // ------------------------------------------------------------- bot replies --
+  //
+  // Somebody types something; one bot answers it. What gets said is decided in
+  // botchat.js — this end gathers the facts, holds the rate limits, and does
+  // the talking.
+  //
+  // Everything gathered below is already on every client's screen: names,
+  // cash, who owns what, whose turn it is, the open debt, the last deed sold.
+  // Nothing a bot knows privately — what it thinks a street is worth, what it
+  // has been refused, what is left in the deck — is collected here, so no
+  // reply can say something that seat could not have worked out for itself.
+  //
+  // The reply goes out through sendChat like any other line, so it is filtered
+  // the same way and signed with the same H0 stand-in code, which is what lets
+  // a player block or report a bot that is getting on their nerves.
+
+  /** The table as a bot may describe it. Public knowledge only — see above. */
+  chatScene(speaker, text, channel, skip = new Set()) {
+    const lower = String(text).toLowerCase();
+    // Nothing on the board means anything until it is being played: in the
+    // lobby everyone holds the same cash and owns nothing, so "who is ahead"
+    // and "how many streets are left" have no honest answer yet.
+    const live = this.status === 'playing';
+    const ranked = live ? [...this.active].sort((a, b) => this.netWorth(b) - this.netWorth(a)) : [];
+
+    // House players only — never an auto-played seat. A person whose
+    // connection dropped is being covered by the house for their TURNS; a
+    // reply in the chat would come out under their own name, and nobody
+    // should find "they" said things while they were gone.
+    const bots = this.players
+      .filter((b) => b.isBot && b.id !== speaker.id && !skip.has(b.id))
+      // A team line is answered inside the team or not at all — a reply that
+      // escaped onto the open channel would repeat what was said in private.
+      .filter((b) => channel !== 'team' || this.sameTeam(b, speaker))
+      .map((b) => ({
+        id: b.id,
+        name: b.name,
+        cash: moneyText(b.money),
+        bankrupt: !!b.bankrupt,
+        spokeAt: this.botChat?.spokeAt?.[b.id] || 0,
+        sets: Object.keys(this.map.groups)
+          .filter((g) => this.ownsFullGroup(b.id, g))
+          .map((g) => GROUPS[g]?.name || g),
+        needs: this.nearSets(b.id).map((n) => ({
+          tileName: this.tile(n.missing).name,
+          groupName: GROUPS[n.group]?.name || n.group,
+          holderId: n.holder,
+          holderName: this.player(n.holder)?.name || '',
+        })),
+      }));
+
+    // A street named in the message is the strongest hint there is about what
+    // the line was actually about. Longest name wins, so "Old Delhi" beats
+    // "Delhi" on a board that has both.
+    let tileHit = null;
+    this.map.tiles.forEach((t, i) => {
+      if (!t.name || t.name.length < 4 || !lower.includes(t.name.toLowerCase())) return;
+      if (tileHit && tileHit.name.length >= t.name.length) return;
+      const o = this.own(i);
+      tileHit = {
+        index: i, name: t.name,
+        ownerId: o?.owner || null,
+        ownerName: o ? (this.player(o.owner)?.name || '') : '',
+      };
+    });
+
+    const d = this.turn?.debt;
+    const buyer = this.lastBuy && this.player(this.lastBuy.by);
+    return {
+      text,
+      speaker: { id: speaker.id, name: speaker.name },
+      bots,
+      tileHit,
+      turn: this.current ? { id: this.current.id, name: this.current.name } : null,
+      // One player ahead of nobody is not a leader, so a two-horse table is
+      // where this starts meaning anything.
+      leader: ranked.length > 1 ? { id: ranked[0].id, name: ranked[0].name } : null,
+      tail: ranked.length > 1 ? { id: ranked.at(-1).id, name: ranked.at(-1).name } : null,
+      debt: d ? {
+        debtorId: d.debtor,
+        debtorName: this.player(d.debtor)?.name || '',
+        creditorId: d.creditor,
+        creditorName: d.creditor
+          ? (this.player(d.creditor)?.name || '')
+          : (d.owedTo ? 'the rest of us' : 'the bank'),
+        amount: moneyText(d.amount),
+      } : null,
+      lastBuy: buyer ? { byName: buyer.name, tileName: this.tile(this.lastBuy.tile)?.name || '' } : null,
+      left: live ? this.map.tiles.filter((t, i) => (
+        (t.type === 'property' || t.type === 'airport' || t.type === 'utility') && !this.own(i)
+      )).length : 0,
+      pot: this.vacationPot ? moneyText(this.vacationPot) : 0,
+      recent: this.botChat?.recent || [],
+    };
+  }
+
+  /** Who would answer this, and with what — without anybody saying it yet. */
+  planChatReply(speaker, text, channel = 'all', skip = new Set()) {
+    if (!speaker || !text) return null;
+    const scene = this.chatScene(speaker, text, channel, skip);
+    if (!scene.bots.length) return null;
+    return planReply(scene);
+  }
+
+  /**
+   * Answer a human, if it is anybody's turn to.
+   *
+   * Replies are allowed at every table, unlike the ambient banter in botSay,
+   * which only runs on quick matches. The reasoning there — that somebody who
+   * deliberately added bots to their own game does not need them making small
+   * talk at them — does not apply to a reply: they typed first, and being
+   * ignored by four opponents is worse than being chatted at.
+   */
+  maybeBotReply(speaker, text, channel = 'all') {
+    if (!this.players.some((b) => b.isBot && b.id !== speaker.id)) return null;
+    this.botChat ??= { tableAt: 0, spokeAt: {}, window: [], recent: [] };
+    const c = this.botChat;
+    const now = Date.now();
+
+    // The ceiling comes first: whatever else is true, a table gets at most
+    // REPLY_WINDOW_MAX replies a minute. Somebody pasting a wall of messages
+    // gets a conversation back, not a flood.
+    c.window = c.window.filter((t) => now - t < REPLY_WINDOW);
+    if (c.window.length >= REPLY_WINDOW_MAX) return null;
+    if (now - c.tableAt < REPLY_GAP_TABLE) return null;
+
+    // Up to three goes at finding somebody who is not still catching their
+    // breath. Being named is the exception: if that bot is on cooldown nobody
+    // answers for them, because being spoken to is personal.
+    const skip = new Set();
+    for (let tries = 0; tries < 3; tries++) {
+      const plan = this.planChatReply(speaker, text, channel, skip);
+      if (!plan) return null;
+      const gap = plan.addressed ? REPLY_GAP_ADDRESSED : REPLY_GAP_BOT;
+      if (now - (c.spokeAt[plan.botId] || 0) < gap) {
+        if (plan.addressed) return null;
+        skip.add(plan.botId);
+        continue;
+      }
+      c.tableAt = now;
+      c.spokeAt[plan.botId] = now;
+      c.window.push(now);
+      // The last dozen templates this table used are avoided where there is a
+      // choice, so a long game does not circle the same four lines.
+      c.recent.push(plan.template);
+      if (c.recent.length > 12) c.recent.shift();
+
+      // Typing takes a moment, and the pause is what sells it.
+      //
+      // Wrapped, because this runs from a bare setTimeout: everything inside
+      // reads a table that has had a second and a half to change under it, and
+      // an uncaught throw in a timer takes the process down — and every other
+      // live table on the box with it. Nobody loses a game over small talk.
+      const timer = setTimeout(() => {
+        try {
+          const bot = this.player(plan.botId);
+          if (!bot) return;
+          this.sendChat(bot.id, plan.line, channel, { auto: true });
+          if (plan.offerTo) this.botTradeOnRequest(bot, this.player(plan.offerTo));
+        } catch (err) {
+          console.error('bot reply failed:', err);
+        }
+      }, REPLY_DELAY_MIN + Math.random() * (REPLY_DELAY_MAX - REPLY_DELAY_MIN));
+      timer.unref?.();
+      return plan;
+    }
+    return null;
+  }
+
+  /**
+   * "Kiran, trade?" answered with the offer itself rather than a line about
+   * one.
+   *
+   * Only ever fires when the person asking is holding the single street that
+   * finishes a colour for this bot — which is exactly what the reply just said
+   * out loud, so the offer and the sentence agree. A straight swap when they
+   * are one short of a different colour the bot is sitting on, otherwise cash
+   * well over the sticker price, because a colour is worth more than the
+   * street that completes it.
+   */
+  botTradeOnRequest(bot, target) {
+    if (this.status !== 'playing') return false;
+    if (!bot || !target || bot.bankrupt || target.bankrupt) return false;
+    if (this.trades.some((t) => t.from === bot.id && t.to === target.id)) return false;
+    const mine = this.nearSets(bot.id);
+    const want = mine.find((n) => n.holder === target.id && !(this.own(n.missing).houses > 0));
+    if (!want) return false;
+
+    // The street handed back has to come from a colour neither of us is
+    // chasing — swapping inside the group we both want just passes the
+    // problem back and forth.
+    const theirs = this.nearSets(target.id).find((n) => (
+      this.own(n.missing)?.owner === bot.id
+      && n.group !== want.group
+      && !mine.some((w) => w.group === n.group)
+      && !(this.own(n.missing).houses > 0)
+    ));
+    const propose = (give, get) => {
+      // Asked for, so the don't-pester clock in botMaybeTrade is spent here
+      // rather than on an offer nobody invited.
+      bot.lastAskedAt = this.turnCount;
+      return !this.proposeTrade(bot.id, { to: target.id, give, get }).error;
+    };
+    const taking = { money: 0, tiles: [want.missing], cards: 0 };
+    if (theirs) return propose({ money: 0, tiles: [theirs.missing], cards: 0 }, taking);
+
+    const tile = this.tile(want.missing);
+    const offer = Math.min(
+      bot.money - Math.floor(this.botFloor(bot) / 2),
+      Math.round(tile.price * 1.9 * this.botTemper(bot)),
+    );
+    if (offer < tile.price) return false;
+    return propose({ money: offer, tiles: [], cards: 0 }, taking);
   }
 
   // -------------------------------------------------------------------- bots --
@@ -2392,10 +2898,25 @@ export class GameRoom {
     if (t.phase === 'debt') {
       // Raise cash one piece at a time — the pause reads like a person doing
       // it. The stream forwards each piece and closes the debt on its own;
-      // out of road means out of the game.
-      if (this.autoLiquidate(p)) {
+      // out of road means out of the game. In debt the shortfall IS the
+      // negative balance, and saying so keeps a small bill from costing the
+      // biggest deed on the board — this runs on human seats too, whenever
+      // the house is minding one whose connection has gone.
+      //
+      // But the theatre has a budget. A bot that now trades and builds owns
+      // more, so a big bill can need eight or ten pieces sold, and at half a
+      // second each the table sits there not moving for five seconds — which
+      // is exactly what "the game froze" looks like from a chair. So the
+      // first two pieces keep their pause, and after that it sells faster and
+      // several at a time: the debt is always settled inside about two
+      // seconds, however much has to go.
+      t.raising = (t.raising || 0) + 1;
+      const pieces = Math.min(1 + Math.max(0, t.raising - 2), 4);
+      let sold = 0;
+      while (sold < pieces && p.money < 0 && this.autoLiquidate(p, Math.max(0, -p.money))) sold++;
+      if (sold > 0) {
         this.push();
-        return this.scheduleBot(500);
+        return this.scheduleBot(t.raising <= 2 ? 500 : 200);
       }
       return this.declareBankrupt(p.id);
     }
@@ -2441,7 +2962,9 @@ export class GameRoom {
    * on the floor — a bot that comments on everything reads as a machine.
    */
   botSay(p, kind, vars = {}, { delay = 1400, always = false } = {}) {
-    if (!p || !this.autoPlayed(p)) return;
+    // Same rule as the replies: only a house player talks, never a covered
+    // human seat speaking in its owner's name.
+    if (!p?.isBot) return;
     // Only the house players on a quick table talk. When someone deliberately
     // adds bots to their own game they know exactly what they're playing
     // against, and a bot making small talk at them is just noise.
@@ -2516,110 +3039,274 @@ export class GameRoom {
     return out;
   }
 
+  /**
+   * WHAT A BOT IS ALLOWED TO KNOW — the rule the whole brain below obeys.
+   *
+   * Every decision from here down reads only what the server already sends
+   * every client on every push: who owns which tile, how many houses sit on
+   * it, whether it is mortgaged, each player's cash, prison cards and net
+   * worth, whose turn it is, the settings, and the open trades. Nothing in the
+   * brain touches this.decks — the card order nobody has seen — or another
+   * player's private working memory, the list of who turned them down and
+   * whose door they have already knocked on. A bot is meant to play well by
+   * reading the board harder than you do, not by reading your hand, and a bot
+   * that cheated would be found out the first time somebody watched a replay.
+   * test/smart-bots.mjs booby-traps both and runs a whole turn of thinking
+   * over the trap, rather than leaving this paragraph to be believed.
+   *
+   * The one place that could quietly break the rule is the trade search, which
+   * has to guess what the OTHER side will say. It does that by running the
+   * same judge from their chair, over the same public board, against the
+   * hardest bargainer on the dial — see botJudgeTrade's `blind`.
+   */
+  botBlindTemper() { return 1.15; }
+
+  /**
+   * Every one- and two-piece packet from a shortlist. Two is the ceiling on
+   * purpose: a three-street package is a negotiation, and a bot that cannot
+   * negotiate has no business sending one.
+   */
+  botPackets(list) {
+    const out = [];
+    for (let a = 0; a < list.length; a++) {
+      out.push([list[a]]);
+      for (let b = a + 1; b < list.length; b++) out.push([list[a], list[b]]);
+    }
+    return out;
+  }
+
+  /**
+   * Who owns what, if this deal goes through.
+   *
+   * Every judgement below is made on the board AFTER the trade rather than on
+   * the deeds in the envelope, because a package is worth more or less than
+   * the sum of its parts: two streets that finish a colour are a monopoly, the
+   * same two streets split across two colours are just two streets. This is
+   * one small object and a lookup, so it is cheap enough to run on every
+   * package the search weighs.
+   */
+  botBoardAfter(toMe, toThem, meId, otherId) {
+    const moved = {};
+    for (const i of toMe) moved[i] = meId;
+    for (const i of toThem) moved[i] = otherId;
+    return (i) => (i in moved ? moved[i] : this.own(i)?.owner ?? null);
+  }
+
+  /**
+   * What a finished colour is worth beyond the deeds inside it.
+   *
+   * Without this a bot prices a monopoly as a multiple of the sticker price of
+   * the single street that finishes it, which says a cheap brown pair is worth
+   * less than one expensive stray — so the cheap sets, the ones that actually
+   * decide games, never moved. A colour is wanted for what it can charge, so
+   * it is priced off what it charges once it is built to the knee.
+   */
+  botSetPremium(group) {
+    // Rents never move, so this is a property of the board rather than of the
+    // moment — worked out once and then read, because the trade search asks
+    // for it a few hundred times a turn.
+    if (this.setPremiums?.uid !== this.map.uid) this.setPremiums = { uid: this.map.uid };
+    if (group in this.setPremiums) return this.setPremiums[group];
+    const idxs = this.map.groups[group] || [];
+    let rent = 0;
+    for (const i of idxs) {
+      const t = this.tile(i);
+      if (t?.rent) rent += t.rent[Math.min(3, t.rent.length - 1)] || 0;
+    }
+    this.setPremiums[group] = Math.floor(rent * 0.9);
+    return this.setPremiums[group];
+  }
+
+  /** The colours a seat gains (+) or breaks up (-) if this deal goes through. */
+  botSetSwing(playerId, before, after) {
+    let swing = 0;
+    for (const [group, idxs] of Object.entries(this.map.groups)) {
+      if (!idxs.length) continue;
+      const had = idxs.every((i) => before(i) === playerId);
+      const has = idxs.every((i) => after(i) === playerId);
+      if (had === has) continue;
+      swing += (has ? 1 : -1) * this.botSetPremium(group);
+    }
+    return swing;
+  }
+
+  /** What one side of an offer is worth, in cash, to the seat weighing it. */
+  botPackageValue(p, side, temper) {
+    let v = (side.money || 0) + (side.cards || 0) * 40;
+    for (const i of side.tiles || []) {
+      // The floor under a deed is what anybody would give for it — and a deed
+      // in hock is worth that much LESS what it costs to get it out, or the
+      // floor would hand back exactly the discount botValueOf just applied.
+      const floor = Math.floor(this.tile(i).price * 0.9) - this.botLiftCost(i);
+      v += Math.max(this.botValueOf(p, i, temper), floor);
+    }
+    return v;
+  }
+
+  /**
+   * The one opinion in the file: would this seat sign this deal?
+   *
+   * A bot runs it on the offers it receives, and — from the other player's
+   * chair, over the same public board — on every offer it is thinking of
+   * sending, so it only ever knocks with a package the other side has an
+   * actual reason to take. One judge doing both jobs is the whole point: a bot
+   * cannot talk itself into sending an offer it would refuse itself.
+   *
+   * `incoming` is what `me` receives, `outgoing` what `me` hands over. `blind`
+   * is set when the judge is run from somebody else's chair: a bot can read
+   * your deeds and your cash off the board but not your temperament, so it
+   * prices you as the hardest bargainer on the dial. Guessing you are soft
+   * would only produce envelopes that come straight back.
+   */
+  botJudgeTrade(me, other, incoming, outgoing, { blind = false } = {}) {
+    const temper = blind ? this.botBlindTemper() : this.botTemper(me);
+    const before = this.botBoardAfter([], [], me.id, other.id);
+    const after = this.botBoardAfter(incoming.tiles || [], outgoing.tiles || [], me.id, other.id);
+    const mySwing = this.botSetSwing(me.id, before, after);
+    const theirSwing = this.botSetSwing(other.id, before, after);
+    const family = this.sameTeam(me, other);
+
+    // A colour gained rides with what comes in, a colour broken up with what
+    // goes out — so one premium reads the right way round whichever direction
+    // the deeds are travelling.
+    const value = this.botPackageValue(me, incoming, temper) + Math.max(0, mySwing) * temper;
+    const cost = this.botPackageValue(me, outgoing, temper) + Math.max(0, -mySwing) * temper;
+
+    // What a street is worth depends entirely on what it finishes. Taking the
+    // deal that completes my colour is worth overpaying for; handing over the
+    // one that completes someone else's is worth being difficult about. The
+    // plain margin thins as a set-less table ages — on a board where nothing
+    // has moved in eighty turns, a thin deal beats another eighty turns.
+    const stale = this.botStaleness();
+    let bar = 1.15 - 0.15 * stale;
+    if (mySwing > 0) bar = 0.7;
+    if (theirSwing > 0 && !family) {
+      // Arming a rival costs dearly — the ransom sits on top of a valuation
+      // that already carries the denial premium. It only eases as a set-less
+      // table ages: a bot playing to win will eventually sell the deadlock
+      // for a fortune rather than hold four players in a permanent draw.
+      bar = Math.max(bar, 2.0 - 0.8 * stale);
+    }
+    if (mySwing > 0 && theirSwing > 0) bar = 1.0; // an even swap suits us both
+    if (family) bar = Math.min(bar, 0.75);        // one purse, two chairs
+    // Breaking up a colour I already own is not a trade, it is a surrender.
+    if (mySwing < 0) bar = Math.max(bar, 2.6);
+
+    // Never sign into rent-death: whatever the sticker maths says, the deal
+    // has to leave enough cash to survive the board as it stands. A colour is
+    // worth going hungry for, but not worth arriving at broke — an unbuilt
+    // monopoly with no money behind it is three rent cards.
+    const float = this.botFloor(me, { temper });
+    const floorAfter = Math.floor(float / (mySwing > 0 ? 4 : 2));
+    const affordable = me.money - (outgoing.money || 0) >= floorAfter;
+    return {
+      accept: value >= cost * bar && affordable,
+      value, cost, bar, mySwing, theirSwing, gain: value - cost * bar,
+    };
+  }
+
+  /**
+   * The best deal this bot can see right now, or nothing.
+   *
+   * Shaped like the way a person shops a table: take the pieces a rival holds
+   * that are worth more to me than to them, offer back the pieces of mine that
+   * are worth more to them than to me, and close whatever gap is left with the
+   * smallest amount of cash that turns their answer. Every candidate then goes
+   * in front of BOTH judges — mine, and the same judge run from their chair —
+   * and only a package both would sign is worth an envelope.
+   *
+   * The search is bounded by BOT_TRADE_PACKAGES rather than by the size of the
+   * board, and the rivals are walked from a rotating start so that the same
+   * player is never the only one considered when the budget runs out.
+   */
+  botBestOffer(p) {
+    p.askedAt ??= {};
+    const stale = this.botStaleness();
+    const houseless = (i) => !this.tradeBlocked(i);
+    const blindTemper = this.botBlindTemper();
+    const rivals = this.active.filter((q) => q.id !== p.id
+      && this.turnCount - (p.askedAt[q.id] ?? -99) >= BOT_ASK_COOLDOWN);
+    if (!rivals.length) return null;
+
+    let budget = BOT_TRADE_PACKAGES;
+    let best = null;
+    const offset = this.turnCount % rivals.length;
+    for (let n = 0; n < rivals.length && budget > 0; n++) {
+      const q = rivals[(offset + n) % rivals.length];
+      // Both shortlists are read the same way: worth more over there than here.
+      // A refused door stays shut — until the desperate hour buys one more knock.
+      const theirs = this.tilesOf(q.id)
+        .filter((i) => houseless(i) && (!p.refused?.includes(i) || stale >= 0.75))
+        .sort((a, b) => (this.botValueOf(p, b) - this.botValueOf(q, b, blindTemper))
+          - (this.botValueOf(p, a) - this.botValueOf(q, a, blindTemper)))
+        .slice(0, 3);
+      if (!theirs.length) continue;
+      const mine = this.tilesOf(p.id).filter(houseless)
+        .sort((a, b) => (this.botValueOf(q, b, blindTemper) - this.botValueOf(p, b))
+          - (this.botValueOf(q, a, blindTemper) - this.botValueOf(p, a)))
+        .slice(0, 2);
+
+      const blind = { blind: true };
+      for (const take of this.botPackets(theirs)) {
+        if (budget <= 0) break;
+        for (const give of [[], ...this.botPackets(mine)]) {
+          if (budget-- <= 0) break;
+          // Their side first, because it prices the deal: the judge is linear
+          // in money, so the cash they come up short by IS the asking price.
+          const out = { money: 0, tiles: give, cards: 0 };
+          const inc = { money: 0, tiles: take, cards: 0 };
+          const dry = this.botJudgeTrade(q, p, out, inc, blind);
+          const cash = Math.max(0, Math.ceil(dry.cost * dry.bar - dry.value));
+          if (cash > p.money) continue;
+          out.money = cash;
+          // Paying is not the only bar they have to clear — a rival too poor
+          // to survive the deal refuses it however much cash is on the table.
+          if (!this.botJudgeTrade(q, p, out, inc, blind).accept) continue;
+          const verdict = this.botJudgeTrade(p, q, inc, out);
+          if (!verdict.accept) continue;
+          // Ties go to the plainer offer: fewer deeds moving, less cash down.
+          const pieces = take.length + give.length;
+          const better = !best || verdict.gain > best.gain + 1
+            || (verdict.gain > best.gain - 1 && pieces < best.pieces);
+          if (better) best = { q, take, give, cash, gain: verdict.gain, pieces };
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * One offer a turn at most, and never twice through the same door in a
+   * hurry. Both waits earn their keep: without the per-target one, a bot with
+   * a single obvious target asks that player every few turns for the rest of
+   * the game, which is how a helpful bot becomes a pest.
+   */
   botMaybeTrade(p) {
     if (this.trades.some((t) => t.from === p.id)) return;
-    // Asking again the moment you were turned down is how two bots end up
-    // pestering each other every turn for the rest of the game. Give it a
-    // few turns, and never re-send an offer that was just refused.
-    if (this.turnCount - (p.lastAskedAt ?? -99) < 6) return;
-    const wants = this.nearSets(p.id);
-    const stale = this.botStaleness();
-
-    // Best case: they hold the street I need and I hold the street they need.
-    // A straight swap costs neither of us cash and hands us both a colour, so
-    // it's the offer most likely to actually be taken — and the ONE package
-    // in which a bot hands over a rival's set-completer, because it is paid
-    // in kind. Everything else it offers completes nothing for the other side.
-    for (const want of wants) {
-      const holder = this.player(want.holder);
-      if (!holder || holder.bankrupt) continue;
-      // The street I hand over has to come from a different colour — and one
-      // I'm not myself one short in. Swapping inside the group we're both
-      // chasing just passes the same problem back and forth.
-      const theirs = this.nearSets(holder.id).find((n) => (
-        this.own(n.missing)?.owner === p.id
-        && n.group !== want.group
-        && !wants.some((w) => w.group === n.group)
-      ));
-      if (!theirs) continue;
-      if ((this.own(want.missing).houses || 0) > 0 || (this.own(theirs.missing).houses || 0) > 0) continue;
-      if (p.refused?.includes(want.missing)) continue;
-      p.lastAskedAt = this.turnCount;
-      this.proposeTrade(p.id, {
-        to: holder.id,
-        give: { money: 0, tiles: [theirs.missing], cards: 0 },
-        get: { money: 0, tiles: [want.missing], cards: 0 },
-      });
-      this.botSay(p, 'swap', {
-        name: holder.name,
-        mine: this.tile(want.missing).name,
-        yours: this.tile(theirs.missing).name,
-      }, { delay: 700 });
-      return;
-    }
-
-    // Otherwise buy the last street with cash — which completes nothing for
-    // the seller — and pay well over the odds: a colour is worth more than
-    // the sticker price of the street that finishes it. The longer the table
-    // sits set-less, the deeper the bot digs; a blockade nobody ever breaks
-    // is a game nobody ever wins.
-    for (const want of wants) {
-      const holder = this.player(want.holder);
-      if (!holder || holder.bankrupt) continue;
-      if ((this.own(want.missing).houses || 0) > 0) continue;
-      const tile = this.tile(want.missing);
-      // A teammate is not a rival — the colour serves the flag from either
-      // chair, so gathering it onto one deed needs no ransom.
-      const softTouch = this.sameTeam(p, holder);
-      const offer = Math.min(
-        p.money - Math.floor(this.botFloor(p) / 2),
-        Math.round(tile.price * (softTouch ? 1.2 : 1.9 + 1.4 * stale) * this.botTemper(p)),
-      );
-      if (offer < tile.price) continue;
-      // A refused door stays shut — until the desperate hour buys one more knock.
-      if (p.refused?.includes(want.missing) && stale < 0.75) continue;
-      p.lastAskedAt = this.turnCount;
-      this.proposeTrade(p.id, {
-        to: holder.id,
-        give: { money: offer, tiles: [], cards: 0 },
-        get: { money: 0, tiles: [want.missing], cards: 0 },
-      });
-      // Ahead-of-me players get the friendly pressure; everyone else gets asked.
-      const leading = this.netWorth(holder) > this.netWorth(p) * 1.2;
-      this.botSay(p, leading ? 'nudge' : 'wantTile',
-        { name: holder.name, tile: tile.name }, { delay: 900 });
-      return;
-    }
-
-    // Nothing within one street of done? Consolidate: in a long game where
-    // every colour is scattered one piece apiece, somebody has to start
-    // collecting or the table circles forever. Offer cash over the odds for
-    // a stray piece of the colour we hold most of — the step that unlocks
-    // the endgame swaps above.
-    if (wants.length || this.turnCount <= 24) return;
-    let best = null;
-    for (const [, idxs] of Object.entries(this.map.groups)) {
-      const mine = idxs.filter((i) => this.own(i)?.owner === p.id).length;
-      if (!mine || mine >= idxs.length - 1) continue;
-      const target = idxs.find((i) => {
-        const o = this.own(i);
-        return o && o.owner !== p.id && !(o.houses > 0)
-          && !this.player(o.owner)?.bankrupt && !p.refused?.includes(i);
-      });
-      if (target === undefined) continue;
-      if (!best || mine > best.mine) best = { target, mine };
-    }
-    if (!best) return;
-    const holder = this.player(this.own(best.target).owner);
-    const price = Math.floor(this.tile(best.target).price * (1.4 + 0.5 * stale) * this.botTemper(p));
-    if (p.money - price < this.botFloor(p)) return;
+    if (this.turnCount - (p.lastAskedAt ?? -99) < BOT_OFFER_GAP) return;
+    const deal = this.botBestOffer(p);
+    if (!deal) return;
+    const { q, take, give, cash } = deal;
     p.lastAskedAt = this.turnCount;
-    this.proposeTrade(p.id, {
-      to: holder.id,
-      give: { money: price, tiles: [], cards: 0 },
-      get: { money: 0, tiles: [best.target], cards: 0 },
+    p.askedAt[q.id] = this.turnCount;
+    const sent = this.proposeTrade(p.id, {
+      to: q.id,
+      give: { money: cash, tiles: give, cards: 0 },
+      get: { money: 0, tiles: take, cards: 0 },
     });
-    this.botSay(p, 'nudge', { name: holder.name }, { delay: 700 });
+    if (sent?.error) return;
+    if (give.length) {
+      this.botSay(p, 'swap', {
+        name: q.name,
+        mine: this.tile(take[0]).name,
+        yours: this.tile(give[0]).name,
+      }, { delay: 700 });
+    } else {
+      // Ahead-of-me players get the friendly pressure; everyone else gets asked.
+      const leading = this.netWorth(q) > this.netWorth(p) * 1.2;
+      this.botSay(p, leading ? 'nudge' : 'wantTile',
+        { name: q.name, tile: this.tile(take[0]).name }, { delay: 900 });
+    }
   }
 
   /**
@@ -2683,25 +3370,50 @@ export class GameRoom {
   }
 
   /**
+   * What it costs to make a deed earn again — nothing, unless it is in hock.
+   *
+   * A mortgaged street is not the same street. The bank has already paid half
+   * its price out to whoever holds it, it collects no rent at all until that
+   * is lifted, and lifting it costs ten per cent over the odds. Priced as if
+   * it were clear, a pile of somebody else's debts reads to a bot as a pile of
+   * bargains — which is how the trade search ended up going shopping for them.
+   */
+  botLiftCost(index) {
+    return this.own(index)?.mortgaged ? Math.ceil((this.tile(index).price / 2) * 1.1) : 0;
+  }
+
+  /**
    * What a street is WORTH to this bot — not what the sticker says. The last
    * piece of anyone's colour is the whole game: finishing my own set tops the
    * list, denying a rival's imminent set is barely behind it ("400 for the
-   * 220 street"), and the second-to-last pieces ripple down from there.
+   * 220 street"), and every piece before those ripples down from there.
    * Airports and utilities are priced by how many siblings the bot holds.
    */
-  botValueOf(p, index) {
+  botValueOf(p, index, temper = this.botTemper(p)) {
     const tile = this.tile(index);
+    // Whatever it is worth standing there, it is worth that less the price of
+    // getting it off the bank's books. Never below nothing: a deed in hock is
+    // still a deed, and one that finishes a colour is still worth having.
+    const lift = this.botLiftCost(index);
     if (tile.type !== 'property') {
       const same = this.tilesOf(p.id).filter((i) => this.tile(i).type === tile.type).length;
-      return Math.floor(tile.price * (0.9 + 0.25 * same) * this.botTemper(p));
+      return Math.max(0, Math.floor(tile.price * (0.9 + 0.25 * same) * temper) - lift);
     }
     const { k, mine, topRival } = this.botGroupRace(p, index);
-    let mult = 1;
-    if (mine === k - 1) mult = 2.2;             // finishes my set
-    else if (topRival === k - 1) mult = 2.0;    // denies an imminent set
-    else if (mine === k - 2 && k >= 3) mult = 1.4;
-    else if (topRival === k - 2 && k >= 3) mult = 1.25;
-    return Math.floor(tile.price * mult * this.botTemper(p));
+    // How far along the colour each side already is, counted out of the pieces
+    // that are not this one, and bent upward so a street is worth little until
+    // it starts to matter and a great deal at the end. That bend is the shape
+    // the old fixed ladder had on a three-street colour — one short is 2.2,
+    // two short is 1.4 — and it now says something on the five- and six-street
+    // colours some boards are built from, which the ladder could not: it knew
+    // only "one short" and "two short", so on a six-street colour a bot holding
+    // three of them saw no reason on earth to want a fourth. Those boards then
+    // produced no monopoly, so no houses, so rent of twenty dollars, so no
+    // loser — tables ran thousands of turns with everybody quietly getting
+    // richer, which is not a game.
+    const climb = (held) => (k > 1 ? (held / (k - 1)) ** 1.6 : 1);
+    const mult = Math.max(1 + 1.2 * climb(mine), 1 + climb(topRival));
+    return Math.max(0, Math.floor(tile.price * mult * temper) - lift);
   }
 
   /**
@@ -2710,8 +3422,8 @@ export class GameRoom {
    * charges nothing, so it doesn't count). Denial spends almost everything —
    * comfort is worthless if a rival finishes their colour.
    */
-  botFloor(p, { denial = false } = {}) {
-    if (denial) return Math.floor(40 * this.botTemper(p));
+  botFloor(p, { denial = false, temper = this.botTemper(p) } = {}) {
+    if (denial) return Math.floor(40 * temper);
     let worst = 0;
     for (const [i, o] of Object.entries(this.ownership)) {
       if (o.owner === p.id || o.mortgaged) continue;
@@ -2720,7 +3432,7 @@ export class GameRoom {
       if (t.type !== 'property' || !t.rent) continue;
       worst = Math.max(worst, t.rent[Math.min(o.houses || 0, t.rent.length - 1)]);
     }
-    return Math.floor(Math.min(400, Math.max(120, worst * 0.75)) * this.botTemper(p));
+    return Math.floor(Math.min(400, Math.max(120, worst * 0.75)) * temper);
   }
 
   /** True when this street decides a colour TODAY: the last piece of the
@@ -2746,21 +3458,43 @@ export class GameRoom {
     return p.money > tile.price * 2;
   }
 
+  /**
+   * What the next house on this street actually buys: the jump in rent it
+   * pays for, per dollar it costs. Two streets that both want a house are
+   * rarely worth the same — this is the number that says which.
+   */
+  botHouseYield(index) {
+    const t = this.tile(index);
+    const h = this.own(index)?.houses || 0;
+    if (!t.rent || !t.houseCost || h >= 5) return 0;
+    const next = t.rent[Math.min(h + 1, t.rent.length - 1)] || 0;
+    const now = t.rent[Math.min(h, t.rent.length - 1)] || 0;
+    return (next - now) / t.houseCost;
+  }
+
   botBuild(p) {
     let guard = 0;
-    while (guard++ < 24) {
+    while (guard++ < BOT_BUILD_STEPS) {
       const floor = this.botFloor(p);
       const candidates = this.tilesOf(p.id)
-        .filter((i) => this.canBuild(p.id, i) && p.money - this.tile(i).houseCost >= floor)
+        .filter((i) => this.canBuild(p.id, i))
+        // Getting a colour to three houses is the single best-paid thing on
+        // the board — rent roughly quintuples at that step — so a bot digs
+        // into its cushion to reach the knee and only builds out of spare
+        // cash after that. Hoarding a survival float while sitting on a bare
+        // monopoly is how a bot draws a game out for four hundred turns.
+        .filter((i) => {
+          const lean = (this.own(i).houses || 0) < 3 ? 0.35 : 1;
+          return p.money - this.tile(i).houseCost >= Math.floor(floor * lean);
+        })
         .sort((a, b) => {
-          // Three houses is where rent bends — carpet every set to the knee
-          // before anyone gets a hotel, dearest streets first within a tier.
           const ka = (this.own(a).houses || 0) < 3 ? 0 : 1;
           const kb = (this.own(b).houses || 0) < 3 ? 0 : 1;
-          return ka - kb || this.tile(b).price - this.tile(a).price;
+          return ka - kb || this.botHouseYield(b) - this.botHouseYield(a)
+            || this.tile(b).price - this.tile(a).price;
         });
       if (!candidates.length) break;
-      this.build(p.id, candidates[0]);
+      if (this.build(p.id, candidates[0])?.error) break;
     }
   }
 
@@ -2770,7 +3504,7 @@ export class GameRoom {
    */
   botUnmortgage(p) {
     let guard = 0;
-    while (guard++ < 12) {
+    while (guard++ < BOT_UNMORTGAGE_STEPS) {
       const floor = this.botFloor(p);
       const pick = this.tilesOf(p.id)
         .filter((i) => this.own(i).mortgaged)
@@ -2851,48 +3585,20 @@ export class GameRoom {
     const trade = this.trades.find((t) => t.id === tradeId);
     if (!trade) return;
     const bot = this.player(trade.to);
-    if (!bot) return;
     const other = this.player(trade.from);
-    const valueOf = (side) => {
-      let v = side.money + side.cards * 40;
-      for (const i of side.tiles) {
-        v += Math.max(this.botValueOf(bot, i), Math.floor(this.tile(i).price * 0.9));
-      }
-      return v;
-    };
-    const incoming = valueOf(trade.give);
-    const outgoing = valueOf(trade.get);
-
-    // What a street is worth depends entirely on what it finishes. Taking the
-    // deal that completes my colour is worth overpaying for; handing over the
-    // one that completes someone else's is worth being difficult about.
-    const completesForMe = this.nearSets(bot.id)
-      .some((n) => trade.give.tiles.includes(n.missing));
-    const completesForThem = this.nearSets(trade.from)
-      .some((n) => trade.get.tiles.includes(n.missing));
-    const family = this.sameTeam(bot, other);
-
-    let bar = 1.15;
-    if (completesForMe) bar = 0.7;        // happily pay a premium for the set
-    if (completesForThem && !family) {
-      // Arming a rival costs dearly — the ransom sits on top of a valuation
-      // that already carries the denial premium. It only eases as a set-less
-      // table ages: a bot playing to win will eventually sell the deadlock
-      // for a fortune rather than hold four players in a permanent draw.
-      bar = Math.max(bar, 2.0 - 0.8 * this.botStaleness());
-    }
-    if (completesForMe && completesForThem) bar = 1.0; // an even swap suits us both
-    if (family) bar = Math.min(bar, 0.75); // teammates deal soft — one purse, two chairs
-
-    // Never accept into rent-death: whatever the sticker maths says, the
-    // deal must leave enough cash to survive the board — unless it lands
-    // the bot's own colour, which is worth going hungry for.
-    const floorAfter = completesForMe ? 0 : Math.floor(this.botFloor(bot) / 2);
-    const accept = incoming >= outgoing * bar
-      && bot.money - trade.get.money >= floorAfter;
-    this.botSay(bot, accept ? 'accept' : 'decline', { name: other?.name || '' },
+    if (!bot) return;
+    // Whoever sent this has left the table. Answering still clears the offer
+    // out of everybody's list — leaving it there would be an envelope nobody
+    // can ever open.
+    if (!other) return void this.respondTrade(bot.id, tradeId, false);
+    // The same judge that builds this bot's own offers, pointed the other way:
+    // `give` is what the sender parts with, so from this chair it is what
+    // arrives. Nothing here is decided that the sender could not have worked
+    // out from the board — which is why a bot can be asked to explain itself.
+    const verdict = this.botJudgeTrade(bot, other, trade.give, trade.get);
+    this.botSay(bot, verdict.accept ? 'accept' : 'decline', { name: other.name || '' },
       { always: true, delay: 500 });
-    this.respondTrade(bot.id, tradeId, accept);
+    this.respondTrade(bot.id, tradeId, verdict.accept);
   }
 
   // ------------------------------------------------------------------- state --
@@ -2947,6 +3653,14 @@ export class GameRoom {
         voters: this.votersFor(id).length,
       })),
       quickStartAt: this.quickStartAt || null,
+      // What a matchmade table dealt itself, for the lobby to show before the
+      // dice start. The phrasing is rebuilt from the live settings on every
+      // push rather than stored with the roll: if anything moved the board
+      // afterwards — a rollover at midnight sending it back to Classic — this
+      // says what is actually going to be played, not what was once promised.
+      quickRoll: this.quickRoll
+        ? { at: this.quickRoll.at, keys: this.quickRoll.keys, parts: quickRollParts(this.settings, this.map.name) }
+        : null,
       log: this.log.slice(-60),
       chat: this.chat.slice(-50),
       vacationPot: this.vacationPot,

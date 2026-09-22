@@ -96,10 +96,18 @@ function playGame(mapId, settings = {}, maxSteps = 4000) {
   const finishAuction = room.finishAuction.bind(room);
   room.finishAuction = () => { if (room.auction) auctions.closed++; return finishAuction(); };
 
-  for (let i = 0; i < (settings.players || 4); i++) room.addBot();
-  room.hostId = room.players[0].id;
+  // A room only plays itself out while somebody is there to watch it (see
+  // GameRoom.watched) — a table of nothing but house players correctly holds
+  // still, which quietly turned this whole section into hundreds of games of
+  // nothing at all. Seat one real person and hand their seat to the house, the
+  // way production does the moment a player walks away: every seat is machine
+  // played, and the room knows who it is playing for.
+  room.addPlayer({ id: 'watcher', name: 'Watcher' });
+  for (let i = 1; i < (settings.players || 4); i++) room.addBot();
+  room.hostId = 'watcher';
   const started = room.start(room.hostId);
   if (started?.error) fail(`${mapId}: could not start (${started.error})`);
+  room.player('watcher').botControlled = true;
 
   let steps = 0;
   while (room.status === 'playing' && steps++ < maxSteps) {
@@ -193,7 +201,14 @@ for (const v of VARIANTS) {
     if (room.status === 'ended') ended++;
     totalTurns += turns;
   }
-  ok(`${v.label}: ${ended}/${RUNS} games reached a winner, ${Math.round(totalTurns / RUNS)} turns avg`);
+  const avg = Math.round(totalTurns / RUNS);
+  // These numbers are the point of the section, so they are asserted rather
+  // than merely printed. A table that cannot find a winner inside the step cap
+  // is a table two real people would have abandoned, and a run that ends in an
+  // average of nothing at all means the games never happened.
+  if (ended < RUNS * 0.9) fail(`${v.label}: only ${ended}/${RUNS} games reached a winner`);
+  else if (avg < 20 || avg > 600) fail(`${v.label}: ${avg} turns a game is not a game`);
+  else ok(`${v.label}: ${ended}/${RUNS} games reached a winner, ${avg} turns avg`);
 }
 
 
@@ -677,21 +692,26 @@ console.log('\n▶ targeted rules');
   room.trades = [];
   room.botMaybeTrade(room.player('x'));
   const offer = room.trades[0];
+  // Street for street, nobody's wallet out: the bot hands over a rival's
+  // set-completer only because it is being paid in kind. Which streets make up
+  // the package is the brain's to decide — it may find a stronger one than the
+  // obvious one-for-one, and a better answer is not a wrong answer — so what
+  // is pinned here is the part that matters.
   if (!offer) fail('bot should have spotted the mutual swap');
-  else if (offer.give.money !== 0 || offer.give.tiles.length !== 1 || offer.get.tiles.length !== 1) {
+  else if (offer.give.money !== 0 || offer.get.money !== 0
+    || !offer.give.tiles.length || !offer.get.tiles.length) {
     fail(`swap should be street-for-street, got ${JSON.stringify(offer)}`);
-  } else if (offer.give.tiles[0] !== gB[0] || offer.get.tiles[0] !== gA[0]) {
-    fail('swap traded the wrong streets');
-  } else {
-    ok('bots offer the street-for-street swap that completes both sets');
-  }
+  } else ok('bots offer the street-for-street swap that completes both sets');
 
-  // And the receiving bot should take an even swap that finishes its colour.
+  // And the receiving bot should take a swap that finishes its colour — the
+  // deal is only worth signing if BOTH sides end up holding one.
   const before = room.trades.length;
+  const colours = (id) => Object.keys(room.map.groups).filter((g) => room.ownsFullGroup(id, g));
   room.botTradeReply(offer.id);
   if (room.trades.length !== before - 1) fail('bot never answered the swap');
-  else if (room.own(gB[0])?.owner !== 'y') fail('bot turned down a set-completing swap');
-  else ok('bots accept a swap that completes their own set');
+  else if (!colours('x').length || !colours('y').length) {
+    fail(`a mutually set-completing swap was turned down (x: ${colours('x')}, y: ${colours('y')})`);
+  } else ok('bots accept a swap that completes their own set');
 }
 
 {
@@ -2579,6 +2599,45 @@ console.log('\n▶ tournaments');
     ok('with the switch off there is no cup to see and no door to knock on');
   }
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ── a board that goes away says which of the four things happened ──────────
+// settleBoard blamed "the new host" whatever had happened, which after a
+// rented game was wrong every single time: the same host is standing there and
+// the one-game pass they paid a coin for has simply been played. The reason
+// now comes from the hook that can see the wallet and the calendar, and this
+// pins each sentence to the cause it belongs to.
+{
+  const settled = (why) => {
+    const room = new GameRoom('settle', () => {});
+    room.addPlayer({ id: 'host-token', name: 'Host' });
+    room.settings.mapId = 'country-jp';
+    room.hooks.mayUseBoard = () => false;
+    room.hooks.boardGone = () => why;
+    const moved = room.settleBoard();
+    const out = { moved, board: room.settings.mapId, said: room.log.at(-1)?.text || '' };
+    room.dispose();
+    return out;
+  };
+
+  const spent = settled('spent');
+  if (!spent.moved || spent.board !== 'classic') fail('settle: a locked board was left on the table');
+  if (!/pass has been used/.test(spent.said)) fail(`settle: a spent pass said "${spent.said}"`);
+  if (!/moved to another table/.test(settled('moved').said)) fail('settle: a pass moved elsewhere lost its sentence');
+  if (!/different board/.test(settled('other').said)) fail('settle: a pass for another board lost its sentence');
+  if (!/day turned over/.test(settled('rollover').said)) fail('settle: a midnight rollover lost its sentence');
+  if (!/new host/.test(settled('').said)) fail('settle: a real host change lost its sentence');
+
+  // And a board the host may still use is not touched, nor spoken about.
+  const kept = new GameRoom('settle-2', () => {});
+  kept.addPlayer({ id: 'host-token', name: 'Host' });
+  kept.settings.mapId = 'country-jp';
+  kept.hooks.mayUseBoard = () => true;
+  if (kept.settleBoard() !== false || kept.settings.mapId !== 'country-jp') {
+    fail('settle: a board the host is entitled to was swapped out anyway');
+  }
+  kept.dispose();
+  ok('a board that goes away says which of the four things happened');
 }
 
 console.log(failures ? `\n✗ ${failures} problem(s) found\n` : '\n✓ all checks passed\n');

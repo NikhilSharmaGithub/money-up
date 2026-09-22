@@ -70,6 +70,11 @@ private struct ToastLayer: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.clear
+            // Coins land in this window too, and for the same reason toasts
+            // do: a payout is collected from inside a sheet as often as
+            // outside one, and a counter drawn under the sheet is a counter
+            // nobody sees move.
+            CoinFlightLayer()
             toast
         }
         .animation(.spring(duration: 0.35), value: store.toast)

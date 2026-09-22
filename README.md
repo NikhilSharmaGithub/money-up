@@ -179,6 +179,22 @@ specific rules directly: full-set rent doubling, airport rent scaling, the even-
 restriction, three-doubles-to-prison, the prison fine, START salary, trade execution and
 bankruptcy handover.
 
+The same command then runs the feature suites, because a headline feature deserves to be
+caught by the command everything else is caught by: the bot brain (`smart-bots`, which
+plays another three hundred tables to the end and puts a ceiling on what one decision may
+cost the tick), the quick-match roll, the one-coin board rental, the bots' chat replies,
+and the coin ledger. Each is a plain node script that prints PASS/FAIL lines and exits
+non-zero, so any one of them can be run on its own while working on it:
+
+```bash
+node test/smart-bots.mjs
+```
+
+Two older scripts stay where they have always been, outside `npm test`, and are worth a
+run by hand before a release: `test/stall-regression.mjs` holds a table to the rule that
+a game with somebody watching never stops, and `test/apple-revoke.mjs` plays Sign in with
+Apple end to end against a stand-in for Apple. Neither needs the network or an account.
+
 ## Notes
 
 Board layouts are data. Add a map by dropping a tile list into `RAW_MAPS` in

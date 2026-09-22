@@ -1242,6 +1242,11 @@ async function payClaim(req, res, token) {
     placement: ticket.placement,
     awarded: out.awarded,
     coins: out.coins,
+    // The wallet's earned watermark after this payout. The client animates
+    // its counter off this rather than off `awarded`, so a claim that was
+    // retried — the AdMob callback races us, and a pending claim is asked
+    // again — lands the coins on screen exactly once.
+    earned: out.earned,
     remaining: remainingFor(token),
   });
 }

@@ -6,6 +6,7 @@ import { icon, groupBanner, groupFlag, circleFlag } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
 import { configureAdNetwork, playNetworkAd } from './ads.js';
+import { noteWallet, setCoins } from './coins.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -503,13 +504,31 @@ const LOOK_COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb
 // Classic, and nobody has to open a menu to find out what they are playing.
 let boardShelf = null;      // { boards, free, until, ... } once it has loaded
 let boardLoading = null;    // the flight in progress, so two renders share one
+// Which table the kept shelf was asked about. A board can be rented for one
+// game at one table, so the same wallet gets a different answer in a different
+// lobby — and a shelf read in the shop, with no table at all, must not be
+// handed back to a lobby as if it knew about this one.
+let boardShelfRoom = null;
+// Which table the flight in progress is asking about — a separate note, kept
+// only for the dedupe below. Stamping the answer's room before the answer
+// arrived meant a failed refetch left one table's shelf labelled as another's,
+// and paintBoards' freshness test is exactly that label: the lobby would draw
+// a board rented at the table you just left as playable here, unlocked and
+// tagged "One game", and tapping it went straight past the buy sheet into a
+// board change the server then refused.
+let boardLoadingRoom = null;
 
-function loadBoardShelf(token, force = false) {
-  if (boardShelf && !force) return Promise.resolve(boardShelf);
-  if (boardLoading && !force) return boardLoading;
-  boardLoading = fetch(api(`/api/boards?token=${encodeURIComponent(token || '')}`))
+function loadBoardShelf(token, force = false, roomId = '') {
+  const room = roomId || '';
+  if (boardShelf && !force && boardShelfRoom === room) return Promise.resolve(boardShelf);
+  if (boardLoading && !force && boardLoadingRoom === room) return boardLoading;
+  boardLoadingRoom = room;
+  boardLoading = fetch(api(`/api/boards?token=${encodeURIComponent(token || '')}`
+    + (room ? `&room=${encodeURIComponent(room)}` : '')))
     .then((r) => r.json())
-    .then((d) => { boardShelf = d; return d; })
+    // The room goes on the shelf with the shelf, never before it — the label
+    // is only true of data that actually arrived.
+    .then((d) => { boardShelf = d; boardShelfRoom = room; return d; })
     // A refresh that failed is not news that the shelf is empty. Keeping the
     // last good one means a dropped packet costs a stale price, not a shop
     // full of cards that do nothing when you tap them.
@@ -546,6 +565,9 @@ function boardTag(b) {
   if (b.how === 'house') return '<span class="bb-tag free">Always free</span>';
   if (b.how === 'today') return '<span class="bb-tag today">Free today</span>';
   if (b.how === 'owned') return '<span class="bb-tag owned">Yours</span>';
+  // Paid for, and good for this table only. It says how long it lasts because
+  // that is the whole difference between this tag and the one above it.
+  if (b.how === 'rented') return '<span class="bb-tag rented">One game</span>';
   // The old price only when there really is one — a "was" that matches the
   // price is the oldest lie in retail.
   const was = b.was ? `<s>${b.was}</s> ` : '';
@@ -604,8 +626,10 @@ function boardBoxesHTML(state, isHost) {
 function paintBoards(state, el, token, actions, isHost) {
   const host = $('#boardPick', el);
   if (!host) return;
-  if (!boardShelf) {
-    loadBoardShelf(token).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+  // The table's own id goes with every ask: a rented board is only rented
+  // here, and the shelf cannot say so without being told where "here" is.
+  if (!boardShelf || boardShelfRoom !== (state.id || '')) {
+    loadBoardShelf(token, false, state.id).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
     return;
   }
   host.innerHTML = boardBoxesHTML(state, isHost);
@@ -619,7 +643,7 @@ function paintBoards(state, el, token, actions, isHost) {
         // guess: the server owns the calendar, and the two new boards are
         // the only thing on this panel that changes without being touched.
         clock.textContent = 'New boards…';
-        loadBoardShelf(token, true).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+        loadBoardShelf(token, true, state.id).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
         return;
       }
       clock.textContent = `Two new free boards in ${longCountdownText(left)}`;
@@ -633,39 +657,72 @@ function paintBoards(state, el, token, actions, isHost) {
       sfx.click();
       const id = b.dataset.board;
       if (b.classList.contains('locked')) {
-        // Bought from the lobby: play it straight away. That is what they
-        // were reaching for when they tapped it.
+        // Bought — or rented for one game — from the lobby: play it straight
+        // away. That is what they were reaching for when they tapped it.
         return openBoardBuy(token, id, (bought) => {
           if (isHost) actions.settings({ mapId: bought });
           paintBoards(state, el, token, actions, isHost);
-        });
+        }, state.id, isHost);
       }
       actions.settings({ mapId: id });
     };
   });
   const all = $('#boardAll', host);
-  if (all) all.onclick = () => { sfx.click(); openBoardModal(state, actions, token, () => paintBoards(state, el, token, actions, isHost)); };
+  if (all) {
+    all.onclick = () => {
+      sfx.click();
+      // The same host-ness the boxes were painted with — a cup table and a
+      // guest's chair are both already folded into it.
+      openBoardModal(state, actions, token, () => paintBoards(state, el, token, actions, isHost), isHost);
+    };
+  }
 }
 
 /**
- * Buying a board where you found it.
+ * Buying a board where you found it — or borrowing it for one game.
  *
  * The shop is a long page and the board is near the bottom of it; sending
  * somebody down there to spend six hundred coins, and then back, is three
  * steps too many for a decision they have already made. So the price is paid
  * here, next to the board it buys, with the board itself as the thing being
  * looked at.
+ *
+ * `roomId` is the table the rent would be good at, and a rent is offered only
+ * when there is one. Opened from the shop there is no table to play at, so
+ * there is one button on this sheet and it buys the board outright.
+ *
+ * `mayRent` is the other half of that: the board a table plays is read against
+ * the HOST's wallet and nobody else's, so the host is the only chair a rent
+ * can be spent from. Without this a guest was shown a coin button that the
+ * server answered with "Only the host picks the board" every time — a money
+ * button somebody was invited to press and could never use. Buying outright is
+ * open to anyone, because a board you buy is yours wherever you sit next.
  */
-export function openBoardBuy(token, boardId, onBought) {
+export function openBoardBuy(token, boardId, onBought, roomId = '', mayRent = false) {
   const b = boardShelf?.boards.find((x) => x.id === boardId);
   // Nothing to open means the shelf never arrived. Silence here reads as a
   // broken shop — the player taps the same card three times and gives up.
   if (!b) {
-    loadBoardShelf(token, true);
+    loadBoardShelf(token, true, roomId);
     return toast('Boards are unreachable — try again in a moment', 'error');
   }
   const coins = boardShelf.coins ?? 0;
   const short = Math.max(0, b.price - coins);
+  // One coin, one game — and a game already paid for and never played moves
+  // here rather than being charged for twice, so the button says so and asks
+  // for nothing. (The server decides that either way; this only reads it.)
+  const rentPrice = boardShelf.rent?.price ?? 1;
+  const holding = boardShelf.rent?.holding || null;
+  const moving = !!holding && !(holding.mapId === boardId && holding.roomId === roomId);
+  const canRent = mayRent && !!roomId && b.rentable && (coins >= rentPrice || !!holding);
+  const rentLabel = holding
+    ? (moving ? 'Move your unplayed game here' : 'Play this game — already paid')
+    : `Play one game — ${rentPrice} coin`;
+  const rentLine = holding
+    ? (moving
+      ? 'You have a game you paid for and never played. It moves to this table and this board — nothing more to pay.'
+      : 'Paid for and waiting. It is spent when this table deals, and only then.')
+    : `${rentPrice} coin plays one game here, on this table. Unplayed, it keeps: rent a different board and the same game moves with you.`;
   openModal(`
     <div class="buy-board">
       ${miniBoard(b.preview)}
@@ -683,6 +740,10 @@ export function openBoardBuy(token, boardId, onBought) {
         ${icon('coin')} ${short ? `${short} more coins needed`
           : `${b.was ? `<s>${b.was}</s> ` : ''}Unlock for ${b.price}`}
       </button>
+      ${canRent ? `<button class="btn wide" id="bbRent">
+        ${icon('coin')} ${rentLabel}
+      </button>
+      <p class="bb-wallet">${escapeHtml(rentLine)}</p>` : ''}
       <p class="bb-wallet">${short
         ? `You have ${coins}. Win a game, collect the daily reward, or top up in the store.`
         : b.was ? `You have ${coins} coins. On sale today — three boards are, every day.`
@@ -690,6 +751,35 @@ export function openBoardBuy(token, boardId, onBought) {
       <div class="modal-actions"><button class="btn ghost" id="bbClose">Close</button></div>
     </div>`, (root) => {
     $('#bbClose', root).onclick = closeModal;
+    const rent = $('#bbRent', root);
+    if (rent) {
+      rent.onclick = async () => {
+        rent.disabled = true;
+        sfx.click();
+        try {
+          const res = await fetch(api('/api/boards/rent'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, mapId: boardId, roomId, expect: rentPrice }),
+          }).then((r) => r.json());
+          if (res.error) {
+            rent.disabled = false;
+            toast(res.error, 'error');
+            await loadBoardShelf(token, true, roomId);
+            return;
+          }
+          sfx.buy();
+          toast(res.charged
+            ? `${b.name} for one game — good at this table`
+            : `Your unplayed game moved to ${b.name}`);
+          closeModal();
+          await loadBoardShelf(token, true, roomId);
+          onBought?.(boardId);
+        } catch {
+          rent.disabled = false;
+          toast('Store is unreachable', 'error');
+        }
+      };
+    }
     const go = $('#bbGo', root);
     if (!go || short) return;
     go.onclick = async () => {
@@ -706,13 +796,13 @@ export function openBoardBuy(token, boardId, onBought) {
           go.disabled = false;
           toast(res.error, 'error');
           // Whatever it was, what is on screen is no longer to be trusted.
-          await loadBoardShelf(token, true);
+          await loadBoardShelf(token, true, roomId);
           return;
         }
         sfx.buy();
         toast(`${b.name} is yours!`);
         closeModal();
-        await loadBoardShelf(token, true);
+        await loadBoardShelf(token, true, roomId);
         onBought?.(boardId);
       } catch {
         go.disabled = false;
@@ -826,8 +916,7 @@ function paintPieces(el, token) {
         // Not bought yet. The shop re-reads the wallet every time it repaints,
         // so its callback is also the moment a just-bought piece exists here.
         openStoreModal(token, (coins) => {
-          const chip = document.querySelector('#coinChip');
-          if (chip) chip.innerHTML = `${icon('coin')} ${coins}`;
+          setCoins(coins);
           showPieceInStore(id);
           loadPieceShelf(token, true).then(() => paintPieces(el, token));
         });
@@ -899,6 +988,22 @@ function wireLookPanel(state, meId, el, actions) {
 }
 
 /**
+ * What a matchmade table dealt itself. Nobody sitting at one picked the board
+ * or the rules, so the least it can do is show them before the dice start —
+ * in the server's own words, so a phone at the same table reads the same
+ * table. The first phrase is the board, which the lobby head already says.
+ */
+function rolledRulesHTML(state) {
+  const parts = state.quickRoll?.parts || [];
+  if (!parts.length) return '';
+  return `<div class="panel">
+      <div class="panel-title">${icon('dice')} This table rolled</div>
+      <div class="rolled-rules">${parts
+        .map((p) => `<span class="rolled-chip">${escapeHtml(p)}</span>`).join('')}</div>
+    </div>`;
+}
+
+/**
  * A Quick Play table runs itself — nobody sitting here owns its settings, so
  * the panel is about who has turned up rather than what to switch on.
  */
@@ -923,6 +1028,7 @@ function renderQuickLobby(state, meId, el, actions) {
       </div>
       <div class="dim small">${state.players.length} of ${seats} seats taken</div>
     </div>
+    ${rolledRulesHTML(state)}
     ${lookPanel(state, meId)}`;
   wireLookPanel(state, meId, el, actions);
 }
@@ -1544,6 +1650,9 @@ export function renderCenter(state, meId, actions) {
           : state.cup ? `${icon('trophy')} Cup match`
           : `Room <b>${escapeHtml(state.id)}</b>`}</div>
         <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
+        ${state.quickRoll?.parts?.length
+          // The board is already on the line above, so this picks up the rules.
+          ? `<div class="lobby-rolled">${escapeHtml(state.quickRoll.parts.slice(1).join(' · '))}</div>` : ''}
       </div>
       <div class="seat-row">${Array.from({ length: seats }, (_, i) => {
         const p = state.players[i];
@@ -2936,9 +3045,14 @@ export function openCupPoster(cup) {
  * what they already own, and what is still behind a price. A locked card is a
  * door into the shop rather than a dead one — the same manners the piece
  * shelf keeps.
+ *
+ * `mayRent` rides through to the buy sheet: a one-game pass is read against
+ * the host's wallet, so it is the host's to spend and nobody else's.
  */
-export function openBoardModal(state, actions, token, onChange) {
-  loadBoardShelf(token, true).then((shelf) => {
+export function openBoardModal(state, actions, token, onChange, mayRent = false) {
+  // Asked about this table, so a board rented for it reads as playable here
+  // rather than as one more locked card with a price on it.
+  loadBoardShelf(token, true, state.id).then((shelf) => {
     if (!shelf) return toast('Boards are unreachable', 'error');
     const cur = currentMapId(state);
     const card = (m) => `<button class="map-card ${m.id === cur ? 'sel' : ''} ${m.playable ? '' : 'locked'}"
@@ -2953,7 +3067,7 @@ export function openBoardModal(state, actions, token, onChange) {
           ${boardTag(m)}
         </button>`;
 
-    const free = shelf.boards.filter((m) => m.how === 'house' || m.how === 'today');
+    const free = shelf.boards.filter((m) => m.how === 'house' || m.how === 'today' || m.how === 'rented');
     const mine = shelf.boards.filter((m) => m.how === 'owned');
     const locked = shelf.boards.filter((m) => m.how === 'locked');
     const shelfOf = (list, title, sub) => (list.length ? `
@@ -2968,11 +3082,13 @@ export function openBoardModal(state, actions, token, onChange) {
         <button class="icon-btn sheet-x" id="bdX" title="Close" aria-label="Close">✕</button>
       </div>
       <p class="sub" id="bdClock"></p>
-      ${shelfOf(free, `${icon('map')} Free to play`,
+      ${shelfOf(free, `${icon('map')} Playable now`,
         `Classic is always free. Two more rotate every day — every board comes round once every ${shelf.cycleDays} days.`)}
       ${shelfOf(mine, `${icon('key')} Yours`, 'Bought and kept. Play them whenever you like.')}
       ${shelfOf(locked, `${icon('coin')} In the store`,
-        'Buy one and it is yours for good. Everyone at your table plays it with you — only the host needs to own it.')}
+        mayRent
+          ? `Buy one and it is yours for good — or pay ${shelf.rent?.price ?? 1} coin to play it once, here at this table. Everyone plays it with you; only the host needs it.`
+          : 'Buy one and it is yours for good. Everyone at your table plays it with you; only the host needs it.')}
       <div class="modal-actions"><button class="btn ghost" id="mClose">Close</button></div>`, (root) => {
       const clock = $('#bdClock', root);
       const tick = () => {
@@ -2991,7 +3107,7 @@ export function openBoardModal(state, actions, token, onChange) {
             openBoardBuy(token, id, (bought) => {
               actions.settings({ mapId: bought });
               onChange?.();
-            });
+            }, state.id, mayRent);
             return;
           }
           actions.settings({ mapId: id });
@@ -3852,7 +3968,8 @@ function refusalLine(out) {
  * cost, and `busy` is always handed back false — a spinner left running would
  * read as coins on the way that are never coming.
  *
- * Resolves { coins, paid } when the server actually paid, else null.
+ * Resolves { coins, earned, paid } when the server actually paid, else null:
+ * the wallet as the claim reported it, and what this view was worth.
  */
 async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {}) {
   const spec = placement(name);
@@ -3901,7 +4018,11 @@ async function watchAdFor(name, { token = walletToken(), busy = () => {} } = {})
   noteRemaining(claim.remaining);
   // The server is the authority on the size of the payout: an offer quoting a
   // figure the claim then disagrees with pays what the claim says.
-  return { coins: Number(claim.coins ?? 0), paid: Number(claim.awarded ?? worth ?? 0) };
+  return {
+    coins: Number(claim.coins ?? 0),
+    earned: Number(claim.earned),
+    paid: Number(claim.awarded ?? worth ?? 0),
+  };
 }
 
 /**
@@ -3938,24 +4059,6 @@ async function claimTicket(token, ticket, outcome, { budgetMs = 15000 } = {}) {
     claim = await adPost('/api/ads/reward', { token, ticket, outcome });
   }
   return claim;
-}
-
-/** The landing's wallet chip, counting up rather than snapping to the total. */
-function countCoinChip(to) {
-  const chip = $('#coinChip');
-  if (!chip || typeof to !== 'number') return;
-  const paint = (n) => { chip.innerHTML = `${icon('coin')} ${n}`; };
-  const from = Number(String(chip.textContent).replace(/\D+/g, '')) || 0;
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches || from >= to) return paint(to);
-  chip.classList.add('minted');
-  setTimeout(() => chip.classList.remove('minted'), 900);
-  const started = performance.now();
-  const step = (now) => {
-    const t = Math.min(1, (now - started) / 700);
-    paint(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
-    if (t < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
 }
 
 // ---- doubleWin: the offer on the game-over sheet -------------------------
@@ -4007,7 +4110,7 @@ function wireDoubleWin(root, meId, state) {
     const from = Math.max(1, Math.round(out.paid / (factor - 1)));
     const to = from + out.paid;
     lastDouble = { from, to };
-    countCoinChip(out.coins);
+    noteWallet(out);
 
     // The offer has been taken, so it is replaced by what it bought rather
     // than sitting there inviting a second press it can't honour.
@@ -4119,7 +4222,7 @@ function paintFreeCoins(card, spec) {
       },
     });
     if (!out) { mountFreeCoins(); return; }
-    countCoinChip(out.coins);
+    noteWallet(out);
     sfx.gain();
     toast(`+${coinWord(out.paid)} — thanks for watching.`);
     // The server just said how many views are left; if that was the last one
