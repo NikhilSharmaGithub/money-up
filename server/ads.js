@@ -1318,7 +1318,13 @@ adsRouter.get('/ssv', async (req, res) => {
   }
 
   const want = admobUnit(rec.placement, rec.platform);
-  if (want && unit && unit !== want) {
+  // Google sends the ad unit as its bare numeric id ("2662122626"); what the
+  // desk holds, and what the app is handed, is the full "ca-app-pub-<pub>/<id>".
+  // Comparing them whole rejected every callback there has ever been — six of
+  // them, and six rewarded views that paid nobody — so both sides are reduced
+  // to the part after the slash before they are compared.
+  const unitId = (id) => String(id || '').trim().split('/').pop();
+  if (want && unit && unitId(unit) !== unitId(want)) {
     return deny(`Callback is for a different ad unit (expected ${want})`, unit);
   }
   if (!want) {
