@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import { getMap, GROUPS, MAPS } from './maps.js';
-import { buildDecks, shuffled } from './cards.js';
+import { buildDecks, shuffled, cardTone } from './cards.js';
 import { banter, cleanText, isAllMasked } from './banter.js';
 import {
   planReply, REPLY_DELAY_MIN, REPLY_DELAY_MAX,
@@ -917,6 +917,8 @@ export class GameRoom {
     this.lastCard = {
       deck: 'treasure',
       text: `The board rolled a ${roll}: ${tile.name} changes hands for ${moneyText(price)}.`,
+      tone: 'plain',
+      playerId: p.id,
       at: Date.now(),
     };
     this.push();
@@ -1550,7 +1552,13 @@ export class GameRoom {
   }
 
   noteMove(p, from, to, steps, cause) {
-    this.actionMoves.push({ playerId: p.id, from, to, steps, cause, at: Date.now() });
+    // A number that only goes up, because the client replays these in order
+    // and has to know which of them it has already played. Wall-clock cannot
+    // do that job: a roll and the card its tile drew are resolved inside the
+    // same millisecond, so two legs of one journey share a timestamp and the
+    // second of them looks like something already seen.
+    this.moveSeq = (this.moveSeq || 0) + 1;
+    this.actionMoves.push({ seq: this.moveSeq, playerId: p.id, from, to, steps, cause, at: Date.now() });
     if (this.actionMoves.length > 6) this.actionMoves.shift();
   }
 
@@ -1731,7 +1739,15 @@ export class GameRoom {
     if (!deck.length) this.decks[deckName] = shuffled(buildDecks(this.map)[deckName]);
     const card = this.decks[deckName].shift();
     this.decks[deckName].push(card);
-    this.lastCard = { deck: deckName, text: card.text, at: Date.now() };
+    // `tone` is what the client paints the card with, and `playerId` is who
+    // it belongs to — both read in the second it turns over, before the words.
+    this.lastCard = {
+      deck: deckName,
+      text: card.text,
+      tone: cardTone(card.act),
+      playerId: p.id,
+      at: Date.now(),
+    };
     this.say(`${p.name} drew ${deckName === 'treasure' ? 'a Treasure' : 'a Surprise'}: ${card.text}`, deckName);
     this.applyCard(p, card.act);
   }
@@ -2047,13 +2063,22 @@ export class GameRoom {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
     const p = this.current;
     if (!p.jail) return { error: 'Not in prison' };
+    if (this.turn.phase === 'debt') return { error: 'Settle your debt first' };
+    if (this.turn.phase === 'auction') return { error: 'Auction in progress' };
     if (p.money < JAIL_FINE) return { error: 'Not enough money' };
     p.money -= JAIL_FINE;
     p.jail = false;
     p.jailTurns = 0;
-    this.say(`${p.name} paid $${JAIL_FINE} and left prison`, 'jail');
-    this.push();
-    this.maybeBot();
+    // The fine buys the door, not the dice.
+    //
+    // It used to open the cell and hand back a whole turn, which made prison
+    // a $50 toll on a bad landing rather than a place anybody gets stuck:
+    // paying on sight was always right, and the corner that is supposed to
+    // cost you three turns cost the price of a cheap street instead. Now the
+    // walk waits for the next turn, so rolling for a double is a real choice
+    // against buying the door outright.
+    this.say(`${p.name} paid $${JAIL_FINE} and left prison — no roll this turn`, 'jail');
+    this.nextTurn();
     return { ok: true };
   }
 
@@ -2940,10 +2965,12 @@ export class GameRoom {
           (x.type === 'property' || x.type === 'airport') && !this.own(x.index)
         )) || this.botFloor(p) < 180;
         if (eager && p.getOutCards > 0) { this.jailCard(p.id); return this.scheduleBot(600); }
-        if (eager && p.jailTurns >= 1 && p.money > JAIL_FINE + this.botFloor(p)) {
-          this.jailPay(p.id);
-          return this.scheduleBot(600);
-        }
+        // Bots no longer buy their way out. Since the fine stopped carrying a
+        // move with it, paying spends the whole turn standing in the doorway,
+        // while rolling for a double costs nothing, can leave *and* move, and
+        // loses to the third failed attempt paying the fine and walking out
+        // regardless. The dice are the better bet every time, and the cash
+        // stays in hand for streets.
       }
       return this.roll(p.id);
     }

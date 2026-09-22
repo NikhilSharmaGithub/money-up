@@ -24,6 +24,7 @@
   --good:       #177c4d;
   --good-soft:  #e4f3ea;
   --bad:        #bf3a4e;
+  --bad-soft:   #fbe9ec;
   --gold:       #a97b1d;
   --gold-soft:  #f7edd8;
 
@@ -87,6 +88,7 @@
   --good:       #4fd98b;
   --good-soft:  #14291e;
   --bad:        #e25a6d;
+  --bad-soft:   #2d161b;
   --gold:       #d9a13a;
   --gold-soft:  #2c2413;
 
@@ -2161,6 +2163,32 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .card-popup.rule { border-color: var(--gold); background: var(--gold-soft); }
 .card-popup.rule .cp-kind { color: var(--gold); }
 .card-popup.rule .cp-text { font-size: 14px; font-weight: 600; }
+/* What the card is worth, before a word of it has been read.
+   A deck's colour says which pile it came off; it says nothing about whether
+   the next three seconds are going to be good ones. So a card that pays or
+   frees arrives green and one that charges or jails arrives red, over the
+   deck's own icon — and the ones that genuinely cut both ways stay in the
+   deck's colours rather than promise something they cannot know. */
+.card-popup.tone-good {
+  border-color: var(--good); background: var(--good-soft);
+}
+.card-popup.tone-good .cp-kind, .card-popup.tone-good .cp-ico { color: var(--good); }
+.card-popup.tone-bad {
+  border-color: var(--bad); background: var(--bad-soft);
+}
+.card-popup.tone-bad .cp-kind, .card-popup.tone-bad .cp-ico { color: var(--bad); }
+/* The shake is the tell that survives a glance away: good news settles, bad
+   news flinches. One beat only — it is a card, not an alarm. */
+.card-popup.tone-bad { animation: cardIn .4s var(--pop), cardFlinch .34s .38s ease-out; }
+@keyframes cardFlinch {
+  0%, 100% { transform: translate(-50%, -50%); }
+  25% { transform: translate(calc(-50% - 6px), -50%) rotate(-1.4deg); }
+  75% { transform: translate(calc(-50% + 6px), -50%) rotate(1.4deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-popup.tone-bad { animation: cardIn .4s var(--pop); }
+}
+
 .cp-ico { font-size: 40px; }
 .cp-kind { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-3); margin: 7px 0 9px; font-weight: 750; }
 .cp-text { font-size: 15.5px; line-height: 1.5; font-weight: 650; color: var(--ink); }

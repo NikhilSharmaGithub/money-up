@@ -30,6 +30,7 @@ struct Palette {
     let good: Color
     let goodSoft: Color
     let bad: Color
+    let badSoft: Color
     let gold: Color
     let goldSoft: Color
 
@@ -64,6 +65,7 @@ struct Palette {
             good: dark ? Color(hex: 0x4FD98B) : Color(hex: 0x177C4D),
             goodSoft: dark ? Color(hex: 0x14291E) : Color(hex: 0xE4F3EA),
             bad: dark ? Color(hex: 0xE25A6D) : Color(hex: 0xBF3A4E),
+            badSoft: dark ? Color(hex: 0x2D161B) : Color(hex: 0xFBE9EC),
             gold: Color(hex: gold), goldSoft: Color(hex: goldSoft),
             tileTreasure: dark ? Color(hex: 0x2C2413) : Color(hex: 0xF7EDD8),
             tileSurprise: dark ? Color(hex: 0x2A1D2C) : Color(hex: 0xF3E4F1),

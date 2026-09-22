@@ -1775,10 +1775,14 @@ export function renderCenter(state, meId, actions) {
     if (me.jail) {
       html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll for a double</button>
               <div class="row-2">
-                <button class="btn ghost" id="cJailPay" ${me.money < 50 ? 'disabled' : ''}>Pay $50</button>
+                <button class="btn ghost" id="cJailPay" ${me.money < 50 ? 'disabled' : ''}>Pay $50 &amp; wait</button>
                 ${me.getOutCards > 0 ? `<button class="btn gold" id="cJailCard">Use ${icon('ticket')} card</button>` : ''}
               </div>`;
-      status = `<div class="dim small">In prison · attempt ${me.jailTurns + 1} of 3</div>`;
+      // The fine buys the door and nothing else, so the button has to say so
+      // before it is pressed — a player who expects to roll afterwards has
+      // spent $50 on the turn they were going to lose anyway.
+      status = `<div class="dim small">In prison · attempt ${me.jailTurns + 1} of 3<br>
+        Paying the fine ends your turn — the card lets you roll.</div>`;
     } else {
       html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll dice</button>`;
       status = t.doubles > 0 ? `<div class="dim small">Double! Free roll (${t.doubles} of 2)</div>` : '';
@@ -4314,7 +4318,11 @@ const CARD_ART = { treasure: 'toolbox', surprise: 'question', rule: 'scales' };
  */
 export function showCard(card, { hold = 3400 } = {}) {
   const el = $('#cardPopup');
-  el.className = `card-popup ${card.deck}`;
+  // Good news or bad, carried in the colour, because the colour is read a
+  // second before the words are. Cards that genuinely cut both ways — advance
+  // to the priciest street — keep the deck's own colour and say nothing.
+  const tone = card.tone && card.tone !== 'plain' ? ` tone-${card.tone}` : '';
+  el.className = `card-popup ${card.deck}${tone}`;
   const kind = card.title || (card.deck === 'treasure' ? 'Treasure' : 'Surprise');
   el.innerHTML = `
     <div class="cp-ico">${icon(CARD_ART[card.deck] || 'question')}</div>

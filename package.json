@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node test/smoke.js && node test/smart-bots.mjs && node test/quick-roll.mjs && node test/rent-board.mjs && node test/bot-chat.mjs && node test/coin-credit.mjs",
+    "test": "node test/smoke.js && node test/smart-bots.mjs && node test/quick-roll.mjs && node test/rent-board.mjs && node test/bot-chat.mjs && node test/coin-credit.mjs && node test/jail-and-cards.mjs",
     "check:live": "node test/live.js"
   },
   "dependencies": {

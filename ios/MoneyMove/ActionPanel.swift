@@ -174,14 +174,19 @@ struct ActionPanel: View {
                 VStack(spacing: 8) {
                     MMIconButton(.dice, "Roll for a double", kind: .primary, big: true) { store.roll() }
                     HStack(spacing: 8) {
-                        Button("Pay $50") { store.jailPay() }
+                        Button("Pay $50 & wait") { store.jailPay() }
                             .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                             .disabled((store.me?.money ?? 0) < 50)
                         if (store.me?.getOutCards ?? 0) > 0 {
                             MMIconButton(.ticket, "Use card", kind: .gold, big: true) { store.jailCard() }
                         }
                     }
+                    // The fine buys the door and nothing else, so the panel has
+                    // to say so before it is pressed — a player who expects to
+                    // roll afterwards has spent $50 on a turn they were losing
+                    // anyway.
                     hint("In prison · attempt \((store.me?.jailTurns ?? 0) + 1) of 3", P)
+                    hint("Paying the fine ends your turn — the card lets you roll.", P)
                 }
             } else {
                 MMIconButton(.dice, "Roll dice", kind: .primary, big: true) { store.roll() }

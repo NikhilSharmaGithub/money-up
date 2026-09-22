@@ -216,11 +216,26 @@ struct RootView: View {
         let P = Palette.current(scheme)
         if let card = store.cardPopup {
             let isTreasure = card.deck == "treasure"
+            // What the card is worth, before a word of it has been read.
+            //
+            // The deck's colour says which pile it came off; it says nothing
+            // about whether the next three seconds are good ones. So a card
+            // that pays or frees arrives green and one that charges or jails
+            // arrives red, and the handful that genuinely cut both ways —
+            // advance to the priciest street, which is a windfall if you own
+            // it and a rent bill if you do not — keep the deck's own colours
+            // rather than promise something the card cannot know.
+            let accent = card.tone == "good" ? P.good
+                : card.tone == "bad" ? P.bad
+                : (isTreasure ? P.gold : P.red)
+            let face = card.tone == "good" ? P.goodSoft
+                : card.tone == "bad" ? P.badSoft
+                : (isTreasure ? P.tileTreasure : P.tileSurprise)
             VStack(spacing: 10) {
-                Art.icon(isTreasure ? .toolbox : .question, size: 46, tint: P.red)
+                Art.icon(isTreasure ? .toolbox : .question, size: 46, tint: accent)
                 Text(isTreasure ? "TREASURE" : "SURPRISE")
                     .font(.system(size: 11, weight: .bold)).kerning(2)
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(card.tone == "good" || card.tone == "bad" ? accent : P.ink3)
                 Text(card.text)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .multilineTextAlignment(.center)
@@ -228,14 +243,16 @@ struct RootView: View {
             }
             .padding(26)
             .frame(maxWidth: 320)
-            .background(isTreasure ? P.tileTreasure : P.tileSurprise,
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(face, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(isTreasure ? P.gold : P.red, lineWidth: 2)
+                    .stroke(accent, lineWidth: 2)
             )
             .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
             .transition(.scale(scale: 0.7).combined(with: .opacity))
+            // Good news settles; bad news flinches. One beat, felt as well as
+            // seen — it is a card, not an alarm.
+            .modifier(CardFlinch(active: card.tone == "bad"))
             .onTapGesture { store.cardPopup = nil }
             .task {
                 try? await Task.sleep(for: .seconds(3.2))
@@ -338,5 +355,31 @@ extension View {
             .animation(.spring(duration: 0.4), value: store.reliefPopup)
             .animation(.spring(duration: 0.4), value: store.turnBanner)
             .animation(.spring(duration: 0.45, bounce: 0.3), value: store.reveal)
+    }
+}
+
+/// The one-beat shake a bad card arrives with.
+///
+/// Colour alone is read by whoever is looking at the middle of the screen at
+/// that second; a card that flinches is caught out of the corner of an eye
+/// too, and it carries a knock of haptics with it so a player watching their
+/// own money feels it without looking up at all. Good news does nothing —
+/// half of every deck moving would be noise, not news.
+struct CardFlinch: ViewModifier {
+    let active: Bool
+    @State private var shove: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: shove)
+            .task(id: active) {
+                guard active else { shove = 0; return }
+                try? await Task.sleep(for: .milliseconds(240))
+                Haptics.warn()
+                for step in [-7.0, 7.0, -4.0, 0.0] {
+                    withAnimation(.easeOut(duration: 0.085)) { shove = step }
+                    try? await Task.sleep(for: .milliseconds(85))
+                }
+            }
     }
 }

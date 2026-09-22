@@ -380,6 +380,57 @@ export function buildDecks(map) {
   };
 }
 
+/**
+ * Whether a card is good news, bad news, or neither — the one thing about it
+ * a player reads before the words.
+ *
+ * A card turns over for three seconds in the middle of a board somebody is
+ * already reading, and the colour it arrives in is the whole message for the
+ * first of those seconds: green pays or frees, red charges or jails. The
+ * handful that genuinely cut both ways keep the deck's own colour rather than
+ * lie about which they are — advancing to the priciest street is a windfall
+ * if you own it and a rent bill if you do not, and the card cannot know.
+ *
+ * @param {{kind: string, amount?: number, n?: number, tile?: string|number,
+ *          payMultiplier?: number}} act
+ * @returns {'good'|'bad'|'plain'}
+ */
+export function cardTone(act) {
+  if (!act) return 'plain';
+  switch (act.kind) {
+    // The signed ones say it themselves.
+    case 'money':
+    case 'perProperty':
+      return act.amount >= 0 ? 'good' : 'bad';
+
+    case 'collectEach':
+    case 'getout':
+      return 'good';
+
+    case 'payEach':
+    case 'repairs':
+    case 'jail':
+      return 'bad';
+
+    // Backwards is always a punishment. Forwards is a lap of the board that
+    // might pay a salary and might walk into a hotel — the card cannot say.
+    case 'moveBy':
+      return act.n < 0 ? 'bad' : 'plain';
+
+    case 'moveTo':
+      if (act.tile === 'prison') return 'bad';
+      if (act.tile === 'start' || act.tile === 'vacation') return 'good';
+      return 'plain';
+
+    // Ordinary rent is a trip; a multiplier is a fine dressed as a trip.
+    case 'nearest':
+      return act.payMultiplier > 1 ? 'bad' : 'plain';
+
+    default:
+      return 'plain';
+  }
+}
+
 function shuffle(list) {
   const out = [...list];
   for (let i = out.length - 1; i > 0; i--) {

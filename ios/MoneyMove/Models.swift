@@ -435,6 +435,13 @@ struct ReliefCard: Codable, Equatable {
 struct LastCard: Codable, Equatable {
     var deck: String                        // treasure | surprise
     var text: String
+    /// good | bad | plain — decided on the server so every client paints the
+    /// same card the same colour, rather than three of them guessing from the
+    /// wording. Absent on older servers, which get the deck's own colours.
+    var tone: String?
+    /// Who drew it. The board reveals a card the moment *that* player's piece
+    /// reaches the tile that drew it, so it has to know whose piece to watch.
+    var playerId: String?
     var at: Double
 }
 
@@ -455,6 +462,10 @@ struct MoveLeg: Codable, Equatable {
     var to: Int
     var steps: Int
     var cause: String?
+    /// A number that only goes up. Two legs of one journey — the roll and the
+    /// card its tile drew — are resolved inside the same millisecond, so the
+    /// clock cannot tell them apart and this can.
+    var seq: Int?
     var at: Double
 }
 

@@ -233,17 +233,30 @@ export function patchBoard(state) {
   });
 }
 
+/**
+ * Lights the tile the player whose turn it is is standing on.
+ *
+ * On screen, not on the server. Those are the same tile almost always, and
+ * the one time they are not is the one time it matters: the server resolves a
+ * roll, the card the landing tile drew, and wherever that card then sends the
+ * piece, all before it pushes anything. Lighting the server's tile lit the
+ * card's destination while the piece was still walking towards the card — so
+ * a Surprise saying "go back ten" had already lit the tile ten back, and the
+ * card turned over to tell you something the board had given away.
+ */
 export function highlightTiles(state) {
   const cur = state.turn ? state.players.find((p) => p.id === state.turn.playerId) : null;
+  const at = cur ? (tokens.get(cur.id)?.pos ?? cur.pos) : -1;
   tileEls.forEach((el, i) => {
     if (!el) return;
-    el.classList.toggle('active-tile', !!cur && cur.pos === i);
+    el.classList.toggle('active-tile', at === i);
   });
 }
 
 export function tileElement(i) { return tileEls[i]; }
 export function resetBoard() {
   builtMapId = null; tileEls = []; tokens.clear(); resetSetTracking();
+  playedTo = 0; seeded = false; animating.clear();
   // Leaving mid-deal must not strand the flying deck on the next table,
   // nor leave its clean-up timer to go off over the next room's board.
   dealtRoom = null;
@@ -257,7 +270,12 @@ export function resetBoard() {
 const tokens = new Map();   // playerId -> { el, pos }
 const walkGen = new Map();  // playerId -> generation counter
 let layerEl = null;
-let lastMoveAt = 0;
+/** The highest move `seq` already played out on this board. */
+let playedTo = 0;
+/** Whether a first state has been seen — the one that places, never replays. */
+let seeded = false;
+/** Players whose journey is still running, so a re-render leaves them alone. */
+const animating = new Set();
 
 const SLOT_OFFSETS = [
   [-0.20, -0.18], [0.20, -0.18], [-0.20, 0.18], [0.20, 0.18],
@@ -309,8 +327,11 @@ const FLIGHT_EASE = 'cubic-bezier(.45, 0, .25, 1)';
 /**
  * Reconciles the token layer with server state. Tokens hop tile by tile when a
  * player rolled, and glide directly when they were teleported by a card.
+ *
+ * `onSettle(player, leg, next)` is awaited between two legs of one journey —
+ * that pause is where the caller turns a drawn card over.
  */
-export function syncTokens(state, { onStep, onArrive, onJailed, meId } = {}) {
+export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId } = {}) {
   layerEl = document.getElementById('tokenLayer');
   if (!layerEl) return;
 
@@ -357,33 +378,91 @@ export function syncTokens(state, { onStep, onArrive, onJailed, meId } = {}) {
     rec.el.title = p.name;
   }
 
-  const move = state.lastMove;
-  const fresh = move && move.at !== lastMoveAt;
-  if (fresh) lastMoveAt = move.at;
+  // Every leg the server has walked that this board has not played yet.
+  //
+  // One push carries a whole action — the roll, the tile it landed on, the
+  // card that tile drew and wherever the card then sent the piece — and
+  // `lastMove` is only the last of those legs. Playing just the last one told
+  // the story backwards: the walk onto Surprise never happened, and a card
+  // sending you back exactly as far as you came moved the piece nowhere at
+  // all while its text was already on screen. So the legs are replayed in
+  // order, with a pause between them for the card to turn over in.
+  const legs = (state.moves || []).filter((m) => (m.seq || 0) > playedTo);
+  if (legs.length) playedTo = legs[legs.length - 1].seq || playedTo;
+  // The first state of a table is a position, not a journey: opening a game
+  // already in progress must not replay the last three things that happened.
+  const replay = seeded ? legs : [];
+  seeded = true;
 
   for (const p of state.players) {
     if (p.bankrupt) continue;
     const rec = tokens.get(p.id);
-    // Mid-air, and already on its way to the right tile: leave it alone.
-    if (flying.get(p.id) === p.pos) continue;
-    if (!rec || rec.pos === p.pos) { place(state, p.id, p.pos, 220, 'ease-out'); continue; }
+    if (!rec) continue;
+    const mine = replay.filter((m) => m.playerId === p.id);
+
+    // Already travelling, with nothing new to travel: leave it be. State is
+    // pushed dozens of times a turn — a bid, a chat line, somebody else's
+    // rent — and cutting a walk short to fly the piece to the tile it was
+    // already heading for is what used to make a long roll slide.
+    if (!mine.length && (animating.has(p.id) || flying.get(p.id) === p.pos)) continue;
+    if (!mine.length && rec.pos === p.pos) { place(state, p.id, p.pos, 220, 'ease-out'); continue; }
 
     const gen = (walkGen.get(p.id) || 0) + 1;
     walkGen.set(p.id, gen);
-
-    if (fresh && move.playerId === p.id && move.steps) {
-      walk(state, p, rec.pos, p.pos, move.steps > 0 ? 1 : -1, gen, onStep, onArrive);
+    if (mine.length) {
+      playChain(state, p, mine, gen, { onStep, onArrive, onJailed, onSettle });
     } else {
-      // Why the piece is being carried, as the server told it: a card, or a
-      // jailing. Only the second one slams a door.
-      const cause = [...(state.moves || [])].reverse()
-        .find((m) => m.playerId === p.id && m.to === p.pos)?.cause;
-      fly(state, p, p.pos, gen, onArrive, (who, at) => {
-        if (cause !== 'jail') return;
-        slamPrison(at);
-        onJailed?.(who, at);
-      });
+      // Standing somewhere else with no leg to explain it — a state that
+      // arrived without its moves, a reconnect part-way through a journey.
+      // Carry the piece there rather than have it blink across the felt.
+      fly(state, p, p.pos, gen, onArrive, null);
     }
+  }
+}
+
+/**
+ * One player's journey, leg by leg.
+ *
+ * A leg with steps is walked tile by tile, the way a roll reads; a leg with
+ * none is a card or a jailing, and the piece is carried. Between two legs the
+ * board stops on the tile it has just reached and waits for `onSettle` —
+ * which is the whole point of doing this in order: the piece stands on the
+ * Surprise, the Surprise lights up, the card turns over, and only then does
+ * what the card says actually happen.
+ */
+async function playChain(state, player, legs, gen, { onStep, onArrive, onJailed, onSettle }) {
+  const rec = tokens.get(player.id);
+  if (!rec) return;
+  animating.add(player.id);
+  try {
+    for (let k = 0; k < legs.length; k++) {
+      if (walkGen.get(player.id) !== gen) return;
+      const leg = legs[k];
+      // A board that has drifted from the server — a reconnect mid-journey —
+      // starts the leg from where the server says it started, not from
+      // wherever the piece happens to be sitting.
+      if (leg.from != null && rec.pos !== leg.from && rec.pos !== leg.to) {
+        place(state, player.id, leg.from, 0);
+      }
+      if (rec.pos !== leg.to) {
+        if (leg.steps) {
+          await walk(state, player, rec.pos, leg.to, leg.steps > 0 ? 1 : -1, gen, onStep, null);
+        } else {
+          await fly(state, player, leg.to, gen, null, (who, at) => {
+            // Only a jailing slams a door: a card that drops you on the
+            // prison tile as a visitor is not the same event.
+            if (leg.cause !== 'jail') return;
+            slamPrison(at);
+            onJailed?.(who, at);
+          });
+        }
+      }
+      if (walkGen.get(player.id) !== gen) return;
+      onArrive?.(player);
+      await onSettle?.(player, leg, legs[k + 1] || null);
+    }
+  } finally {
+    if (walkGen.get(player.id) === gen) animating.delete(player.id);
   }
 }
 

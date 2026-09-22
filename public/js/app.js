@@ -920,6 +920,7 @@ function render() {
     // The clank belongs to the door closing, not to the server saying so —
     // it waits for the piece to be set down inside.
     onJailed: () => sfx.jail(),
+    onSettle: settleLeg,
   }));
   if (rebuilt) requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
 
@@ -964,16 +965,11 @@ function render() {
     if (p) { showTurnBanner(p, p.id === meId); if (p.id === meId) sfx.turn(); }
   }
 
-  // drawn card — revealed only once the token has walked onto the tile; the
-  // server resolves instantly, but the reveal must not beat the piece there.
+  // A drawn card is held, not shown: the board turns it over at the moment
+  // the piece it belongs to is standing on the tile that drew it.
   if (state.lastCard && state.lastCard.at !== lastCardAt) {
     lastCardAt = state.lastCard.at;
-    const card = state.lastCard;
-    setTimeout(() => {
-      if (state?.lastCard?.at !== card.at) return; // superseded meanwhile
-      $('#cardPopup').classList.remove('hidden');
-      showCard(card);
-    }, moveDelay(card.at));
+    holdCard(state.lastCard);
   }
 
   safe('relief', showReliefCardOnce);
@@ -1012,10 +1008,61 @@ function render() {
 }
 
 /** Long enough for the piece to finish walking to whatever caused the card. */
-function moveDelay(at) {
-  const mv = state?.lastMove;
-  const steps = mv && mv.steps && Math.abs(mv.at - at) < 2500 ? Math.abs(mv.steps) : 0;
-  return steps ? steps * 120 + 350 : 0;
+// ───────────────────────────────────────────────────────── the held card ──
+// The server resolves a whole action at once — the roll, the tile it landed
+// on, the card that tile drew, and whatever the card then does — and pushes
+// the lot as one state. Showing the card the moment that state arrives tells
+// the story backwards: "go back ten steps" is read while the piece is still
+// walking the ten that got it there, and on a board where the card undoes the
+// roll exactly, the piece never visibly moves at all.
+//
+// So the card waits here until the board says the piece has arrived on the
+// tile that drew it, and the leg the card causes waits for the card to be
+// read. A timer is kept only as a floor under states with nothing to animate
+// — a spectator opening the table mid-action, or a reconnect.
+
+/** How long a card is left on screen before the board acts on it. */
+const CARD_BEAT = 1500;
+
+let heldCard = null;
+let heldTimer = null;
+
+function holdCard(card) {
+  heldCard = card;
+  clearTimeout(heldTimer);
+  heldTimer = setTimeout(revealHeldCard, cardFloor(card.at));
+}
+
+/** Turns the held card over, once. Returns whether this call was the one. */
+function revealHeldCard() {
+  const card = heldCard;
+  if (!card) return false;
+  heldCard = null;
+  clearTimeout(heldTimer);
+  if (state?.lastCard?.at !== card.at) return false; // superseded meanwhile
+  $('#cardPopup').classList.remove('hidden');
+  showCard(card);
+  return true;
+}
+
+/**
+ * The pause between two legs of one journey — and the only place a card is
+ * allowed to turn over while the board still has moving left to do.
+ */
+function settleLeg(who, _leg, next) {
+  highlightTiles(state);
+  const mine = !heldCard?.playerId || heldCard.playerId === who?.id;
+  const shown = mine ? revealHeldCard() : false;
+  if (!next) return null;
+  return new Promise((done) => setTimeout(done, shown ? CARD_BEAT : 240));
+}
+
+/** Long enough for the piece to have finished walking to the card's tile. */
+function cardFloor(at) {
+  const steps = (state?.moves || [])
+    .filter((m) => Math.abs(m.at - at) < 2500)
+    .reduce((n, m) => n + Math.abs(m.steps || 0), 0);
+  return steps * 150 + 1200;
 }
 
 // ─────────────────────────────────────────────────────── deadlock rule ──
@@ -1048,7 +1095,7 @@ function showReliefCardOnce() {
     $('#cardPopup').classList.remove('hidden');
     // A rule to read, not a payout to glance at — it stays up long enough.
     showCard({ deck: 'rule', title: rc.title, text: rc.text }, { hold: 12000 });
-  }, moveDelay(rc.at));
+  }, cardFloor(rc.at));
 }
 
 /** Turns fresh log lines into sound effects. */

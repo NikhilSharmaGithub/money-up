@@ -69,6 +69,10 @@ struct BoardGeometry {
 struct BoardView<Center: View>: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// Owned here because both halves of the board need it: the token layer
+    /// writes it as each leg lands, and every tile reads it to know whether
+    /// the light is on it.
+    @StateObject private var spotlight = TurnSpotlight()
     let onTapTile: (Int) -> Void
     @ViewBuilder var center: Center
 
@@ -85,8 +89,9 @@ struct BoardView<Center: View>: View {
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(P.rule2, lineWidth: 1))
                         .shadow(color: .black.opacity(scheme == .light ? 0.22 : 0.5), radius: 16, y: 8)
 
+                    let lit = store.currentPlayer.map { spotlight.at[$0.id] ?? $0.pos }
                     ForEach(state.map.tiles) { tile in
-                        TileView(tile: tile, geom: geom)
+                        TileView(tile: tile, geom: geom, isActive: state.isPlaying && lit == tile.index)
                             .frame(width: geom.frame(of: tile.index).width,
                                    height: geom.frame(of: tile.index).height)
                             .position(x: geom.frame(of: tile.index).midX,
@@ -99,7 +104,7 @@ struct BoardView<Center: View>: View {
                         .frame(width: geom.centerWell.width, height: geom.centerWell.height)
                         .position(x: geom.centerWell.midX, y: geom.centerWell.midY)
 
-                    TokenLayer(geom: geom)
+                    TokenLayer(geom: geom, spotlight: spotlight)
                 }
                 .frame(width: side, height: side)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -116,6 +121,10 @@ struct TileView: View {
     @Environment(\.colorScheme) private var scheme
     let tile: TileData
     let geom: BoardGeometry
+    /// Whether the turn's piece is standing here *on screen* — BoardView works
+    /// it out from the spotlight, because the server's answer arrives a whole
+    /// card early.
+    var isActive: Bool = false
     @State private var dealt = true
     /// Drives the "whole set completed" celebration: the tile floods with the
     /// owner's colour and pulses back three times.
@@ -123,10 +132,6 @@ struct TileView: View {
 
     private var ownership: TileOwnership? { store.state?.owner(of: tile.index) }
     private var ownerPlayer: PlayerState? { store.state?.player(ownership?.owner) }
-    private var isActive: Bool {
-        guard let state = store.state, state.isPlaying else { return false }
-        return store.currentPlayer?.pos == tile.index
-    }
 
     /// The whole country (or airport/utility family) in one player's hands.
     private var isFullSet: Bool {
@@ -424,11 +429,31 @@ struct TileView: View {
 
 // MARK: - tokens
 
+/// Where each piece has actually come to rest — as opposed to where the
+/// server says it ended up.
+///
+/// Those are the same tile almost always, and the one time they are not is
+/// the one time it matters. The server resolves a roll, the card the landing
+/// tile drew, and wherever that card then sends the piece, and pushes the lot
+/// at once; lighting the server's tile lit the card's destination while the
+/// piece was still walking towards the card. A Surprise reading "go back ten"
+/// had already lit the tile ten back, so the card turned over to tell you
+/// something the board had given away a second and a half earlier.
+///
+/// Deliberately kept apart from `TokenWalker.shown`: this moves once a leg,
+/// where `shown` moves once a tile, and every tile on the board watches it.
+@MainActor
+final class TurnSpotlight: ObservableObject {
+    @Published var at: [String: Int] = [:]
+}
+
 /// Walks each token tile-by-tile when its player moved by dice — with a tick
 /// per step and a soft thump on arrival — and glides it when teleported.
 @MainActor
 final class TokenWalker: ObservableObject {
     @Published var shown: [String: Int] = [:]
+    /// Lit at leg boundaries only, never mid-walk.
+    weak var spotlight: TurnSpotlight?
     private var tasks: [String: Task<Void, Never>] = [:]
     private var targets: [String: Int] = [:]
     private var lastMoveAt: Double = 0
@@ -439,6 +464,7 @@ final class TokenWalker: ObservableObject {
         let alive = state.players.filter { !$0.isBankrupt }
         for gone in shown.keys where !alive.contains(where: { $0.id == gone }) {
             shown.removeValue(forKey: gone)
+            spotlight?.at.removeValue(forKey: gone)
             tasks[gone]?.cancel()
         }
 
@@ -466,6 +492,7 @@ final class TokenWalker: ObservableObject {
             // First sight of a player, or a teleport: glide straight there.
             guard let from = current, fresh, let move, move.playerId == p.id, move.steps != 0 else {
                 shown[p.id] = p.pos
+                spotlight?.at[p.id] = p.pos
                 if current != nil { SoundKit.shared.land() }
                 continue
             }
@@ -487,6 +514,7 @@ final class TokenWalker: ObservableObject {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55)
                     try? await Task.sleep(for: pace)
                 }
+                self?.spotlight?.at[p.id] = target
                 self?.tasks.removeValue(forKey: p.id)
                 self?.targets.removeValue(forKey: p.id)
             }
@@ -512,6 +540,7 @@ final class TokenWalker: ObservableObject {
                 let d = Choreography.distance(of: leg, boardSize: size)
                 guard d > 0 else {
                     self?.shown[pid] = leg.to
+                    self?.spotlight?.at[pid] = leg.to
                     SoundKit.shared.land()
                     continue
                 }
@@ -526,6 +555,10 @@ final class TokenWalker: ObservableObject {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55)
                     try? await Task.sleep(for: .seconds(pace))
                 }
+                // The leg is over: this is the tile the player is standing on
+                // and the one the board is allowed to light. The next leg, if
+                // the card orders one, has not happened yet.
+                self?.spotlight?.at[pid] = leg.to
             }
             self?.tasks.removeValue(forKey: pid)
             self?.targets.removeValue(forKey: pid)
@@ -537,6 +570,7 @@ struct TokenLayer: View {
     @EnvironmentObject var store: GameStore
     @StateObject private var walker = TokenWalker()
     let geom: BoardGeometry
+    @ObservedObject var spotlight: TurnSpotlight
 
     var body: some View {
         if let state = store.state, state.isPlaying || state.isEnded {
@@ -551,7 +585,7 @@ struct TokenLayer: View {
             .onChange(of: state.lastMove?.at) { walker.reconcile(state) }
             .onChange(of: state.moves?.last?.at) { walker.reconcile(state) }
             .onChange(of: state.version) { walker.reconcile(state) }
-            .onAppear { walker.reconcile(state) }
+            .onAppear { walker.spotlight = spotlight; walker.reconcile(state) }
         }
     }
 }
