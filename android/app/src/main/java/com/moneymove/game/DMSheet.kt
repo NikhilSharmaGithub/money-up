@@ -61,6 +61,12 @@ fun DMSheet(
     friend: Friend,
     messaging: MessagingStore,
     account: AccountStore,
+    /**
+     * A block made from here has to reach GameStore, or it holds for this
+     * sheet and nowhere else — the table chat would keep showing the lines of
+     * somebody the player has just blocked.
+     */
+    onBlocked: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val p = P.current
@@ -151,7 +157,9 @@ fun DMSheet(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon("chat", size = 26.dp, tint = p.ink3)
                         Spacer(Modifier.height(7.dp))
-                        Hint("Say hi.")
+                        // "Say hi" above a panel saying you cannot is a screen
+                        // arguing with itself.
+                        Hint(if (canMessage) "Say hi." else "Nothing was ever said here.")
                     }
                 }
             } else {
@@ -250,7 +258,8 @@ fun DMSheet(
             // records anything else as "other".
             place = "dm",
             quote = lastFromThem,
-            onBlocked = {
+            onBlocked = { code ->
+                onBlocked(code)
                 // Blocking takes the friendship apart on both sides, so there
                 // is no thread left to sit in.
                 reporting = false

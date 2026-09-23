@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -205,24 +206,55 @@ private fun TableBar(
     ) {
         Icon("dice", size = 19.dp, tint = p.red)
         Spacer(Modifier.width(8.dp))
+        // One line each, and allowed to shrink. Four icon buttons and a money
+        // chip left the title about forty points wide, and "Random / Room
+        // 27A6A" came out as five stacked lines that pushed the board down
+        // the screen.
         Column(Modifier.weight(1f)) {
             Text(
                 store.state?.map?.name ?: "MoneyMove",
                 color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            store.roomId?.let { Hint("Room ${it.uppercase()}") }
+            store.roomId?.let {
+                Text(
+                    "Room ${it.uppercase()}",
+                    color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+        Spacer(Modifier.width(8.dp))
         store.me?.let { me ->
             Chip(money(me.money), icon = "cash", tint = if (me.inDebt) p.bad else p.good)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
         }
-        MMButton("", kind = BtnKind.GHOST, icon = "palette") { onPiece() }
-        Spacer(Modifier.width(6.dp))
-        MMButton("", kind = BtnKind.GHOST, icon = "bank") { onDeeds() }
-        Spacer(Modifier.width(6.dp))
-        MMButton("", kind = BtnKind.GHOST, icon = "scales") { onRules() }
-        Spacer(Modifier.width(6.dp))
+        IconTap("palette", onPiece)
+        IconTap("bank", onDeeds)
+        IconTap("scales", onRules)
+        Spacer(Modifier.width(4.dp))
         MMButton("Leave", kind = BtnKind.GHOST) { store.leave() }
+    }
+}
+
+/**
+ * A bare icon in the table bar.
+ *
+ * MMButton's minimum height and horizontal padding are sized for a label; put
+ * four of them side by side with nothing in them and they eat the title.
+ */
+@Composable
+private fun IconTap(glyph: String, onClick: () -> Unit) {
+    val p = P.current
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .border(1.dp, p.rule2, RoundedCornerShape(11.dp))
+            .clickable { SoundKit.click(); onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(glyph, size = 18.dp, tint = p.ink2)
     }
 }
 

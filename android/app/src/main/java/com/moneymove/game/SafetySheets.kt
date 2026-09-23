@@ -2,6 +2,7 @@ package com.moneymove.game
 
 import android.app.Application
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -690,5 +691,74 @@ private fun BlockedRow(
             kind = BtnKind.GHOST,
             enabled = enabled,
         ) { onUnblock() }
+    }
+}
+
+// ── the rules, before anybody types ────────────────────────────────────────
+
+/**
+ * What a player agrees to before they can say anything to a stranger.
+ *
+ * It is a gate, not a notice: the composer below it stays shut until the
+ * button is pressed. That is the whole reason it works — a banner nobody has
+ * to act on is a banner nobody reads, and on a store listing that allows
+ * open chat between strangers, "we told them" has to mean something they
+ * actually did.
+ *
+ * Agreed once per device and never asked again. It draws nothing after that,
+ * so every surface can host it unconditionally.
+ */
+@Composable
+fun CommunityRulesCard(onAgree: () -> Unit = {}) {
+    val p = P.current
+    val context = LocalContext.current
+    val prefs = remember(context) { Prefs(context) }
+    var agreed by remember { mutableStateOf(prefs.rulesAgreed) }
+    if (agreed) return
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(p.card)
+            .border(1.dp, p.gold.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon("shield", size = 15.dp, tint = p.gold)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "Before you chat",
+                color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Black,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Be kind. There is zero tolerance for harassment, hate, sexual content or "
+                + "threats — players who break this are removed. Long-press any message "
+                + "to report or block someone.",
+            color = p.ink2, fontSize = 12.5.sp, lineHeight = 18.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(10.dp))
+        MMButton("I agree", kind = BtnKind.PRIMARY, modifier = Modifier.fillMaxWidth()) {
+            Haptics.tap()
+            prefs.rulesAgreed = true
+            agreed = true
+            onAgree()
+        }
+    }
+}
+
+/** Whether writing is allowed yet — the composer stays shut until it is. */
+@Composable
+fun rememberRulesAgreed(): Boolean {
+    val context = LocalContext.current
+    val prefs = remember(context) { Prefs(context) }
+    // Read through a state so agreeing on one surface opens the other one
+    // without either of them knowing the other exists.
+    return remember { mutableStateOf(prefs.rulesAgreed) }.let { held ->
+        if (!held.value && prefs.rulesAgreed) held.value = true
+        held.value
     }
 }

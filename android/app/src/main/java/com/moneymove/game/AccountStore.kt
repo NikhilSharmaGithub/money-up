@@ -91,8 +91,24 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
         load("/api/boards", BoardsView.serializer()) { boards = it }
     }
 
-    fun refreshSocial() {
-        load("/api/social", SocialView.serializer()) { social = it }
+    /**
+     * The social half — and the two things the chat quietly depends on.
+     *
+     * `onBlocked` carries the blocked list to GameStore, which is the only
+     * place the chat's drop-a-blocked-line filter reads. Nothing populated it
+     * before, so that filter was a no-op that looked exactly like a working
+     * one. `myCode` is the other: without it a player's own lines are offered
+     * a Report button pointed at themselves.
+     */
+    fun refreshSocial(onBlocked: (Set<String>) -> Unit = {}, onMyCode: (String) -> Unit = {}) {
+        load("/api/social", SocialView.serializer()) {
+            social = it
+            onBlocked(it.blocked.toSet())
+        }
+        load("/api/me", MeView.serializer()) {
+            me = it
+            if (it.code.isNotBlank()) onMyCode(it.code)
+        }
         loadPublic("/api/leaderboard", LeaderboardView.serializer()) { leaderboard = it.top }
     }
 
@@ -115,16 +131,29 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     fun buy(item: StoreItem, onDone: (String?) -> Unit = {}) = viewModelScope.launch {
         // `itemId`, not `id`. The server reads req.body.itemId and answers
         // "Unknown item" to anything else — which is what it had been doing.
-        val body = api.post("/api/store/buy", mapOf("itemId" to item.id, "expect" to item.price))
-        val reply = body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
-        val error = reply?.obj()?.get("error").asString()
+        //
+        // And postOrError, not post: a refusal is a 400 with the reason in it,
+        // and the plain post throws the body away and hands back the same null
+        // a dead tunnel does. Read that way, "Not enough coins" looked exactly
+        // like a purchase that worked — the shop equipped a piece nobody owned
+        // and the coins came back on the next poll.
+        val reply = api.postOrError(
+            "/api/store/buy",
+            mapOf("itemId" to item.id, "expect" to item.price),
+        )
+        val said = reply.body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
+            ?.obj()?.get("error").asString()
+        val error = when {
+            reply.ok -> null
+            reply.offline -> "That didn't go through, and nothing has changed. Try again."
+            else -> said ?: "That didn't go through, and nothing has changed. Try again."
+        }
         if (error == null) {
             load("/api/wallet", Wallet.serializer()) { wallet = it }
             // Wearing what you just bought is what buying it meant.
             equip(item)
-        } else {
-            notice = error
         }
+        notice = error
         onDone(error)
     }
 
@@ -257,9 +286,11 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun addFriend(code: String, onDone: (String?) -> Unit = {}) = viewModelScope.launch {
-        val body = api.post("/api/friends", mapOf("code" to code.trim().uppercase()))
-        val error = body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
+        val reply = api.postOrError("/api/friends", mapOf("code" to code.trim().uppercase()))
+        val said = reply.body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
             ?.obj()?.get("error").asString()
+        val error = if (reply.ok) null
+            else said ?: "That didn't go through, and nothing has changed. Try again."
         notice = error
         load("/api/social", SocialView.serializer()) { social = it }
         onDone(error)
@@ -273,16 +304,6 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     fun removeFriend(code: String) = viewModelScope.launch {
         api.post("/api/friends/remove", mapOf("code" to code))
         load("/api/social", SocialView.serializer()) { social = it }
-    }
-
-    fun block(code: String) = viewModelScope.launch {
-        api.post("/api/block", mapOf("code" to code))
-        load("/api/social", SocialView.serializer()) { social = it }
-    }
-
-    fun report(code: String, reason: String) = viewModelScope.launch {
-        api.post("/api/report", mapOf("code" to code, "reason" to reason))
-        notice = "Reported. Thanks — we read every one of these."
     }
 
     // ── plumbing ───────────────────────────────────────────────────────────

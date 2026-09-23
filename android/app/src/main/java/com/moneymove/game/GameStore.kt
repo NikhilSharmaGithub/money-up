@@ -59,6 +59,15 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      */
     fun applyBlocked(codes: Set<String>) { blockedCodes = codes }
 
+    /**
+     * This player's own public code.
+     *
+     * Without it their own chat lines are offered a Report button pointed at
+     * themselves, which is the kind of thing nobody files a bug about and
+     * everybody notices.
+     */
+    fun applyMyCode(code: String) { myCode = code }
+
     // ── table state ────────────────────────────────────────────────────────
 
     var state: GameState? by mutableStateOf(null)

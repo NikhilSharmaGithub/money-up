@@ -104,6 +104,15 @@ data class SocialView(
     val requests: List<Friend> = emptyList(),
     /** People you have asked. */
     val sent: List<Friend> = emptyList(),
+    /**
+     * Friend codes this player has blocked, as socialOf() sends them.
+     *
+     * Without this field the list was being quietly swallowed by
+     * `ignoreUnknownKeys`, so nothing ever populated GameStore.blockedCodes
+     * and the chat's drop-a-blocked-line filter was a no-op that looked
+     * exactly like a working one.
+     */
+    val blocked: List<String> = emptyList(),
 )
 
 @Serializable

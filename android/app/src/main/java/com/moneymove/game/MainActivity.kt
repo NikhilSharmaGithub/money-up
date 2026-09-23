@@ -75,6 +75,11 @@ class MainActivity : ComponentActivity() {
         // politely does nothing rather than a crash. See PushRegistration.
         lifecycleScope.launch { PushRegistration.register(this@MainActivity) }
 
+        // Billing is started here as well as on the shop, because the player
+        // who most needs its recovery sweep — a purchase Play took and the
+        // server never heard about — has no reason to open the shop again.
+        billing.start(account)
+
         setContent {
             val prefs = store.prefs
             var theme by remember { mutableStateOf(prefs.theme) }

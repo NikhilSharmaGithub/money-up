@@ -52,7 +52,11 @@ fun SocialTab(account: AccountStore, game: GameStore, messaging: MessagingStore)
     var talkingTo by remember { mutableStateOf<Friend?>(null) }
     var blocked by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { account.refreshSocial() }
+    // The blocked list and this player's own code both come back here, and
+    // both are things the chat depends on having.
+    LaunchedEffect(Unit) {
+        account.refreshSocial(onBlocked = game::applyBlocked, onMyCode = game::applyMyCode)
+    }
 
     val social = account.social
     val mine = account.me?.code?.takeIf { it.isNotBlank() } ?: friendCode(game.token)
@@ -231,7 +235,10 @@ fun SocialTab(account: AccountStore, game: GameStore, messaging: MessagingStore)
     }
 
     talkingTo?.let { friend ->
-        DMSheet(friend, messaging, account) { talkingTo = null }
+        DMSheet(
+            friend, messaging, account,
+            onBlocked = { game.applyBlocked(game.blockedCodes + it) },
+        ) { talkingTo = null }
     }
     if (blocked) {
         val safety = rememberSafety()

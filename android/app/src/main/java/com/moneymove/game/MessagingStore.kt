@@ -33,7 +33,26 @@ import kotlinx.coroutines.launch
 class MessagingStore(app: Application) : AndroidViewModel(app) {
 
     private val prefs = Prefs(app)
-    private val api get() = Api(prefs.server, prefs.token)
+
+    private var held: Api? = null
+    private var heldFor = ""
+
+    /**
+     * One [Api], kept until the identity behind it changes.
+     *
+     * [AccountStore] builds a fresh one per call, which costs nothing when a
+     * tap is what asks for it. This store asks every two and a half seconds
+     * for as long as a thread is open, and a new Api is a new OkHttpClient
+     * with a connection pool of its own — so one per poll is a fresh TCP and
+     * TLS handshake per poll, on somebody's battery, all afternoon.
+     */
+    private val api: Api
+        get() {
+            val id = prefs.server + "|" + prefs.token
+            held?.takeIf { heldFor == id }?.let { return it }
+            heldFor = id
+            return Api(prefs.server, prefs.token).also { held = it }
+        }
 
     // ── the owner's notes ──────────────────────────────────────────────────
 
@@ -169,6 +188,14 @@ class MessagingStore(app: Application) : AndroidViewModel(app) {
         // The sheet may have been closed, or swapped to another friend, while
         // this was in flight.
         if (openWith != code) return
+        // The poll and a send's own reload are in flight at the same time and
+        // nothing makes them land in the order they left. A thread only ever
+        // grows — the server appends and keeps the last two hundred — so an
+        // answer holding fewer lines than the screen already shows is an older
+        // one, and letting it through takes a message somebody has just sent
+        // back off the screen for a couple of seconds. Which reads as "that
+        // didn't send", and is answered by sending it again.
+        if (reply.messages.size < thread.size) return
         thread = reply.messages
         if (reply.me.isNotBlank()) myCode = reply.me
     }

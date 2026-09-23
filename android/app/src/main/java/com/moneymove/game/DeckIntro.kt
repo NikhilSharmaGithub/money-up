@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -112,6 +113,7 @@ class DeckIntro {
 
     private var tiles = 0
     private var lastStatus: String? = null
+    private var lastRoom: String? = null
     private var dealtRoom: String? = null
 
     /** True while tiles are still in the air. */
@@ -134,9 +136,11 @@ class DeckIntro {
         if (state == null) return forget()
         tiles = state.map.tiles.size
         // A deal whose coroutine was cancelled halfway — the room changed
-        // under it, or the host swapped the board — would otherwise leave the
-        // next table's tiles stranded wherever they had flown to.
-        if (dealing && dealtRoom != state.id) clock.snapTo(1f)
+        // under it, the screen went away — leaves a clock that nothing is
+        // driving any more and every tile stranded wherever it had flown to.
+        // Nobody else is coming to finish it, so an unfinished deal that has
+        // stopped moving is put back.
+        if (clock.value < 1f && !clock.isRunning) clock.snapTo(1f)
 
         // A quick match keeps its tiles in the deck while it hunts for
         // players, so kick-off has something to be. A private lobby keeps its
@@ -147,8 +151,19 @@ class DeckIntro {
             else -> Deck.HIDDEN
         }
 
-        val sawLobby = lastStatus == "lobby"
+        // Joining a table is not the same as watching it start, and the
+        // status alone cannot tell them apart. Switching rooms leaves the old
+        // table's state on screen until the new one's first push — the store
+        // does a quiet leave that keeps it there — so a lobby seen at the old
+        // table would read as this table's lobby, and anyone walking into a
+        // friend's game already in progress would be shown the board dealing
+        // itself in: the app saying the game is starting now when it started
+        // ten minutes ago. Hence pinning the status to the room it was seen
+        // in, which is what the web client's `lastStatus = null` on entering
+        // a room amounts to.
+        val sawLobby = lastStatus == "lobby" && lastRoom == state.id
         lastStatus = state.status
+        lastRoom = state.id
         // Passing back through a lobby re-arms it: a rematch is a fresh game
         // at the same table, and it gets its own deal.
         if (state.isLobby) dealtRoom = null
@@ -198,6 +213,7 @@ class DeckIntro {
     private suspend fun forget() {
         deck = Deck.HIDDEN
         lastStatus = null
+        lastRoom = null
         dealtRoom = null
         if (clock.value < 1f) clock.snapTo(1f)
     }
@@ -240,8 +256,12 @@ fun rememberDeckIntro(store: GameStore): DeckIntro {
 /**
  * The deck itself: a stack of card backs in the middle of the table.
  *
- * Place it over the board's centre well. It draws nothing at all unless the
- * table is either waiting to be dealt or being dealt right now.
+ * Place it over the board's centre well. Given no modifier it fills the box
+ * it is dropped into and sits in the middle of it — left to wrap its cards it
+ * would take their size and land in the corner of whatever is behind it,
+ * which is a deck on the wall rather than on the table. It draws nothing at
+ * all unless the table is either waiting to be dealt or being dealt right
+ * now.
  */
 @Composable
 fun DeckIntroOverlay(intro: DeckIntro, modifier: Modifier = Modifier) {
@@ -267,7 +287,7 @@ fun DeckIntroOverlay(intro: DeckIntro, modifier: Modifier = Modifier) {
         }
     }
 
-    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val height = (minOf(maxWidth, maxHeight) * 0.42f).coerceIn(64.dp, 132.dp)
         val width = height * 0.71f
         for (i in 0 until CARDS) {

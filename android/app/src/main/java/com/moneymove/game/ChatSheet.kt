@@ -64,6 +64,7 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
     // act on is the thing you touch.
     var reporting by remember { mutableStateOf<ChatMessage?>(null) }
 
+    val agreed = rememberRulesAgreed()
     val lines = remember(state.chat, store.blockedCodes) {
         state.chat.filter { it.code == null || it.code !in store.blockedCodes }
     }
@@ -72,6 +73,16 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
     LaunchedEffect(Unit) { store.markChatRead() }
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
+    }
+
+    reporting?.let { line ->
+        ReportSheet(
+            code = line.code.orEmpty(),
+            name = line.name,
+            place = "chat",
+            quote = line.text,
+            onBlocked = { store.applyBlocked(store.blockedCodes + it) },
+        ) { reporting = null }
     }
 
     ModalBottomSheet(
@@ -110,17 +121,16 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
                 }
             }
 
-            reporting?.let { line ->
-                ReportSheet(
-                    code = line.code.orEmpty(),
-                    name = line.name,
-                    place = "chat",
-                    quote = line.text,
-                    onBlocked = { store.applyBlocked(store.blockedCodes + it) },
-                ) { reporting = null }
-            }
-
             Spacer(Modifier.height(12.dp))
+            // Nobody types to a stranger before they have agreed to the rules.
+            CommunityRulesCard()
+            if (!agreed) {
+                Spacer(Modifier.height(10.dp))
+                MMButton("Close", kind = BtnKind.GHOST, modifier = Modifier.fillMaxWidth()) {
+                    onDismiss()
+                }
+                return@Column
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     BasicTextField(

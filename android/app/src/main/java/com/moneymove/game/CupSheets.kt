@@ -315,6 +315,7 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
 
     /** The last thing that went wrong, for the one line a sheet shows. */
     var notice: String? by mutableStateOf(null)
+        private set
 
     var bracket: CupBracketView? by mutableStateOf(null)
         private set
@@ -375,6 +376,9 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
     /** Look at one of the other cups instead. */
     fun show(cupId: String) {
         showing = cupId
+        // A refusal belongs to the cup it was about. Carried across to the
+        // next cup in the list, "This one is full" is a lie about that one.
+        notice = null
         scope.launch { load() }
     }
 
@@ -393,13 +397,19 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
                 "/api/cup/join",
                 mapOf("code" to code.trim(), "cupId" to cupId),
             )
+            // The card's own poll, asked straight afterwards, is also the
+            // answer to which kind of null that was. [Api] flattens a refusal
+            // and a dead socket into the same null, and guessing between them
+            // is how somebody holding the RIGHT code gets told it does not
+            // match and retypes it until the doors shut.
+            val answered = load()
             if (body == null) {
-                notice = whyNot(code)
+                notice = if (answered) whyNot(code)
+                else "Could not reach the server — try that again."
             } else {
                 Haptics.turn()
                 game.showToast("Joined — good luck")
             }
-            load()
             busy = false
         }
     }
@@ -410,8 +420,11 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
             busy = true
             notice = null
             val body = api.post("/api/cup/leave", mapOf("cupId" to cupId))
-            if (body == null) notice = "Too late to withdraw — the doors have shut."
-            load()
+            val answered = load()
+            if (body == null) {
+                notice = if (answered) "Too late to withdraw — the doors have shut."
+                else "Could not reach the server — try that again."
+            }
             busy = false
         }
     }
@@ -860,8 +873,15 @@ fun CupDetailSheet(
 ) {
     val p = P.current
     // A cup that ends while somebody is reading about it takes its sheet with
-    // it, rather than leaving them looking at a screen about nothing.
-    val cup = cups.live ?: return onDismiss()
+    // it, rather than leaving them looking at a screen about nothing — but as
+    // an effect rather than mid-draw. Calling back into the caller's state
+    // from inside composition sets the sheet and its owner fighting over the
+    // same frame.
+    val cup = cups.live
+    if (cup == null) {
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var chart by remember { mutableStateOf(false) }
 
@@ -1032,8 +1052,12 @@ private fun DetailBody(
         Spacer(Modifier.height(12.dp))
         SectionLabel("Also on")
         Spacer(Modifier.height(8.dp))
+        // One clock read at the top and handed down the list: [tick] starts a
+        // coroutine per call, and six cups counting towards six different
+        // minutes do not need six of them to agree on the same second.
+        val now = tick(1000)
         for (o in others) {
-            OtherCupRow(o) { cups.show(o.id) }
+            OtherCupRow(o, now) { cups.show(o.id) }
             Spacer(Modifier.height(6.dp))
         }
     }
@@ -1419,9 +1443,8 @@ private fun PlanRow(r: CupPlanRound) {
 }
 
 @Composable
-private fun OtherCupRow(o: CupBrief, onPick: () -> Unit) {
+private fun OtherCupRow(o: CupBrief, now: Long, onPick: () -> Unit) {
     val p = P.current
-    val now = tick(1000)
     val shape = RoundedCornerShape(11.dp)
     Column(
         Modifier
@@ -1475,6 +1498,15 @@ private fun ruleLines(cup: CupView): List<String> {
             "one long game never holds up everybody else's evening."
     }
     out += "Free to enter — no coins, no purchase, no payment of any kind."
+    // Every figure on these screens is already in the reader's own money, and
+    // nothing else says the prize is not set in it. The server converts as a
+    // reading aid and never touches the sum that actually gets paid, so a
+    // player owed two hundred dollars should not be left expecting rupees.
+    if (cup.local != null) {
+        val set = cup.prize.currency.ifBlank { "USD" }
+        out += "Prizes are set in $set and shown here in your own money at today's rate — " +
+            "every figure marked ≈ is approximate."
+    }
     out += "Prizes are awarded and paid by hand by MoneyMove, the organiser. Keep your friend code."
     out += "Google is not a sponsor of this tournament and is not involved in it in any way."
     return out
@@ -1776,9 +1808,10 @@ private fun standingLine(cup: CupView): String = when {
 /**
  * The wall clock, ticking into a recomposition.
  *
- * Every countdown on these screens is derived from it rather than from a
- * timer of its own, so a card with four clocks on it wakes up once a second
- * instead of four times.
+ * One timer per call, which is why a screen drawing a list of countdowns
+ * reads it once at the top and passes the number down instead of calling it
+ * per row. The interval is the call site's to choose: a bar that drains wants
+ * asking twice a second, a row that prints minutes does not.
  */
 @Composable
 private fun tick(everyMs: Long): Long {

@@ -189,12 +189,40 @@ class Api(private val baseUrl: String, private val token: String) {
         return base + sep + q
     }
 
-    private fun request(builder: Request.Builder): String? = try {
+    /**
+     * A call that answers with the body whatever the status was.
+     *
+     * The plain [get]/[post] hand back null for anything that is not a 2xx,
+     * which throws away the only useful thing a refusal carries: the server's
+     * own sentence saying why. Everything that shows a player a reason —
+     * buying, adding a friend, blocking — reads this instead, or it ends up
+     * treating "You already own that" as a purchase that worked.
+     */
+    suspend fun postOrError(path: String, body: Map<String, Any?> = emptyMap()): Reply =
+        withContext(Dispatchers.IO) {
+            val payload = JSONObject((body + ("token" to token)).filterValues { it != null })
+            call(
+                Request.Builder().url(url(path))
+                    .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            )
+        }
+
+    /** A status and a body, or neither when nothing answered at all. */
+    data class Reply(val code: Int, val body: String?) {
+        val ok: Boolean get() = code in 200..299
+        /** True when nothing answered — a tunnel, not a refusal. */
+        val offline: Boolean get() = code == 0
+    }
+
+    private fun call(builder: Request.Builder): Reply = try {
         http.newCall(builder.build()).execute().use { res ->
-            if (res.isSuccessful) res.body?.string() else null
+            Reply(res.code, res.body?.string())
         }
     } catch (e: Exception) {
         Log.w("MMApi", "request failed: ${e.message}")
-        null
+        Reply(0, null)
     }
+
+    private fun request(builder: Request.Builder): String? =
+        call(builder).let { if (it.ok) it.body else null }
 }

@@ -23,6 +23,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -111,9 +115,26 @@ fun NoticeBell(count: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
 fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
     val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val notices = messaging.notices
+
+    // Which notes were new is decided once, as they arrive, and then held for
+    // as long as the sheet is up. Marking the list read is the server being
+    // told they are not new any more, and the poll behind this sheet would
+    // then take the dots away at whatever moment it next happened to land —
+    // usually while somebody is still on the first line, and always without
+    // being asked.
+    var wereNew by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(notices) {
+        val fresh = notices.filter { it.unread }.map { it.id }
+        if (fresh.isNotEmpty()) wereNew = wereNew + fresh
+    }
 
     LaunchedEffect(Unit) {
-        messaging.refreshNotices()
+        // Waited on rather than fired and forgotten: marking a list read
+        // before it has arrived says "seen" about notes nobody has been shown
+        // yet, and the server stamps the moment it is told rather than
+        // anything this app sends, so there is no taking it back.
+        messaging.refreshNotices().join()
         // Opening the list is reading it — but the dots are the only thing
         // that says which notes were new, so they get a moment to be seen
         // before the count is given up.
@@ -138,7 +159,6 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
 
-            val notices = messaging.notices
             if (notices.isEmpty()) {
                 Box(
                     Modifier.fillMaxWidth().heightIn(min = 200.dp),
@@ -166,7 +186,9 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 460.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(notices.size) { i -> NoticeRow(notices[i]) }
+                    items(notices.size) { i ->
+                        NoticeRow(notices[i], isNew = notices[i].id in wereNew)
+                    }
                 }
             }
         }
@@ -174,7 +196,7 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun NoticeRow(n: Notice) {
+private fun NoticeRow(n: Notice, isNew: Boolean) {
     val p = P.current
     val shape = RoundedCornerShape(14.dp)
     Column(
@@ -207,7 +229,7 @@ private fun NoticeRow(n: Notice) {
                 Text(n.title, color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.Black)
             }
             Spacer(Modifier.weight(1f))
-            if (n.unread) {
+            if (isNew) {
                 Box(Modifier.size(8.dp).clip(RoundedCornerShape(99.dp)).background(p.red))
             }
         }

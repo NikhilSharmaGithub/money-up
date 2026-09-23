@@ -71,6 +71,16 @@ class Prefs(context: Context) {
         get() = java.lang.Double.longBitsToDouble(sp.getLong(KEY_RELIEF, 0L))
         set(v) = sp.edit().putLong(KEY_RELIEF, java.lang.Double.doubleToRawLongBits(v)).apply()
 
+    /**
+     * Whether this player has agreed to the community rules.
+     *
+     * The chat composer stays shut until they have. Asked once per device, on
+     * whichever chat surface they reach first.
+     */
+    var rulesAgreed: Boolean
+        get() = sp.getBoolean(KEY_RULES, false)
+        set(v) = sp.edit().putBoolean(KEY_RULES, v).apply()
+
     /** Whether the six welcome cards have been through once. */
     var seenWelcome: Boolean
         get() = sp.getBoolean(KEY_WELCOME, false)
@@ -109,5 +119,6 @@ class Prefs(context: Context) {
         private const val KEY_WELCOME = "mm.seenWelcome"
         private const val KEY_SERVER = "mm.server"
         private const val KEY_RELIEF = "mm.reliefSeen"
+        private const val KEY_RULES = "mm.rulesAgreed"
     }
 }
