@@ -113,7 +113,9 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun buy(item: StoreItem, onDone: (String?) -> Unit = {}) = viewModelScope.launch {
-        val body = api.post("/api/store/buy", mapOf("id" to item.id))
+        // `itemId`, not `id`. The server reads req.body.itemId and answers
+        // "Unknown item" to anything else — which is what it had been doing.
+        val body = api.post("/api/store/buy", mapOf("itemId" to item.id, "expect" to item.price))
         val reply = body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
         val error = reply?.obj()?.get("error").asString()
         if (error == null) {
@@ -127,7 +129,8 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun equip(item: StoreItem) = viewModelScope.launch {
-        api.post("/api/store/equip", mapOf("id" to item.id, "kind" to item.kind))
+        // `slot` and `itemId` are the names equipItem() reads.
+        api.post("/api/store/equip", mapOf("slot" to item.kind, "itemId" to item.id))
         load("/api/wallet", Wallet.serializer()) { wallet = it }
         when (item.kind) {
             "token" -> prefs.tokenSkin = item.emoji

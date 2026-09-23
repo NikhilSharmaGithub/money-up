@@ -41,6 +41,7 @@ import {
 import { STORE_ITEMS, COIN_PACKS, itemById, packByProductId, emojiFor } from './store.js';
 import { randomName } from './names.js';
 import { verifySignedTransaction } from './appstore.js';
+import { verifyPlayPurchase, playVerifyReady } from './playstore.js';
 import { stripeEnabled, createCheckout, handleWebhook } from './stripe.js';
 import { adsRouter, adsTxt, appAdsTxt } from './ads.js';
 import { adminPageHTML } from './adminPage.js';
@@ -602,6 +603,33 @@ app.post('/api/store/redeem', async (req, res) => {
   res.json({ ...result, pack: pack.id });
 });
 
+/**
+ * The Android half of /api/store/redeem.
+ *
+ * Play hands the app an opaque purchase token, which is worth nothing until
+ * Google is asked about it — so the server asks, and only the answer moves
+ * coins. Same ledger, same idempotency: the order id is what the wallet
+ * remembers, so a client that lost its reply and tries again is paid once.
+ */
+app.post('/api/store/redeem/play', async (req, res) => {
+  const token = String(req.body?.token || '').slice(0, 64);
+  const productId = String(req.body?.productId || '');
+  const purchaseToken = String(req.body?.purchaseToken || '');
+  if (!token) return res.status(400).json({ error: 'Missing identity' });
+
+  const verdict = await verifyPlayPurchase(productId, purchaseToken);
+  if (verdict.error) return res.status(400).json({ error: verdict.error });
+
+  const pack = packByProductId(verdict.productId);
+  if (!pack) return res.status(400).json({ error: 'Unknown product' });
+
+  const result = creditPurchase(token, verdict.orderId, pack.coins, {
+    provider: 'google', packId: pack.id, usd: Number(pack.price) || 0,
+  });
+  if (result.error) return res.status(400).json(result);
+  res.json({ ...result, pack: pack.id });
+});
+
 app.post('/api/store/equip', (req, res) => {
   const token = String(req.body?.token || '').slice(0, 64);
   const { slot, itemId } = req.body || {};
@@ -720,6 +748,8 @@ const APPLE_UNVERIFIED_SIGNIN = (() => {
 })();
 console.log(`  apple: unverified (pre-build-11) Sign in with Apple is ${APPLE_UNVERIFIED_SIGNIN
   ? 'ON — APPLE_UNVERIFIED_SIGNIN lets builds 10 and earlier in unverified' : 'off'}`);
+console.log(`  play: Google Play purchases ${playVerifyReady()
+  ? 'can be verified' : 'CANNOT be verified — no service account'}`);
 
 /**
  * Take this profile's Apple token off it, and hand it back to Apple if that
