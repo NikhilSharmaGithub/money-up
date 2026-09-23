@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.sp
  * button that comes back refused is worse than no button.
  */
 @Composable
-fun ActionPanel(store: GameStore, state: GameState) {
+fun ActionPanel(store: GameStore, state: GameState, onTrade: () -> Unit = {}) {
     val p = P.current
     val me = store.me
 
@@ -61,6 +61,16 @@ fun ActionPanel(store: GameStore, state: GameState) {
             }
 
             else -> Panel { TurnActions(store, state, me) }
+        }
+
+        if (state.isPlaying && state.players.count { !it.isBankrupt } > 1) {
+            Spacer(Modifier.height(8.dp))
+            // Not a turn action: a trade is the one move you can make while
+            // somebody else is rolling, which is when people think of it.
+            MMButton(
+                "Offer a trade", kind = BtnKind.GHOST, icon = "trade",
+                modifier = Modifier.fillMaxWidth(),
+            ) { onTrade() }
         }
     }
 }

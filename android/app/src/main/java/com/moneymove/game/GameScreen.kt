@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -53,6 +54,8 @@ fun GameScreen(store: GameStore) {
     val p = P.current
     val state = store.state
     var tappedTile by remember { mutableStateOf<Int?>(null) }
+    var chatOpen by remember { mutableStateOf(false) }
+    var tradeOpen by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(p.page)) {
         Column(
@@ -80,7 +83,11 @@ fun GameScreen(store: GameStore) {
                     BoardView(store) { tappedTile = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                ActionPanel(store, state)
+                for (offer in state.trades.filter { it.to == store.meId && it.ignored != true }) {
+                    TradeOfferCard(store, offer, Modifier.padding(horizontal = 12.dp))
+                    Spacer(Modifier.height(10.dp))
+                }
+                ActionPanel(store, state, onTrade = { tradeOpen = true })
                 Spacer(Modifier.height(10.dp))
                 Feed(state)
             }
@@ -91,10 +98,55 @@ fun GameScreen(store: GameStore) {
 
         CardPopup(store, Modifier.align(Alignment.Center))
         TurnBanner(store, Modifier.align(Alignment.TopCenter))
+
+        // A round button at thumb height, because the chat is the half of a
+        // board game that is not the board — and a badge, because a game
+        // where nobody notices the chat is a game where nobody uses it.
+        ChatButton(
+            store,
+            Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 18.dp, bottom = 26.dp),
+        ) { chatOpen = true }
     }
 
     tappedTile?.let { i ->
         DeedSheet(store, i) { tappedTile = null }
+    }
+    if (chatOpen) ChatSheet(store) { chatOpen = false }
+    if (tradeOpen) TradeSheet(store) { tradeOpen = false }
+}
+
+@Composable
+private fun ChatButton(store: GameStore, modifier: Modifier = Modifier, onOpen: () -> Unit) {
+    val p = P.current
+    Box(modifier) {
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(99.dp))
+                .background(p.card)
+                .border(1.dp, p.rule2, RoundedCornerShape(99.dp))
+                .clickable { onOpen() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon("chat", size = 22.dp, tint = p.ink2)
+        }
+        if (store.unreadChat > 0) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .size(20.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(p.red),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (store.unreadChat > 9) "9+" else store.unreadChat.toString(),
+                    color = p.accentInk, fontSize = 10.sp, fontWeight = FontWeight.Black,
+                )
+            }
+        }
     }
 }
 
