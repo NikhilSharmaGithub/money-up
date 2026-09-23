@@ -135,42 +135,34 @@ private fun DrawScope.drawTile(
     drawRect(face, topLeft = r.topLeft, size = r.size)
     drawRect(p.rule, topLeft = r.topLeft, size = r.size, style = Stroke(width = 1f))
 
-    // A street wears its country's colour as a band along its inner edge —
-    // the side facing the middle of the board, so the ring of colours reads
-    // as one band rather than four that happen to be near each other — and a
-    // flag medallion riding that edge, which is what says WHICH country
-    // rather than merely that two streets share one.
-    tile.group?.let { key ->
-        val info = state.groups[key] ?: return@let
-        val band = cssColor(info.color, p.red)
-        val short = minOf(r.width, r.height)
-        val thickness = short * 0.24f
-        val medal = short * 0.20f
-        var badge: Offset? = null
-        when (geom.side(tile.index)) {
-            BoardGeometry.Side.TOP -> {
-                drawRect(band, topLeft = Offset(r.left, r.bottom - thickness),
-                    size = Size(r.width, thickness))
-                badge = Offset(r.center.x, r.bottom - thickness / 2)
-            }
-            BoardGeometry.Side.BOTTOM -> {
-                drawRect(band, topLeft = r.topLeft, size = Size(r.width, thickness))
-                badge = Offset(r.center.x, r.top + thickness / 2)
-            }
-            BoardGeometry.Side.LEFT -> {
-                drawRect(band, topLeft = Offset(r.right - thickness, r.top),
-                    size = Size(thickness, r.height))
-                badge = Offset(r.right - thickness / 2, r.center.y)
-            }
-            BoardGeometry.Side.RIGHT -> {
-                drawRect(band, topLeft = r.topLeft, size = Size(thickness, r.height))
-                badge = Offset(r.left + thickness / 2, r.center.y)
-            }
-        }
-        // A tile with buildings on it has better things to show in that space.
-        if (badge != null && (own?.houseCount ?: 0) == 0 && short > 18f) {
-            with(Art) { drawMedallion(info.flag, band, badge, medal, p.tileFace()) }
-        }
+    // The richup rule, and the one thing that made this board read wrong: a
+    // bought tile wears its OWNER'S colour, not its country's. The medallion
+    // already says which country a street belongs to, so an unowned tile
+    // stays clean — a band on every street from the first frame is a board
+    // that looks as though somebody already owns all of it.
+    val short = minOf(r.width, r.height)
+    val group = tile.group?.let { state.groups[it] }
+    val ownerColour = own?.let { cssColor(state.player(it.owner)?.color, p.ink3) }
+    val whole = tile.group?.let { key ->
+        val idxs = state.map.groups?.get(key).orEmpty()
+        own != null && idxs.isNotEmpty() && idxs.all { state.owner(it)?.owner == own.owner }
+    } == true
+
+    // Thicker for a whole country, which is the only visual difference
+    // between "owns a street here" and "charges double".
+    val thickness = if (whole) short * 0.28f else short * 0.16f
+    val bandEdge = when (geom.side(tile.index)) {
+        BoardGeometry.Side.TOP -> Offset(r.left, r.bottom - thickness) to Size(r.width, thickness)
+        BoardGeometry.Side.BOTTOM -> r.topLeft to Size(r.width, thickness)
+        BoardGeometry.Side.LEFT -> Offset(r.right - thickness, r.top) to Size(thickness, r.height)
+        BoardGeometry.Side.RIGHT -> r.topLeft to Size(thickness, r.height)
+    }
+    if (ownerColour != null) {
+        drawRect(ownerColour, topLeft = bandEdge.first, size = bandEdge.second)
+        // A wash over the whole face, so a glance at the ring says who holds
+        // what without reading a single pip.
+        drawRect(ownerColour, topLeft = r.topLeft, size = r.size,
+            alpha = if (whole) 0.30f else 0.18f)
     }
 
     // The special tiles carry their own drawing rather than their name.
@@ -196,13 +188,15 @@ private fun DrawScope.drawTile(
         // The short side is what a name has to fit across, whichever run the
         // tile is on; sizing off the width alone made every street on the left
         // and right edges wrap in the middle of a word.
-        val short = minOf(r.width, r.height)
         val side = geom.side(tile.index)
-        // The name gets the tile MINUS the band, not the whole tile. On the
-        // left and right runs the band is a quarter of the width and carries
-        // the country medallion, and a name centred over the lot ends up
-        // printed underneath a flag.
-        val band = if (tile.group != null) short * 0.24f else 0f
+        // The name gets the tile MINUS whatever is already on the inner edge,
+        // not the whole tile. On the left and right runs that edge carries
+        // the band and the half of the medallion that rides onto the tile,
+        // and a name centred over the lot comes out printed under a flag.
+        val medallion = if (tile.type == "property" && group != null && (own?.houseCount ?: 0) == 0) {
+            short * 0.23f
+        } else 0f
+        val band = maxOf(if (ownerColour != null) thickness else 0f, medallion)
         val room = when (side) {
             BoardGeometry.Side.LEFT, BoardGeometry.Side.RIGHT -> r.width - band
             else -> r.width
@@ -227,24 +221,74 @@ private fun DrawScope.drawTile(
             BoardGeometry.Side.LEFT -> Offset(-band / 2f, 0f)
             BoardGeometry.Side.RIGHT -> Offset(band / 2f, 0f)
         }
-        drawText(label, topLeft = Offset(
+        val nameAt = Offset(
             r.center.x - label.size.width / 2f + shift.x,
-            r.center.y - label.size.height / 2f + shift.y,
-        ))
+            r.center.y - label.size.height / 2f + shift.y - (if (tile.price != null) short * 0.10f else 0f),
+        )
+        drawText(label, topLeft = nameAt)
+
+        // The price never leaves the card. It is the one number a street is
+        // read for before anybody owns it, and the buildings stack above it.
+        tile.price?.takeIf { it > 0 && short > 20f }?.let { price ->
+            val tag = measurer.measure(
+                money(price),
+                style = TextStyle(
+                    color = p.ink3,
+                    fontSize = (short * 0.23f).coerceIn(5.5f, 8f).sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+            drawText(tag, topLeft = Offset(
+                r.center.x - tag.size.width / 2f + shift.x,
+                nameAt.y + label.size.height + short * 0.02f,
+            ))
+        }
     }
 
-    // An owned street shows a pip in its owner's colour; a mortgaged one dims.
-    if (own != null) {
-        val colour = cssColor(state.player(own.owner)?.color, p.ink3)
-        val dot = minOf(r.width, r.height) * 0.11f
-        drawCircle(colour, radius = dot, center = Offset(r.left + dot * 1.6f, r.top + dot * 1.6f),
-            alpha = if (own.isMortgaged) 0.35f else 1f)
-        if (own.houseCount > 0) {
-            val hs = minOf(r.width, r.height) * 0.16f
-            val name = if (own.houseCount >= 5) "hotel" else "house"
-            translate(r.right - hs * 1.5f, r.top + hs * 0.35f) {
-                with(Art) { drawGlyph(name, hs, p.ink) }
-            }
+    // What is standing on it. A hotel gets a marquee rather than a sixth dot,
+    // because five houses and a hotel are different things and a counter that
+    // just keeps climbing says they are the same.
+    if (own != null && own.houseCount > 0) {
+        val hs = short * 0.21f
+        val name = if (own.houseCount >= 5) "hotel" else "house"
+        translate(r.center.x - hs / 2f, r.top + short * 0.10f) {
+            with(Art) { drawGlyph(name, hs, if (own.houseCount >= 5) p.red else p.good) }
+        }
+        if (own.houseCount in 2..4) {
+            val chip = measurer.measure(
+                "${own.houseCount}×",
+                style = TextStyle(color = p.good, fontSize = (short * 0.24f).coerceIn(6f, 9f).sp,
+                    fontWeight = FontWeight.Black),
+            )
+            drawText(chip, topLeft = Offset(
+                r.center.x + hs * 0.55f, r.top + short * 0.12f,
+            ))
+        }
+    }
+
+    // Mortgaged: the tile underneath can be any colour, so the mark sits on
+    // its own dark wash rather than trusting the one below it.
+    if (own?.isMortgaged == true) {
+        drawRect(Color.Black, topLeft = r.topLeft, size = r.size, alpha = 0.28f)
+        val ms = short * 0.28f
+        translate(r.center.x - ms / 2f, r.center.y - ms / 2f) {
+            with(Art) { drawGlyph("bank", ms, Color.White) }
+        }
+    }
+
+    // The country's medallion, worn richup-style: centred on the inner edge,
+    // half on the tile and half over the board. Houses take the face over
+    // once building starts, so the coin steps aside rather than jostle them.
+    if (tile.type == "property" && group != null && short > 16f && (own?.houseCount ?: 0) == 0) {
+        val medal = short * 0.23f
+        val badge = when (geom.side(tile.index)) {
+            BoardGeometry.Side.TOP -> Offset(r.center.x, r.bottom)
+            BoardGeometry.Side.BOTTOM -> Offset(r.center.x, r.top)
+            BoardGeometry.Side.LEFT -> Offset(r.right, r.center.y)
+            BoardGeometry.Side.RIGHT -> Offset(r.left, r.center.y)
+        }
+        with(Art) {
+            drawMedallion(group.flag, cssColor(group.color, p.ink3), badge, medal, p.tileCorner)
         }
     }
 
