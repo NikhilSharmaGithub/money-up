@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,14 @@ fun GameScreen(store: GameStore, account: AccountStore) {
     var rulesOpen by remember { mutableStateOf(false) }
     var deedsOpen by remember { mutableStateOf(false) }
     var watching by remember { mutableStateOf(false) }
+    var pieceOpen by remember { mutableStateOf(false) }
+
+    // The board dealing itself out at kick-off, and coins flying to the
+    // wallet when the earned watermark rises. Both are holders the screen
+    // drives rather than things that watch the store themselves.
+    val deck = rememberDeckIntro(store)
+    val flight = remember { CoinFlight() }
+    LaunchedEffect(account.wallet?.earned) { flight.note(account.wallet) }
 
     Box(Modifier.fillMaxSize().background(p.page)) {
         Column(
@@ -67,7 +76,12 @@ fun GameScreen(store: GameStore, account: AccountStore) {
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
                 .verticalScroll(rememberScrollState()),
         ) {
-            TableBar(store, onDeeds = { deedsOpen = true }, onRules = { rulesOpen = true })
+            TableBar(
+                store,
+                onPiece = { pieceOpen = true },
+                onDeeds = { deedsOpen = true },
+                onRules = { rulesOpen = true },
+            )
 
             if (state == null) {
                 Box(Modifier.fillMaxWidth().height(320.dp), contentAlignment = Alignment.Center) {
@@ -100,6 +114,11 @@ fun GameScreen(store: GameStore, account: AccountStore) {
             ))
         }
 
+        // The deal-in sits over the board and nothing else; the coins fly to
+        // the wallet chip, which is above everything.
+        DeckIntroOverlay(deck)
+        CoinFlightLayer(flight)
+
         CardPopup(store, Modifier.align(Alignment.Center))
         ReliefCardOverlay(store)
         TurnBanner(store, Modifier.align(Alignment.TopCenter))
@@ -127,6 +146,7 @@ fun GameScreen(store: GameStore, account: AccountStore) {
     if (chatOpen) ChatSheet(store) { chatOpen = false }
     if (tradeOpen) TradeSheet(store) { tradeOpen = false }
     if (rulesOpen) LobbySheet(account, store) { rulesOpen = false }
+    if (pieceOpen) PiecePicker(store, account) { pieceOpen = false }
     if (deedsOpen) {
         PropertiesSheet(
             store,
@@ -172,7 +192,12 @@ private fun ChatButton(store: GameStore, modifier: Modifier = Modifier, onOpen: 
 
 /** The strip at the top: who you are at this table, and the way out. */
 @Composable
-private fun TableBar(store: GameStore, onDeeds: () -> Unit, onRules: () -> Unit) {
+private fun TableBar(
+    store: GameStore,
+    onPiece: () -> Unit,
+    onDeeds: () -> Unit,
+    onRules: () -> Unit,
+) {
     val p = P.current
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
@@ -191,6 +216,8 @@ private fun TableBar(store: GameStore, onDeeds: () -> Unit, onRules: () -> Unit)
             Chip(money(me.money), icon = "cash", tint = if (me.inDebt) p.bad else p.good)
             Spacer(Modifier.width(8.dp))
         }
+        MMButton("", kind = BtnKind.GHOST, icon = "palette") { onPiece() }
+        Spacer(Modifier.width(6.dp))
         MMButton("", kind = BtnKind.GHOST, icon = "bank") { onDeeds() }
         Spacer(Modifier.width(6.dp))
         MMButton("", kind = BtnKind.GHOST, icon = "scales") { onRules() }

@@ -76,6 +76,10 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
+    // Google Play Billing. The coin packs are the only thing in this app that
+    // costs real money, and Play is the only way to take it on Android.
+    implementation("com.android.billingclient:billing:7.1.1")
+
     // No AdMob SDK yet, deliberately. It refuses to start without an
     // APPLICATION_ID in the manifest — it does not warn, it crashes the app on
     // launch — and there is no Android app in the AdMob account to give it an

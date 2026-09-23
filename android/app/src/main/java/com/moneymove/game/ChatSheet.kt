@@ -1,6 +1,7 @@
 package com.moneymove.game
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -58,6 +59,10 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
+    // A line you cannot report is a line you have to put up with. Long-press
+    // the line itself rather than hunting for a menu — the thing you want to
+    // act on is the thing you touch.
+    var reporting by remember { mutableStateOf<ChatMessage?>(null) }
 
     val lines = remember(state.chat, store.blockedCodes) {
         state.chat.filter { it.code == null || it.code !in store.blockedCodes }
@@ -99,8 +104,20 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 380.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(lines.size) { i -> ChatLine(lines[i], store) }
+                    items(lines.size) { i ->
+                        ChatLine(lines[i], store) { reporting = it }
+                    }
                 }
+            }
+
+            reporting?.let { line ->
+                ReportSheet(
+                    code = line.code.orEmpty(),
+                    name = line.name,
+                    place = "chat",
+                    quote = line.text,
+                    onBlocked = { store.applyBlocked(store.blockedCodes + it) },
+                ) { reporting = null }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -142,11 +159,21 @@ fun ChatSheet(store: GameStore, onDismiss: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChatLine(line: ChatMessage, store: GameStore) {
+private fun ChatLine(line: ChatMessage, store: GameStore, onReport: (ChatMessage) -> Unit) {
     val p = P.current
     val mine = line.name == store.nickname.ifBlank { "Player" }
-    Row(verticalAlignment = Alignment.Top) {
+    // Your own lines, and the house players', have nobody to report.
+    val reportable = !mine && !line.code.isNullOrBlank()
+    Row(
+        Modifier.combinedClickable(
+            enabled = reportable,
+            onClick = {},
+            onLongClick = { Haptics.tap(); onReport(line) },
+        ),
+        verticalAlignment = Alignment.Top,
+    ) {
         Box(
             Modifier
                 .size(26.dp)

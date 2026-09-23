@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 /**
  * Friends, and everybody else.
@@ -43,10 +45,12 @@ import androidx.compose.ui.unit.sp
  * for. The leaderboard is below it — the same names, further away.
  */
 @Composable
-fun SocialTab(account: AccountStore, game: GameStore) {
+fun SocialTab(account: AccountStore, game: GameStore, messaging: MessagingStore) {
     val p = P.current
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var talkingTo by remember { mutableStateOf<Friend?>(null) }
+    var blocked by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { account.refreshSocial() }
 
@@ -165,6 +169,8 @@ fun SocialTab(account: AccountStore, game: GameStore) {
                         }
                         // A friend at a table is one tap from being played with,
                         // which is the only reason to keep a friends list.
+                        MMButton("", kind = BtnKind.GHOST, icon = "chat") { talkingTo = f }
+                        Spacer(Modifier.width(6.dp))
                         if (f.room != null) {
                             MMButton("Join", kind = BtnKind.PRIMARY) { game.connect(f.room) }
                         } else {
@@ -210,7 +216,37 @@ fun SocialTab(account: AccountStore, game: GameStore) {
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        Panel {
+            SectionLabel("Blocked", icon = "shield")
+            Spacer(Modifier.height(6.dp))
+            Hint("People whose lines you never see. Blocking is quiet — they are not told.")
+            Spacer(Modifier.height(10.dp))
+            MMButton("Who I have blocked", kind = BtnKind.GHOST, modifier = Modifier.fillMaxWidth()) {
+                blocked = true
+            }
+        }
+
         Spacer(Modifier.height(28.dp))
+    }
+
+    talkingTo?.let { friend ->
+        DMSheet(friend, messaging, account) { talkingTo = null }
+    }
+    if (blocked) {
+        val safety = rememberSafety()
+        val scope = rememberCoroutineScope()
+        BlockedPlayersSheet(
+            codes = game.blockedCodes,
+            onUnblock = { code ->
+                scope.launch {
+                    // The answer carries the whole list, so the screen never
+                    // has to guess what the server now thinks.
+                    safety.unblock(code).blocked?.let(game::applyBlocked)
+                }
+            },
+            onDismiss = { blocked = false },
+        )
     }
 }
 

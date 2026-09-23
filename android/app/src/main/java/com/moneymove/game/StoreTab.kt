@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.sp
  * it is the single thing a player wants to know before they read a price.
  */
 @Composable
-fun StoreTab(store: AccountStore) {
+fun StoreTab(store: AccountStore, billing: Billing) {
     val p = P.current
     var kind by remember { mutableStateOf("token") }
 
@@ -77,6 +77,10 @@ fun StoreTab(store: AccountStore) {
         // taken is worse than no offer.
         Spacer(Modifier.height(10.dp))
         AdOfferRow(store, "freeCoins") { store.watchAd("freeCoins") }
+
+        // Coin packs: the one thing in this app that costs real money.
+        Spacer(Modifier.height(12.dp))
+        CoinPacks(store, billing)
 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -112,6 +116,51 @@ fun StoreTab(store: AccountStore) {
         // arrives less than three after the ticket was cut — a view nobody
         // could have watched is the one thing it can refuse on its own.
         HouseAdOverlay(seconds = 5) { played -> gate.complete(played) }
+    }
+}
+
+/**
+ * The coin packs, straight off Play.
+ *
+ * Prices come from Play rather than from this app, because a price written
+ * here would be wrong in every country but one — Play knows what this player
+ * actually pays and in which currency.
+ */
+@Composable
+private fun CoinPacks(store: AccountStore, billing: Billing) {
+    val p = P.current
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    LaunchedEffect(Unit) { billing.start(store) }
+    Panel {
+        SectionLabel("Coin packs", icon = "bag")
+        Spacer(Modifier.height(10.dp))
+        for (pack in billing.offers) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon("coin", size = 20.dp)
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        pack.name,
+                        color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.Bold,
+                    )
+                    Hint("${pack.coins} coins")
+                }
+                // No price until Play has answered, because a price written
+                // here would be wrong in every country but one.
+                MMButton(
+                    pack.price ?: "…", kind = BtnKind.GOLD,
+                    enabled = activity != null && pack.price != null
+                        && billing.onSale && billing.buying == null,
+                ) { activity?.let { billing.buy(it, pack.packId) } }
+            }
+        }
+        billing.notice?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = p.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 

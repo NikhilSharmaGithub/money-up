@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +54,8 @@ enum class Tab(val label: String, val icon: String) {
 fun AppScaffold(
     store: GameStore,
     account: AccountStore,
+    messaging: MessagingStore,
+    billing: Billing,
     onTheme: (MMTheme) -> Unit,
     onAppearance: (MMAppearance) -> Unit,
 ) {
@@ -60,6 +63,11 @@ fun AppScaffold(
     var tab by remember { mutableStateOf(Tab.PLAY) }
     var welcome by remember { mutableStateOf(!store.prefs.seenWelcome) }
     var howTo by remember { mutableStateOf(false) }
+    var notices by remember { mutableStateOf(false) }
+
+    // The bell has to know there is something to ring about before anybody
+    // opens the tab it lives on, so the watch starts with the app.
+    LaunchedEffect(Unit) { messaging.watchNotices() }
     val atTable = store.roomId != null
 
     Box(Modifier.fillMaxSize().background(p.page)) {
@@ -69,16 +77,19 @@ fun AppScaffold(
             Column(Modifier.fillMaxSize()) {
                 Spacer(Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding()))
                 Box(Modifier.weight(1f)) {
-                    // The rules, one tap from wherever somebody met one.
-                    if (tab == Tab.PLAY) {
-                        Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp)) {
-                            MMButton("", kind = BtnKind.GHOST, icon = "bulb") { howTo = true }
-                        }
-                    }
                     when (tab) {
-                        Tab.PLAY -> PlayTab(store, account)
-                        Tab.STORE -> StoreTab(account)
-                        Tab.SOCIAL -> SocialTab(account, store)
+                        // The bell and the rules ride in the landing screen's
+                        // own header rather than floating over it — pinned to
+                        // the corner they sat on top of the wallet chip, which
+                        // is the one thing up there somebody needs to read.
+                        Tab.PLAY -> PlayTab(
+                            store, account,
+                            unreadNotices = messaging.unread,
+                            onNotices = { notices = true },
+                            onHowTo = { howTo = true },
+                        )
+                        Tab.STORE -> StoreTab(account, billing)
+                        Tab.SOCIAL -> SocialTab(account, store, messaging)
                         Tab.HISTORY -> HistoryTab(account, store)
                         Tab.SETTINGS -> SettingsTab(store, account, onTheme, onAppearance)
                     }
@@ -97,6 +108,7 @@ fun AppScaffold(
             }
         }
         if (howTo) HowToPlaySheet { howTo = false }
+        if (notices) NoticesSheet(messaging) { notices = false }
 
         // Toasts sit above everything, including a table.
         AnimatedVisibility(

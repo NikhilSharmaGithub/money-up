@@ -45,11 +45,23 @@ import kotlinx.serialization.json.jsonPrimitive
  * first of those feel like the obvious one.
  */
 @Composable
-fun PlayTab(store: GameStore, account: AccountStore) {
+fun PlayTab(
+    store: GameStore,
+    account: AccountStore,
+    unreadNotices: Int = 0,
+    onNotices: () -> Unit = {},
+    onHowTo: () -> Unit = {},
+) {
     val p = P.current
     val scope = rememberCoroutineScopeCompat()
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var cupOpen by remember { mutableStateOf(false) }
+
+    // A cup is news on the landing screen or it is nothing: nobody goes
+    // looking for a tournament in a tab. The card draws itself away when
+    // there is none, so this costs an empty screen nothing.
+    val cups = rememberCupStore(store)
 
     Column(
         Modifier
@@ -60,6 +72,10 @@ fun PlayTab(store: GameStore, account: AccountStore) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Wordmark()
             Spacer(Modifier.weight(1f))
+            NoticeBell(unreadNotices, onClick = onNotices)
+            Spacer(Modifier.width(2.dp))
+            MMButton("", kind = BtnKind.GHOST, icon = "bulb") { onHowTo() }
+            Spacer(Modifier.width(8.dp))
             Row(
                 Modifier
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(99.dp))
@@ -111,6 +127,7 @@ fun PlayTab(store: GameStore, account: AccountStore) {
         }
 
         Spacer(Modifier.height(12.dp))
+        CupCard(cups.live) { cupOpen = true }
 
         Panel {
             MMButton(
@@ -177,6 +194,14 @@ fun PlayTab(store: GameStore, account: AccountStore) {
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (cupOpen) {
+        CupDetailSheet(
+            cups = cups,
+            game = store,
+            signedIn = account.me?.provider != null,
+        ) { cupOpen = false }
     }
 }
 

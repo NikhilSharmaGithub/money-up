@@ -38,6 +38,10 @@
                 <data android:scheme="https" android:host="moneymove.live" />
                 <!-- Links sent before the custom domain still open in the app. -->
                 <data android:scheme="https" android:host="money-up-nine.vercel.app" />
+                <!-- A room link carries its code in the query, which an intent
+                     filter cannot match on, so the path is what is matched and
+                     MainActivity reads the code off the data URI. -->
+                <data android:pathPattern="/.*" />
             </intent-filter>
         </activity>
     </application>

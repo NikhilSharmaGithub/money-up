@@ -50,6 +50,15 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     var blockedCodes: Set<String> by mutableStateOf(emptySet())
         private set
 
+    /**
+     * The blocked list, as the server now holds it.
+     *
+     * Every safety call answers with the whole list rather than a delta, so
+     * this is a replace and not a merge — which is what makes blocking on one
+     * screen show up on every other one without anybody plumbing it through.
+     */
+    fun applyBlocked(codes: Set<String>) { blockedCodes = codes }
+
     // ── table state ────────────────────────────────────────────────────────
 
     var state: GameState? by mutableStateOf(null)
