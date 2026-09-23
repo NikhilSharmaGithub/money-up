@@ -20,6 +20,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,8 @@ fun SettingsTab(
     var theme by remember { mutableStateOf(store.prefs.theme) }
     var appearance by remember { mutableStateOf(store.prefs.appearance) }
     var sound by remember { mutableStateOf(store.prefs.soundOn) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) { account.refresh() }
 
     Column(
         Modifier
@@ -180,6 +183,24 @@ fun SettingsTab(
                     )
                 }
                 Chip("${account.coins}", icon = "coin", tint = p.gold)
+            }
+            Spacer(Modifier.height(12.dp))
+            if (me?.provider == null) {
+                MMButton(
+                    if (account.signingIn) "Signing in…" else "Sign in with Google",
+                    kind = BtnKind.PRIMARY, big = true, icon = "key",
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !account.signingIn && account.auth?.google == true,
+                ) { account.signInWithGoogle(context, store.nickname) }
+            } else {
+                MMButton(
+                    "Sign out", kind = BtnKind.GHOST,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { account.signOut() }
+            }
+            account.notice?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = p.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
             }
             Spacer(Modifier.height(10.dp))
             Hint("Karma ${me?.karma ?: 100} · leaving games early costs a point.")

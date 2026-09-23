@@ -44,6 +44,34 @@ $ANDROID_HOME/platform-tools/adb install -r app/build/outputs/apk/debug/app-debu
 $ANDROID_HOME/platform-tools/adb shell am start -n com.moneymove.game/.MainActivity
 ```
 
+## What only the account's owner can switch on
+
+Two things are written and wired but cannot work until somebody with the
+Google account does a console step. Both fail politely rather than crashing.
+
+**Google Sign-In.** The code asks Credential Manager for an ID token
+audienced to the *web* client id, which is the audience the server accepts and
+the one the browser and iOS already use. Google still refuses to mint one
+until this app is registered in the Cloud project as an **Android** OAuth
+client — package `com.moneymove.game` plus the signing fingerprint:
+
+```
+debug   SHA-1  21:26:1B:59:47:54:DA:23:E9:DF:D4:54:43:11:23:BE:DF:40:A4:DC
+```
+
+The release build will have its own, from whatever keystore signs it, and
+Play App Signing adds a third. All of them go in the same place:
+<https://console.cloud.google.com/apis/credentials> → project 968669711294.
+Until then the button says so in words rather than doing nothing.
+
+**AdMob.** There is deliberately no AdMob SDK in this build. It refuses to
+start without an `APPLICATION_ID` in the manifest — it does not warn, it
+crashes the app on launch — and there is no Android app in the AdMob account
+to take an id from. Meanwhile the whole rewarded path is real and running:
+the offer, the ticket, the view, the server-verified reward and the daily
+caps all work, carried by the house ad. Wiring a network in later is one
+dependency, one manifest line and one adapter.
+
 ## What is done, and what is not
 
 Done: the design system with all seven table styles in light and dark, the
@@ -51,9 +79,16 @@ wire models, delta patching, the socket, the store, the drawn glyph set, the
 board with leg-by-leg move choreography, the action panel through every turn
 phase, the lobby, the Play tab and Settings.
 
-Not yet: Store (coins, pieces, board rentals), Social (friends, DMs, the
-leaderboard), History, trading, the deed sheets, the auction box's own screen,
-Google Sign-In, Play Billing, AdMob and push. Those are the next passes.
+Done since: the deed sheet with its rent ladder and Build all, the board's
+middle (dice, turn, clock), chat with its unread badge, trading, the three
+tabs (Store, Social, History), the house rules sheet, your streets, the
+game-over sheet with standings and badges, held seats, the timed-out
+explainer, the deadlock card, synthesised sound and haptics, the welcome
+cards, how-to-play, Google Sign-In (see above) and the rewarded-ad path.
+
+Not yet: direct messages, notices, the block/report screens, cups and
+tournaments, the piece picker at the table, the board deal-in animation, the
+coin-flight animation, Play Billing, and push notifications.
 
 ## Shipping to Google Play — what only you can do
 

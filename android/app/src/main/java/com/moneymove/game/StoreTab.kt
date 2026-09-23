@@ -49,6 +49,7 @@ fun StoreTab(store: AccountStore) {
     val p = P.current
     var kind by remember { mutableStateOf("token") }
 
+
     LaunchedEffect(Unit) { store.refreshStore() }
 
     val owned = store.wallet?.owned.orEmpty().toSet()
@@ -71,6 +72,11 @@ fun StoreTab(store: AccountStore) {
 
         Spacer(Modifier.height(16.dp))
         CoinWays(store)
+
+        // Only when the server says there is one. An offer that cannot be
+        // taken is worse than no offer.
+        Spacer(Modifier.height(10.dp))
+        AdOfferRow(store, "freeCoins") { store.watchAd("freeCoins") }
 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -97,6 +103,15 @@ fun StoreTab(store: AccountStore) {
             Text(it, color = p.bad, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Spacer(Modifier.height(28.dp))
+    }
+
+    // The ad itself covers everything, because that is what an ad does. The
+    // store asked for it and is waiting on the gate; this completes it.
+    store.adRequest?.let { gate ->
+        // Five seconds, because the server will not settle a claim that
+        // arrives less than three after the ticket was cut — a view nobody
+        // could have watched is the one thing it can refuse on its own.
+        HouseAdOverlay(seconds = 5) { played -> gate.complete(played) }
     }
 }
 

@@ -27,6 +27,14 @@ data class MeView(
 )
 
 @Serializable
+data class AuthConfig(
+    val google: Boolean = false,
+    /** The audience the server accepts — the WEB client id, on every platform. */
+    val googleClientId: String? = null,
+    val appleRevoke: Boolean = false,
+)
+
+@Serializable
 data class Wallet(
     val coins: Int = 0,
     /** Ids of everything bought. */

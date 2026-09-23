@@ -70,6 +70,19 @@ dependencies {
     }
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Google Sign-In through Credential Manager, which is the only way in on
+    // a modern phone — the old GoogleSignInClient is deprecated and gone.
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+
+    // No AdMob SDK yet, deliberately. It refuses to start without an
+    // APPLICATION_ID in the manifest — it does not warn, it crashes the app on
+    // launch — and there is no Android app in the AdMob account to give it an
+    // id from. The whole rewarded path (offer, ticket, view, server-verified
+    // reward, daily caps) is live and carried by the house ad; adding the SDK
+    // is then one dependency, one manifest line and one adapter.
+
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
