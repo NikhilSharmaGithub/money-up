@@ -76,6 +76,10 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
         load("/api/me", MeView.serializer()) { me = it }
         load("/api/wallet", Wallet.serializer()) { wallet = it }
         load("/api/daily", DailyView.serializer()) { daily = it }
+        // The shelf is not a shop thing. Which boards may be dealt is the
+        // first question the lobby asks, and a player who taps Play and never
+        // opens the Store used to arrive at a table with no answer to it.
+        loadBoards(boardsRoom)
         // Platform matters: the owner can have ads on for phones and off in a
         // browser, and this client has to ask as the platform it actually is.
         viewModelScope.launch {
@@ -88,7 +92,8 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     fun refreshStore() {
         if (store == null) loadPublic("/api/store", StoreView.serializer()) { store = it }
         load("/api/wallet", Wallet.serializer()) { wallet = it }
-        load("/api/boards", BoardsView.serializer()) { boards = it }
+        loadBoards(boardsRoom)
+        rolloverIfDue()
     }
 
     /**
@@ -117,6 +122,203 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
         loadPublic("/api/leaderboard", LeaderboardView.serializer()) { leaderboard = it.top }
     }
 
+    // ── the board shelf ────────────────────────────────────────────────────
+    //
+    // One loader for the whole app, the way iOS keeps one BoardShelf. The
+    // lobby and the shop want the same answer, the answer moves once a day,
+    // and it costs a round trip — so it is fetched, kept, and re-fetched only
+    // when the wallet moves or the clock rolls over.
+
+    /**
+     * Which table the kept shelf was asked about.
+     *
+     * A pass is good at exactly one table, so the same wallet gets a different
+     * answer in a different lobby: a rented board only reads as playable when
+     * the server is told which table is asking. An answer fetched with no
+     * table in hand must therefore never be handed to a lobby as though it
+     * knew about this one.
+     */
+    private var boardsRoom: String? = null
+
+    /**
+     * The table the fetch in the air is asking about, or null when none is.
+     *
+     * Not a bare "a fetch is in flight" flag, and the difference is the whole
+     * reason it holds a room. Opening a lobby asks twice in one frame — the
+     * sheet warms the shop, the board row asks about this table — and a flag
+     * swallowed the second of those, so the lobby spent its whole life holding
+     * a shelf fetched with no table in it. A shelf with no table in it cannot
+     * know about a rented board, which is the one thing the room is for.
+     */
+    private var boardsAsking: String? = null
+
+    /**
+     * Which question the answer being waited on came from.
+     *
+     * Two can be in the air at once — the lobby's, and a forced reload the
+     * clock just asked for — and they can land in either order. Only the
+     * newest one may be kept, or a slow reply about a table nobody is at any
+     * more settles on top of a fresh one.
+     */
+    private var boardsAsk = 0
+
+    /**
+     * The shelf, as this wallet sees it at this table.
+     *
+     * Cache-first: the same room asked twice is free. `force` is somebody
+     * asking for the truth — after a purchase, or after midnight — and it is
+     * deliberately not swallowed by an ordinary poll already in flight, or a
+     * board someone just bought stays drawn as locked until the app restarts.
+     */
+    fun loadBoards(room: String? = null, force: Boolean = false) {
+        val at = room.orEmpty()
+        if (boards != null && !force && boardsRoom == at) return
+        // The same question, already asked and not yet answered. A different
+        // table is a different question and is never dropped.
+        if (boardsAsking == at && !force) return
+        boardsAsking = at
+        val ask = ++boardsAsk
+        viewModelScope.launch {
+            try {
+                val asking = if (at.isBlank()) emptyMap() else mapOf("room" to at)
+                val body = api.get("/api/boards", asking) ?: return@launch
+                val fresh = runCatching { MMJson.decodeFromString(BoardsView.serializer(), body) }
+                    .getOrNull() ?: return@launch
+                if (ask != boardsAsk) return@launch
+                boards = fresh
+                boardsRoom = at
+            } finally {
+                if (ask == boardsAsk) boardsAsking = null
+            }
+        }
+    }
+
+    /**
+     * Midnight came round while somebody was looking at it.
+     *
+     * `until` is the server's own midnight and the server is the only honest
+     * clock in the building — but reading a number the server sent against
+     * this phone's clock is the one comparison a client may safely make, and
+     * it is how the free pair changes under an app nobody closed.
+     *
+     * It asks about whatever table is in question right now rather than the
+     * one yesterday's answer came from: a lobby that opens a second before
+     * midnight would otherwise have its own question overtaken by a forced
+     * reload about nowhere.
+     */
+    fun rolloverIfDue() {
+        val until = boards?.until ?: return
+        if (until > 0 && System.currentTimeMillis() >= until) {
+            loadBoards(boardsAsking ?: boardsRoom, force = true)
+        }
+    }
+
+    fun board(id: String): BoardListing? = boards?.boards?.firstOrNull { it.id == id }
+
+    /**
+     * The three the lobby shows: both boards the day is giving away, then the
+     * one this table is actually on — falling back to the house board so the
+     * row never repeats itself and never comes up short.
+     */
+    fun trio(current: String): List<BoardListing> {
+        val feed = boards ?: return emptyList()
+        val out = mutableListOf<BoardListing>()
+        fun add(id: String) {
+            val b = board(id) ?: return
+            if (out.none { it.id == b.id }) out += b
+        }
+        feed.free.forEach(::add)
+        add(current)
+        add(feed.house)
+        return out.take(3)
+    }
+
+    /**
+     * Buying a board outright, where it was found.
+     *
+     * Not [buy]: that one wears what it just bought, and a board is not worn —
+     * it is dealt, by whoever is hosting. `expect` is the price-agreement the
+     * shop keeps both ends of; a client showing yesterday's number is refused
+     * with today's rather than quietly charged it.
+     *
+     * Either way the shelf is re-fetched. A refusal means the numbers on
+     * screen are no longer to be trusted, which is the whole reason it was
+     * refused.
+     *
+     * `quiet` is for the screens that say the refusal themselves. [notice] is
+     * drawn only under the Store, Settings and Social tabs, nothing clears it
+     * but the next thing to go wrong, and nothing at the table draws it at
+     * all — so "Only the host picks the board", read and understood in the
+     * lobby sheet where the shop already prints it, would surface again in
+     * red under a Settings button an hour later.
+     */
+    fun buyBoard(
+        board: BoardListing,
+        quiet: Boolean = false,
+        onDone: (String?) -> Unit = {},
+    ) = viewModelScope.launch {
+        val reply = api.postOrError(
+            "/api/store/buy",
+            mapOf("itemId" to board.storeId, "expect" to board.price),
+        )
+        val error = reply.refusal(reply.said())
+        if (error == null) load("/api/wallet", Wallet.serializer()) { wallet = it }
+        loadBoards(boardsRoom, force = true)
+        if (!quiet) notice = error
+        onDone(error)
+    }
+
+    /**
+     * One coin, one game, on a board nobody here owns.
+     *
+     * The table is named because that is what makes the pass readable: it is
+     * good at one table, and only the host's wallet is ever asked. The server
+     * either sells a game or moves an unplayed one here for nothing, and says
+     * which by what it charged — so [onDone] carries that rather than making
+     * the screen guess.
+     *
+     * `quiet` means the same here as it does in [buyBoard]: the only caller
+     * is the shop, which prints the refusal in the body of the sheet the tap
+     * happened in, and a second copy parked in [notice] would only reappear
+     * somewhere else later.
+     */
+    fun rentBoard(
+        mapId: String,
+        roomId: String,
+        quiet: Boolean = false,
+        onDone: (String?, Int) -> Unit = { _, _ -> },
+    ) = viewModelScope.launch {
+        val reply = api.postOrError(
+            "/api/boards/rent",
+            mapOf("mapId" to mapId, "roomId" to roomId, "expect" to (boards?.rent?.price ?: 1)),
+        )
+        val said = reply.said()
+        val error = reply.refusal(said)
+        if (error == null) load("/api/wallet", Wallet.serializer()) { wallet = it }
+        loadBoards(roomId, force = true)
+        if (!quiet) notice = error
+        onDone(error, said?.get("charged").asInt() ?: 0)
+    }
+
+    /**
+     * What the server actually said, or nothing if it did not answer at all.
+     *
+     * Every refusal on this side of the app carries its reason in the body,
+     * which is why these read [Api.postOrError] and not the plain post — that
+     * one throws the body away and hands back the same null a dead tunnel
+     * does, and read that way "Not enough coins" looks exactly like a purchase
+     * that worked. That bug has been fixed here once already.
+     */
+    private fun Api.Reply.said(): kotlinx.serialization.json.JsonObject? =
+        body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }?.obj()
+
+    private fun Api.Reply.refusal(said: kotlinx.serialization.json.JsonObject?): String? = when {
+        ok -> null
+        offline -> "That didn't go through, and nothing has changed. Try again."
+        else -> said?.get("error").asString()
+            ?: "That didn't go through, and nothing has changed. Try again."
+    }
+
     // ── the things a tap does ──────────────────────────────────────────────
 
     fun claimDaily(onDone: (Boolean) -> Unit = {}) = viewModelScope.launch {
@@ -131,23 +333,11 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     fun buy(item: StoreItem, onDone: (String?) -> Unit = {}) = viewModelScope.launch {
         // `itemId`, not `id`. The server reads req.body.itemId and answers
         // "Unknown item" to anything else — which is what it had been doing.
-        //
-        // And postOrError, not post: a refusal is a 400 with the reason in it,
-        // and the plain post throws the body away and hands back the same null
-        // a dead tunnel does. Read that way, "Not enough coins" looked exactly
-        // like a purchase that worked — the shop equipped a piece nobody owned
-        // and the coins came back on the next poll.
         val reply = api.postOrError(
             "/api/store/buy",
             mapOf("itemId" to item.id, "expect" to item.price),
         )
-        val said = reply.body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
-            ?.obj()?.get("error").asString()
-        val error = when {
-            reply.ok -> null
-            reply.offline -> "That didn't go through, and nothing has changed. Try again."
-            else -> said ?: "That didn't go through, and nothing has changed. Try again."
-        }
+        val error = reply.refusal(reply.said())
         if (error == null) {
             load("/api/wallet", Wallet.serializer()) { wallet = it }
             // Wearing what you just bought is what buying it meant.
@@ -287,10 +477,7 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
 
     fun addFriend(code: String, onDone: (String?) -> Unit = {}) = viewModelScope.launch {
         val reply = api.postOrError("/api/friends", mapOf("code" to code.trim().uppercase()))
-        val said = reply.body?.let { runCatching { MMJson.parseToJsonElement(it) }.getOrNull() }
-            ?.obj()?.get("error").asString()
-        val error = if (reply.ok) null
-            else said ?: "That didn't go through, and nothing has changed. Try again."
+        val error = reply.refusal(reply.said())
         notice = error
         load("/api/social", SocialView.serializer()) { social = it }
         onDone(error)

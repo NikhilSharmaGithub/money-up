@@ -21,8 +21,12 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * The shared glyph language, Android half.
@@ -60,23 +64,66 @@ object Art {
     fun hasFlag(mark: String?): Boolean = !mark.isNullOrBlank() && FLAGS.containsKey(mark)
 
     /**
-     * A street's country medallion: the flag, clipped to a disc, with a rim.
+     * A street's country medallion.
      *
-     * The flags are already composed for a circle rather than cropped out of a
-     * rectangle, so this only has to clip. A country with no drawn flag gets
-     * its colour instead — never the emoji, which is another vendor's artwork,
-     * changes per platform, and cannot take the table's palette.
+     * Three cases, and the middle one is why this is not just a flag drawer.
+     *
+     * A country whose flag is drawn gets the flag, already composed for a
+     * circle rather than cropped out of a rectangle, so this only has to clip.
+     *
+     * A regional board — every single-country board, where the groups are
+     * cities and their marks are castles, tigers and mosques rather than
+     * flags — keeps its pictograph, centred on a recessed wash. That is the
+     * one place an emoji is drawn on purpose: as a badge that is plainly a
+     * badge, rather than a thing pretending to be a flag. Thirteen of the
+     * nineteen boards are in this case, so without it most of the game's
+     * boards wear a blank disc.
+     *
+     * No mark at all falls back to the group's colour.
+     *
+     * The rim is a fixed near-white rather than a palette ink, because it has
+     * to read as the same coin rim on a cream board and a midnight one.
      */
     fun DrawScope.drawMedallion(
         mark: String?,
         colour: Color,
         centre: Offset,
         radius: Float,
-        rim: Color,
+        wash: Color,
+        measurer: TextMeasurer? = null,
     ) {
+        val rim = Color(0xFFF7F4EC).copy(alpha = 0.95f)
         val parts = mark?.let { FLAGS[it] }
         if (parts == null) {
-            drawCircle(colour, radius = radius, center = centre)
+            drawCircle(wash, radius = radius, center = centre)
+            val pictograph = mark?.replace("\uFE0F", "")?.takeIf { it.isNotBlank() }
+            if (pictograph != null && measurer != null) {
+                // iOS sets the mark at 0.56 of the disc's DIAMETER \u2014 the same
+                // 1.12 of the radius \u2014 but it says that in points. `radius`
+                // here is pixels, and `.sp` multiplies by the density again
+                // on the way out, so asking for it directly drew a crown
+                // nearly three times the coin it sits in, hanging off the
+                // tile and over the street's name.
+                val laid = measurer.measure(
+                    pictograph,
+                    style = TextStyle(fontSize = (radius * 1.12f / density).sp),
+                )
+                // Clipped to the disc, exactly as iOS clips the whole
+                // medallion: a glyph with a long descender is cropped by the
+                // coin rather than allowed to leave it.
+                clipPath(
+                    Path().apply {
+                        addOval(Rect(centre - Offset(radius, radius), Size(radius * 2, radius * 2)))
+                    },
+                ) {
+                    drawText(laid, topLeft = Offset(
+                        centre.x - laid.size.width / 2f,
+                        centre.y - laid.size.height / 2f,
+                    ))
+                }
+            } else if (pictograph == null) {
+                drawCircle(colour, radius = radius * 0.62f, center = centre)
+            }
         } else {
             // Clip first, then draw the flag over the whole 32×32 grid: the
             // art runs to the edges and the disc is what makes it a coin.

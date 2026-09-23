@@ -141,6 +141,13 @@ private fun DrawScope.drawTile(
     // stays clean — a band on every street from the first frame is a board
     // that looks as though somebody already owns all of it.
     val short = minOf(r.width, r.height)
+    // Everything written on a tile is sized the way iOS sizes it — in points,
+    // against the roughly 33pt tile an iPhone draws — and then scaled by how
+    // big this tile actually is. Sizing off `short` directly was sizing off
+    // PIXELS: the clamp ended up doing all the work, every name came out
+    // better than a third larger than iOS's against its own tile, and the
+    // price ended up SMALLER than the name when iOS has it larger.
+    val k = (short / density) / 33f
     val group = tile.group?.let { state.groups[it] }
     val ownerColour = own?.let { cssColor(state.player(it.owner)?.color, p.ink3) }
     val whole = tile.group?.let { key ->
@@ -201,16 +208,41 @@ private fun DrawScope.drawTile(
             BoardGeometry.Side.LEFT, BoardGeometry.Side.RIGHT -> r.width - band
             else -> r.width
         }
+        val maxW = (room * 0.94f).toInt().coerceAtLeast(1)
+        val base = (6.8f * k).coerceIn(4.5f, 9f)
+        fun nameStyle(size: Float) = TextStyle(
+            color = p.ink2,
+            fontSize = size.sp,
+            lineHeight = (size * 1.13f).sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+        // Two lines, shrinking before it ever breaks a word — the same rule
+        // iOS uses. A name is wrapped between its words long before it is
+        // wrapped inside one, so the thing that actually has to fit across
+        // the tile is the longest single word: let that set the size and
+        // Salvador stops coming out as "Salvad / or". The floor is iOS's
+        // own 0.7; below that a name is better clipped than unreadable.
+        val longest = tile.name.split(' ').maxByOrNull { it.length } ?: tile.name
+        val wide = measurer.measure(longest, style = nameStyle(base)).size.width
+        // The ratio alone lands the word at exactly the width it is allowed,
+        // and a glyph's advance is not perfectly linear in its size, so it
+        // can come back a fraction over and break anyway — which is how
+        // Jerusalem came out as "Jerusale / m" while every other name on the
+        // board fitted. The hair of headroom is what makes it land, and one
+        // correcting pass catches the rest. Not a loop: this runs for forty
+        // tiles every time a piece moves.
+        val slack = 0.97f
+        var fitted = if (wide > maxW) base * maxW / wide * slack else base
+        if (fitted < base) {
+            val again = measurer.measure(longest, style = nameStyle(fitted)).size.width
+            if (again > maxW) fitted = fitted * maxW / again * slack
+        }
+        fitted = fitted.coerceAtLeast(base * 0.7f)
         val label = measurer.measure(
             tile.name,
-            style = TextStyle(
-                color = p.ink2,
-                fontSize = (short * 0.30f).coerceIn(6f, 9.5f).sp,
-                lineHeight = (short * 0.34f).coerceIn(7f, 11f).sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            ),
-            constraints = Constraints(maxWidth = (room * 0.94f).toInt().coerceAtLeast(1)),
+            style = nameStyle(fitted),
+            constraints = Constraints(maxWidth = maxW),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -234,7 +266,7 @@ private fun DrawScope.drawTile(
                 money(price),
                 style = TextStyle(
                     color = p.ink3,
-                    fontSize = (short * 0.23f).coerceIn(5.5f, 8f).sp,
+                    fontSize = (8.5f * k).coerceIn(5f, 10f).sp,
                     fontWeight = FontWeight.Bold,
                 ),
             )
@@ -288,7 +320,10 @@ private fun DrawScope.drawTile(
             BoardGeometry.Side.RIGHT -> Offset(r.left, r.center.y)
         }
         with(Art) {
-            drawMedallion(group.flag, cssColor(group.color, p.ink3), badge, medal, p.tileCorner)
+            drawMedallion(
+                group.flag, cssColor(group.color, p.ink3), badge, medal,
+                wash = p.sunken, measurer = measurer,
+            )
         }
     }
 

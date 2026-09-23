@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,6 +49,12 @@ fun MMButton(
     kind: BtnKind = BtnKind.PLAIN,
     big: Boolean = false,
     icon: String? = null,
+    // The price this used to be, struck through in front of the label. It is a
+    // parameter rather than part of the label because it is not the same text:
+    // a different size, a different weight, and a line through it. Only the
+    // buttons that actually charge somebody pass it, and only while the sale
+    // is real — the shelves elsewhere draw their own.
+    was: Int? = null,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -79,6 +86,16 @@ fun MMButton(
         if (icon != null) {
             Icon(icon, size = if (big) 20.dp else 17.dp, tint = fg)
             Spacer(Modifier.width(8.dp))
+        }
+        if (was != null) {
+            Text(
+                "$was",
+                color = (if (enabled) fg else fg.copy(alpha = 0.6f)).copy(alpha = 0.55f),
+                fontSize = if (big) 14.sp else 13.sp,
+                fontWeight = FontWeight.Bold,
+                textDecoration = TextDecoration.LineThrough,
+            )
+            Spacer(Modifier.width(7.dp))
         }
         Text(
             label,
