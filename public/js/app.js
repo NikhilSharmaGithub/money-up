@@ -105,6 +105,7 @@ const actions = {
   jailPay: emit('jailPay'),
   jailCard: emit('jailCard'),
   build: emit('build'),
+  buildAll: emit('buildAll'),
   sellHouse: emit('sellHouse'),
   mortgage: emit('mortgage'),
   unmortgage: emit('unmortgage'),

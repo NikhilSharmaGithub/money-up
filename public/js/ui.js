@@ -79,6 +79,49 @@ export function canBuildOn(state, meId, i) {
   return true;
 }
 
+/**
+ * How many buildings one press of Build all would actually put up.
+ *
+ * The server decides; this only decides whether to offer the button and what
+ * number to print on it. It walks the same loop `GameRoom.buildAll` does —
+ * always the shortest street in the country next, cheapest first when they
+ * are level — so the number on the button is the number in the log a moment
+ * later, rather than an optimistic guess the player has to reconcile.
+ *
+ * Zero means don't offer it; one means the ＋ beside it already says
+ * everything this button would.
+ */
+export function buildAllCount(state, meId, i) {
+  const tile = state.map.tiles[i];
+  const group = state.map.groups?.[tile?.group] || [];
+  // Ownership, mortgages, whose turn it is: canBuildOn already says all of
+  // it. If no street in the country may take a house, neither may this.
+  if (group.length < 2 || !group.some((g) => canBuildOn(state, meId, g))) return 0;
+
+  const houses = Object.fromEntries(group.map((g) => [g, state.ownership[g]?.houses || 0]));
+  let purse = state.players.find((p) => p.id === meId)?.money || 0;
+  const even = !!state.settings.evenBuild;
+  let built = 0;
+
+  // At most five to a street, so this cannot run away.
+  for (let guard = group.length * 5; guard > 0; guard--) {
+    const lowest = Math.min(...group.map((g) => houses[g]));
+    const next = group
+      .filter((g) => {
+        const cost = state.map.tiles[g].houseCost || 0;
+        if (houses[g] >= 5 || !cost || cost > purse) return false;
+        return even ? houses[g] === lowest : true;
+      })
+      .sort((a, b) => (houses[a] - houses[b])
+        || ((state.map.tiles[a].houseCost || 0) - (state.map.tiles[b].houseCost || 0)))[0];
+    if (next === undefined) break;
+    purse -= state.map.tiles[next].houseCost || 0;
+    houses[next]++;
+    built++;
+  }
+  return built;
+}
+
 export function canSellOn(state, meId, i) {
   if (state.turn?.playerId !== state.ownership?.[i]?.owner) return false;
   const o = state.ownership[i];
@@ -2537,6 +2580,10 @@ function quickBuildBar(state, meId, i) {
   const liftCost = Math.ceil(((tile.price || 0) / 2) * 1.1);
 
   const buildable = street && canBuildOn(state, meId, i);
+  // Build all earns its place only when it would do something ＋ does not:
+  // one more building is one tap either way.
+  const sweep = street ? buildAllCount(state, meId, i) : 0;
+  const groupName = state.groups?.[tile.group]?.name || tile.group || 'this country';
   const sellable = canSellOn(state, meId, i);
   const canAfford = cash >= houseCost;
   const mortgageable = canMortgage(state, meId, i);
@@ -2577,7 +2624,10 @@ function quickBuildBar(state, meId, i) {
       ${street ? `
         <button class="qb-btn" data-qb-sell title="Sell a building for $${sellBack}" ${sellable ? '' : 'disabled'}>−</button>
         <span class="qb-count">${houses === 5 ? icon('hotel') : houses}<small>${houses === 5 ? '' : '/5'}</small></span>
-        <button class="qb-btn" data-qb-build title="Build for $${houseCost}" ${buildable && canAfford ? '' : 'disabled'}>＋</button>` : ''}
+        <button class="qb-btn" data-qb-build title="Build for $${houseCost}" ${buildable && canAfford ? '' : 'disabled'}>＋</button>
+        ${sweep > 1 ? `<button class="qb-btn all" data-qb-build-all
+            title="Build ${sweep} buildings across ${escapeHtml(groupName)} in one go"
+            >${icon('houses')} All ×${sweep}</button>` : ''}` : ''}
       ${own.mortgaged
         ? `<button class="qb-btn mort gold" data-qb-unmort title="${escapeHtml(!state.settings.mortgage ? 'Mortgages are switched off on this table'
             : cash < liftCost ? `You need $${liftCost} to buy this mortgage back` : 'Buy the mortgage back')}"
@@ -2606,6 +2656,11 @@ export function openDeedModal(state, i, meId, actions) {
       if (b && !b.disabled) b.onclick = () => { (sound || sfx.click)(); fn(i); };
     };
     tap('data-qb-build', actions.build, sfx.build);
+    // The whole country: the server takes the country's key, not a tile.
+    const allBtn = sheet.querySelector('[data-qb-build-all]');
+    if (allBtn && !allBtn.disabled) {
+      allBtn.onclick = () => { sfx.build(); actions.buildAll(s.map.tiles[i].group); };
+    }
     tap('data-qb-sell', actions.sellHouse);
     tap('data-qb-mort', actions.mortgage, sfx.cash);
     tap('data-qb-unmort', actions.unmortgage, sfx.cash);

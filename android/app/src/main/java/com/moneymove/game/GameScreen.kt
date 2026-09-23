@@ -92,6 +92,10 @@ fun GameScreen(store: GameStore) {
         CardPopup(store, Modifier.align(Alignment.Center))
         TurnBanner(store, Modifier.align(Alignment.TopCenter))
     }
+
+    tappedTile?.let { i ->
+        DeedSheet(store, i) { tappedTile = null }
+    }
 }
 
 /** The strip at the top: who you are at this table, and the way out. */

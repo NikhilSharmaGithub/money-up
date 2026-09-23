@@ -409,6 +409,12 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     fun jailPay() = emit("jailPay")
     fun jailCard() = emit("jailCard")
     fun build(tile: Int) = emit("build", tile)
+
+    /** Everything this street's country will take, in one press. */
+    fun buildAll(tile: Int) {
+        val group = tile(tile)?.group ?: return
+        emit("buildAll", group)
+    }
     fun sellHouse(tile: Int) = emit("sellHouse", tile)
     fun mortgage(tile: Int) = emit("mortgage", tile)
     fun unmortgage(tile: Int) = emit("unmortgage", tile)
@@ -462,6 +468,52 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             if (own.houseCount > lowest) return false
         }
         return (me?.money ?: 0) >= (t.houseCost ?: 0)
+    }
+
+    /**
+     * How many buildings one press of Build all would actually put up.
+     *
+     * The server decides; this only decides whether to offer the button and
+     * what number to print on it. It walks the same loop `GameRoom.buildAll`
+     * does — always the shortest street in the country next, cheapest first
+     * when they are level — so the number on the button is the number in the
+     * log a moment later rather than an optimistic guess the player then has
+     * to reconcile.
+     *
+     * Zero means don't offer it; one means Build already says everything this
+     * button would.
+     */
+    fun buildAllCount(i: Int): Int {
+        val s = state ?: return 0
+        val group = tile(i)?.group ?: return 0
+        val idxs = s.map.groups?.get(group) ?: return 0
+        // Ownership, mortgages, whose turn it is: canBuild already says all of
+        // it. If no street in the country may take a house, neither may this.
+        if (idxs.size < 2 || idxs.none { canBuild(it) }) return 0
+
+        val houses = idxs.associateWith { (s.owner(it)?.houseCount ?: 0) }.toMutableMap()
+        var purse = me?.money ?: 0
+        val even = s.settings.evenBuild == true
+        var built = 0
+
+        // At most five to a street, so this cannot run away.
+        repeat(idxs.size * 5) {
+            val lowest = houses.values.minOrNull() ?: 0
+            val next = idxs
+                .filter { idx ->
+                    val standing = houses[idx] ?: 0
+                    val cost = tile(idx)?.houseCost ?: 0
+                    standing < 5 && cost > 0 && cost <= purse && (!even || standing == lowest)
+                }
+                // The shortest street next, cheapest first when they are level.
+                .minWithOrNull(
+                    compareBy({ houses[it] ?: 0 }, { tile(it)?.houseCost ?: 0 })
+                ) ?: return built
+            purse -= tile(next)?.houseCost ?: 0
+            houses[next] = (houses[next] ?: 0) + 1
+            built++
+        }
+        return built
     }
 
     fun canSellHouse(i: Int): Boolean {

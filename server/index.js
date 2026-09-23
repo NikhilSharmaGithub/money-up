@@ -2217,6 +2217,9 @@ io.on('connection', (socket) => {
   socket.on('jailCard', onTurn(() => ok(room.jailCard(playerId))));
 
   socket.on('build', onTurn((tile) => ok(room.build(playerId, Number(tile)))));
+  // One press for a whole country — see GameRoom.buildAll for why the button
+  // exists at all.
+  socket.on('buildAll', onTurn((group) => ok(room.buildAll(playerId, String(group || '')))));
   socket.on('sellHouse', onTurn((tile) => {
     if (!room.sellHouse(playerId, Number(tile))) fail('Cannot sell that building');
   }));

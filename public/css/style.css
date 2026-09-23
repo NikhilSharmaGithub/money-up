@@ -2709,6 +2709,19 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .qb-btn:active:not(:disabled) { transform: scale(.94); }
 .qb-btn:disabled { opacity: .38; cursor: not-allowed; }
 .qb-btn.mort { flex: 1; font-size: 12.5px; font-weight: 750; }
+/* The whole country in one press. It wears the accent because it is the one
+   button here that does more than the obvious thing, and it only ever appears
+   when it would save more than a single tap — see buildAllCount(). */
+.qb-btn.all {
+  flex: 1; gap: 5px; font-size: 12.5px; font-weight: 800;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--red) 72%, white), var(--red));
+  border-color: var(--red-deep); color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+}
+.qb-btn.all:hover:not(:disabled) {
+  color: #fff; border-color: var(--red-deep); filter: brightness(1.06);
+}
+.qb-btn.all .ico { width: 15px; height: 15px; }
 .qb-btn.gold { border-color: var(--gold); color: var(--gold); }
 .qb-count { flex: 1; text-align: center; font-size: 17px; font-weight: 900; }
 .qb-count small { font-size: 11px; font-weight: 700; color: var(--ink-3); }

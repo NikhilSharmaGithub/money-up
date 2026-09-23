@@ -195,6 +195,15 @@ const SALARY = 200;
 /** Landing dead on START pays this instead of the passing salary. */
 const START_BONUS = 300;
 const MAX_JAIL_TURNS = 3;
+
+/**
+ * Missed turns in a row before a seat is actually taken away.
+ *
+ * Two, because one is a person who looked at something else for ninety
+ * seconds and two is a person who has gone. The first costs them the turn and
+ * nothing else — the house plays it and hands the seat straight back.
+ */
+const MAX_MISSED_TURNS = 2;
 /**
  * How long a disconnected player keeps their seat. A bot covers their turns
  * from the moment they drop, so this is not the table's patience — the table
@@ -335,6 +344,10 @@ export class GameRoom {
       isBot,
       connected: true,
       botControlled: false,
+      /** Turns missed in a row. Two takes the seat; the first is forgiven. */
+      missedTurns: 0,
+      /** The house is covering this one turn and no more. */
+      coveredTurn: false,
       money: this.settings.startingCash,
       pos: 0,
       jail: false,
@@ -415,6 +428,8 @@ export class GameRoom {
     const wasBot = p.botControlled;
     p.connected = true;
     p.botControlled = false;
+    p.coveredTurn = false;
+    p.missedTurns = 0;
     this.say(wasBot ? `${p.name} is back and takes over from the bot` : `${p.name} reconnected`, 'join');
     // Walking back in on your own turn puts you back on the clock. The seat had
     // none while the house was covering it — a bot cannot run out of time — so
@@ -700,6 +715,8 @@ export class GameRoom {
       p.getOutCards = 0;
       p.skipTurns = 0;
       p.bankrupt = false;
+      p.missedTurns = 0;
+      p.coveredTurn = false;
     });
     this.status = 'playing';
     this.ownership = {};
@@ -1105,13 +1122,38 @@ export class GameRoom {
     // somebody else's bidding war and throwing you out of the game for it.
     // finishAuction hands the clock back the moment the hammer falls.
     if (this.auction) return;
-    this.say(`${p.name} ran out of time and was removed`, 'leave');
+
+    // One missed turn is a doorbell, not a desertion.
+    //
+    // The clock used to take the whole game off anybody who looked away for
+    // ninety seconds — deeds back to the bank, cash gone, a spectator's seat
+    // and a karma point docked, for putting a phone down once. So the first
+    // one is covered: the house plays that single turn, the player keeps
+    // everything, and their next turn is theirs again with a fresh clock.
+    // Two in a row is somebody who has actually gone, and the table has been
+    // waiting three minutes for them.
+    p.missedTurns = (p.missedTurns || 0) + 1;
+    if (p.missedTurns < MAX_MISSED_TURNS) {
+      this.say(`${p.name} ran out of time — the house plays this turn`, 'warn');
+      // Covering THIS turn only: nextTurn hands the seat straight back, so a
+      // player who is simply slow never quietly becomes a bot for the rest of
+      // the game (and a bot, having no clock, could never be removed at all).
+      p.coveredTurn = true;
+      p.botControlled = true;
+      this.push();
+      return this.maybeBot();
+    }
+    this.say(`${p.name} ran out of time twice in a row and was removed`, 'leave');
     this.removeFromPlay(p, 'timeout');
   }
 
   /** Any deliberate move by the player on the clock buys them a fresh one. */
   touchTurnClock(id) {
     if (this.status !== 'playing' || this.turn?.playerId !== id) return;
+    // They are at the table after all, so the last missed turn stops counting
+    // towards the two in a row that take a seat away.
+    const p = this.player(id);
+    if (p) p.missedTurns = 0;
     const before = this.turn.endsAt;
     this.armTurnTimer();
     if (this.turn.endsAt !== before) this.push();
@@ -2129,6 +2171,64 @@ export class GameRoom {
     return { ok: true };
   }
 
+  /**
+   * Everything this country will take, in one press.
+   *
+   * Building by hand is five taps a street and twenty for a country, and the
+   * fifth of them is refused for a reason the button cannot show — even build
+   * says this street is a house ahead, or the money ran out two taps ago.
+   * Pressing again and again to find out which is not a decision anybody is
+   * making; it is just the interface asking to be beaten.
+   *
+   * So this builds the same houses a patient player would, in the same order:
+   * always the shortest street in the country first, which is what even build
+   * asks for and what brings a country up together rather than leaving one
+   * hotel standing over four bare plots. It stops on the first thing that
+   * stops it — no money, a mortgage in the country, a hotel already there —
+   * and says how far it got. If the rules only allow one street to be topped
+   * out, one street is what gets topped out.
+   */
+  buildAll(id, group) {
+    const p = this.player(id);
+    if (!p || this.status !== 'playing') return { error: 'Not available' };
+    // Construction happens on your clock, not between other people's rolls.
+    if (!this.isCurrent(id)) return { error: 'Wait for your turn' };
+    const key = String(group || '');
+    const tiles = this.map.groups[key];
+    if (!tiles?.length) return { error: 'Unknown country' };
+    if (!this.ownsFullGroup(id, key)) return { error: 'You need the whole country first' };
+
+    let built = 0;
+    let spent = 0;
+    // At most five buildings a street, so this cannot run away even if a rule
+    // one day stops answering the way this loop expects.
+    for (let guard = tiles.length * 5; guard > 0; guard--) {
+      const next = tiles
+        .filter((i) => this.canBuild(id, i) && p.money >= this.tile(i).houseCost)
+        .sort((a, b) => ((this.own(a).houses || 0) - (this.own(b).houses || 0))
+          || (this.tile(a).houseCost - this.tile(b).houseCost))[0];
+      if (next === undefined) break;
+      const t = this.tile(next);
+      p.money -= t.houseCost;
+      spent += t.houseCost;
+      const o = this.own(next);
+      o.houses = (o.houses || 0) + 1;
+      this.statFor(p).housesBuilt++;
+      built++;
+    }
+    if (!built) return { error: 'Nothing more can be built there' };
+
+    const name = GROUPS[key]?.name || key;
+    const topped = tiles.every((i) => (this.own(i).houses || 0) >= 5);
+    this.say(
+      `${p.name} built ${built} ${built === 1 ? 'building' : 'buildings'} across ${name}`
+      + ` for ${moneyText(spent)}${topped ? ' — the country is full' : ''}`,
+      'build',
+    );
+    this.push();
+    return { ok: true, built, spent, topped };
+  }
+
   sellHouse(id, index, silent = false) {
     const p = this.player(id);
     const o = this.own(index);
@@ -2497,6 +2597,13 @@ export class GameRoom {
   nextTurn() {
     if (this.status !== 'playing') return;
     if (this.checkGameEnd()) return;
+    // A seat the house was covering for one missed turn gets itself back the
+    // moment that turn is over, clock and all.
+    const leaving = this.player(this.turn?.playerId);
+    if (leaving?.coveredTurn) {
+      leaving.coveredTurn = false;
+      leaving.botControlled = false;
+    }
     let idx = this.players.findIndex((p) => p.id === this.turn.playerId);
     for (let step = 1; step <= this.players.length * 2; step++) {
       const cand = this.players[(idx + step) % this.players.length];
@@ -2585,6 +2692,7 @@ export class GameRoom {
       p.pos = 0; p.jail = false; p.jailTurns = 0; p.getOutCards = 0;
       p.bankrupt = false; p.skipTurns = 0;
       p.timedOut = false; p.removedFor = null; p.botControlled = false;
+      p.missedTurns = 0; p.coveredTurn = false;
       // A new game is a clean slate for the bot brain too: who turned it down
       // last game, and whose door it already knocked on, are last game's.
       p.blockedLaps = 0; p.refused = []; p.askedAt = {}; p.lastAskedAt = undefined;

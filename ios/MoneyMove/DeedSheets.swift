@@ -269,6 +269,9 @@ struct DeedSheet: View {
             let houseCost = tile.houseCost ?? 0
             let price = tile.price ?? 0
             VStack(spacing: 10) {
+                // Build all earns its place only when it would do something
+                // Build does not: one more building is one tap either way.
+                let sweep = tile.type == "property" ? store.buildAllCount(tileIndex) : 0
                 HStack(spacing: 8) {
                     if tile.type == "property" {
                         quickButton(icon: "hammer.fill",
@@ -277,6 +280,15 @@ struct DeedSheet: View {
                                     kind: .good,
                                     enabled: store.canBuild(tileIndex) && houseCost > 0) {
                             store.build(tileIndex)
+                        }
+                        if sweep > 1 {
+                            quickButton(icon: "building.2.fill",
+                                        caption: "Build all",
+                                        detail: "\(sweep) up",
+                                        kind: .primary,
+                                        enabled: true) {
+                                store.buildAll(tileIndex)
+                            }
                         }
                         quickButton(icon: "minus.circle.fill",
                                     caption: houses == 5 ? "Sell hotel" : "Sell",
@@ -853,6 +865,16 @@ struct PropertiesSheet: View {
         var buttons: [RowButton] = []
         if store.canBuild(i), let hc = tile.houseCost {
             buttons.append(RowButton(label: money(hc), kind: .good, glyph: .crane) { store.build(i) })
+            // The whole country in one press, when that is more than one
+            // press saved. The number is what will actually go up, not what
+            // the country could hold — a player who cannot afford the fourth
+            // house should not be promised it.
+            let sweep = store.buildAllCount(i)
+            if sweep > 1 {
+                buttons.append(RowButton(label: "All ×\(sweep)", kind: .primary, glyph: .houses) {
+                    store.buildAll(i)
+                })
+            }
         }
         if store.canSellHouse(i), let hc = tile.houseCost {
             buttons.append(RowButton(label: "Sell +\(money(hc / 2))", kind: .ghost) { store.sellHouse(i) })

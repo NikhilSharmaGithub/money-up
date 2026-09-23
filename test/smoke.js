@@ -610,8 +610,9 @@ console.log('\n▶ targeted rules');
 }
 
 {
-  // The shot clock removes a silent player without paying anyone off, and
-  // the seat stays in the roster so their client can keep watching.
+  // The shot clock forgives the first missed turn and takes the seat on the
+  // second — and when it finally does, it pays nobody off, while the seat
+  // stays in the roster so their client can keep watching.
   const room = new GameRoom('to', () => {});
   room.map = MAPS.classic;
   room.addPlayer({ id: 'a', name: 'A' });
@@ -627,6 +628,22 @@ console.log('\n▶ targeted rules');
   room.buyFor?.(a, 1);
   room.ownership[1] = { owner: 'a', houses: 0, mortgaged: false };
   if (!room.turn.endsAt) fail('turn should carry a deadline');
+
+  // One missed turn is a doorbell: the house plays that turn and hands the
+  // seat straight back, with everything the player owned still theirs.
+  room.turnTimedOut('a');
+  if (a.timedOut) fail('one missed turn must not take the seat');
+  if (!room.ownership[1]) fail('one missed turn must not take the deeds');
+  if (!a.coveredTurn || !a.botControlled) fail('the house should cover the missed turn');
+  if (karmaHits.length) fail(`a forgiven turn must not dock karma: ${JSON.stringify(karmaHits)}`);
+  room.nextTurn();
+  if (a.coveredTurn || a.botControlled) fail('the cover should end with the turn');
+
+  // Two in a row is somebody who has gone.
+  room.turn = {
+    playerId: 'a', phase: 'roll', dice: null, doubles: 0,
+    pending: null, debt: null, rolledThisTurn: false,
+  };
   room.turnTimedOut('a');
   if (!a.timedOut) fail('timeout should mark the player');
   if (room.ownership[1]) fail('timed-out player\'s deeds should return to the bank');
@@ -634,7 +651,7 @@ console.log('\n▶ targeted rules');
   if (!room.players.some((p) => p.id === 'a')) fail('seat should stay in the roster to spectate');
   if (room.turn.playerId !== 'b') fail('play should move on');
   if (JSON.stringify(karmaHits) !== JSON.stringify([['a', -1]])) fail(`karma hook wrong: ${JSON.stringify(karmaHits)}`);
-  ok('turn timeout removes the player and moves on');
+  ok('one missed turn is forgiven, two in a row takes the seat');
 }
 
 {

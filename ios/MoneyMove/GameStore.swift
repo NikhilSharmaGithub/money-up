@@ -1111,6 +1111,11 @@ final class GameStore: ObservableObject {
         return owner.flatMap { localIds.contains($0) ? $0 : nil } ?? activeId
     }
     func build(_ tile: Int) { emitAs(deedSeat(for: tile), "build", [tile]) }
+    /// Everything this street's country will take, in one press.
+    func buildAll(_ tile: Int) {
+        guard let group = self.tile(tile)?.group else { return }
+        emitAs(deedSeat(for: tile), "buildAll", [group])
+    }
     func sellHouse(_ tile: Int) { emitAs(deedSeat(for: tile), "sellHouse", [tile]) }
     func mortgage(_ tile: Int) { emitAs(deedSeat(for: tile), "mortgage", [tile]) }
     func unmortgage(_ tile: Int) { emitAs(deedSeat(for: tile), "unmortgage", [tile]) }
@@ -1334,6 +1339,57 @@ final class GameStore: ObservableObject {
             if own.houseCount > minHouses { return false }
         }
         return true
+    }
+
+    /**
+     How many buildings one press of Build all would actually put up.
+
+     The server decides — this only decides whether to offer the button, and
+     with what on it. It walks the same loop `GameRoom.buildAll` does, always
+     taking the shortest street in the country next, so the number on the
+     button is the number that appears in the log a moment later rather than
+     an optimistic guess the player then has to reconcile.
+
+     Zero means don't offer it at all; one means Build already says everything
+     this button would.
+     */
+    func buildAllCount(_ i: Int) -> Int {
+        guard let state, let group = tile(i)?.group,
+              let idxs = state.map.groups?[group], idxs.count > 1,
+              let own = state.owner(of: i), localIds.contains(own.owner),
+              // Whatever the rules say about owning the country, mortgages in
+              // it and whose turn it is, canBuild already says it. If no
+              // street in the country may take a house right now, neither may
+              // this button put one up.
+              idxs.contains(where: { canBuild($0) }) else { return 0 }
+
+        var houses = Dictionary(uniqueKeysWithValues: idxs.map {
+            ($0, state.owner(of: $0)?.houseCount ?? 0)
+        })
+        var purse = state.player(own.owner)?.money ?? 0
+        let even = state.settings.evenBuild ?? true
+        var built = 0
+
+        // At most five to a street, so this cannot run away.
+        for _ in 0..<(idxs.count * 5) {
+            let lowest = houses.values.min() ?? 0
+            let next = idxs
+                .filter { idx in
+                    guard let standing = houses[idx], standing < 5 else { return false }
+                    guard let cost = tile(idx)?.houseCost, cost > 0, cost <= purse else { return false }
+                    return even ? standing == lowest : true
+                }
+                // The shortest street next, cheapest first when they are
+                // level — the same order the server builds in.
+                .min { a, b in
+                    (houses[a] ?? 0, tile(a)?.houseCost ?? 0) < (houses[b] ?? 0, tile(b)?.houseCost ?? 0)
+                }
+            guard let next, let cost = tile(next)?.houseCost else { break }
+            houses[next] = (houses[next] ?? 0) + 1
+            purse -= cost
+            built += 1
+        }
+        return built
     }
 
     func canSellHouse(_ i: Int) -> Bool {

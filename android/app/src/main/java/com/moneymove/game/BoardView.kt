@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +92,18 @@ fun BoardView(
                 drawTile(state, tile, geom, p, measurer, lit == tile.index)
             }
             drawTokens(state, walker, geom, p)
+        }
+
+        // The middle, over the felt: the dice and what the table is waiting
+        // for. A board with an empty middle reads as one that has not loaded.
+        val well = geom.centerWell
+        with(LocalDensity.current) {
+            CenterWell(
+                store,
+                Modifier
+                    .padding(start = well.left.toDp(), top = well.top.toDp())
+                    .size(well.width.toDp(), well.height.toDp()),
+            )
         }
     }
 }
