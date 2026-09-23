@@ -58,6 +58,8 @@ fun AppScaffold(
 ) {
     val p = P.current
     var tab by remember { mutableStateOf(Tab.PLAY) }
+    var welcome by remember { mutableStateOf(!store.prefs.seenWelcome) }
+    var howTo by remember { mutableStateOf(false) }
     val atTable = store.roomId != null
 
     Box(Modifier.fillMaxSize().background(p.page)) {
@@ -67,6 +69,12 @@ fun AppScaffold(
             Column(Modifier.fillMaxSize()) {
                 Spacer(Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding()))
                 Box(Modifier.weight(1f)) {
+                    // The rules, one tap from wherever somebody met one.
+                    if (tab == Tab.PLAY) {
+                        Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp)) {
+                            MMButton("", kind = BtnKind.GHOST, icon = "bulb") { howTo = true }
+                        }
+                    }
                     when (tab) {
                         Tab.PLAY -> PlayTab(store, account)
                         Tab.STORE -> StoreTab(account)
@@ -78,6 +86,17 @@ fun AppScaffold(
                 TabBar(tab) { tab = it }
             }
         }
+
+        // Six cards for somebody who has never been here, over everything
+        // else, because a stranger dropped onto a board with eight buttons on
+        // it is how a game loses the people who would have liked it.
+        if (welcome) {
+            WelcomeIntro {
+                welcome = false
+                store.prefs.seenWelcome = true
+            }
+        }
+        if (howTo) HowToPlaySheet { howTo = false }
 
         // Toasts sit above everything, including a table.
         AnimatedVisibility(

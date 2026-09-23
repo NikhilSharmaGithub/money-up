@@ -38,17 +38,38 @@ const colour = (v) => {
   return `0xFF${full.toUpperCase()}`;
 };
 
+// SVG presentation attributes inherit. A <g stroke="currentColor"
+// stroke-width="2"> around three shapes is how half this set is drawn, and a
+// reader that ignores the group produces three invisible shapes — which is
+// exactly what the globe, the key and the door came out as.
+const INHERITED = [
+  'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+  'stroke-dasharray', 'fill', 'fill-rule',
+];
+
 function shapesOf(svg) {
   const body = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
   const out = [];
-  const stack = [{ opacity: 1 }];
+  // The root <svg> carries fill="none", which is the default every shape
+  // without a fill of its own inherits.
+  const stack = [{ opacity: 1, fill: 'none' }];
   const tokens = body.match(/<\/?[a-zA-Z]+[^>]*>/g) || [];
   for (const tok of tokens) {
     const name = tok.match(/^<\/?([a-zA-Z]+)/)[1];
     if (tok.startsWith('</')) { if (name === 'g') stack.pop(); continue; }
-    const a = attrs(tok);
+    const raw = attrs(tok);
+    const parent = stack[stack.length - 1];
+    // What this element ends up with: its own attributes over its parents'.
+    const a = { ...raw };
+    for (const key of INHERITED) if (a[key] === undefined && parent[key] !== undefined) a[key] = parent[key];
+
     if (name === 'g') {
-      stack.push({ opacity: stack[stack.length - 1].opacity * (a.opacity ? num(a.opacity) : 1) });
+      const next = { opacity: parent.opacity * (raw.opacity ? num(raw.opacity) : 1) };
+      for (const key of INHERITED) {
+        const v = raw[key] !== undefined ? raw[key] : parent[key];
+        if (v !== undefined) next[key] = v;
+      }
+      stack.push(next);
       continue;
     }
     let d = null;
@@ -56,11 +77,9 @@ function shapesOf(svg) {
     else if (name === 'circle') d = circlePath(num(a.cx), num(a.cy), num(a.r));
     else if (name === 'rect') d = rectPath(num(a.x), num(a.y), num(a.width), num(a.height), num(a.rx));
     if (!d) continue;
-    const group = stack[stack.length - 1].opacity;
+    const group = parent.opacity;
     out.push({
       d: d.replace(/\s+/g, ' ').trim(),
-      // The <svg> wrapper sets fill="none", so a shape with no fill of its
-      // own has none — it is there to be stroked.
       fill: colour(a.fill),
       stroke: colour(a.stroke),
       strokeWidth: a['stroke-width'] ? num(a['stroke-width']) : 1,

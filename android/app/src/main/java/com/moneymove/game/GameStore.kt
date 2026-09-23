@@ -332,6 +332,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             if (next.isPlaying && pid != lastTurnId) {
                 lastTurnId = pid
                 turnBanner = next.player(pid)
+                // Only your own turn is worth a doorbell; everyone else's is
+                // just the game going round.
+                if (pid == meId && old != null) SoundKit.turn()
                 viewModelScope.launch { delay(2200); if (turnBanner?.id == pid) turnBanner = null }
             }
         }
@@ -349,9 +352,54 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             heardChatId = lastChat.id
         }
 
+        soundsFor(old, next)
+
         timedOut = next.player(meId)?.wasRemoved == true && next.player(meId)?.removedFor != "quit"
         if (next.isEnded && old?.isEnded != true) {
+            if (next.winner?.id == meId) SoundKit.win()
             viewModelScope.launch { delay(700); showGameOver = true }
+        }
+    }
+
+    /** The last log line this device has already sounded. */
+    private var heardLogAt: Double = 0.0
+
+    /**
+     * Turns fresh log lines into sound.
+     *
+     * The log is the one feed that says what actually happened rather than
+     * what the board now looks like, which is why the web client drives its
+     * sounds from it too. Only lines newer than the last one heard play, so a
+     * resync does not replay a whole turn's worth of noise at once.
+     */
+    private fun soundsFor(old: GameState?, next: GameState) {
+        val fresh = next.log.filter { it.at > heardLogAt }
+        heardLogAt = next.log.lastOrNull()?.at ?: heardLogAt
+        // A first state is a position, not a journey: joining a game in
+        // progress must not play the last sixty lines.
+        if (old == null || fresh.isEmpty()) return
+
+        val kinds = fresh.map { it.kind }.toSet()
+        when {
+            "bankrupt" in kinds -> SoundKit.bankrupt()
+            "jail" in kinds -> SoundKit.jail()
+            "auction" in kinds -> SoundKit.auction()
+            "trade" in kinds -> SoundKit.trade()
+            "build" in kinds -> SoundKit.build()
+        }
+
+        // Money is only news when it is YOUR money, and which way it went is
+        // the whole difference between the two sounds.
+        val mine = next.player(meId)?.money
+        val before = old.player(meId)?.money
+        if (mine != null && before != null && mine != before) {
+            if (mine > before) SoundKit.gain() else SoundKit.lose()
+        }
+
+        // Somebody spoke. Not the lines this device sent itself.
+        val said = next.chat.lastOrNull()
+        if (said != null && said.id != old.chat.lastOrNull()?.id && said.name != nickname) {
+            SoundKit.pop()
         }
     }
 
@@ -370,6 +418,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         pendingCard = null
         if (state?.lastCard?.at != card.at) return
         cardPopup = card
+        SoundKit.card()
         viewModelScope.launch {
             delay(3200)
             if (cardPopup?.at == card.at) cardPopup = null
@@ -411,8 +460,15 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         emit("appearance", JSONObject(d))
     }
 
-    fun roll() = emit("roll")
-    fun buy() = emit("buy")
+    fun roll() {
+        SoundKit.dice()
+        Haptics.tap()
+        emit("roll")
+    }
+    fun buy() {
+        SoundKit.buy()
+        emit("buy")
+    }
     fun skipBuy() = emit("skipBuy")
     fun endTurn() = emit("endTurn")
     fun bid(amount: Int) = emit("bid", amount)

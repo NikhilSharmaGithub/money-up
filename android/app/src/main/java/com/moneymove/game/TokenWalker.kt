@@ -74,6 +74,9 @@ class TokenWalker {
                 // A card or a jailing: the piece is carried rather than walked.
                 delay(240)
                 shown[mover] = leg.to
+                // The clank belongs to the door closing, not to the server
+                // saying so — it waits for the piece to be set down inside.
+                if (leg.cause == "jail") SoundKit.jail() else SoundKit.land()
             } else {
                 val dir = if (leg.steps > 0) 1 else -1
                 val pace = (Choreography.pace(distance) * 1000).toLong()
@@ -81,6 +84,7 @@ class TokenWalker {
                 repeat(distance) {
                     at = ((at + dir) % size + size) % size
                     shown[mover] = at
+                    if (at == leg.to) SoundKit.land() else SoundKit.step()
                     delay(pace)
                 }
                 shown[mover] = leg.to

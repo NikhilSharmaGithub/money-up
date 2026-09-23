@@ -37,6 +37,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
+        // Sound and the three taps the app uses. Both read the player's own
+        // switch, so turning sound off turns the whole kit off rather than
+        // muting it one call site at a time.
+        SoundKit.attach(this, store.prefs.soundOn)
+        Haptics.attach(this)
+
         setContent {
             val prefs = store.prefs
             var theme by remember { mutableStateOf(prefs.theme) }

@@ -50,9 +50,9 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     ),
     "bank" to listOf(
         GlyphPart("M16 3.2 30.2 10.4v3H1.8v-3z", fill = INK),
-        GlyphPart("M5.6 14.8h3.8v9.6h-3.8Z", fill = null, alpha = 0.34f),
-        GlyphPart("M14.1 14.8h3.8v9.6h-3.8Z", fill = null, alpha = 0.34f),
-        GlyphPart("M22.6 14.8h3.8v9.6h-3.8Z", fill = null, alpha = 0.34f),
+        GlyphPart("M5.6 14.8h3.8v9.6h-3.8Z", fill = INK, alpha = 0.34f),
+        GlyphPart("M14.1 14.8h3.8v9.6h-3.8Z", fill = INK, alpha = 0.34f),
+        GlyphPart("M22.6 14.8h3.8v9.6h-3.8Z", fill = INK, alpha = 0.34f),
         GlyphPart("M3.2 25.4h25.599999999999998a1.4 1.4 0 0 1 1.4 1.4v0.8000000000000003a1.4 1.4 0 0 1 -1.4 1.4h-25.599999999999998a1.4 1.4 0 0 1 -1.4 -1.4v-0.8000000000000003a1.4 1.4 0 0 1 1.4 -1.4Z", fill = INK),
     ),
     "bolt" to listOf(
@@ -107,8 +107,8 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     "door" to listOf(
         GlyphPart("M3.4 4.4h10a2 2 0 0 1 2 2v19.2a2 2 0 0 1-2 2h-10z", fill = INK, alpha = 0.32f),
         GlyphPart("M10.3 16a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0Z", fill = INK),
-        GlyphPart("M18 16h10.4", fill = null),
-        GlyphPart("M23.6 11 28.6 16l-5 5", fill = null),
+        GlyphPart("M18 16h10.4", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
+        GlyphPart("M23.6 11 28.6 16l-5 5", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
     ),
     "droplet" to listOf(
         GlyphPart("M16 3c5.4 6.6 8.4 10.9 8.4 14.7A8.4 8.4 0 0 1 16 26a8.4 8.4 0 0 1-8.4-8.3C7.6 13.9 10.6 9.6 16 3z", fill = 0xFF5CC9F5),
@@ -129,9 +129,9 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     ),
     "globe" to listOf(
         GlyphPart("M3.0999999999999996 16a12.9 12.9 0 1 0 25.8 0a12.9 12.9 0 1 0 -25.8 0Z", fill = INK, alpha = 0.26f),
-        GlyphPart("M3.0999999999999996 16a12.9 12.9 0 1 0 25.8 0a12.9 12.9 0 1 0 -25.8 0Z", fill = null),
-        GlyphPart("M3.1 16h25.8", fill = null),
-        GlyphPart("M16 3.1c3.6 3.5 5.7 8 5.7 12.9S19.6 25.4 16 28.9c-3.6-3.5-5.7-8-5.7-12.9S12.4 6.6 16 3.1z", fill = null),
+        GlyphPart("M3.0999999999999996 16a12.9 12.9 0 1 0 25.8 0a12.9 12.9 0 1 0 -25.8 0Z", fill = null, stroke = INK, strokeWidth = 2f),
+        GlyphPart("M3.1 16h25.8", fill = null, stroke = INK, strokeWidth = 2f),
+        GlyphPart("M16 3.1c3.6 3.5 5.7 8 5.7 12.9S19.6 25.4 16 28.9c-3.6-3.5-5.7-8-5.7-12.9S12.4 6.6 16 3.1z", fill = null, stroke = INK, strokeWidth = 2f),
     ),
     "gotoprison" to listOf(
         GlyphPart("M3.5999999999999996 19a6.4 6.4 0 1 0 12.8 0a6.4 6.4 0 1 0 -12.8 0Z", fill = null, stroke = 0xFF54607A, strokeWidth = 3f),
@@ -146,11 +146,11 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     "hotel" to listOf(
         GlyphPart("M7 7h18a2 2 0 0 1 2 2v17a2 2 0 0 1 -2 2h-18a2 2 0 0 1 -2 -2v-17a2 2 0 0 1 2 -2Z", fill = 0xFFF43F5E),
         GlyphPart("M6.6 4h18.8a1.6 1.6 0 0 1 1.6 1.6v0.7999999999999998a1.6 1.6 0 0 1 -1.6 1.6h-18.8a1.6 1.6 0 0 1 -1.6 -1.6v-0.7999999999999998a1.6 1.6 0 0 1 1.6 -1.6Z", fill = 0xFFFB7185),
-        GlyphPart("M9.3 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = null),
-        GlyphPart("M14.8 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = null),
-        GlyphPart("M20.3 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = null),
-        GlyphPart("M9.3 17h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = null),
-        GlyphPart("M20.3 17h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = null),
+        GlyphPart("M9.3 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = 0xFFFFE4E6),
+        GlyphPart("M14.8 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = 0xFFFFE4E6),
+        GlyphPart("M20.3 11h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = 0xFFFFE4E6),
+        GlyphPart("M9.3 17h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = 0xFFFFE4E6),
+        GlyphPart("M20.3 17h2.4a0.8 0.8 0 0 1 0.8 0.8v2.4a0.8 0.8 0 0 1 -0.8 0.8h-2.4a0.8 0.8 0 0 1 -0.8 -0.8v-2.4a0.8 0.8 0 0 1 0.8 -0.8Z", fill = 0xFFFFE4E6),
         GlyphPart("M14.6 21h2.8a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1h-2.8a1 1 0 0 1 -1 -1v-5a1 1 0 0 1 1 -1Z", fill = 0xFF7F1D3A),
     ),
     "house" to listOf(
@@ -171,8 +171,8 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     ),
     "key" to listOf(
         GlyphPart("M4 11.2a7.2 7.2 0 1 0 14.4 0a7.2 7.2 0 1 0 -14.4 0ZM8.4 11.2a2.8 2.8 0 1 0 5.6 0a2.8 2.8 0 1 0 -5.6 0Z", fill = INK, evenOdd = true),
-        GlyphPart("M15.8 15.8 27.6 27.6", fill = null),
-        GlyphPart("M20.6 22.2 23.9 18.9M23.8 25.4 26.6 22.6", fill = null),
+        GlyphPart("M15.8 15.8 27.6 27.6", fill = null, stroke = INK, strokeWidth = 3f, cap = 1),
+        GlyphPart("M20.6 22.2 23.9 18.9M23.8 25.4 26.6 22.6", fill = null, stroke = INK, strokeWidth = 3f, cap = 1),
     ),
     "map" to listOf(
         GlyphPart("M11 4.4 2.4 7.6v20l8.6-3.2z", fill = INK, alpha = 0.32f),
@@ -237,7 +237,7 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
         GlyphPart("M7.5 5.5h17a3 3 0 0 1 3 3v15a3 3 0 0 1 -3 3h-17a3 3 0 0 1 -3 -3v-15a3 3 0 0 1 3 -3Z", fill = 0xFF1B2140),
         GlyphPart("M11.8 13a4.2 4.2 0 1 0 8.4 0a4.2 4.2 0 1 0 -8.4 0Z", fill = 0xFFAAB6D8),
         GlyphPart("M8.5 26.5c0-4.4 3.4-7.6 7.5-7.6s7.5 3.2 7.5 7.6z", fill = 0xFFAAB6D8),
-        GlyphPart("M11 6.6v18.8M16 6.6v18.8M21 6.6v18.8", fill = null),
+        GlyphPart("M11 6.6v18.8M16 6.6v18.8M21 6.6v18.8", fill = null, stroke = 0xFFE6ECFF, strokeWidth = 1.9f, cap = 1),
         GlyphPart("M7.5 5.5h17a3 3 0 0 1 3 3v15a3 3 0 0 1 -3 3h-17a3 3 0 0 1 -3 -3v-15a3 3 0 0 1 3 -3Z", fill = null, stroke = 0xFF8F9DC4, strokeWidth = 1.6f),
     ),
     "question" to listOf(
@@ -262,7 +262,7 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
         GlyphPart("M29.799999999999997 12.8h0a1.4 1.4 0 0 1 1.4 1.4v4.2a1.4 1.4 0 0 1 -1.4 1.4h0a1.4 1.4 0 0 1 -1.4 -1.4v-4.2a1.4 1.4 0 0 1 1.4 -1.4Z", fill = INK, alpha = 0.5f),
     ),
     "scales" to listOf(
-        GlyphPart("M16 6.6v21M6.6 28.4h18.8M3.4 9.2h25.2", fill = null),
+        GlyphPart("M16 6.6v21M6.6 28.4h18.8M3.4 9.2h25.2", fill = null, stroke = INK, strokeWidth = 2.6f, cap = 1),
         GlyphPart("M13.4 9.2a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0 -5.2 0Z", fill = INK),
         GlyphPart("M1.4 13.6h11.4L7.1 21z", fill = INK, alpha = 0.4f),
         GlyphPart("M19.2 13.6h11.4L24.9 21z", fill = INK, alpha = 0.4f),
@@ -272,8 +272,8 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
         GlyphPart("M16 7.4 23.9 10.2v5.9c0 4.3-3.1 7.5-7.9 9-4.8-1.5-7.9-4.7-7.9-9v-5.9z", fill = INK),
     ),
     "shuffle" to listOf(
-        GlyphPart("M2.6 8.6h4.8l12.8 14.8h5", fill = null),
-        GlyphPart("M2.6 23.4h4.8l4.4-5.1M17.6 13.2l2.6-4.6h5", fill = null),
+        GlyphPart("M2.6 8.6h4.8l12.8 14.8h5", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
+        GlyphPart("M2.6 23.4h4.8l4.4-5.1M17.6 13.2l2.6-4.6h5", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
         GlyphPart("M23.4 3.8 30 8.6l-6.6 4.8z", fill = INK),
         GlyphPart("M23.4 18.6 30 23.4l-6.6 4.8z", fill = INK),
     ),
@@ -281,9 +281,9 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
         GlyphPart("M16 2.6C9.2 2.6 3.7 8 3.7 14.6c0 3.9 1.9 7.4 4.9 9.5v3.1c0 1.3 1 2.3 2.3 2.3h10.2c1.3 0 2.3-1 2.3-2.3v-3.1c3-2.1 4.9-5.6 4.9-9.5C28.3 8 22.8 2.6 16 2.6ZM7.8 14.2a3.3 3.3 0 1 0 6.6 0a3.3 3.3 0 1 0 -6.6 0ZM17.6 14.2a3.3 3.3 0 1 0 6.6 0a3.3 3.3 0 1 0 -6.6 0ZM16 16.4l1.7 4.2h-3.4ZM12.9 25.1h1.9v4.4h-1.9ZM17.2 25.1h1.9v4.4h-1.9Z", fill = INK, evenOdd = true),
     ),
     "snooze" to listOf(
-        GlyphPart("M18.4 3.6h9.8l-9.8 9.4h9.8", fill = null),
-        GlyphPart("M10.2 16h7.2l-7.2 6.8h7.2", fill = null, alpha = 0.72f),
-        GlyphPart("M3.4 24.4h5.2l-5.2 4.6h5.2", fill = null, alpha = 0.5f),
+        GlyphPart("M18.4 3.6h9.8l-9.8 9.4h9.8", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
+        GlyphPart("M10.2 16h7.2l-7.2 6.8h7.2", fill = null, stroke = INK, strokeWidth = 2.4f, cap = 1, join = 1, alpha = 0.72f),
+        GlyphPart("M3.4 24.4h5.2l-5.2 4.6h5.2", fill = null, stroke = INK, strokeWidth = 2.1f, cap = 1, join = 1, alpha = 0.5f),
     ),
     "soundOff" to listOf(
         GlyphPart("M3.6 12.2h5.2L16.2 5.6v20.8l-7.4-6.6H3.6z", fill = INK),
@@ -291,8 +291,8 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     ),
     "soundOn" to listOf(
         GlyphPart("M3.6 12.2h5.2L16.2 5.6v20.8l-7.4-6.6H3.6z", fill = INK),
-        GlyphPart("M20.4 12.2a5.4 5.4 0 0 1 0 7.6", fill = null),
-        GlyphPart("M24.6 8.6a10.4 10.4 0 0 1 0 14.8", fill = null),
+        GlyphPart("M20.4 12.2a5.4 5.4 0 0 1 0 7.6", fill = null, stroke = INK, strokeWidth = 2.4f, cap = 1),
+        GlyphPart("M24.6 8.6a10.4 10.4 0 0 1 0 14.8", fill = null, stroke = INK, strokeWidth = 2.4f, cap = 1),
     ),
     "sparkle" to listOf(
         GlyphPart("M14.4 2.4c1 6.4 3.1 8.5 9.5 9.5-6.4 1-8.5 3.1-9.5 9.5-1-6.4-3.1-8.5-9.5-9.5 6.4-1 8.5-3.1 9.5-9.5z", fill = 0xFFF5C542),
@@ -306,7 +306,7 @@ val GLYPHS: Map<String, List<GlyphPart>> = mapOf(
     ),
     "sun" to listOf(
         GlyphPart("M9.6 16a6.4 6.4 0 1 0 12.8 0a6.4 6.4 0 1 0 -12.8 0Z", fill = 0xFFFCD34D),
-        GlyphPart("M16 3.4v3.6M16 25v3.6M3.4 16h3.6M25 16h3.6M7.2 7.2l2.5 2.5M22.3 22.3l2.5 2.5M24.8 7.2l-2.5 2.5M9.7 22.3l-2.5 2.5", fill = null),
+        GlyphPart("M16 3.4v3.6M16 25v3.6M3.4 16h3.6M25 16h3.6M7.2 7.2l2.5 2.5M22.3 22.3l2.5 2.5M24.8 7.2l-2.5 2.5M9.7 22.3l-2.5 2.5", fill = null, stroke = 0xFFFCD34D, strokeWidth = 2.4f, cap = 1),
     ),
     "surprise" to listOf(
         GlyphPart("M12 5h8a7 7 0 0 1 7 7v8a7 7 0 0 1 -7 7h-8a7 7 0 0 1 -7 -7v-8a7 7 0 0 1 7 -7Z", fill = 0xFFBE1A63),

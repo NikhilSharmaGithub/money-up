@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +45,7 @@ fun SettingsTab(
     val p = P.current
     var theme by remember { mutableStateOf(store.prefs.theme) }
     var appearance by remember { mutableStateOf(store.prefs.appearance) }
+    var sound by remember { mutableStateOf(store.prefs.soundOn) }
 
     Column(
         Modifier
@@ -114,6 +117,39 @@ fun SettingsTab(
         Spacer(Modifier.height(12.dp))
 
         Panel {
+            SectionLabel("Sound", icon = if (sound) "soundOn" else "soundOff")
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Sound effects",
+                        color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    )
+                    Hint("Dice, footsteps, cash and the door of the prison.")
+                }
+                Switch(
+                    checked = sound,
+                    onCheckedChange = {
+                        sound = it
+                        store.prefs.soundOn = it
+                        SoundKit.enabled = it
+                        Haptics.enabled = it
+                        if (it) SoundKit.click()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = p.accentInk,
+                        checkedTrackColor = p.red,
+                        uncheckedThumbColor = p.ink3,
+                        uncheckedTrackColor = p.sunken,
+                        uncheckedBorderColor = p.rule2,
+                    ),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Panel {
             SectionLabel("This device", icon = "key")
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -123,6 +159,40 @@ fun SettingsTab(
             }
             Spacer(Modifier.height(8.dp))
             Hint("Share it and a friend can add you from their Social tab.")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Panel {
+            SectionLabel("Account", icon = "shield")
+            Spacer(Modifier.height(8.dp))
+            val me = account.me
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        me?.provider?.let { "Signed in with ${it.replaceFirstChar(Char::uppercase)}" }
+                            ?: "Playing as a guest",
+                        color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    )
+                    Hint(
+                        if (me?.provider != null) "Your coins and friends follow this account."
+                        else "Your coins live on this device only. Signing in keeps them."
+                    )
+                }
+                Chip("${account.coins}", icon = "coin", tint = p.gold)
+            }
+            Spacer(Modifier.height(10.dp))
+            Hint("Karma ${me?.karma ?: 100} · leaving games early costs a point.")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Panel {
+            SectionLabel("About", icon = "bulb")
+            Spacer(Modifier.height(8.dp))
+            Hint("MoneyMove · the same game in a browser, on an iPhone and here.")
+            Spacer(Modifier.height(6.dp))
+            Hint("moneymove.live")
         }
 
         Spacer(Modifier.height(28.dp))
