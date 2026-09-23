@@ -60,25 +60,36 @@ async function accessToken() {
   if (cached.token && cached.exp - 60 > now) return cached.token;
   if (inFlight) return inFlight;
 
-  inFlight = (async () => {
-    const sa = serviceAccount();
-    if (!sa) return '';
-    const header = b64url({ alg: 'RS256', typ: 'JWT' });
-    const claim = b64url({
-      iss: sa.client_email,
-      scope: 'https://www.googleapis.com/auth/androidpublisher',
-      aud: 'https://oauth2.googleapis.com/token',
-      iat: now,
-      exp: now + 3600,
-    });
-    let assertion;
+  // The in-flight marker is cleared AFTER this promise settles, not inside
+  // it — and that ordering is the whole point.
+  //
+  // An async IIFE that returns before it ever awaits runs to completion
+  // synchronously, so a `finally` inside it fires BEFORE `inFlight = …` has
+  // been assigned. Every path that gives up early does exactly that: no
+  // service account, a key that will not sign. The marker was therefore left
+  // holding a resolved promise of '', every later call short-circuited on it,
+  // and the server answered "cannot verify" for the life of the process —
+  // including long after somebody had fixed the key. Found by the test, which
+  // is the only place that ever asks twice with two different keys.
+  const run = (async () => {
     try {
-      const sig = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${claim}`), sa.private_key);
-      assertion = `${header}.${claim}.${sig.toString('base64url')}`;
-    } catch {
-      return '';   // a key that will not load is a key we do not have
-    }
-    try {
+      const sa = serviceAccount();
+      if (!sa) return '';
+      const header = b64url({ alg: 'RS256', typ: 'JWT' });
+      const claim = b64url({
+        iss: sa.client_email,
+        scope: 'https://www.googleapis.com/auth/androidpublisher',
+        aud: 'https://oauth2.googleapis.com/token',
+        iat: now,
+        exp: now + 3600,
+      });
+      let assertion;
+      try {
+        const sig = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${claim}`), sa.private_key);
+        assertion = `${header}.${claim}.${sig.toString('base64url')}`;
+      } catch {
+        return '';   // a key that will not load is a key we do not have
+      }
       const res = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -93,11 +104,11 @@ async function accessToken() {
       return cached.token;
     } catch {
       return '';
-    } finally {
-      inFlight = null;
     }
   })();
-  return inFlight;
+  inFlight = run;
+  run.finally(() => { if (inFlight === run) inFlight = null; });
+  return run;
 }
 
 const b64url = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');

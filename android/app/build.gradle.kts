@@ -19,10 +19,36 @@ android {
         versionName = "1.0"
     }
 
+    /**
+     * Release signing, read from the environment.
+     *
+     * Play signs releases with a key that must never be lost — losing it means
+     * never updating the app again — so the keystore and its passwords stay
+     * out of this repo entirely and out of this file. Set the four variables
+     * and `./gradlew bundleRelease` works; leave them unset and the release
+     * build simply goes out unsigned rather than failing in a way that looks
+     * like a broken build.
+     */
+    val keystore = System.getenv("MM_KEYSTORE")?.let(::file)?.takeIf { it.exists() }
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = keystore
+                storePassword = System.getenv("MM_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MM_KEY_ALIAS") ?: "moneymove"
+                keyPassword = System.getenv("MM_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 on, because a Compose app ships a lot of code it never runs
+            // and Play's download size is a real number people look at.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystore != null) signingConfig = signingConfigs.getByName("release")
         }
         debug {
             applicationIdSuffix = ""
