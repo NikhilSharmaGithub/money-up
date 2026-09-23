@@ -62,7 +62,7 @@ fun AppScaffold(
 
     Box(Modifier.fillMaxSize().background(p.page)) {
         if (atTable) {
-            GameScreen(store)
+            GameScreen(store, account)
         } else {
             Column(Modifier.fillMaxSize()) {
                 Spacer(Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding()))

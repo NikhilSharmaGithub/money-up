@@ -316,6 +316,17 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        // The deadlock rule explains itself the one time it becomes possible.
+        // The server keeps the card in every push from then on, so the `at`
+        // stamp — not its presence — is what makes it news, and the stamp is
+        // remembered on disk so rejoining the same table does not re-teach it.
+        next.reliefCard?.let { card ->
+            if (card.at > prefs.reliefSeenAt) {
+                prefs.reliefSeenAt = card.at
+                if (old != null) reliefPopup = card
+            }
+        }
+
         // The turn banner, once per change of hands.
         next.turn?.playerId?.let { pid ->
             if (next.isPlaying && pid != lastTurnId) {

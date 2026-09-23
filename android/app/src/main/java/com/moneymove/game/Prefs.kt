@@ -63,6 +63,14 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_LAST_ROOM, "") ?: ""
         set(v) = sp.edit().putString(KEY_LAST_ROOM, v).apply()
 
+    /**
+     * The deadlock rule's stamp, so rejoining a table does not re-teach a rule
+     * this device has already read.
+     */
+    var reliefSeenAt: Double
+        get() = java.lang.Double.longBitsToDouble(sp.getLong(KEY_RELIEF, 0L))
+        set(v) = sp.edit().putLong(KEY_RELIEF, java.lang.Double.doubleToRawLongBits(v)).apply()
+
     /** Whether the six welcome cards have been through once. */
     var seenWelcome: Boolean
         get() = sp.getBoolean(KEY_WELCOME, false)
@@ -100,5 +108,6 @@ class Prefs(context: Context) {
         private const val KEY_LAST_ROOM = "mm.lastRoom"
         private const val KEY_WELCOME = "mm.seenWelcome"
         private const val KEY_SERVER = "mm.server"
+        private const val KEY_RELIEF = "mm.reliefSeen"
     }
 }

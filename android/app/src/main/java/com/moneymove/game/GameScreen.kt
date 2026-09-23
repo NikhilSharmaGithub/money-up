@@ -50,12 +50,15 @@ import androidx.compose.ui.unit.sp
  * undealt and the seats still filling up.
  */
 @Composable
-fun GameScreen(store: GameStore) {
+fun GameScreen(store: GameStore, account: AccountStore) {
     val p = P.current
     val state = store.state
     var tappedTile by remember { mutableStateOf<Int?>(null) }
     var chatOpen by remember { mutableStateOf(false) }
     var tradeOpen by remember { mutableStateOf(false) }
+    var rulesOpen by remember { mutableStateOf(false) }
+    var deedsOpen by remember { mutableStateOf(false) }
+    var watching by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(p.page)) {
         Column(
@@ -64,7 +67,7 @@ fun GameScreen(store: GameStore) {
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
                 .verticalScroll(rememberScrollState()),
         ) {
-            TableBar(store)
+            TableBar(store, onDeeds = { deedsOpen = true }, onRules = { rulesOpen = true })
 
             if (state == null) {
                 Box(Modifier.fillMaxWidth().height(320.dp), contentAlignment = Alignment.Center) {
@@ -79,6 +82,7 @@ fun GameScreen(store: GameStore) {
             } else {
                 Seats(store, state)
                 Spacer(Modifier.height(8.dp))
+                AwaitingSeats(store, Modifier.padding(horizontal = 12.dp))
                 Box(Modifier.padding(horizontal = 10.dp)) {
                     BoardView(store) { tappedTile = it }
                 }
@@ -97,7 +101,14 @@ fun GameScreen(store: GameStore) {
         }
 
         CardPopup(store, Modifier.align(Alignment.Center))
+        ReliefCardOverlay(store)
         TurnBanner(store, Modifier.align(Alignment.TopCenter))
+
+        // Removed by the clock: the one thing that has happened, so it covers
+        // everything until the player says they would rather watch.
+        if (store.timedOut && !watching) {
+            TimedOutOverlay(store, onWatch = { watching = true })
+        }
 
         // A round button at thumb height, because the chat is the half of a
         // board game that is not the board — and a badge, because a game
@@ -115,6 +126,15 @@ fun GameScreen(store: GameStore) {
     }
     if (chatOpen) ChatSheet(store) { chatOpen = false }
     if (tradeOpen) TradeSheet(store) { tradeOpen = false }
+    if (rulesOpen) LobbySheet(account, store) { rulesOpen = false }
+    if (deedsOpen) {
+        PropertiesSheet(
+            store,
+            onDismiss = { deedsOpen = false },
+            onOpenTile = { deedsOpen = false; tappedTile = it },
+        )
+    }
+    if (store.showGameOver) GameOverSheet(store) { store.showGameOver = false }
 }
 
 @Composable
@@ -152,7 +172,7 @@ private fun ChatButton(store: GameStore, modifier: Modifier = Modifier, onOpen: 
 
 /** The strip at the top: who you are at this table, and the way out. */
 @Composable
-private fun TableBar(store: GameStore) {
+private fun TableBar(store: GameStore, onDeeds: () -> Unit, onRules: () -> Unit) {
     val p = P.current
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
@@ -171,6 +191,10 @@ private fun TableBar(store: GameStore) {
             Chip(money(me.money), icon = "cash", tint = if (me.inDebt) p.bad else p.good)
             Spacer(Modifier.width(8.dp))
         }
+        MMButton("", kind = BtnKind.GHOST, icon = "bank") { onDeeds() }
+        Spacer(Modifier.width(6.dp))
+        MMButton("", kind = BtnKind.GHOST, icon = "scales") { onRules() }
+        Spacer(Modifier.width(6.dp))
         MMButton("Leave", kind = BtnKind.GHOST) { store.leave() }
     }
 }
