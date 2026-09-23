@@ -137,20 +137,39 @@ private fun DrawScope.drawTile(
 
     // A street wears its country's colour as a band along its inner edge —
     // the side facing the middle of the board, so the ring of colours reads
-    // as one band rather than four that happen to be near each other.
+    // as one band rather than four that happen to be near each other — and a
+    // flag medallion riding that edge, which is what says WHICH country
+    // rather than merely that two streets share one.
     tile.group?.let { key ->
         val info = state.groups[key] ?: return@let
         val band = cssColor(info.color, p.red)
-        val thickness = minOf(r.width, r.height) * 0.24f
+        val short = minOf(r.width, r.height)
+        val thickness = short * 0.24f
+        val medal = short * 0.20f
+        var badge: Offset? = null
         when (geom.side(tile.index)) {
-            BoardGeometry.Side.TOP -> drawRect(band,
-                topLeft = Offset(r.left, r.bottom - thickness), size = Size(r.width, thickness))
-            BoardGeometry.Side.BOTTOM -> drawRect(band,
-                topLeft = r.topLeft, size = Size(r.width, thickness))
-            BoardGeometry.Side.LEFT -> drawRect(band,
-                topLeft = Offset(r.right - thickness, r.top), size = Size(thickness, r.height))
-            BoardGeometry.Side.RIGHT -> drawRect(band,
-                topLeft = r.topLeft, size = Size(thickness, r.height))
+            BoardGeometry.Side.TOP -> {
+                drawRect(band, topLeft = Offset(r.left, r.bottom - thickness),
+                    size = Size(r.width, thickness))
+                badge = Offset(r.center.x, r.bottom - thickness / 2)
+            }
+            BoardGeometry.Side.BOTTOM -> {
+                drawRect(band, topLeft = r.topLeft, size = Size(r.width, thickness))
+                badge = Offset(r.center.x, r.top + thickness / 2)
+            }
+            BoardGeometry.Side.LEFT -> {
+                drawRect(band, topLeft = Offset(r.right - thickness, r.top),
+                    size = Size(thickness, r.height))
+                badge = Offset(r.right - thickness / 2, r.center.y)
+            }
+            BoardGeometry.Side.RIGHT -> {
+                drawRect(band, topLeft = r.topLeft, size = Size(thickness, r.height))
+                badge = Offset(r.left + thickness / 2, r.center.y)
+            }
+        }
+        // A tile with buildings on it has better things to show in that space.
+        if (badge != null && (own?.houseCount ?: 0) == 0 && short > 18f) {
+            with(Art) { drawMedallion(info.flag, band, badge, medal, p.tileFace()) }
         }
     }
 
@@ -178,6 +197,16 @@ private fun DrawScope.drawTile(
         // tile is on; sizing off the width alone made every street on the left
         // and right edges wrap in the middle of a word.
         val short = minOf(r.width, r.height)
+        val side = geom.side(tile.index)
+        // The name gets the tile MINUS the band, not the whole tile. On the
+        // left and right runs the band is a quarter of the width and carries
+        // the country medallion, and a name centred over the lot ends up
+        // printed underneath a flag.
+        val band = if (tile.group != null) short * 0.24f else 0f
+        val room = when (side) {
+            BoardGeometry.Side.LEFT, BoardGeometry.Side.RIGHT -> r.width - band
+            else -> r.width
+        }
         val label = measurer.measure(
             tile.name,
             style = TextStyle(
@@ -187,19 +216,20 @@ private fun DrawScope.drawTile(
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
             ),
-            constraints = Constraints(maxWidth = (r.width * 0.94f).toInt().coerceAtLeast(1)),
+            constraints = Constraints(maxWidth = (room * 0.94f).toInt().coerceAtLeast(1)),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        // Centred in the space the colour band leaves, not in the whole tile.
-        val bandShift = when (geom.side(tile.index)) {
-            BoardGeometry.Side.TOP -> -short * 0.10f
-            BoardGeometry.Side.BOTTOM -> short * 0.10f
-            else -> 0f
+        // Centred in the space the band leaves, not in the whole tile.
+        val shift = when (side) {
+            BoardGeometry.Side.TOP -> Offset(0f, -band / 2f)
+            BoardGeometry.Side.BOTTOM -> Offset(0f, band / 2f)
+            BoardGeometry.Side.LEFT -> Offset(-band / 2f, 0f)
+            BoardGeometry.Side.RIGHT -> Offset(band / 2f, 0f)
         }
         drawText(label, topLeft = Offset(
-            r.center.x - label.size.width / 2f,
-            r.center.y - label.size.height / 2f + bandShift,
+            r.center.x - label.size.width / 2f + shift.x,
+            r.center.y - label.size.height / 2f + shift.y,
         ))
     }
 

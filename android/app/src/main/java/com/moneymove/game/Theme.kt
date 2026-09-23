@@ -228,6 +228,12 @@ enum class MMAppearance(val id: String, val title: String, val caption: String) 
 val LocalPalette: ProvidableCompositionLocal<Palette> =
     compositionLocalOf { MMTheme.FELT.dark }
 
+/**
+ * The ring a medallion wears so a pale flag does not dissolve into a pale
+ * tile. Light tables get a white rim, dark tables the board's own felt.
+ */
+fun Palette.tileFace(): Color = tileCorner
+
 object P {
     val current: Palette
         @Composable get() = LocalPalette.current
