@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun SettingsTab(
     store: GameStore,
+    account: AccountStore,
     onTheme: (MMTheme) -> Unit,
     onAppearance: (MMAppearance) -> Unit,
 ) {

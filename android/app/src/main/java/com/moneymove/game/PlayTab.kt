@@ -45,7 +45,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * first of those feel like the obvious one.
  */
 @Composable
-fun PlayTab(store: GameStore) {
+fun PlayTab(store: GameStore, account: AccountStore) {
     val p = P.current
     val scope = rememberCoroutineScopeCompat()
     var code by remember { mutableStateOf("") }
@@ -57,13 +57,52 @@ fun PlayTab(store: GameStore) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
-        Wordmark()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Wordmark()
+            Spacer(Modifier.weight(1f))
+            Row(
+                Modifier
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(99.dp))
+                    .background(p.goldSoft)
+                    .padding(horizontal = 11.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon("coin", size = 15.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${account.coins}",
+                    color = p.gold, fontSize = 14.sp, fontWeight = FontWeight.Black,
+                )
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             "Buy streets. Build hotels. Bankrupt your friends.",
             color = p.ink2, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
+
+        LaunchedEffect(Unit) { account.refresh() }
+        account.daily?.takeIf { it.claimable }?.let { d ->
+            Panel {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon("coin", size = 22.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Daily reward",
+                            color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                        )
+                        Hint(
+                            "${d.amount} coin${if (d.amount == 1) "" else "s"} waiting" +
+                                if (d.streak > 1) " · ${d.streak}-day streak" else ""
+                        )
+                    }
+                    MMButton("Collect", kind = BtnKind.GOLD) { account.claimDaily() }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
 
         Panel {
             SectionLabel("Your nickname")

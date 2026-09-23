@@ -52,6 +52,7 @@ enum class Tab(val label: String, val icon: String) {
 @Composable
 fun AppScaffold(
     store: GameStore,
+    account: AccountStore,
     onTheme: (MMTheme) -> Unit,
     onAppearance: (MMAppearance) -> Unit,
 ) {
@@ -67,11 +68,11 @@ fun AppScaffold(
                 Spacer(Modifier.height(WindowInsets.statusBars.asPaddingValues().calculateTopPadding()))
                 Box(Modifier.weight(1f)) {
                     when (tab) {
-                        Tab.PLAY -> PlayTab(store)
-                        Tab.STORE -> ComingSoon("Store", "Coins, pieces and board rentals.")
-                        Tab.SOCIAL -> ComingSoon("Social", "Friends, messages and the leaderboard.")
-                        Tab.HISTORY -> ComingSoon("History", "Every game this device has finished.")
-                        Tab.SETTINGS -> SettingsTab(store, onTheme, onAppearance)
+                        Tab.PLAY -> PlayTab(store, account)
+                        Tab.STORE -> StoreTab(account)
+                        Tab.SOCIAL -> SocialTab(account, store)
+                        Tab.HISTORY -> HistoryTab(account, store)
+                        Tab.SETTINGS -> SettingsTab(store, account, onTheme, onAppearance)
                     }
                 }
                 TabBar(tab) { tab = it }
@@ -137,18 +138,4 @@ private fun TabBar(current: Tab, onPick: (Tab) -> Unit) {
     }
 }
 
-@Composable
-private fun ComingSoon(title: String, body: String) {
-    val p = P.current
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon("crane", size = 40.dp, tint = p.ink3)
-        Spacer(Modifier.height(12.dp))
-        Text(title, color = p.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
-        Hint(body)
-    }
-}
+

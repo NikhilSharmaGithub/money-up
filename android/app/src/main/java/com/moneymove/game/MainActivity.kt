@@ -29,6 +29,7 @@ import androidx.core.view.WindowCompat
 class MainActivity : ComponentActivity() {
 
     private val store: GameStore by viewModels()
+    private val account: AccountStore by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
             MoneyMoveTheme(theme, dark) {
                 Root(
                     store = store,
+                    account = account,
                     onTheme = { theme = it; prefs.theme = it },
                     onAppearance = { appearance = it; prefs.appearance = it },
                 )
@@ -60,11 +62,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Root(
     store: GameStore,
+    account: AccountStore,
     onTheme: (MMTheme) -> Unit,
     onAppearance: (MMAppearance) -> Unit,
 ) {
     val p = P.current
     Box(Modifier.fillMaxSize().background(p.page)) {
-        AppScaffold(store = store, onTheme = onTheme, onAppearance = onAppearance)
+        AppScaffold(store = store, account = account, onTheme = onTheme, onAppearance = onAppearance)
     }
 }
