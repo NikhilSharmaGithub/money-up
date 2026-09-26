@@ -572,7 +572,8 @@ struct GameScreen: View {
 
             if state.isLobby {
                 if state.isQuickWaiting {
-                    QuickMatchPanel()
+                    QuickMatchPanel(openSettings: { open(.settings) },
+                                    openChat: { open(.chatLog(0)) })
                         .frame(maxHeight: .infinity)
                 } else {
                     LobbyPanel(openSettings: { open(.settings) })
@@ -624,16 +625,22 @@ struct ActivityFeed: View {
         "leave": ("person.fill.badge.minus", Color(hex: 0x94A3B8)),
     ]
 
+    /// Only what the table has said since kick-off (logFloor): the feed
+    /// starts the game silent and fills as it goes, instead of dumping the
+    /// lobby's backlog all at once. The History sheet is where the whole
+    /// record lives. Read off the store's shown log, so a rent line waits
+    /// for the piece exactly as the purse does.
+    private var lines: [LogLine] {
+        Array(store.shownLog.filter { $0.at > store.logFloor }.suffix(12))
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
+        let lines = lines
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: embedded ? 4 : 5) {
-                    // Only what the table has said since kick-off (logFloor):
-                    // the feed starts the game silent and fills as it goes,
-                    // instead of dumping the lobby's backlog all at once. The
-                    // History sheet is where the whole record lives.
-                    ForEach((store.state?.log ?? []).filter { $0.at > store.logFloor }.suffix(12)) { line in
+                    ForEach(lines) { line in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             let style = Self.icons[line.kind] ?? ("circle.fill", P.ink3)
                             Image(systemName: style.0)
@@ -652,13 +659,16 @@ struct ActivityFeed: View {
                 .padding(embedded ? 8 : 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: store.state?.log.last?.at) {
-                if let last = store.state?.log.last {
-                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            // Keyed on the lines on screen rather than the newest one: a line
+            // released at its payday can land above one that arrived during
+            // the walk (an auction bid), and still wants the feed to follow.
+            .onChange(of: lines.map(\.id)) { _, ids in
+                if let last = ids.last {
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last, anchor: .bottom) }
                 }
             }
             .onAppear {
-                if let last = store.state?.log.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
         .background(

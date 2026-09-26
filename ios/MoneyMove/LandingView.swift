@@ -817,7 +817,7 @@ struct LandingView: View {
                     // player is still closing while their first turn runs. The
                     // search carries on behind it either way — nothing about
                     // the game waits on this line.
-                    InterstitialAd.shared.showIfReady(AdDesk.shared.config)
+                    InterstitialAd.beforeGame()
                 } label: {
                     HStack(spacing: 9) {
                         if searching {
@@ -880,6 +880,10 @@ struct LandingView: View {
 
                 MMIconButton(.dice, "Create a private game", kind: .ghost, big: true) {
                     store.createRoom()
+                    // A table of your own is a new table like any other, and
+                    // a private one has no Ready for the break to hold up —
+                    // it starts when you say so.
+                    InterstitialAd.beforeGame()
                 }
                     .disabled(busy)
 
@@ -1018,7 +1022,11 @@ struct LandingView: View {
     private func joinTapped() {
         let code = joinCode.trimmingCharacters(in: .whitespaces).lowercased()
         guard !code.isEmpty else { return }
+        // The code of a game this device still has a seat in is the way back
+        // to it — Continue's door, typed out — and that door shows no break.
+        let returning = store.unfinishedGames.contains { $0.roomId == code }
         store.join(roomId: code)
+        if !returning { InterstitialAd.beforeGame() }
     }
 
     // MARK: - continue last game
@@ -1183,6 +1191,11 @@ struct LandingView: View {
                             ForEach(publicRooms) { room in
                                 Button {
                                     store.join(roomId: room.id)
+                                    // A seat is a new table; a full lobby
+                                    // or a game in play is only somewhere
+                                    // to watch, and nobody sits through a
+                                    // break to watch.
+                                    if room.canSit { InterstitialAd.beforeGame() }
                                 } label: {
                                     HStack(spacing: 10) {
                                         // The list carries games already under

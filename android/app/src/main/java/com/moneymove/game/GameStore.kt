@@ -172,10 +172,35 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     // What is held is shown, never decided on: seats, pods, ranks and pieces
     // read [shownPlayers]; the buy button, trade limits, the debt panel and
     // every purse sum keep reading the raw state.
+    //
+    // The log is held with the money, because it tells the same story in
+    // words: "pays $1,100 rent" printed under the dice while the piece is
+    // still three streets short of the hotel is the surprise told backwards
+    // all over again. So a journey's lines — the rent, the tax, the card, the
+    // bust, the winner — wait on its payday too, and every place the log is
+    // read reads [shownLog]. The dice are said at once, and so is everything
+    // that is not a walk's: a trade, the auction, somebody joining.
 
     /** Money waiting on its journey: player id -> what has not been shown yet. */
     var held: Map<String, Int> by mutableStateOf(emptyMap())
         private set
+
+    /** Log lines waiting on their journey, by [LogLine.key]. */
+    var heldLog: Set<String> by mutableStateOf(emptySet())
+        private set
+
+    /**
+     * The table's log as it is shown: the server's own window, the lines a
+     * walk still on stage has yet to earn left out. The centre well's feed
+     * and the History sheet both read this, so neither can tell the story
+     * before the other.
+     */
+    val shownLog: List<LogLine>
+        get() {
+            val log = state?.log.orEmpty()
+            val h = heldLog
+            return if (h.isEmpty()) log else log.filter { it.key !in h }
+        }
 
     /** Seats already out on the server whose bankruptcy has not landed on screen. */
     var heldBusts: Set<String> by mutableStateOf(emptySet())
@@ -712,9 +737,12 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     // Who may press what in a lobby — the server's own gates, so no button is
     // offered that would come back refused.
 
-    /** The host may remove anybody but themselves, except at a cup table. */
+    /**
+     * The host may remove anybody but themselves, except at a cup table — and
+     * at a Play-now table, whose chairs belong to matchmaking.
+     */
     fun canKick(player: PlayerState): Boolean =
-        isHost && player.id != meId && state?.cup != true
+        isHost && player.id != meId && state?.cup != true && state?.quick != true
 
     /** The chair travels to a connected person, never to a bot, and never at a matchmade table. */
     fun canMakeHost(player: PlayerState): Boolean =
@@ -725,8 +753,11 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     fun canCycleTeam(player: PlayerState): Boolean =
         (state?.settings?.teams ?: 0) > 0 && (player.id == meId || (isHost && player.isBot == true))
 
-    /** The host fills an empty chair with a house player, except at a cup table. */
-    val canAddBot: Boolean get() = isHost && state?.cup != true
+    /**
+     * The host fills an empty chair with a house player, except at a cup
+     * table, and at a Play-now table, which fills its own.
+     */
+    val canAddBot: Boolean get() = isHost && state?.cup != true && state?.quick != true
 
     /** A name can still change: the server only listens in the lobby. */
     val canRename: Boolean get() = state?.isLobby == true
@@ -902,6 +933,11 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             // Say we can stitch diffs and the table stops re-sending the board
             // thirty times a minute. Silence keeps the old contract.
             "proto" to StateMirror.PROTOCOL_VERSION,
+            // This seat has an "I'm ready" button. A seat that never says so
+            // is counted ready by the server, so a Play-now table never waits
+            // on a phone that has no button to press. The guests' joins leave
+            // it off on purpose: a pass & play seat has no Ready of its own.
+            "canReady" to true,
         )))
     }
 
@@ -1525,6 +1561,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             .mapTo(HashSet()) { it.id }
         val ended = next.isEnded && !old.isEnded
         val kinds = freshLog.mapTo(HashSet()) { it.kind }.apply { remove("dice"); remove("auction") }
+        // The words that go with this push's money, held with it if it is
+        // held. What a walk did not cause is never among them.
+        val lines = freshLog.filter { it.kind !in NEVER_HELD }.mapTo(HashSet()) { it.key }
         // The walker clangs the gate itself on the walk to prison.
         val walkedToJail = legs.any { it.cause == "jail" }
 
@@ -1634,12 +1673,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         }
         val rest = delta - mine.keys
         val bustOut = busts - bustIn
-        val entry = Entry(mine, kinds, bustIn, creditors, ended, walkedToJail)
+        val entry = Entry(mine, kinds, bustIn, creditors, ended, walkedToJail, lines)
         if (!entry.isEmpty) {
             target.entries += entry
             if (mine.isNotEmpty()) held = held.plusDelta(mine)
             if (bustIn.isNotEmpty()) heldBusts = heldBusts + bustIn
             if (ended) gameOverHeld = true
+            if (lines.isNotEmpty()) heldLog = heldLog + lines
         }
         if (rest.isNotEmpty() || bustOut.isNotEmpty()) {
             voice(Entry(rest, emptySet(), bustOut, creditors, false, walkedToJail))
@@ -1665,10 +1705,11 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         stage = journeys.filter { !it.cut }
     }
 
-    /** One entry off the ledger and onto the table. */
+    /** One entry off the ledger and onto the table — its lines into the log with it. */
     private fun land(entry: Entry) {
         if (entry.delta.isNotEmpty()) held = held.plusDelta(entry.delta.mapValues { -it.value })
         if (entry.busts.isNotEmpty()) heldBusts = heldBusts - entry.busts
+        if (entry.lines.isNotEmpty()) heldLog = heldLog - entry.lines
         voice(entry)
     }
 
@@ -1693,6 +1734,8 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         if (stage.isNotEmpty()) stage = emptyList()
         if (held.isNotEmpty()) held = emptyMap()
         if (heldBusts.isNotEmpty()) heldBusts = emptySet()
+        // A position shows the log as it stands, like the money.
+        if (heldLog.isNotEmpty()) heldLog = emptySet()
         gameOverHeld = false
     }
 
@@ -1978,6 +2021,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     private fun localOr(seat: String?, fallback: String = meId): String = seat?.takeIf { isLocal(it) } ?: fallback
 
     fun start() = emit("start")
+
+    /**
+     * "I'm ready", or taking it back, at a Play-now table. The button only
+     * moves when the server's next push says it has, so two quick taps can
+     * never leave the phone and the table disagreeing about it.
+     */
+    fun setReady(on: Boolean) = emit("ready", on)
     fun addBot() = emit("addBot")
     fun kick(playerId: String) = emit("kick", playerId)
     fun makeHost(playerId: String) = emit("makeHost", JSONObject(mapOf("id" to playerId)))
@@ -2067,7 +2117,16 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         for (seat in localIds) emitAs(seat, "quit")
     }
 
-    fun rematch() = emit("rematch")
+    /**
+     * Run the table back. A Play-now table does not reconvene — the server
+     * turns that down, because four strangers are not a group that asked for
+     * another round under whoever pressed first — so from one of those the
+     * dock's "Play again" does what the result sheet's does: out of this table
+     * and into a fresh Play now, as iOS's rematch() does.
+     */
+    fun rematch() {
+        if (state?.quick == true && state?.cup != true) playAgainQuick() else emit("rematch")
+    }
 
     /**
      * "Play again" at a matchmade table. It does not reconvene — offering the
@@ -2858,6 +2917,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         /** A journey lands at most this many entries; anything after folds into the last. */
         private const val MAX_ENTRIES = 4
 
+        /**
+         * Log lines said the moment they arrive, whatever is walking: the
+         * dice, which start the walk; the gavel and the bids, which the whole
+         * table watches in the open; and people coming and going.
+         */
+        private val NEVER_HELD = setOf("dice", "auction", "join", "leave")
+
     }
 
     /**
@@ -2897,8 +2963,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     /**
      * One push's worth of a journey's money and what it would say: the change
      * per seat, the log's kinds (less the dice and the gavel, which are never
-     * held), who went bankrupt, who each bankruptcy paid, and whether it
-     * ended the game.
+     * held), who went bankrupt, who each bankruptcy paid, whether it ended
+     * the game, and the log lines it printed ([LogLine.key]s), which reach
+     * the log when it lands.
      */
     data class Entry(
         val delta: Map<String, Int>,
@@ -2907,8 +2974,10 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         val creditors: Map<String, Set<String>>,
         val ended: Boolean,
         val walkedToJail: Boolean,
+        val lines: Set<String> = emptySet(),
     ) {
-        val isEmpty: Boolean get() = delta.isEmpty() && kinds.isEmpty() && busts.isEmpty() && !ended
+        val isEmpty: Boolean
+            get() = delta.isEmpty() && kinds.isEmpty() && busts.isEmpty() && !ended && lines.isEmpty()
 
         /** Two entries said as one — the tail of a journey that filed more than four. */
         operator fun plus(o: Entry) = Entry(
@@ -2920,6 +2989,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             },
             ended = ended || o.ended,
             walkedToJail = walkedToJail || o.walkedToJail,
+            lines = lines + o.lines,
         )
     }
 }

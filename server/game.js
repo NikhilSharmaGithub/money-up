@@ -75,6 +75,18 @@ export const QUICK_ROLL_KEYS = Object.keys(QUICK_ROLL);
 export const quickRollValues = (key) => [...(QUICK_ROLL[key] || [])];
 
 /**
+ * What the host of a Play-now table may change: exactly what the table rolled,
+ * plus the board. Everything else a stranger sat down under stays put — the
+ * seats, the privacy and the house players because matchmaking stands on
+ * them, the clock because a timeout costs karma, the mortgage because without
+ * it ordinary rent turns into bankruptcy, teams because strangers cannot pick
+ * sides, the random order because without it the host always goes first, and
+ * deadlock relief because it is the anti-stall valve. The same list the
+ * reasoning above QUICK_ROLL gives for not rolling them.
+ */
+export const QUICK_HOST_KEYS = [...QUICK_ROLL_KEYS, 'mapId'];
+
+/**
  * Deal one quick table's house rules.
  *
  * `boards` is whatever the caller says every player can sit down on today.
@@ -131,6 +143,47 @@ export function quickRollParts(settings = {}, mapName = '') {
     `$${Number(settings.startingCash || 0).toLocaleString('en-US')} to start`,
     ...Object.entries(QUICK_ROLL_LABELS).map(([k, label]) => `${label} ${settings[k] ? 'on' : 'off'}`),
   ];
+}
+
+/**
+ * The same phrases, for only the rules a host just changed and in the same
+ * reading order, so "Riya changed the rules: $1,500 to start · auctions off"
+ * uses the words the chips above it use. The board alone gets a noun after
+ * it: a bare "Blighty" at the end of that sentence reads as a typo.
+ */
+function quickChangeParts(settings, mapName, keys) {
+  const [board, cash, ...rules] = quickRollParts(settings, mapName);
+  const out = [];
+  if (keys.includes('mapId')) out.push(`${board} board`);
+  if (keys.includes('startingCash')) out.push(cash);
+  Object.keys(QUICK_ROLL_LABELS).forEach((k, i) => { if (keys.includes(k)) out.push(rules[i]); });
+  return out;
+}
+
+/**
+ * Pick the Play-now table a player should be sent to, or null for a fresh one.
+ *
+ * Only a table still in its lobby, with a chair a person can take, and far
+ * enough from its start that they will be sitting down before it deals —
+ * matchmaking never sends somebody to a table that leaves without them.
+ *
+ * Then, in order: the table with the most people already, so tables fill
+ * instead of splitting; then one with a chair that is actually empty — a seat
+ * somebody just walked out of — so no house player has to be turfed out for
+ * the newcomer and the leaver's seat goes back to a person; then whichever
+ * starts soonest, so nobody waits longer than they have to.
+ */
+export function pickQuickRoom(rooms, now = Date.now()) {
+  const people = (r) => r.players.filter((p) => !p.isBot).length;
+  const open = (r) => (r.players.length < r.settings.maxPlayers ? 1 : 0);
+  const cutoff = GameRoom.QUICK.joinCutoffMs;
+  const fits = [...rooms].filter((r) => r.quick && r.status === 'lobby' && r.quickLobby
+    && people(r) < r.settings.maxPlayers
+    && r.quickLobby.startBy - now > cutoff);
+  fits.sort((a, b) => (people(b) - people(a))
+    || (open(b) - open(a))
+    || (a.quickLobby.startBy - b.quickLobby.startBy));
+  return fits[0] || null;
 }
 
 /**
@@ -320,7 +373,14 @@ export class GameRoom {
     return COLORS.find((c) => !used.has(c)) || COLORS[this.players.length % COLORS.length];
   }
 
-  addPlayer({ id, name, isBot = false, flag = '', color = '' }) {
+  /**
+   * `canReady` is false for a client that has no Ready button — every build
+   * that shipped before the Play-now lobby had one. Those seats count as ready
+   * from the moment they sit, so a mixed table never waits on a player who
+   * has no way to say they are.
+   */
+  addPlayer({ id, name, isBot = false, flag = '', color = '', canReady = true }) {
+    const lobby = !!(this.quick && this.status === 'lobby' && this.quickLobby);
     if (this.players.length >= this.settings.maxPlayers) {
       // A quick table never turns a person away over a house player's chair:
       // the most recent house arrival gives the seat back and slips out.
@@ -328,7 +388,9 @@ export class GameRoom {
         ? [...this.players].reverse().find((p) => p.isBot) : null;
       if (!seat) return { error: 'Room is full' };
       this.players = this.players.filter((p) => p !== seat);
-      if (this.hostId === seat.id) this.hostId = this.players[0]?.id || null;
+      this.clearTimer(`quickBotReady:${seat.id}`);
+      if (this.quick) this.syncQuickHost();
+      else if (this.hostId === seat.id) this.hostId = this.players[0]?.id || null;
       this.say(`${seat.name} left the room`, 'leave');
     }
     if (this.status !== 'lobby') return { error: 'Game already started' };
@@ -356,18 +418,56 @@ export class GameRoom {
       skipTurns: 0,
       bankrupt: false,
       doublesInARow: 0,
+      /** Said "I'm ready" in a Play-now lobby. Nowhere else means anything. */
+      ready: false,
+      /** On a build with no Ready button, so counted as ready throughout. */
+      legacyReady: false,
     };
+    const firstPerson = lobby && !isBot && !this.players.some((p) => !p.isBot);
     this.players.push(player);
-    if (!this.hostId) this.hostId = id;
+    if (this.quick) this.syncQuickHost();
+    else if (!this.hostId) this.hostId = id;
     this.say(`${player.name} joined the game`, 'join');
-    if (this.quick && !isBot && this.status === 'lobby') {
-      // A person sat down: relight a burnt-out fuse if need be, and replan
-      // the house arrivals around the seats that are actually left.
-      if (!this.quickStartAt) this.armQuickStart(GameRoom.QUICK_FUSE_SECONDS);
-      else this.planQuickFill();
-    }
+    if (lobby) this.seatedInQuickLobby(player, { canReady, firstPerson });
     this.push();
     return { player };
+  }
+
+  /**
+   * Somebody took a chair at a Play-now table that is still in its lobby.
+   *
+   * A house player starts unready and taps Ready a moment later, the way a
+   * person would — the lobby does not say who is who, and a seat that is
+   * ready the instant it appears would. A person starts unready too, unless
+   * their client has no Ready button to press.
+   *
+   * The first person into an empty table gets the whole search from the top:
+   * the clock started when the table was made, and the ad they were shown on
+   * the way in has been eating it since. Anyone arriving after the search has
+   * given the table something new to read, so it cannot deal for a few
+   * seconds, and any seat waiting on a house player is theirs now.
+   */
+  seatedInQuickLobby(p, { canReady = true, firstPerson = false } = {}) {
+    if (p.isBot) {
+      this.armBotReady(p);
+    } else {
+      p.legacyReady = !canReady;
+      // …except the host, who has a Start rather than a Ready — the first
+      // person in holds the chair already, and a tick beside their name would
+      // say something no host is ever asked to say.
+      p.ready = !canReady && p.id !== this.hostId;
+      if (firstPerson) this.openQuickLobby();
+    }
+    if (!this.quickSearching()) this.quickLobby.settledAt = Date.now();
+    if (!p.isBot) {
+      this.trimBackfill();
+      this.planQuickFill();
+      // A table full of people has nobody left to look for.
+      if (this.quickSearching() && this.humans.length >= this.settings.maxPlayers) {
+        this.endGathering({ push: false });
+      }
+    }
+    this.scheduleQuick();
   }
 
   removePlayer(id) {
@@ -379,19 +479,32 @@ export class GameRoom {
     // next lobby inherits.
     if (this.status === 'lobby' || this.status === 'ended') {
       this.players = this.players.filter((x) => x.id !== id);
-      if (this.hostId === id) this.hostId = this.players[0]?.id || null;
       this.say(`${p.name} left the room`, 'leave');
-      if (this.quick && this.status === 'lobby') {
+      // A Play-now table's host is whoever has been sitting there longest,
+      // and is always a person: handing the chair to players[0] could give it
+      // to a house player, who would then never press Start.
+      if (this.quick) this.syncQuickHost({ quiet: this.status !== 'lobby' });
+      else if (this.hostId === id) this.hostId = this.players[0]?.id || null;
+      if (this.quick && this.status === 'lobby' && this.quickLobby) {
+        this.clearTimer(`quickBotReady:${id}`);
         if (!this.players.some((x) => !x.isBot)) {
           // The last person walked out — the house players don't hang around
-          // performing for an empty room.
+          // performing for an empty room, and nothing here is on a clock any
+          // more. Whoever sits down next gets the search from the top.
           for (const b of this.players) this.say(`${b.name} left the room`, 'leave');
           this.players = [];
           this.hostId = null;
+          this.clearQuickTimers();
+        } else {
+          // With the search still well under way, the empty chair simply goes
+          // back into the plan. Late in it, or after it, the chair is held
+          // open for a moment first: matchmaking may send a person to it, and
+          // a person is worth waiting eleven seconds for.
+          const left = this.quickLobby.gatherUntil - Date.now();
+          if (left > GameRoom.QUICK.backfillMs) this.planQuickFill();
+          else this.scheduleBackfill();
+          this.scheduleQuick();
         }
-        // Either clears the joins still on the clock, or refills the freed
-        // chair on the same human rhythm.
-        this.planQuickFill();
       }
     } else {
       // Keep the seat warm: a refresh or a flaky network shouldn't instantly
@@ -409,6 +522,9 @@ export class GameRoom {
 
   /** The host hands the chair on to someone else at the table. */
   makeHost(id, targetId) {
+    // Nothing to hand over: at a Play-now table the chair belongs to whoever
+    // has been sitting there longest, and moves by itself when they leave.
+    if (this.quick) return { error: 'At a Play-now table the host is whoever has been there longest' };
     if (id !== this.hostId) return { error: 'Only the host can pass it on' };
     const target = this.player(targetId);
     if (!target || target.isBot) return { error: 'Pick a player at the table' };
@@ -521,21 +637,27 @@ export class GameRoom {
 
   updateSettings(id, patch) {
     if (id !== this.hostId || this.status !== 'lobby') return;
-    // A matchmade table is nobody's table.
+    if (!patch || typeof patch !== 'object') return;
+    // A matchmade table is only partly its host's.
     //
-    // Whoever tapped Play Now first is host here only because somebody had to
-    // hold the chair, and the three strangers matchmaking funnelled in behind
-    // them were shown what the table rolled and agreed to that. Rewriting it
-    // under them is not a host's privilege, it is a stranger changing the
-    // rules of a game already in front of you.
+    // The host may re-deal what the table rolled — the bankroll, the five
+    // house rules, the board — because everyone at the table can read the
+    // change before they say they are ready, and saying so is the whole point
+    // of the lobby. Nothing else. The seats, the privacy and the house players
+    // are what matchmaking stands on, and the clock is the sharp end: a
+    // five-second turn on somebody who never asked for one is a timeout, and a
+    // timeout takes them out of the game AND costs them karma.
     //
-    // The clock is the sharp end and the reason this is a rule rather than a
-    // courtesy: a five-second turn on somebody who never asked for one is a
-    // timeout, and a timeout takes them out of the game AND costs them karma.
-    // Both clients already say the settings here belong to nobody; this is
-    // the server finally agreeing. It lives in updateSettings rather than in
-    // the socket handler because that is the one door every client uses.
-    if (this.quick) return { error: 'A matchmade table sets itself' };
+    // One stray key refuses the whole patch rather than quietly keeping the
+    // half that was allowed — a client asking for something it may not have
+    // is a client out of step, and half a change is harder to explain than
+    // none. It lives here rather than in the socket handler because this is
+    // the one door every client uses.
+    const quick = !!this.quick;
+    if (quick && Object.keys(patch).some((k) => !QUICK_HOST_KEYS.includes(k))) {
+      return { error: 'A Play-now table keeps its seats, privacy, house players, teams and clock' };
+    }
+    const before = quick ? Object.fromEntries(QUICK_HOST_KEYS.map((k) => [k, this.settings[k]])) : null;
     // A board is stock now. The host may pick the house board, either of the
     // two the day is giving away, or anything they have bought — and nothing
     // else. Hiding the locked ones in the picker is a courtesy to a player;
@@ -564,7 +686,9 @@ export class GameRoom {
     const allowed = Object.keys(DEFAULT_SETTINGS);
     for (const [k, v] of Object.entries(patch)) {
       if (!allowed.includes(k)) continue;
-      this.settings[k] = v;
+      // Four strangers read these rules off chips that say "on" or "off", so
+      // at their table a switch is a switch and nothing else gets stored.
+      this.settings[k] = quick && typeof DEFAULT_SETTINGS[k] === 'boolean' ? !!v : v;
     }
     this.settings.maxPlayers = Math.max(2, Math.min(8, Number(this.settings.maxPlayers) || 4));
     // The bankroll and the clock arrive as numbers from a picker, which is to
@@ -583,10 +707,38 @@ export class GameRoom {
       this.settings.teams = Math.max(0, Math.min(4, Number(this.settings.teams) || 0));
       this.syncTeamsWithSettings();
     }
-    if (patch.startingCash) {
+    // Any bankroll that arrived, even one the clamp above had to replace —
+    // otherwise the lobby announces a bankroll nobody is holding.
+    if (patch.startingCash !== undefined) {
       this.players.forEach((p) => { p.money = this.settings.startingCash; });
     }
+    if (quick) this.quickRulesChanged(id, QUICK_HOST_KEYS.filter((k) => this.settings[k] !== before[k]));
     this.push();
+  }
+
+  /**
+   * A Play-now host changed what the table plays. Everybody who said they were
+   * ready said it to the old rules, so they say it again — the host aside,
+   * and the seats on builds with no Ready button, which could never say it
+   * again. House players re-ready after a human pause like anyone else.
+   *
+   * Only a change that changed something counts. Tapping the value that is
+   * already set is not news, and unreadying a table over it would hand a
+   * restless host a way to keep strangers waiting that the lobby's own clock
+   * could never see — this is exactly the trick the hard stop is there for.
+   */
+  quickRulesChanged(id, keys) {
+    const L = this.quickLobby;
+    if (!L || !keys.length) return;
+    for (const p of this.players) {
+      if (p.id === this.hostId || p.legacyReady) continue;
+      p.ready = false;
+      if (p.isBot) this.armBotReady(p);
+    }
+    L.settledAt = Date.now();
+    const who = this.player(id)?.name || 'The host';
+    this.say(`${who} changed the rules: ${quickChangeParts(this.settings, this.map.name, keys).join(' · ')}`, 'system');
+    this.scheduleQuick();
   }
 
   /** Clears team picks when the mode is switched off mid-lobby. */
@@ -651,7 +803,7 @@ export class GameRoom {
    * parked tabs.
    *
    * This puts it back, and it COERCES rather than refuses. Two callers throw
-   * away what start() returns — the quick-match fuse and the cup auto-start —
+   * away what start() returns — the Play-now clock and the cup auto-start —
    * so an error here would be a table that silently never begins. Falling back
    * to the house board is a table that plays.
    *
@@ -718,6 +870,10 @@ export class GameRoom {
       p.missedTurns = 0;
       p.coveredTurn = false;
     });
+    // The lobby is over however the game began — the host's Start, the clock,
+    // or a test calling this directly — so it is closed here, at the one door
+    // they all come through, and nothing it had on a timer outlives it.
+    if (this.quick) this.closeQuickLobby();
     this.status = 'playing';
     this.ownership = {};
     this.vacationPot = 0;
@@ -943,32 +1099,65 @@ export class GameRoom {
 
   // ---------------------------------------------------------- quick match --
   /**
-   * Turn this room into a drop-in table: public, bot-backed, and on a short
-   * fuse. Whoever is queueing right now plays together; the fuse is what stops
-   * a lone player staring at an empty lobby.
+   * Every clock a Play-now lobby runs on, in one object a test can swap out.
+   *
+   * gatherMs      The search. Long enough for the ad shown at the Play now tap
+   *               to finish inside it, and for other people tapping Play now
+   *               to land on this table rather than one of their own.
+   * botWindowMs   The end of the search, the only part in which house players
+   *               take chairs — a person who arrives on second nine should find
+   *               a table of people, not one already padded out.
+   * startWindowMs After the search: time to read the rules and say hello. An idle
+   *               host can hold strangers no longer than this.
+   * settleMs      After a rule change or a new face, nothing deals by itself
+   *               for at least this long, so it can actually be read.
+   * hardStopMs    After the search, the ceiling. A host who keeps changing the
+   *               rules still cannot hold a table past about two minutes.
+   * backfillMs    How long a chair somebody walked out of is held open for a
+   *               person before a house player takes it — the owner's "10–12
+   *               seconds", split down the middle.
+   * botReadyMs    How long a house player takes to tap Ready: a person's pause.
+   * joinCutoffMs  Matchmaking sends nobody to a table that will deal before
+   *               they can possibly be sitting at it.
    */
+  static QUICK = {
+    gatherMs: 20000,
+    botWindowMs: 5000,
+    startWindowMs: 30000,
+    settleMs: 10000,
+    hardStopMs: 90000,
+    backfillMs: 11000,
+    botReadyMs: [1200, 3500],
+    joinCutoffMs: 3000,
+  };
+
+  /** How long a quick table looks for people before it stops looking. */
+  static get QUICK_FUSE_SECONDS() { return GameRoom.QUICK.gatherMs / 1000; }
+
+  /** The stretch at the end of the search in which house players may arrive. */
+  static get QUICK_BOT_WINDOW_MS() { return GameRoom.QUICK.botWindowMs; }
+
   /**
-   * How long a quick table looks for people before it stops looking.
-   * Fifteen seconds of that is the search itself, and only the last five are
-   * spent filling the empty chairs with house players — a person who arrives
-   * on second nine should find a table of people, not one already padded out.
+   * Turn this room into a drop-in table: public, bot-backed, dealt its own
+   * rules, and opened as a lobby. Whoever is queueing right now plays
+   * together. `seconds` is how long this table searches — the default is the
+   * house's, and a test that must never be interrupted asks for a day.
    */
-  static get QUICK_FUSE_SECONDS() { return 15; }
-
-  /** The stretch at the end of the fuse in which house players may arrive. */
-  static get QUICK_BOT_WINDOW_MS() { return 5000; }
-
   makeQuickMatch(seconds = GameRoom.QUICK_FUSE_SECONDS, rolled = null) {
     this.quick = true;
     // The deal comes first, so the log line that announces it is the first
-    // thing in the room and the fuse starts on a table that already knows
+    // thing in the room and the search starts on a table that already knows
     // what it is. Quick play's own three settings go on top of it — they are
     // not up for rolling, and this order says so.
     if (rolled) this.applyQuickRoll(rolled);
     this.settings.isPrivate = false;
     this.settings.allowBots = true;
     this.settings.maxPlayers = 4;
-    this.armQuickStart(seconds);
+    const ms = Number(seconds) * 1000;
+    this.quickGatherMs = Number.isFinite(ms) && ms >= 0 ? ms : GameRoom.QUICK.gatherMs;
+    this.quickBackfills = new Map(); // timer key -> when that chair gets its house player
+    this.openQuickLobby();
+    this.push();
   }
 
   /**
@@ -992,49 +1181,322 @@ export class GameRoom {
     // Same move updateSettings makes: the board is a setting AND an object,
     // and a lobby showing one while the table holds the other is a lie.
     if (keys.includes('mapId')) this.map = getMap(this.settings.mapId);
-    this.quickRoll = { at: Date.now(), keys };
+    // What was dealt, kept beside what is being played: the host may change
+    // the one, and the lobby marks every rule that no longer matches the roll
+    // so nobody mistakes the host's table for the one the dice gave them.
+    const values = Object.fromEntries(QUICK_HOST_KEYS.map((k) => [k, this.settings[k]]));
+    this.quickRoll = { at: Date.now(), keys, values };
     this.say(`This table rolled: ${quickRollParts(this.settings, this.map.name).join(' · ')}`, 'system');
   }
 
-  armQuickStart(seconds) {
-    clearTimeout(this.timers.quick);
-    if (this.status !== 'lobby') return;
-    this.quickStartAt = Date.now() + seconds * 1000;
-    this.timers.quick = setTimeout(() => this.startQuickMatch(), seconds * 1000);
-    this.timers.quick.unref?.();
-    this.planQuickFill();
+  /** The rules the host has changed away from what the table rolled. */
+  quickEdited() {
+    const values = this.quickRoll?.values;
+    if (!values) return [];
+    return QUICK_HOST_KEYS.filter((k) => Object.hasOwn(values, k) && this.settings[k] !== values[k]);
+  }
+
+  /** One timer, gone — handle and key both, so a listing of timers is true. */
+  clearTimer(key) {
+    clearTimeout(this.timers[key]);
+    delete this.timers[key];
+  }
+
+  /** Arm a lobby timer that never keeps the process alive on its own. */
+  quickTimer(key, ms, fn) {
+    this.clearTimer(key);
+    this.timers[key] = setTimeout(() => { delete this.timers[key]; fn(); }, Math.max(0, ms));
+    this.timers[key].unref?.();
+  }
+
+  /** Every lobby timer: the deal, the search, the seats, the backfills, the Ready taps. */
+  clearQuickTimers() {
+    for (const k of Object.keys(this.timers)) if (k.startsWith('quick')) this.clearTimer(k);
+    this.quickBackfills?.clear();
+  }
+
+  /**
+   * Still looking for players: Start waits, and house players arrive on the
+   * plan. Over when endGathering says so rather than when the clock passes
+   * gatherUntil — a timer can land a few milliseconds late, and in that gap
+   * the table would be neither searching nor topped up.
+   */
+  quickSearching() {
+    return !!this.quickLobby && !this.quickLobby.searchOver;
+  }
+
+  /**
+   * Start the search from the top. Called when the table is made and again
+   * when the first person sits down at an empty one — the clock that matters
+   * is theirs, not the table's.
+   */
+  openQuickLobby() {
+    const gatherUntil = Date.now() + (this.quickGatherMs ?? GameRoom.QUICK.gatherMs);
+    this.quickLobby = {
+      gatherUntil,
+      hardStopAt: gatherUntil + GameRoom.QUICK.hardStopMs,
+      settledAt: 0,
+      allSetAt: null,
+      startBy: null,
+      searchOver: false,
+    };
+    this.scheduleQuick();
+  }
+
+  /**
+   * Work out when this table deals by itself, and set the clocks for it.
+   *
+   * The table deals at the end of the start window — or sooner, once every
+   * seat is taken and everyone but the host has said they are ready, a
+   * settle's length after that became true. Never within a settle of the last
+   * rule change or new arrival, so there is always time to read either. And
+   * never later than the hard stop, however many times the rules change.
+   *
+   * Recomputed from scratch on every change rather than nudged, so the answer
+   * never depends on the order things happened in. It does not push: every
+   * caller has something else to say in the same breath.
+   */
+  scheduleQuick() {
+    const L = this.quickLobby;
+    this.clearTimer('quick');
+    this.clearTimer('quickGather');
+    if (!this.quick || this.status !== 'lobby' || !L) return;
+    const Q = GameRoom.QUICK;
+    const now = Date.now();
+    const allSet = this.players.some((p) => !p.isBot)
+      && this.players.length === this.settings.maxPlayers
+      && this.players.every((p) => p.id === this.hostId || p.ready);
+    L.allSetAt = allSet ? (L.allSetAt ?? now) : null;
+    let by = Math.max(L.gatherUntil + Q.startWindowMs, L.settledAt + Q.settleMs);
+    if (L.allSetAt != null) by = Math.min(by, Math.max(L.allSetAt, L.gatherUntil, L.settledAt) + Q.settleMs);
+    L.startBy = Math.min(by, L.hardStopAt);
+    // The one number a build without the lobby knows how to read: it counts
+    // down to it in the waiting room it already has.
+    this.quickStartAt = L.startBy;
+    if (!L.searchOver) this.quickTimer('quickGather', L.gatherUntil - now, () => this.endGathering());
+    this.quickTimer('quick', L.startBy - now, () => this.launchQuick());
+  }
+
+  /**
+   * The search is over — because its clock ran out, or because the table
+   * filled with people and there is nobody left to look for. Every chair
+   * still empty gets its house player now, except the ones being held open
+   * for somebody who might yet come back through matchmaking.
+   */
+  endGathering({ push = true } = {}) {
+    const L = this.quickLobby;
+    if (!this.quick || this.status !== 'lobby' || !L) return;
+    this.clearTimer('quickGather');
+    L.gatherUntil = Math.min(L.gatherUntil, Date.now());
+    L.searchOver = true;
+    if (!this.players.some((p) => !p.isBot)) return;
+    // The planned arrivals were all meant to land before now; any still on
+    // the clock are late, and are seated below rather than left to wander in.
+    for (const k of Object.keys(this.timers)) if (k.startsWith('quickSeat:')) this.clearTimer(k);
+    const held = () => this.quickBackfills?.size || 0;
+    while (this.players.length + held() < this.settings.maxPlayers) {
+      if (this.addBot()?.error) break;
+    }
+    this.scheduleQuick();
+    if (push) this.push();
+  }
+
+  /**
+   * A house player says it is ready after a pause a person might take. Every
+   * seat at a Play-now table looks the same, and one that was ready the
+   * instant it appeared would be the one that was not a person.
+   */
+  armBotReady(p) {
+    const [lo, hi] = GameRoom.QUICK.botReadyMs;
+    const ms = lo + Math.random() * Math.max(0, hi - lo);
+    this.quickTimer(`quickBotReady:${p.id}`, ms, () => {
+      if (this.status !== 'lobby' || !this.quickLobby || this.player(p.id) !== p) return;
+      p.ready = true;
+      this.scheduleQuick();
+      this.push();
+    });
+  }
+
+  /**
+   * Hold an empty chair open for a person before the house takes it. The
+   * chair is filled only if it is still empty when the time is up — someone
+   * matchmaking sent in the meantime has it by then.
+   */
+  scheduleBackfill() {
+    this.quickBackfills ??= new Map();
+    this.backfillSeq = (this.backfillSeq || 0) + 1;
+    const key = `quickBackfill:${this.backfillSeq}`;
+    const ms = GameRoom.QUICK.backfillMs;
+    this.quickBackfills.set(key, Date.now() + ms);
+    this.quickTimer(key, ms, () => {
+      this.quickBackfills.delete(key);
+      if (this.status !== 'lobby' || !this.quickLobby) return;
+      if (!this.players.some((p) => !p.isBot)) return;
+      if (this.players.length >= this.settings.maxPlayers) return;
+      this.addBot();
+    });
+  }
+
+  /**
+   * No more chairs held open than there are empty chairs. When a person takes
+   * a held one, the house player that was coming for it is called off —
+   * otherwise it would arrive to a full table and turf out someone else.
+   * The latest-due go first, so what is left still fills soonest.
+   */
+  trimBackfill() {
+    if (!this.quickBackfills?.size) return;
+    const empty = Math.max(0, this.settings.maxPlayers - this.players.length);
+    const pending = [...this.quickBackfills.entries()].sort((a, b) => a[1] - b[1]);
+    while (pending.length > empty) {
+      const [key] = pending.pop();
+      this.clearTimer(key);
+      this.quickBackfills.delete(key);
+    }
+  }
+
+  /**
+   * The host of a Play-now table is the person who has been sitting there
+   * longest — never a house player, and never whoever it was handed to. It
+   * moves by itself, and says so, only when that person leaves.
+   */
+  syncQuickHost({ quiet = false } = {}) {
+    const first = this.players.find((p) => !p.isBot) || null;
+    const next = first?.id || null;
+    if (next === this.hostId) return;
+    const had = !!this.hostId;
+    this.hostId = next;
+    if (!first) return;
+    // A host has a Start button, not a Ready one; a tick left over from
+    // before the chair came to them would only say something untrue.
+    first.ready = false;
+    if (had && !quiet) this.say(`${first.name} is the host now`, 'system');
+  }
+
+  /**
+   * Matchmaking has just told somebody to come here. They are a round trip
+   * away, so the table may not deal in the meantime: it counts as a new
+   * arrival from this moment, and the real one resets it again when they sit.
+   */
+  expectArrival() {
+    const L = this.quickLobby;
+    if (!this.quick || this.status !== 'lobby' || !L) return;
+    L.settledAt = Math.max(L.settledAt, Date.now());
+    this.scheduleQuick();
     this.push();
   }
 
   /**
+   * "I'm ready", or taking it back. Only at a Play-now table still in its
+   * lobby; a private table has friends who wait for each other already, and
+   * a Ready gate there would only hand one of them a way to stall the rest.
+   * The host has nothing to be ready for — they have the Start button.
+   */
+  setReady(id, on = true) {
+    if (!this.quick) return { error: 'Nothing to get ready for' };
+    // A tap that crossed the deal on the wire. The game it was for has begun,
+    // which is what the tap wanted; there is nothing to refuse.
+    if (this.status !== 'lobby' || !this.quickLobby) return { ok: true };
+    const p = this.player(id);
+    if (!p) return { error: 'Take a seat first' };
+    if (id === this.hostId) return { ok: true };
+    if (p.ready === !!on) return { ok: true };
+    p.ready = !!on;
+    this.scheduleQuick();
+    this.push();
+    return { ok: true };
+  }
+
+  /**
+   * The host's Start. A private table starts the way it always has; a
+   * Play-now table waits for the search to end and for everyone else to say
+   * they are ready — the clock deals anyway if they never do.
+   */
+  requestStart(id) {
+    if (!this.quick) return this.start(id);
+    if (id !== this.hostId) return { error: 'Only the host can start the game' };
+    if (this.status !== 'lobby' || !this.quickLobby) return { error: 'The game has already started' };
+    if (this.quickSearching()) return { error: 'Still finding players — Start opens when the search ends' };
+    const waiting = this.players.filter((p) => p.id !== this.hostId && !p.ready);
+    if (waiting.length) {
+      const more = waiting.length > 1 ? ` and ${waiting.length - 1} more` : '';
+      return { error: `Waiting for ${waiting[0].name}${more} to get ready` };
+    }
+    return this.launchQuick();
+  }
+
+  /**
+   * Deal. From the host's Start, or from the clock — in which case whoever
+   * never pressed Ready plays anyway: they have had the start window to read
+   * the table, and the table does not wait on them longer than that.
+   */
+  launchQuick() {
+    if (!this.quick || this.status !== 'lobby') return { error: 'The game has already started' };
+    // No people means no game — the house doesn't play itself.
+    if (!this.players.some((p) => !p.isBot)) return { error: 'Nobody is at the table' };
+    this.clearQuickTimers();
+    this.syncQuickHost();
+    return this.start(this.hostId);
+  }
+
+  /** The lobby is over: its clocks stop and nobody is "ready" for anything now. */
+  closeQuickLobby() {
+    this.clearQuickTimers();
+    this.quickLobby = null;
+    this.quickStartAt = null;
+    for (const p of this.players) p.ready = false;
+  }
+
+  /** What every client needs to draw the lobby, or null when there is none. */
+  quickLobbyView() {
+    const L = this.quickLobby;
+    if (!this.quick || this.status !== 'lobby' || !L) return null;
+    const phase = this.quickSearching() ? 'gathering' : 'ready';
+    const waitingOn = this.players.filter((p) => p.id !== this.hostId && !p.ready).length;
+    const held = [...(this.quickBackfills?.values() || [])];
+    return {
+      phase,
+      gatherUntil: L.gatherUntil,
+      startBy: L.startBy,
+      backfillAt: held.length ? Math.min(...held) : null,
+      waitingOn,
+      canStart: phase === 'ready' && waitingOn === 0 && !!this.hostId,
+      editable: [...QUICK_HOST_KEYS],
+    };
+  }
+
+  /**
    * Seat the house players one at a time, the way a real lobby fills — but
-   * not before the search has had its run. The first ten seconds of the fuse
-   * belong to whoever else is queueing; only in the last five does the house
-   * start taking the chairs nobody claimed, spread across that window with
-   * enough jitter that they don't arrive on a metronome.
+   * not before the search has had its run. The first fifteen seconds belong
+   * to whoever else is queueing; only in the last five does the house start
+   * taking the chairs nobody claimed, spread across that window with enough
+   * jitter that they don't arrive on a metronome.
    *
-   * Called whenever the picture changes — fuse armed, person in, person out —
-   * and reschedules every pending arrival from scratch, so a real player
-   * landing at second nine pushes the house back out of the way.
+   * Called whenever the picture changes — search opened, person in, person
+   * out — and reschedules every pending arrival from scratch, so a real
+   * player landing at second nine pushes the house back out of the way. A
+   * chair being held open for a backfill is not planned twice.
    */
   planQuickFill() {
-    for (const k of Object.keys(this.timers)) {
-      if (!k.startsWith('quickSeat:')) continue;
-      clearTimeout(this.timers[k]);
-      delete this.timers[k];
-    }
-    if (!this.quick || this.status !== 'lobby' || !this.quickStartAt) return;
+    for (const k of Object.keys(this.timers)) if (k.startsWith('quickSeat:')) this.clearTimer(k);
+    const L = this.quickLobby;
+    if (!this.quick || this.status !== 'lobby' || !L) return;
     // An empty room needs no performance.
     if (!this.players.some((p) => !p.isBot)) return;
-    const seats = this.settings.maxPlayers - this.players.length;
+    const seats = this.settings.maxPlayers - this.players.length - (this.quickBackfills?.size || 0);
     if (seats <= 0) return;
+    // Once the search is over, endGathering has seated everyone it was going
+    // to; a chair emptied after that is the backfill's to fill.
+    const untilEnd = L.gatherUntil - Date.now();
+    if (untilEnd <= 0) return;
     // The table is guaranteed full by kick-off regardless — start() tops up
-    // any seat still empty — so this is only about the last few seconds being
-    // visibly a table filling up rather than a table that was always full.
-    const untilStart = this.quickStartAt - Date.now();
-    const opens = Math.max(0, untilStart - GameRoom.QUICK_BOT_WINDOW_MS);
-    // …and the last arrival still has to land before the deal.
-    const closes = Math.max(opens, untilStart - 900);
+    // any seat still empty — so this is only about the end of the search
+    // being visibly a table filling up rather than a table that was always
+    // full.
+    const windowMs = GameRoom.QUICK.botWindowMs;
+    const opens = Math.max(0, untilEnd - windowMs);
+    // …and the last arrival still lands a beat before the search ends — the
+    // same 900 ms the five-second window always kept, as a share of it.
+    const closes = Math.max(opens, untilEnd - windowMs * 0.18);
     const span = closes - opens;
     for (let i = 0; i < seats; i++) {
       // Evenly through the window, nudged either way so two seats never fill
@@ -1042,23 +1504,8 @@ export class GameRoom {
       const slot = span * ((i + 0.5) / seats);
       const jitter = (Math.random() - 0.5) * (span / seats) * 0.7;
       const at = opens + Math.max(0, Math.min(span, slot + jitter));
-      const key = `quickSeat:${i}`;
-      this.timers[key] = setTimeout(() => {
-        delete this.timers[key];
-        this.addBot();
-      }, at);
-      this.timers[key].unref?.();
+      this.quickTimer(`quickSeat:${i}`, at, () => this.addBot());
     }
-  }
-
-  /** The fuse burnt down (or the table filled) — deal everyone in. */
-  startQuickMatch() {
-    clearTimeout(this.timers.quick);
-    this.quickStartAt = null;
-    // No people means no game — the house doesn't play itself.
-    if (this.status !== 'lobby' || !this.players.some((p) => !p.isBot)) return;
-    this.hostId = this.players[0].id;
-    this.start(this.hostId);
   }
 
   // -------------------------------------------------------------- turn clock --
@@ -2665,6 +3112,10 @@ export class GameRoom {
    * ghosts, and the survivors' removal flags are wiped clean.
    */
   rematch(id) {
+    // Four strangers the matchmaker put together are not a group that wants
+    // another round under whoever pressed first. Every client's game-over
+    // sheet already offers "leave, then Play now" here; this is the rule.
+    if (this.quick) return { error: 'A Play-now table breaks up when it ends — Play now finds you a fresh one' };
     const presser = this.player(id);
     if (!presser || presser.isBot) return { error: 'Take a seat first' };
     if (this.status !== 'ended') return { error: 'The game is still on' };
@@ -3775,6 +4226,8 @@ export class GameRoom {
         timedOut: !!p.timedOut, removedFor: p.removedFor || null,
         blockedLaps: p.blockedLaps || 0,
         skipTurns: p.skipTurns, netWorth: this.netWorth(p),
+        // Only a Play-now lobby has a Ready; everywhere else it is false.
+        ready: !!(this.quickLobby && p.ready),
       })),
       ownership: this.ownership,
       turn: this.turn,
@@ -3791,14 +4244,28 @@ export class GameRoom {
         granted: a.granted, needAll: a.grants >= GameRoom.FREE_GRANTS,
         voters: this.votersFor(id).length,
       })),
+      // When a Play-now table deals by itself. Builds that predate the lobby
+      // count down to this in the waiting room they already have; the lobby
+      // below carries the same moment as `startBy`.
       quickStartAt: this.quickStartAt || null,
+      // The Play-now lobby: which phase, what it is counting to, who it is
+      // waiting on, whether the host may deal now, and which rules the host
+      // may change. Null everywhere else — a private table, a game under way.
+      quickLobby: this.quickLobbyView(),
       // What a matchmade table dealt itself, for the lobby to show before the
       // dice start. The phrasing is rebuilt from the live settings on every
       // push rather than stored with the roll: if anything moved the board
       // afterwards — a rollover at midnight sending it back to Classic — this
       // says what is actually going to be played, not what was once promised.
+      // `edited` names each rule that no longer matches the roll, because the
+      // host changed it.
       quickRoll: this.quickRoll
-        ? { at: this.quickRoll.at, keys: this.quickRoll.keys, parts: quickRollParts(this.settings, this.map.name) }
+        ? {
+          at: this.quickRoll.at,
+          keys: this.quickRoll.keys,
+          parts: quickRollParts(this.settings, this.map.name),
+          edited: this.quickEdited(),
+        }
         : null,
       log: this.log.slice(-60),
       chat: this.chat.slice(-50),

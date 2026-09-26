@@ -397,9 +397,13 @@ private fun FriendsSheet(
                             Haptics.tap()
                             onMessage(it)
                         },
-                        onJoin = { room ->
+                        onJoin = { f, room ->
                             Haptics.tap()
                             close()
+                            // A seat in their lobby is a new game and gets
+                            // the break a code would; watching a game already
+                            // under way is theirs, not a new one, and gets none.
+                            if (!f.started) PreGameAd.beforeGame(context, account)
                             game.connect(room)
                         },
                         // The other direction: ask them to come to yours.
@@ -667,7 +671,7 @@ private fun FriendList(
     seatedAt: String?,
     invited: (String) -> Boolean,
     onMessage: (Friend) -> Unit,
-    onJoin: (String) -> Unit,
+    onJoin: (Friend, String) -> Unit,
     onInvite: (Friend, String) -> Unit,
     onRemove: (Friend) -> Unit,
     onReport: (Friend, ReportReason) -> Unit,
@@ -719,7 +723,7 @@ private fun FriendList(
                         seatedAt = seatedAt,
                         invited = invited(f.code),
                         onMessage = { onMessage(f) },
-                        onJoin = onJoin,
+                        onJoin = { onJoin(f, it) },
                         onInvite = { onInvite(f, it) },
                     ) {
                         PersonMenu(

@@ -2175,7 +2175,7 @@ export const adminPageHTML = `<!doctype html>
     sw += '<div><div class="field"><label>Pre-game break</label>' +
       adSeg('interstitial:preGame', preGame.enabled ? '1' : '0',
         [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
-      '</div><div class="caption" style="max-width:260px">A full-screen ad while a quick match is being found. Pays the player nothing — it is the only ad here that does not. In each app only once that app has an interstitial unit id below.</div></div>';
+      '</div><div class="caption" style="max-width:260px">A full-screen ad before a new table — Play now, a new private game, or a code. Pays the player nothing — it is the only ad here that does not. In each app only once that app has an interstitial unit id below.</div></div>';
     sw += '</div>';
     if (!s.enabled) {
       sw += '<div class="caption" style="margin-top:12px">Nothing pays out while ads are off: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> — so every client, including one already installed on a phone, draws no ad button until you switch it back on. It takes effect on the next screen a player opens; no redeploy, no app update.</div>';
@@ -2692,7 +2692,7 @@ export const adminPageHTML = `<!doctype html>
         patch.placements[what.slice(10)] = { enabled: val === '1' };
       } else if (what.indexOf('interstitial:') === 0) {
         if (val === '1' && !confirm('Turn the pre-game break on?' + NL + NL +
-          'A full-screen ad while a quick match is being found. It pays the player nothing — ' +
+          'A full-screen ad before a new table — Play now, a new private game, or a code. It pays the player nothing — ' +
           'it is the one ad here that is purely revenue. Needs an interstitial unit id below.')) return;
         patch.interstitials = {};
         patch.interstitials[what.slice(13)] = { enabled: val === '1' };

@@ -108,13 +108,14 @@ rule('WHAT THE ROLL IS ALLOWED TO SAY');
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-rule('AND NOBODY REWRITES IT AFTERWARDS');
+rule('THE HOST RE-DEALS THE ROLL, AND NOTHING ELSE');
 {
   // The first person to tap Play Now holds the chair only because somebody
-  // had to. The three strangers behind them read what the table rolled and
-  // agreed to that — so the host seat is not a licence to change it, and the
-  // clock least of all: a five-second turn on somebody who never asked for one
-  // is a timeout, and a timeout takes them out of the game and costs karma.
+  // had to. They may re-deal what the table rolled — everyone reads the change
+  // before saying they are ready — but not the seats, the privacy or the
+  // clock: a five-second turn on somebody who never asked for one is a
+  // timeout, and a timeout takes them out of the game and costs karma. A patch
+  // that reaches for any of those is refused whole, the allowed half included.
   const room = new GameRoom('quick-lock', () => {});
   room.makeQuickMatch(86_400, rollQuickSettings(playableOn()));
   room.addPlayer({ id: 'first', name: 'First' });
@@ -124,13 +125,27 @@ rule('AND NOBODY REWRITES IT AFTERWARDS');
   const said = room.updateSettings(room.hostId, {
     startingCash: 10_000_000, turnSeconds: 5, maxPlayers: 8, auction: !before.auction,
   });
-  P(!!said?.error, 'a quick host is told the table sets itself', said?.error || 'accepted in silence');
+  P(!!said?.error, 'a patch with a locked key is refused, and says why', said?.error || 'accepted in silence');
   P(room.settings.startingCash === before.startingCash
     && room.settings.turnSeconds === before.turnSeconds
     && room.settings.maxPlayers === before.maxPlayers
     && room.settings.auction === before.auction,
-    'and not one of the four settings moved',
+    'and not one of the four settings moved — the allowed two neither',
     `$${room.settings.startingCash} · ${room.settings.turnSeconds}s · ${room.settings.maxPlayers} seats`);
+
+  // A rolled rule on its own is the host's to change, and the table says so.
+  const cash = before.startingCash === 1500 ? 2000 : 1500;
+  const allowed = room.updateSettings(room.hostId, { startingCash: cash, auction: !before.auction });
+  P(!allowed?.error && room.settings.startingCash === cash && room.settings.auction === !before.auction,
+    'a rolled rule on its own is the host\'s to change',
+    allowed?.error || `$${room.settings.startingCash} · auctions ${room.settings.auction ? 'on' : 'off'}`);
+  P(room.players.every((p) => p.money === cash), 'and every seat\'s money follows the bankroll');
+  const edited = room.serialize().quickRoll?.edited || [];
+  P(edited.includes('startingCash') && edited.includes('auction') && edited.length === 2,
+    'the lobby is told which rules the host changed', edited.join(', ') || 'none');
+  const note = room.log.at(-1)?.text || '';
+  P(/^First changed the rules: /.test(note) && note.includes(`$${cash.toLocaleString('en-US')} to start`),
+    'and the log says who changed what', note);
   room.dispose();
 
   // An ordinary table still belongs to its host — and the two numbers that go

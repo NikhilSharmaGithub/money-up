@@ -265,55 +265,238 @@ struct LobbyPanel: View {
 
 // MARK: - quick match waiting room
 
-/// A matchmade table that hasn't dealt itself in yet. There are no host
-/// controls to offer here, so the panel says the only two things that matter:
-/// who has landed so far, and how long the table waits.
+/// A Play-now table that hasn't dealt itself in yet.
+///
+/// It runs in two acts. First the search: the table looks for real people
+/// and only pads itself out with house players in the last few seconds.
+/// Then the Ready round: everybody reads what the table rolled, says hello,
+/// and presses Ready; the host starts once they have — or the table deals
+/// itself in at the server's deadline, because a host who wandered off must
+/// not be able to hold four strangers for ever. The host may change the money
+/// and the house rules; a change un-readies everybody, so it gets read.
+///
+/// A server from before the Ready round sends only quickStartAt, and the
+/// panel falls back to the plain countdown it always showed, with no buttons:
+/// that server has nothing for them to press.
 struct QuickMatchPanel: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// The table's settings sheet: open for the host on the keys the server
+    /// allows, read-only for everybody else.
+    let openSettings: () -> Void
+    let openChat: () -> Void
 
     var body: some View {
         let P = Palette.current(scheme)
         let players = store.state?.players ?? []
         let seats = max(players.count, store.state?.settings.maxPlayers ?? players.count)
+        let lobby = store.state?.quickLobby
 
-        VStack(spacing: 12) {
-            // The table spends most of its fuse actually looking for people
-            // and only the last few seconds filling the chairs nobody took.
-            // Saying which is happening is the difference between "nobody
-            // came" and a table that quietly padded itself out while claiming
-            // to search.
-            TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                let left = store.state?.quickStartAt.map {
+        // The Ready round adds a button, the rules' own buttons and the chat
+        // under the seats, and on a small phone that is more than the space
+        // under the board — so it scrolls, as the private lobby does.
+        ScrollView {
+            VStack(spacing: 12) {
+                if let lobby {
+                    phaseHeader(lobby, P)
+                } else {
+                    legacyHeader(P)
+                }
+
+                seatRow(players: players, seats: seats, lobby: lobby, P)
+
+                Text("\(players.count) of \(seats) seated")
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+
+                if let lobby { actions(lobby, P) }
+
+                rolledRules(P)
+
+                if lobby != nil { rulesAndChat(P) }
+
+                TableTalkTicker()
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 8)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    // MARK: the two acts
+
+    /// The search, then the Ready round, each counted down against the
+    /// server's own deadline — the phase comes from the server, so a phone
+    /// whose clock runs a few seconds out never flips early.
+    private func phaseHeader(_ lobby: QuickLobby, _ P: Palette) -> some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            if lobby.isGathering {
+                let left = lobby.gatherUntil.map { TurnClock.secondsLeft($0, at: context.date) } ?? 0
+                VStack(spacing: 12) {
+                    searching(left: left, P)
+                    countdownCard(left, caption: "SECONDS TO FIND PLAYERS",
+                                  done: "STARTING THE READY ROUND", P)
+                }
+            } else {
+                readyCard(lobby, left: lobby.startBy.map {
                     TurnClock.secondsLeft($0, at: context.date)
-                } ?? 99
-                HStack(spacing: 9) {
-                    ProgressView().tint(P.red).scaleEffect(0.9)
-                    Text(left > 5 ? "Finding players…" : "Filling the table…")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .foregroundStyle(P.ink)
+                } ?? 0, P)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// The table spends most of its search actually looking for people and
+    /// only the last few seconds filling the chairs nobody took. Saying which
+    /// is happening is the difference between "nobody came" and a table that
+    /// quietly padded itself out while claiming to search.
+    private func searching(left: Int, _ P: Palette) -> some View {
+        HStack(spacing: 9) {
+            ProgressView().tint(P.red).scaleEffect(0.9)
+            Text(left > 5 ? "Finding players…" : "Filling the table…")
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.ink)
+        }
+    }
+
+    /// The Ready round's headline and the deadline under it. Everybody sees
+    /// the deadline — the host included — because the table goes at that
+    /// moment whether or not anybody pressed anything.
+    private func readyCard(_ lobby: QuickLobby, left: Int, _ P: Palette) -> some View {
+        let waiting = waitingCount(lobby)
+        let allSet = lobby.canStart == true || waiting == 0
+        return VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: allSet ? "checkmark.circle.fill" : "hourglass")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(allSet ? P.good : P.gold)
+                Text(allSet ? "Everyone's ready" : "Waiting for \(waiting) to get ready")
+                    .font(.system(size: 19, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.2), value: waiting)
+            }
+            Text(left > 0 ? "Starts by itself in \(clock(left))" : "Dealing you in…")
+                .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(P.ink3)
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .stroke((allSet ? P.good : P.gold).opacity(0.5), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Start for the host, Ready for everybody else seated. A spectator — a
+    /// full table watched from the landing screen — gets neither.
+    @ViewBuilder
+    private func actions(_ lobby: QuickLobby, _ P: Palette) -> some View {
+        if store.isHost {
+            // The server has the last word (Start is refused while anybody
+            // is still reading); the button only says what it will answer.
+            let open = !lobby.isGathering && lobby.canStart == true
+            VStack(spacing: 6) {
+                Button {
+                    store.start()
+                    Haptics.tap()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 14, weight: .heavy))
+                        Text("Start game")
+                    }
+                }
+                .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                .disabled(!open)
+                .opacity(open ? 1 : 0.5)
+                .animation(.easeOut(duration: 0.2), value: open)
+                if lobby.isGathering {
+                    caption("You're the host. Start unlocks when the search ends.", P)
                 }
             }
-            .padding(.top, 4)
-
-            if let startAt = store.state?.quickStartAt {
-                countdown(startAt, P)
+        } else if let me = store.state?.player(store.meId) {
+            let ready = me.ready == true
+            // Pressed, it turns green and says so; pressed again it takes it
+            // back — a player who needs a moment is not trapped by a tap.
+            Button {
+                store.setReady(!ready)
+                SoundKit.shared.click()
+                Haptics.tap()
+            } label: {
+                HStack(spacing: 8) {
+                    Text(ready ? "Ready" : "I'm ready")
+                    if ready {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 15, weight: .heavy))
+                    }
+                }
             }
-
-            seatRow(players: players, seats: seats, P)
-
-            Text("\(players.count) of \(seats) seated")
-                .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                .foregroundStyle(P.ink2)
-
-            rolledRules(P)
-
-            TableTalkTicker()
-
-            Spacer(minLength: 0)
+            .buttonStyle(MMButtonStyle(kind: ready ? .good : .primary, big: true))
+            .accessibilityHint(ready ? "Double-tap to take it back" : "")
+            .animation(.easeOut(duration: 0.2), value: ready)
         }
+    }
+
+    /// The same sheet either way: the host changes what the server lets a
+    /// Play-now host change, everybody else reads every rule the table will
+    /// play by. And the chat — the one way strangers get to say hello
+    /// before the dice start.
+    private func rulesAndChat(_ P: Palette) -> some View {
+        VStack(spacing: 8) {
+            if store.isHost {
+                MMIconButton(.toolbox, "Change rules", kind: .ghost, big: true) { openSettings() }
+            } else {
+                MMIconButton(.scales, "See all rules", kind: .ghost, big: true) { openSettings() }
+            }
+            MMIconButton(.chat, "Chat with the table", kind: .ghost, big: true) { openChat() }
+                .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: -8, y: -7) }
+        }
+    }
+
+    // MARK: pieces
+
+    /// A server from before the Ready round: the countdown to its auto-start
+    /// and nothing to press.
+    private func legacyHeader(_ P: Palette) -> some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let left = store.state?.quickStartAt.map {
+                TurnClock.secondsLeft($0, at: context.date)
+            } ?? 99
+            VStack(spacing: 12) {
+                searching(left: left, P)
+                if store.state?.quickStartAt != nil {
+                    countdownCard(left, caption: "SECONDS TO KICK-OFF", done: "DEALING YOU IN", P)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// The big gold number. Counts down to the server's deadline the same way
+    /// the turn clock does, so a late join sees the real number rather than a
+    /// fresh twenty.
+    private func countdownCard(_ left: Int, caption: String, done: String, _ P: Palette) -> some View {
+        VStack(spacing: 1) {
+            Text(left > 0 ? "\(left)" : "…")
+                .font(.system(size: 42, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(P.gold)
+                .contentTransition(.numericText(countsDown: true))
+                .animation(.snappy(duration: 0.2), value: left)
+            Text(left > 0 ? caption : done)
+                .font(.system(size: 10.5, weight: .bold))
+                .kerning(1)
+                .foregroundStyle(P.ink3)
+        }
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 18)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.gold.opacity(0.5), lineWidth: 1))
+        .accessibilityElement(children: .combine)
     }
 
     /// What this table dealt itself: the board, the bankroll, and every house
@@ -323,15 +506,19 @@ struct QuickMatchPanel: View {
     /// screen before the dice start — not left to be worked out from the log
     /// once somebody is already paying rent they did not expect. The phrases
     /// come written from the server, which is the same thing the web lobby
-    /// shows, word for word.
+    /// shows, word for word. Whatever the host has moved off the roll wears
+    /// the accent's ring, so a stranger can see which rules a person chose.
     @ViewBuilder
     private func rolledRules(_ P: Palette) -> some View {
         let parts = store.state?.quickRoll?.parts ?? []
+        let edited = Set(store.state?.quickRoll?.edited ?? [])
         if !parts.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Art.icon(.dice, size: 14, tint: P.ink3)
-                    Text("THIS TABLE ROLLED")
+                    Text(edited.isEmpty
+                         ? "THIS TABLE ROLLED"
+                         : "THIS TABLE'S RULES · HOST CHANGED \(edited.count)")
                         .font(.system(size: 10.5, weight: .bold))
                         .kerning(1)
                         .foregroundStyle(P.ink3)
@@ -339,6 +526,7 @@ struct QuickMatchPanel: View {
                 // However many rules there are, on as many lines as they need.
                 FlowRow(spacing: 6) {
                     ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
+                        let changed = QuickRoll.partKeys[safe: i].map { edited.contains($0) } ?? false
                         Text(part)
                             .font(.system(size: 11.5, weight: .bold, design: .rounded))
                             // The board leads, and reads like it.
@@ -346,7 +534,10 @@ struct QuickMatchPanel: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(P.card, in: Capsule())
-                            .overlay(Capsule().stroke(i == 0 ? P.gold.opacity(0.5) : P.rule, lineWidth: 1))
+                            .overlay(Capsule().stroke(
+                                changed ? P.red : (i == 0 ? P.gold.opacity(0.5) : P.rule),
+                                lineWidth: changed ? 1.5 : 1))
+                            .accessibilityLabel(changed ? "\(part), changed by the host" : part)
                     }
                 }
             }
@@ -355,35 +546,36 @@ struct QuickMatchPanel: View {
         }
     }
 
-    /// Counts down to the server's deadline the same way the turn clock does,
-    /// so a late join sees the real number rather than a fresh 20.
-    private func countdown(_ startAt: Double, _ P: Palette) -> some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            let left = TurnClock.secondsLeft(startAt, at: context.date)
-            VStack(spacing: 1) {
-                Text(left > 0 ? "\(left)" : "…")
-                    .font(.system(size: 42, weight: .heavy, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(P.gold)
-                    .contentTransition(.numericText(countsDown: true))
-                    .animation(.snappy(duration: 0.2), value: left)
-                Text(left > 0 ? "seconds to kick-off" : "dealing you in")
-                    .font(.system(size: 10.5, weight: .bold))
-                    .kerning(1)
-                    .foregroundStyle(P.ink3)
-            }
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.gold.opacity(0.5), lineWidth: 1))
-        }
-    }
-
-    private func seatRow(players: [PlayerState], seats: Int, _ P: Palette) -> some View {
-        HStack(spacing: 8) {
+    /// Who has landed so far. The host wears the crown — the longest-seated
+    /// real person, so it never lands on a house player — and anybody who
+    /// has pressed Ready wears the tick. A chair somebody just left says it
+    /// is being found rather than sitting there looking abandoned.
+    private func seatRow(players: [PlayerState], seats: Int, lobby: QuickLobby?,
+                         _ P: Palette) -> some View {
+        let hostId = store.state?.hostId
+        let finding = lobby?.backfillAt != nil
+        return HStack(spacing: 8) {
             ForEach(players) { p in
+                let isHost = lobby != nil && p.id == hostId
+                let ready = lobby != nil && !isHost && p.ready == true
                 VStack(spacing: 3) {
                     AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 38, emoji: p.avatar ?? "")
+                        .overlay(alignment: .top) {
+                            if isHost {
+                                Art.icon(.crown, size: 15)
+                                    .offset(y: -11)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if ready {
+                                readyTick(P)
+                                    .offset(x: 4, y: -3)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        .animation(.spring(duration: 0.3, bounce: 0.4), value: ready)
+                        .animation(.spring(duration: 0.3, bounce: 0.4), value: isHost)
                     Text(store.isLocal(p.id) ? "You" : p.name)
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(P.ink2)
@@ -391,20 +583,82 @@ struct QuickMatchPanel: View {
                 }
                 .frame(width: 54)
                 .transition(.scale.combined(with: .opacity))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(seatLabel(p, host: isHost, ready: ready))
             }
             ForEach(0..<max(0, seats - players.count), id: \.self) { _ in
                 VStack(spacing: 3) {
                     Circle()
                         .stroke(P.rule2, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                         .frame(width: 38, height: 38)
-                    Text("open")
+                    Text(finding ? "finding…" : "open")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
                 }
                 .frame(width: 54)
             }
         }
+        // Room for the crown, which stands above the row.
+        .padding(.top, lobby != nil ? 6 : 0)
         .animation(.spring(duration: 0.35), value: players.count)
+    }
+
+    /// The green disc. Drawn, and on a ring of the page so it lifts off the
+    /// avatar it overhangs rather than bleeding into its colour.
+    private func readyTick(_ P: Palette) -> some View {
+        Image(systemName: "checkmark")
+            .font(.system(size: 8, weight: .black))
+            .foregroundStyle(MMButtonStyle.Kind.good.ink(P))
+            .frame(width: 16, height: 16)
+            .background(P.good, in: Circle())
+            .overlay(Circle().stroke(BackdropKind.page.settledGlass(P).solid, lineWidth: 2))
+    }
+
+    private func seatLabel(_ p: PlayerState, host: Bool, ready: Bool) -> String {
+        var words = [store.isLocal(p.id) ? "You" : p.name]
+        if host { words.append("host") }
+        if ready { words.append("ready") }
+        return words.joined(separator: ", ")
+    }
+
+    /// Lines said since the chat was last opened — the same count the top
+    /// bar's chat key wears, in the same plate.
+    @ViewBuilder
+    private func unreadBadge(_ P: Palette) -> some View {
+        if store.unreadChat > 0 {
+            Text(store.unreadChat > 99 ? "99+" : "\(store.unreadChat)")
+                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.accentInk)
+                .padding(.horizontal, store.unreadChat > 9 ? 5 : 0)
+                .frame(minWidth: 19, minHeight: 19)
+                .background(P.red, in: Capsule())
+                .overlay(Capsule().stroke(BackdropKind.page.settledGlass(P).solid, lineWidth: 2))
+                .transition(.scale.combined(with: .opacity))
+                .animation(.spring(duration: 0.28, bounce: 0.5), value: store.unreadChat)
+                .accessibilityLabel("\(store.unreadChat) unread")
+        }
+    }
+
+    private func caption(_ text: String, _ P: Palette) -> some View {
+        Text(text)
+            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+            .foregroundStyle(P.ink3)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Seats other than the host still to press Ready: the server's count
+    /// when it sends one, otherwise counted off the seats themselves.
+    private func waitingCount(_ lobby: QuickLobby) -> Int {
+        if let n = lobby.waitingOn?.count { return n }
+        let host = store.state?.hostId
+        return (store.state?.players ?? []).filter { $0.id != host && $0.ready != true }.count
+    }
+
+    /// "0:24" — the Ready round runs up to a couple of minutes, so seconds
+    /// alone would read as a long number rather than a time.
+    private func clock(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 

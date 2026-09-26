@@ -15,6 +15,10 @@ struct GameState: Codable, Equatable {
     var cup: Bool?
     /// Epoch ms the matchmade table deals itself in; nil once it has.
     var quickStartAt: Double?
+    /// A Play-now table's lobby — the search, then the Ready round the host
+    /// starts from. Nil everywhere else, and from a server that predates it,
+    /// which leaves the table on quickStartAt and the old waiting room.
+    var quickLobby: QuickLobby?
     /// What a matchmade table dealt itself — board and house rules. Nobody at
     /// one of these tables picked them, so they get shown before the dice.
     var quickRoll: QuickRoll?
@@ -77,9 +81,12 @@ struct GameState: Codable, Equatable {
     func owner(of tile: Int) -> TileOwnership? { ownership[String(tile)] }
 
     var isLobby: Bool { status == "lobby" }
-    /// A matchmade table still filling up: the seats and the clock are the
-    /// whole story, so the host controls stay out of the way.
-    var isQuickWaiting: Bool { isLobby && quick == true && quickStartAt != nil }
+    /// A matchmade table that has not dealt itself in: the Play-now lobby, or
+    /// on an older server the plain countdown. Either way the private lobby's
+    /// host controls — seats, kicks, bots — have no place here.
+    var isQuickWaiting: Bool {
+        isLobby && quick == true && (quickLobby != nil || quickStartAt != nil)
+    }
     var isPlaying: Bool { status == "playing" }
     var isEnded: Bool { status == "ended" }
 }
@@ -94,6 +101,79 @@ struct QuickRoll: Codable, Equatable {
     var at: Double?
     var keys: [String]?
     var parts: [String]?
+    /// The settings the host has moved off what the table rolled. The lobby
+    /// rings those chips, so a stranger can see which rules a person chose.
+    var edited: [String]?
+
+    /// Which setting each of `parts` describes, in the order quickRollParts()
+    /// in server/game.js writes them: the board, the bankroll, then the five
+    /// house rules. The phrases arrive finished, so this is the only way to
+    /// tell which chip an edited key belongs to.
+    static let partKeys = ["mapId", "startingCash", "x2rent", "vacationCash",
+                           "auction", "noRentInPrison", "evenBuild"]
+}
+
+/// A Play-now table between the tap and the deal: first the search, then a
+/// Ready round the host starts from — or that starts by itself at `startBy`.
+///
+/// Every time is the server's epoch ms, counted down against this phone's
+/// clock the way the turn clock is, so a late arrival sees the real number
+/// rather than a fresh one.
+struct QuickLobby: Codable, Equatable {
+    /// "gathering" while the search runs, "ready" once it has ended.
+    var phase: String?
+    var gatherUntil: Double?
+    /// When the table deals itself in if the host never presses Start.
+    var startBy: Double?
+    /// The soonest a house player takes a chair somebody left; nil when no
+    /// chair is waiting on one.
+    var backfillAt: Double?
+    /// The seats other than the host still to press Ready.
+    var waitingOn: SeatTally?
+    /// Everybody but the host is ready and the search is over.
+    var canStart: Bool?
+    /// The setting keys a host may change at this table.
+    var editable: [String]?
+
+    /// Still searching. The server's phase decides it, so a phone whose clock
+    /// runs a few seconds fast never offers Start early; only a lobby that
+    /// arrives without one is read off the clock.
+    var isGathering: Bool {
+        if let phase { return phase != "ready" }
+        return (gatherUntil ?? 0) > Date().timeIntervalSince1970 * 1000
+    }
+}
+
+/// A head count the server may send either as the number or as the list of
+/// who it counts. Either decodes; anything else counts as nobody rather than
+/// failing the whole state.
+struct SeatTally: Codable, Equatable {
+    var count: Int
+    var ids: [String]?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let n = try? c.decode(Int.self) {
+            count = n
+        } else if let list = try? c.decode([String].self) {
+            ids = list
+            count = list.count
+        } else if let any = try? c.decode([Anything].self) {
+            count = any.count
+        } else {
+            count = 0
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        if let ids { try c.encode(ids) } else { try c.encode(count) }
+    }
+
+    /// Takes any one JSON value and keeps nothing of it — for counting.
+    private struct Anything: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
 }
 
 struct GameSettings: Codable, Equatable {
@@ -187,6 +267,9 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var removedFor: String?                 // "timeout" | "quit"
     /// Laps walked while the deadlock rule was counting for this seat, 0...4.
     var blockedLaps: Int?
+    /// Pressed Ready in a Play-now lobby. False everywhere else; older
+    /// servers never send it.
+    var ready: Bool?
 
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }

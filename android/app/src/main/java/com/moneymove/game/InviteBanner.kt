@@ -35,10 +35,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
 
 /**
@@ -54,9 +56,19 @@ import kotlinx.coroutines.delay
  * board as readily as over the tabs. The poll that feeds it is
  * [MessagingStore.watchInvites], started once with the app; this only draws
  * what that found, and answers it.
+ *
+ * `account` is only for the pre-game break Join brings with it, and defaults
+ * to the activity's own AccountStore — the instance the tabs hold — so the
+ * root that hangs this needs to hand it nothing more.
  */
 @Composable
-fun InviteBanner(messaging: MessagingStore, store: GameStore, modifier: Modifier = Modifier) {
+fun InviteBanner(
+    messaging: MessagingStore,
+    store: GameStore,
+    modifier: Modifier = Modifier,
+    account: AccountStore = viewModel(),
+) {
+    val context = LocalContext.current
     val current = messaging.invite
     // The strip slides out after the invite is gone, so it has to remember
     // what it was showing or it would empty itself on the way out.
@@ -87,6 +99,9 @@ fun InviteBanner(messaging: MessagingStore, store: GameStore, modifier: Modifier
                 onJoin = {
                     Haptics.turn()
                     messaging.clearInvite(inv)
+                    // The same act as typing the friend's code, so the same
+                    // break, at the tap; the join runs on behind it.
+                    PreGameAd.beforeGame(context, account)
                     store.connect(inv.roomId)
                 },
                 onDismiss = { messaging.clearInvite(inv) },

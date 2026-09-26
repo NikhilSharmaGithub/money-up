@@ -2,14 +2,18 @@
 //
 // Everything else in this app trades: watch thirty seconds, take the purse
 // twice, or a couple of coins. This does not. It is a full-screen break shown
-// while a quick match is being found, and the only thing on the other side of
-// it is the game the player was already waiting for.
+// as the player sits down at a NEW table by their own tap — Play now, a
+// private game of their own, a code (typed, off a friend's row, or from an
+// invite), a public lobby with a seat in it — and the only thing on the other
+// side of it is the table they just asked for.
 //
 // Which is exactly why it is held to tighter rules than the rewarded ads:
 //
-//   It never delays the game. The search runs behind it and the table opens on
-//   its own schedule whether or not an ad is still on screen. Nothing here is
-//   awaited by anything that matters.
+//   It never delays a game. It goes up after the request is already on its
+//   way, the search or the lobby carries on behind it, and nothing here is
+//   awaited by anything that matters. The doors back into a table that
+//   already exists — Continue, a cup match, a private rematch, a push or a
+//   link — never show one at all.
 //
 //   It is shown at the START of the wait, not the end. A break that lands in
 //   the last three seconds is a break the player is still closing while their
@@ -74,18 +78,52 @@ final class InterstitialAd: NSObject {
         #endif
     }
 
+    /// The one door every new table goes through, called at the tap and after
+    /// the request is on its way: Play now, "Create a private game", a code
+    /// typed or handed over by a friend, and a public lobby with a seat in it.
+    ///
+    /// The doors that lead back to a table that already exists never call it —
+    /// Continue and the History list, every way into a cup match (a cup table
+    /// is never late), the private rematch (everyone waits on whoever pressed
+    /// it) and anything opened from a push or a link, which usually lands in a
+    /// live game and finds nothing loaded at a cold start anyway.
+    static func beforeGame() {
+        shared.showIfReady(AdDesk.shared.config)
+    }
+
     /// Show it if one is ready. Returns immediately either way — nothing about
     /// the game waits on this.
     func showIfReady(_ config: AdsConfig?) {
         #if canImport(GoogleMobileAds)
-        guard isDue(config), let ad = loaded, let root = Self.topViewController() else { return }
+        guard isDue(config), let ad = loaded else { return }
+        // Taken at the tap, so two taps in one breath cannot spend it twice.
         loaded = nil
-        lastShownAt = Date().timeIntervalSince1970
-        ad.present(from: root)
+        Task { await presentWhenSettled(ad) }
         #endif
     }
 
     #if canImport(GoogleMobileAds)
+    /// The tap that asks for a break has often just closed something too — the
+    /// friends list on "Join their table", the results on "Play again" — and
+    /// UIKit will not present over a screen on its way out. The break would be
+    /// spent and the owner's gap restarted with nobody having seen a thing. So
+    /// the tap's own changes get a beat to begin, anything still sliding is
+    /// waited out, and it goes up over whatever is left standing. Two seconds
+    /// with nowhere steady to stand and it is kept for the next table instead.
+    private func presentWhenSettled(_ ad: InterstitialAd_Google) async {
+        try? await Task.sleep(for: .milliseconds(150))
+        for _ in 0..<20 {
+            if let top = Self.topViewController(), !top.isBeingDismissed,
+               !top.isBeingPresented, top.transitionCoordinator == nil {
+                lastShownAt = Date().timeIntervalSince1970
+                ad.present(from: top)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if loaded == nil { loaded = ad }
+    }
+
     /// Nothing reaches Google until something is about to be shown — the same
     /// rule the rewarded network keeps, for the same reason.
     private static func startOnce() {

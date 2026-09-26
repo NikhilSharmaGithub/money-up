@@ -3088,10 +3088,35 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 }
 
 /* ─────────────────────────────────────────────────────── board centre ── */
+/* Everything in the well is sized from the well, never from the window.
+   It used to be fixed pixels — a 78px die, a 228px deed, a 16.5px Buy
+   button — on a board that is 310px across on a small phone and 880 on a
+   desktop, so shrinking the window left "Buy for $200" and the airport's
+   deed the same size on a board a third as big: they swallowed the middle
+   and ran out over the tiles. Now the centre is a size container and the
+   well is drawn to one design, at a 600px well (an 820px board), scaled by
+   the well's own width: --wpx is one pixel of that design, so every number
+   below reads as the size it has on a big laptop and keeps its proportion to
+   the board at every width. Only a floor ever stops it — a button is never
+   under 40px tall and no line in the well under 12px — and on a phone, where
+   the board is 310px, those floors are what the well is made of. */
 .board-center {
   position: absolute; inset: 13.5%;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   pointer-events: none; text-align: center;
+  container: well / inline-size;
+  --wpx: calc(100cqi / 600);
+  /* The well's type, as roles: a line, the fine print, a button, the one
+     big button, and a headline. Each is a size at the design, and a floor. */
+  --well-text:  max(12px, calc(13.5 * var(--wpx)));
+  --well-small: max(12px, calc(12.5 * var(--wpx)));
+  --well-btn:   max(12px, calc(15 * var(--wpx)));
+  --well-big:   max(13px, calc(17 * var(--wpx)));
+  --well-head:  max(14px, calc(18 * var(--wpx)));
+  /* How wide the buttons stand, and the tallest a thumb needs. */
+  --well-row:   max(164px, calc(276 * var(--wpx)));
+  --well-tap:   40px;
+  --well-gap:   max(6px, calc(9 * var(--wpx)));
 }
 .board-center > * { pointer-events: auto; }
 .center-felt {
@@ -3099,8 +3124,8 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
   background: radial-gradient(circle at 50% 45%, rgba(217, 161, 58, .06), transparent 62%);
 }
 .center-logo {
-  position: absolute; top: 2%; font-size: clamp(13px, 1.8vw, 24px); font-weight: 900;
-  letter-spacing: 1.5px; color: var(--ink); opacity: .045; pointer-events: none;
+  position: absolute; top: 2%; font-size: calc(32 * var(--wpx)); font-weight: 900;
+  letter-spacing: .06em; color: var(--ink); opacity: .045; pointer-events: none;
 }
 .center-logo span { color: var(--red); }
 
@@ -3113,19 +3138,22 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
    the film and the rim stay, and nobody is looking at it then anyway — they
    are watching the piece. The dice and the deed sit on it as what they are,
    an ivory object and a paper card. A 26 platter over twelve of padding
-   hands its buttons 14, the radius the big ones already wear. */
+   hands its buttons 14, the radius the big ones already wear — all three
+   read off the well now, so the corners stay concentric at every size. */
 .center-panel {
-  display: flex; flex-direction: column; align-items: center; gap: 16px;
-  padding: 12px 16px; border-radius: var(--r-26);
-  --glass-nest-r: max(calc(var(--r-26) - 12px), 4px);
+  --well-r: max(var(--r-14), calc(26 * var(--wpx)));
+  --well-pad: calc(12 * var(--wpx));
+  display: flex; flex-direction: column; align-items: center; gap: max(8px, calc(14 * var(--wpx)));
+  padding: var(--well-pad) calc(16 * var(--wpx)); border-radius: var(--well-r);
+  --glass-nest-r: max(calc(var(--well-r) - var(--well-pad)), 4px);
   max-width: 94%;
-  /* The platter shrink-wraps whatever is on it, and the action row takes 80%
-     of that — so with only the two dice on it, the platter was as wide as the
-     dice and "Roll dice" ran three pixels past its own padding. Invisible on
-     bare felt, cramped on glass. A floor measured against the board centre
-     (a definite width, so no percentage chases itself) makes it the bar the
-     phones' dock is. */
-  min-width: min(240px, 94%);
+  /* The platter shrink-wraps whatever is on it, so with only the two dice on
+     it, it was as wide as the dice and "Roll dice" ran past its own padding.
+     Its floor is the button row it carries plus its own padding — measured
+     against the board centre (a definite width, so no percentage chases
+     itself) — which makes it the bar the phones' dock is, and keeps it the
+     same width whether it is holding two dice or a deed and two buttons. */
+  min-width: min(94%, calc(var(--well-row) + 32 * var(--wpx)));
 }
 /* With nothing in it, there is nothing to frame — a pane of empty glass in
    the middle of the board is a blur for its own sake. */
@@ -3153,15 +3181,22 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 .center-panel .turn-clock-well.urgent { color: var(--glass-bad-ink); }
 body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .35); }
 
-.dice-row { display: flex; gap: 18px; height: 86px; align-items: center; }
+/* A die is drawn to its own size: the corner, the inset and the pips are
+   fractions of it, so it is the same die at 40px as at 80. The row leaves
+   room over it for the tumble, which swells a die by a fifth. */
+.dice-row {
+  --die: max(40px, calc(76 * var(--wpx)));
+  display: flex; gap: calc(var(--die) * .23); height: calc(var(--die) * 1.12); align-items: center;
+}
 .dice-row:not(:has(.die.show)) { display: none; }
 .die {
-  width: 78px; height: 78px; border-radius: 18px;
+  width: var(--die); height: var(--die); border-radius: calc(var(--die) * .23);
   /* Real dice are ivory in any light — never theme-tinted. */
   background: linear-gradient(155deg, #ffffff, #efe7e2);
   border: 1px solid rgba(0, 0, 0, .14);
   display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
-  padding: 12px; box-shadow: 0 10px 26px rgba(0, 0, 0, .3), inset 0 -4px 0 rgba(0, 0, 0, .06);
+  padding: calc(var(--die) * .155);
+  box-shadow: 0 calc(var(--die) * .13) calc(var(--die) * .33) rgba(0, 0, 0, .3), inset 0 -4px 0 rgba(0, 0, 0, .06);
   opacity: 0; transform: scale(.5); transition: opacity .2s, transform .3s var(--pop);
 }
 .die.show { opacity: 1; transform: scale(1); }
@@ -3171,18 +3206,73 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   45%  { transform: rotate(220deg) scale(1.2); }
   100% { transform: rotate(360deg) scale(1); }
 }
-.pip { width: 13px; height: 13px; border-radius: 50%; background: #1b5e3f; align-self: center; justify-self: center; }
+.pip { width: calc(var(--die, 78px) * .167); height: calc(var(--die, 78px) * .167); border-radius: 50%; background: #1b5e3f; align-self: center; justify-self: center; }
 
 .center-card { display: flex; justify-content: center; }
-.center-action { display: flex; flex-direction: column; gap: 9px; align-items: center; width: min(280px, 80%); }
-.center-status { font-size: 13.5px; color: var(--ink-2); max-width: 320px; line-height: 1.5; }
-.room-code { font-size: 15px; }
-.room-code b { letter-spacing: 3px; color: var(--ink); font-size: 19px; }
-.turn-block { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.center-action {
+  display: flex; flex-direction: column; gap: var(--well-gap); align-items: center;
+  width: min(100%, var(--well-row));
+}
+.center-status {
+  font-size: var(--well-text); color: var(--ink-2); line-height: 1.5;
+  max-width: max(200px, calc(340 * var(--wpx)));
+}
+.room-code { font-size: max(13px, calc(15.5 * var(--wpx))); }
+.room-code b { letter-spacing: .16em; color: var(--ink); font-size: 1.25em; }
+.turn-block { display: flex; flex-direction: column; align-items: center; gap: max(5px, calc(7 * var(--wpx))); }
 .avatar.lg { width: 46px; height: 46px; font-size: 20px; animation: breathe 2.4s ease-in-out infinite; }
+.turn-block .avatar.lg {
+  width: max(34px, calc(48 * var(--wpx))); height: max(34px, calc(48 * var(--wpx)));
+  font-size: max(15px, calc(21 * var(--wpx)));
+}
 @keyframes breathe { 50% { transform: scale(1.07); } }
-.turn-line { font-size: 17px; font-weight: 800; }
-.win-line { font-size: 24px; font-weight: 900; }
+.turn-line { font-size: var(--well-head); font-weight: 800; }
+.win-line { font-size: max(16px, calc(26 * var(--wpx))); font-weight: 900; }
+
+/* The controls in the well, drawn to the well. A button keeps the house
+   shape (see "buttons") and takes its type, its padding and its height from
+   the well instead: never under a thumb's 40px, never under 12px of type. A
+   row of two stands one above the other, because the well's row is narrower
+   than any two of its labels side by side. */
+.center-panel .btn {
+  font-size: var(--well-btn);
+  padding: max(6px, calc(10 * var(--wpx))) max(10px, calc(16 * var(--wpx)));
+  min-height: var(--well-tap);
+}
+.center-panel .btn.big {
+  font-size: var(--well-big);
+  padding: max(8px, calc(15 * var(--wpx))) max(12px, calc(22 * var(--wpx)));
+}
+.center-panel .btn.small { font-size: var(--well-small); padding: 0 max(8px, calc(12 * var(--wpx))); }
+.center-panel .row-2 { grid-template-columns: minmax(0, 1fr); gap: var(--well-gap); }
+.center-panel :is(.small, .dim.small, .waiting, .turn-clock-well) { font-size: var(--well-small); }
+.center-panel .alert { font-size: var(--well-text); padding: .6em .9em; }
+
+/* The deed you landed on, as a card sized to the well. Everything inside it
+   is in ems of its own type, so the rent table and the spacing grow and
+   shrink together. When the well is too small to hold the rent table as
+   well as the buttons it belongs to, the table goes — the card keeps its
+   name and price, and the rest is one tap away on the tile.
+   The name and the price each take their own floor rather than riding an
+   em of the card's: an em of a floored 12px held "TLV Airport" at 14.4px and
+   its price at 17px on every board under about 790px — a laptop's as much as
+   a phone's — so the card shrank round a name that did not, which read
+   bigger than the Buy button under it. Drawn to the well, they keep the
+   proportion to the board and to that button all the way to the floor. */
+.center-card .deed.compact {
+  width: max(140px, calc(236 * var(--wpx)));
+  font-size: max(12px, calc(12.5 * var(--wpx)));
+}
+.center-card .deed.compact .deed-head { padding: .55em .8em; gap: .55em; }
+.center-card .deed.compact .deed-flag { width: 1.25em; height: 1.25em; }
+.center-card .deed.compact .deed-title { font-size: max(12px, calc(15 * var(--wpx))); }
+.center-card .deed.compact .deed-price { font-size: max(13px, calc(18 * var(--wpx))); padding: .35em 0 .1em; }
+.center-card .deed.compact .deed-rows { padding: .6em 1em .9em; }
+.center-card .deed.compact .deed-row { padding: .2em 0; gap: .8em; }
+@container well (max-width: 470px) {
+  .center-card .deed-rows { display: none; }
+  .center-card .deed.compact .deed-price { padding-bottom: .35em; }
+}
 /* The border was a literal #f3c3ca, which is the accent mixed a quarter of
    the way into white — true back when the accent was red, and a pink hairline
    on a brass table ever since. Same recipe, read off whichever accent the
@@ -3193,11 +3283,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 }
 
 .auction-box { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 100%; }
-.auction-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--gold); font-weight: 750; }
-.auction-bid { font-size: 38px; font-weight: 900; color: var(--red); line-height: 1.1; }
-.auction-timer { height: 5px; width: 100%; background: var(--paper-2); border-radius: 4px; overflow: hidden; margin: 9px 0 4px; }
+.auction-label { font-size: var(--well-small, 12px); text-transform: uppercase; letter-spacing: .12em; color: var(--gold); font-weight: 750; }
+.auction-bid { font-size: max(22px, calc(40 * var(--wpx, 1px))); font-weight: 900; color: var(--red); line-height: 1.1; }
+.auction-timer { height: max(4px, calc(5 * var(--wpx, 1px))); width: 100%; background: var(--paper-2); border-radius: 4px; overflow: hidden; margin: var(--well-gap, 9px) 0 4px; }
 .auction-timer i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, var(--red), #f2748a); }
-.bid-row { display: flex; gap: 7px; justify-content: center; flex-wrap: wrap; }
+.bid-row { display: flex; gap: max(4px, calc(7 * var(--wpx, 1px))); justify-content: center; flex-wrap: wrap; }
+/* The bids and Pass are four keys that belong on one line, and at a phone's
+   floor they are wider than the well's usual button row — so an auction
+   takes what the well has. The dice, which only said how the piece got
+   here, step aside for the gavel: a deed with its rent table, the bid and
+   its keys are already as much as the well holds. */
+.center-action:has(> .auction-box) { width: min(100%, max(var(--well-row), 200px)); }
+.center-panel:has(.auction-box) .dice-row { display: none; }
 
 /* The flight happens to the banner itself, not to the strip it rides in: the
    strip is a full-width row, and a row faded by opacity is a wall a pane of
@@ -4013,8 +4110,6 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 /* ────────────────────────────────────────────────────────── responsive ── */
 @media (max-width: 1240px) {
   .app { grid-template-columns: 230px minmax(0, 1fr) 268px; gap: 9px; padding: 9px; }
-  .die { width: 64px; height: 64px; border-radius: 15px; }
-  .pip { width: 11px; height: 11px; }
 }
 @media (max-width: 1024px) {
   html, body { overflow: auto; }
@@ -4055,14 +4150,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   .corner .tile-name { font-size: 7.5px; }
   .board { gap: 2px; padding: 3px; border-radius: 12px; }
   .tile { --tile-r: 5px; }
-  .board-center { inset: 15%; }
+  /* The phone board's tiles are deeper, so its centre is 70% of the board
+     rather than 73% — and the well's design pixel is re-based to match, so a
+     button is the same fraction of the BOARD on both sides of this line. */
+  .board-center { inset: 15%; --wpx: calc(100cqi / 575); }
   .center-logo { display: none; }
   .deed.compact { width: min(180px, 94%); font-size: 10px; }
-  /* The middle of the board is barely 250px tall on a phone. A full rent
-     table there pushed the very Buy button it belongs to down over the tiles,
-     and clipped the name of the street off the top — so the well keeps the
-     name and the price, and the table stays one tap away on the tile. */
-  .center-panel { gap: 10px; max-height: 100%; min-height: 0; overflow-y: auto; }
+  /* The middle of the board is barely 250px tall on a phone. The well is
+     drawn to it (see "board centre"), and there the floors under the type
+     and the buttons are most of what it is made of — so on the rare turn
+     that still has more to say than fits, it scrolls rather than spilling
+     over the tiles. */
+  .center-panel { max-height: 100%; min-height: 0; overflow-y: auto; }
   /* …and it has no room for a platter either. Twelve pixels of padding and a
      rim on every side is a tenth of a well this size, and the well scrolls
      here, which carries a drawn rim away with the content. On a phone the
@@ -4076,7 +4175,6 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   }
   .center-panel::before,
   .center-panel::after { display: none; }
-  .center-card .deed-rows { display: none; }
   .turn-banner-fly { top: 8%; }
   .tb-avatar { width: 25px; height: 25px; font-size: 12px; }
   .tb-text { font-size: 14px; }
@@ -4085,14 +4183,6 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 @media (max-width: 560px) {
   .app { padding: 8px; gap: 8px; }
   .board-wrap { width: 97vw; }
-  .dice-row { height: 56px; gap: 12px; }
-  .die { width: 48px; height: 48px; border-radius: 12px; padding: 7px; }
-  .pip { width: 8px; height: 8px; }
-  .center-action { width: 90%; }
-  /* The well in the middle of a phone board is about 225px wide. "Final
-     standings" and "Back to home" side by side needed three hundred, and the
-     second one hung a full inch off the right edge of the screen. */
-  .center-action .row-2 { grid-template-columns: 1fr; }
   .btn.big { padding: 13px 17px; font-size: 14.5px; }
   .landing-feats { gap: 20px; }
 }
@@ -4132,14 +4222,14 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 }
 .corner .tile-body { gap: 2%; padding: 4% 3%; }
 
-/* lobby centre */
-.lobby-head { margin-bottom: 10px; }
-.lobby-map { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; font-weight: 600; }
+/* lobby centre — in the well, so drawn to it like everything else there */
+.lobby-head { margin-bottom: max(6px, calc(10 * var(--wpx))); }
+.lobby-map { font-size: var(--well-small); color: var(--ink-2); margin-top: 2px; font-weight: 600; }
 /* What a matchmade table dealt itself, under the board it dealt. Wrapped
    rather than clipped: four people are about to play by these rules and a
    cut-off sentence is no use to any of them. */
 .lobby-rolled {
-  font-size: 11.5px; color: var(--ink-3); font-weight: 600;
+  font-size: var(--well-small); color: var(--ink-3); font-weight: 600;
   margin-top: 3px; line-height: 1.4;
 }
 /* The seats a table is still waiting on. Faces rather than dots, so a player
@@ -4148,12 +4238,20 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    it sits on the same optical line as the drawn ones. */
 .group-mark { font-size: 1.05em; line-height: 1; vertical-align: -.1em; }
 
-.seat-row { display: flex; gap: 10px; justify-content: center; margin: 8px 0 8px; flex-wrap: wrap; }
-.seat-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; }
+.seat-row {
+  --seat: max(46px, calc(64 * var(--wpx)));
+  --face: max(30px, calc(36 * var(--wpx)));
+  display: flex; gap: max(4px, calc(10 * var(--wpx))); justify-content: center;
+  margin: max(5px, calc(8 * var(--wpx))) 0; flex-wrap: wrap;
+}
+/* Room over the faces for the host's crown, which stands above its seat. */
+.seat-row.marked { padding-top: calc(var(--face) * .3); }
+.seat-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; width: var(--seat); }
 .seat-face {
-  width: 34px; height: 34px; border-radius: 50%;
+  position: relative;
+  width: var(--face); height: var(--face); border-radius: 50%;
   display: grid; place-items: center;
-  font-size: 15px; font-weight: 850; color: #fff;
+  font-size: calc(var(--face) * .44); font-weight: 850; color: #fff;
   box-shadow: 0 2px 6px rgba(0, 0, 0, .28);
   animation: seatIn .32s var(--pop);
 }
@@ -4161,11 +4259,32 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   background: transparent; border: 2px dashed var(--rule-2); box-shadow: none; animation: none;
 }
 .seat-name {
-  font-size: 10.5px; font-weight: 700; color: var(--ink-2);
-  max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: max(12px, calc(11.5 * var(--wpx))); font-weight: 700; color: var(--ink-2);
+  max-width: var(--seat); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .seat-slot.open .seat-name { color: var(--ink-3); font-weight: 600; }
 @keyframes seatIn { from { transform: scale(.5); opacity: 0; } }
+/* The Ready round's two marks on a seat: the crown over the host — who
+   starts the table rather than readying for it — and a green disc on anyone
+   who has pressed Ready. The disc is ringed in the page, so it lifts off the
+   face it overhangs instead of bleeding into that player's colour. */
+.seat-crown {
+  position: absolute; left: 50%; top: 0; translate: -50% -72%;
+  display: grid; place-items: center; font-style: normal; line-height: 0;
+}
+.seat-crown .ico { width: calc(var(--face) * .5); height: calc(var(--face) * .5); }
+.seat-tick {
+  position: absolute; right: -12%; top: -8%;
+  width: calc(var(--face) * .46); height: calc(var(--face) * .46); border-radius: 50%;
+  display: grid; place-items: center; font-style: normal; line-height: 0;
+  /* The page's own colour is the ink as well as the ring: cream on the deep
+     green by day, near-black on the bright green after dark — both clear
+     the contrast a white mark on the night green would not. */
+  background: var(--good); color: var(--page);
+  box-shadow: 0 0 0 2px var(--page);
+  animation: seatIn .28s var(--pop);
+}
+.seat-tick .ico { width: 70%; height: 70%; vertical-align: 0; }
 
 .seat-dots { display: flex; gap: 6px; justify-content: center; margin: 4px 0 8px; }
 .seat-dot {
@@ -4533,11 +4652,101 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 
 /* ── board centre: the searching state a Quick Play table shows itself ── */
 .quick-search {
-  display: flex; align-items: center; justify-content: center; gap: 9px;
-  font-size: 15.5px; font-weight: 800; color: var(--ink);
+  display: flex; align-items: center; justify-content: center; gap: .55em;
+  font-size: var(--well-head, 15.5px); font-weight: 800; color: var(--ink);
 }
-.quick-count { font-size: 12.5px; color: var(--ink-3); font-weight: 650; text-align: center; }
+.quick-count { font-size: var(--well-small, 12.5px); color: var(--ink-3); font-weight: 650; text-align: center; font-variant-numeric: tabular-nums; }
 .quick-count b { color: var(--gold); font-weight: 850; font-variant-numeric: tabular-nums; }
+
+/* ── the Play-now lobby's two acts, in the well ── */
+/* The search's big gold number, the phones' countdown card: it counts to the
+   end of the search, and its caption says what that end is. */
+.quick-big {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  width: 100%; padding: max(6px, calc(10 * var(--wpx))) 0;
+  border-radius: var(--glass-nest-r, var(--r-14));
+  background: var(--card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 50%, transparent);
+  --ink-3: var(--paper-ink-3);
+}
+.quick-big b {
+  font-size: max(26px, calc(44 * var(--wpx))); line-height: 1.05; font-weight: 900;
+  color: var(--gold); font-variant-numeric: tabular-nums;
+}
+.quick-big span { font-size: var(--well-small); font-weight: 750; letter-spacing: .08em; color: var(--ink-3); }
+/* The Ready round's headline and the deadline under it, on the same card —
+   gold while it waits on somebody, green once everybody is set. */
+.quick-ready {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  width: 100%; padding: max(8px, calc(12 * var(--wpx))) max(8px, calc(12 * var(--wpx)));
+  border-radius: var(--glass-nest-r, var(--r-14));
+  background: var(--card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 50%, transparent);
+  --ink-2: var(--paper-ink-2); --ink-3: var(--paper-ink-3);
+  transition: box-shadow .24s var(--ease);
+}
+.quick-ready.set { box-shadow: 0 0 0 1px color-mix(in srgb, var(--good) 55%, transparent); }
+.quick-head {
+  display: flex; align-items: center; justify-content: center; gap: .45em;
+  font-size: max(13px, calc(18 * var(--wpx))); font-weight: 850; color: var(--ink); line-height: 1.25;
+}
+.qh-mark {
+  flex: none; display: grid; place-items: center; line-height: 0;
+  width: 1.1em; height: 1.1em; border-radius: 50%;
+  background: var(--good); color: var(--page);
+}
+.qh-mark .ico { width: 72%; height: 72%; vertical-align: 0; }
+/* The buttons under either act: Start or Ready, then the rules and the chat. */
+.quick-controls { display: flex; flex-direction: column; align-items: stretch; gap: var(--well-gap); width: 100%; }
+.quick-controls .btn .ico.tick { width: 1em; height: 1em; margin-left: .2em; vertical-align: -.12em; }
+.quick-note-host { font-size: var(--well-small); color: var(--ink-2); line-height: 1.4; }
+.quick-more .btn { white-space: normal; line-height: 1.25; }
+/* The chat button wears the unread count the chat bubble does — where the
+   chat is a dock. On a desktop the chat is open in the rail beside the board
+   the whole time, and a count of what is already on screen is noise. */
+.quick-chat { overflow: visible; }
+@media (max-width: 1024px) {
+  .quick-chat.has-unread::after {
+    content: attr(data-unread);
+    position: absolute; top: -7px; right: -5px; left: auto; bottom: auto;
+    min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
+    background: var(--red); color: var(--on-red); mix-blend-mode: normal;
+    font-size: 11px; font-weight: 800; line-height: 19px; text-align: center;
+    box-shadow: 0 0 0 2px var(--page);
+  }
+}
+/* A Play-now table waits with its tiles still in the deck (see "the undealt
+   table"), so the ring the well normally keeps clear of is bare felt the
+   whole time. The search has more to say than the middle of a dealt board
+   holds — the countdown, Start or Ready, the rules and the chat, the talk,
+   the seats — and in 73% of a board it stood taller than the middle at every
+   desktop width, and taller than the whole board at a 566px one, where the
+   deck and the seats were cut off its ends. While the tiles are away the
+   well takes the felt. Its design pixel is re-based to the bigger well —
+   the design's 600px well sits on an 822px board, and 94% of 822 is 773 —
+   so everything in it stays the same fraction of the board as before. */
+.board-wrap.undealt .board-center { inset: 3%; --wpx: calc(100cqi / 773); }
+/* Where even that is short — a board under about 720px, where the type and
+   the buttons are at their floors — what the lobby can do without goes
+   first: the table talk, then the riffling deck. The countdown already says
+   the table is being dealt, and there is a chat to read. Where the well
+   stands on bare felt it also drops the murmur of the log that would
+   otherwise run under the buttons. */
+@container well (max-width: 680px) {
+  .center-action:has(.quick-controls) .table-talk { display: none; }
+}
+@container well (max-width: 560px) {
+  .center-action:has(.quick-controls) .deal-deck { display: none; }
+}
+@media (max-width: 700px) {
+  .board-center:has(.quick-controls) .center-log { display: none; }
+}
+/* The rules panel the well's "Change rules" lands on lights up for a moment,
+   so the eye knows where it has been taken. */
+.quick-rules.flash { animation: rulesFlash 1.2s var(--ease); }
+@keyframes rulesFlash {
+  0%, 40% { box-shadow: 0 0 0 2px var(--glass-accent-ink), var(--glass-shadow); }
+}
 
 /* ── the line everyone reads while waiting: a tip or a city fact ── */
 .table-talk {
@@ -4548,6 +4757,7 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 .table-talk .talk-in { display: block; animation: talkIn .7s ease; }
 @keyframes talkIn { from { opacity: 0; } }
 .modal .table-talk { margin-top: 16px; }
+.center-panel .table-talk { font-size: var(--well-small); max-width: max(200px, calc(420 * var(--wpx))); min-height: 1.5em; }
 
 /* ── the undealt table, and the deal at kick-off ── */
 /* While a quick match hunts for players the tiles wait in the deck: bare
@@ -4583,6 +4793,15 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   font-size: clamp(11px, 1.3vw, 16px); font-weight: 900; letter-spacing: .5px;
   color: rgba(255, 255, 255, .82);
 }
+
+/* In the well the deck is drawn to the board like the rest of the search:
+   a card's height is its width and a half, and the monogram a quarter of it. */
+.center-panel .deal-deck {
+  --deck-w: max(36px, calc(54 * var(--wpx)));
+  width: var(--deck-w); height: calc(var(--deck-w) * 1.44);
+  margin-bottom: max(4px, calc(10 * var(--wpx)));
+}
+.center-panel .deal-card::after { font-size: calc(var(--deck-w) * .25); }
 
 /* The idle riffle: the halves ease apart, hang a beat, and merge again —
    once every four-and-a-half seconds while the table waits. */
@@ -4640,6 +4859,29 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 }
 .quick-seat.open { background: transparent; border-style: dashed; }
 .qs-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The Ready round, seat by seat: the host's chair says HOST under a crown,
+   a ready one wears the green disc the well's seats wear, and the rest say
+   plainly that they are not ready yet. */
+.quick-seat .tag.host { display: inline-flex; align-items: center; gap: 2px; }
+.quick-seat .tag.host .ico { width: 10px; height: 10px; }
+.qs-ready {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; line-height: 0;
+  background: var(--good); color: var(--page);
+}
+.qs-ready .ico { width: 12px; height: 12px; vertical-align: 0; }
+.qs-wait { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-3); }
+/* …and in the players' list under the money, the same word. */
+.lobby-ready { display: inline-flex; align-items: center; gap: 3px; color: var(--good); font-weight: 750; }
+.lobby-ready .ico { width: 1em; height: 1em; vertical-align: 0; }
+
+/* A Play-now table's rules: what the host may change, then what nobody can. */
+.qr-note { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; margin: 9px 0 2px; }
+.qr-locked { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.qr-locked .look-label { display: flex; align-items: center; gap: 5px; margin-top: 0; }
+.qr-locked .setting { opacity: .78; }
+.qr-value { flex: none; font-size: 12.5px; font-weight: 800; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.qr-foot { margin-top: 6px; }
 
 /* The same roll again in the side panel, one phrase per chip, because a run-on
    line of seven rules is something nobody reads twice. */
@@ -4650,6 +4892,9 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   background: var(--paper-2); border: 1px solid var(--rule);
 }
 .rolled-chip:first-child { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 45%, var(--rule)); }
+/* A rule the host moved off the roll wears the accent's ring, so a stranger
+   can tell which rules a person chose and which the dice did. */
+.rolled-chip.edited { border-color: var(--red); box-shadow: 0 0 0 .5px var(--red); color: var(--ink); }
 
 /* ── player chips: live position, and a nudge for whoever plays next ── */
 .prank {
@@ -4767,7 +5012,11 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.5) 26%, #000 62%);
   mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,.5) 26%, #000 62%);
 }
-.center-log .log-line { font-size: clamp(9px, .85vw, 12px); padding: 1px 0; background: none; }
+/* The one line in the well allowed under the 12px floor: it is a murmur at
+   two-fifths strength behind the buttons, and on a phone it runs straight
+   under them with no platter between — at 12px there it would be printed
+   over "Roll dice". Above that it is drawn to the board like the rest. */
+.center-log .log-line { font-size: max(9px, calc(11.5 * var(--wpx))); padding: 1px 0; background: none; }
 .center-log .log-line.turn { background: none; font-weight: 800; }
 /* Both of these sit above the log written across the felt behind them. The
    logo asked for that in the same breath as `position: relative`, which quietly

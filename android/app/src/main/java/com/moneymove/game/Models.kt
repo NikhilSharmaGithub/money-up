@@ -1,6 +1,9 @@
 package com.moneymove.game
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Serializable mirror of the state the game server broadcasts.
@@ -28,8 +31,18 @@ data class GameState(
      * guests, no settings, and nobody to throw out.
      */
     val cup: Boolean? = null,
-    /** Epoch ms the matchmade table deals itself in; null once it has. */
+    /**
+     * Epoch ms the matchmade table deals itself in; null once it has. A
+     * server with a Play-now lobby keeps it equal to [QuickLobby.startBy],
+     * so an older phone still counts down to the real kick-off.
+     */
     val quickStartAt: Double? = null,
+    /**
+     * The Play-now lobby: the search, then Ready and Start. Null everywhere
+     * else, and on a server too old to run one — which is how this client
+     * knows to fall back to the waiting room with nothing to press.
+     */
+    val quickLobby: QuickLobby? = null,
     /**
      * What a matchmade table dealt itself — board and house rules. Nobody at
      * one of these tables picked them, so they get shown before the dice.
@@ -80,20 +93,31 @@ data class GameState(
     val isLobby: Boolean get() = status == "lobby"
 
     /**
-     * A matchmade table still filling up: the seats and the clock are the
-     * whole story, so the host controls stay out of the way.
+     * A matchmade table that has not dealt itself in: its own waiting room
+     * (QuickMatchPanel.kt) rather than the private lobby's host controls. A
+     * server with the Play-now lobby says so with [quickLobby]; an older one
+     * only ever sent the fuse.
      */
-    val isQuickWaiting: Boolean get() = isLobby && quick == true && quickStartAt != null
+    val isQuickWaiting: Boolean
+        get() = isLobby && quick == true && (quickLobby != null || quickStartAt != null)
     val isPlaying: Boolean get() = status == "playing"
     val isEnded: Boolean get() = status == "ended"
 
     /**
-     * Whole seconds until a matchmade table deals itself in, measured against
-     * the server's own deadline — so somebody who walks in late sees what is
-     * really left rather than a fresh fifteen. Null once it has dealt.
+     * What the waiting room counts down to: the end of the search while it
+     * runs, the table starting by itself once it has, and the old fuse on a
+     * server that has no lobby.
+     */
+    val quickDeadline: Double?
+        get() = quickLobby?.let { if (it.isGathering) it.gatherUntil else it.startBy } ?: quickStartAt
+
+    /**
+     * Whole seconds to [quickDeadline], measured against the server's own
+     * clock — so somebody who walks in late sees what is really left rather
+     * than a fresh twenty. Null once the table has dealt.
      */
     fun quickSecondsLeft(now: Long = System.currentTimeMillis()): Int? =
-        quickStartAt?.let { clockSecondsLeft(it, now) }
+        quickDeadline?.let { clockSecondsLeft(it, now) }
 
     /** Chairs nobody is sitting in yet. */
     val openSeats: Int get() = maxOf(0, settings.maxPlayers - players.size)
@@ -159,7 +183,73 @@ data class QuickRoll(
     val at: Double? = null,
     val keys: List<String>? = null,
     val parts: List<String>? = null,
-)
+    /**
+     * The settings keys the host has since moved off what was rolled. A table
+     * whose rules somebody changed says so, so nobody sits down to "the dice
+     * picked this" when a person did.
+     */
+    val edited: List<String>? = null,
+) {
+    /**
+     * Which setting each of [parts] describes, in its order. The server
+     * writes the phrases in quickRollParts' fixed reading order — the board,
+     * the bankroll, then its five labelled rules — and this is that order, so
+     * a changed rule can be found among the chips without parsing the words.
+     */
+    fun partKey(index: Int): String? = PART_KEYS.getOrNull(index)
+
+    /** The chip for this setting has been changed by the host. */
+    fun isEdited(index: Int): Boolean = partKey(index)?.let { it in edited.orEmpty() } == true
+
+    companion object {
+        /** quickRollParts() in server/game.js, phrase for phrase. */
+        val PART_KEYS = listOf("mapId", "startingCash", "x2rent", "vacationCash", "auction", "noRentInPrison", "evenBuild")
+    }
+}
+
+/**
+ * The Play-now lobby, as the server runs it.
+ *
+ * Twenty seconds of search, when the table only looks for people and the
+ * last five fill the empty chairs with the house; then the ready phase, when
+ * everyone but the host says they are ready, the host starts, and a table
+ * nobody starts starts itself at [startBy]. Every time here is the server's,
+ * so two phones at one table count down to the same second.
+ *
+ * `waitingOn` is read loosely — a count, or the seats themselves — because
+ * the only thing any screen says with it is how many.
+ */
+@Serializable
+data class QuickLobby(
+    /** "gathering" | "ready". */
+    val phase: String = "gathering",
+    /** Epoch ms the search ends. */
+    val gatherUntil: Double? = null,
+    /** Epoch ms the table starts by itself if nobody starts it first. */
+    val startBy: Double? = null,
+    /** Epoch ms the earliest empty chair is given to the house, or null. */
+    val backfillAt: Double? = null,
+    val waitingOn: JsonElement? = null,
+    /** Everyone but the host is ready: the host's Start is live. */
+    val canStart: Boolean? = null,
+    /** The settings keys the host may change here — QUICK_HOST_KEYS. */
+    val editable: List<String>? = null,
+) {
+    val isGathering: Boolean get() = phase != "ready"
+
+    /** Seats other than the host that have not said they are ready. */
+    val waitingCount: Int
+        get() = when (val w = waitingOn) {
+            is JsonArray -> w.size
+            is JsonPrimitive -> w.content.toDoubleOrNull()?.toInt() ?: 0
+            else -> 0
+        }
+
+    /** The host's Start would be taken: the search is over and nobody is still reading. */
+    val startLive: Boolean get() = !isGathering && canStart == true
+
+    fun mayEdit(key: String): Boolean = key in editable.orEmpty()
+}
 
 @Serializable
 data class GameSettings(
@@ -279,8 +369,14 @@ data class PlayerState(
     val removedFor: String? = null,         // "timeout" | "quit"
     /** Laps walked while the deadlock rule was counting for this seat, 0...4. */
     val blockedLaps: Int? = null,
+    /**
+     * Said "I'm ready" in a Play-now lobby. False everywhere else, and never
+     * asked of the host, whose Start is their answer.
+     */
+    val ready: Boolean? = null,
 ) {
     val isBankrupt: Boolean get() = bankrupt == true
+    val isReady: Boolean get() = ready == true
     val inJail: Boolean get() = jail == true
     val wasRemoved: Boolean get() = timedOut == true
 

@@ -423,6 +423,11 @@ struct FriendsSheet: View {
                         Haptics.tap()
                         dismiss()
                         store.join(roomId: roomId)
+                        // Sitting down in their lobby is a new table; watching
+                        // a game already running is not, and gets no break.
+                        // The break waits for this sheet to finish closing —
+                        // see InterstitialAd.presentWhenSettled.
+                        if !started { InterstitialAd.beforeGame() }
                     } label: {
                         HStack(spacing: 6) {
                             Art.icon(started ? .eye : .dice, size: 14)

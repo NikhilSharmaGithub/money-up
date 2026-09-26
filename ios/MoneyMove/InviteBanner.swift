@@ -100,7 +100,12 @@ struct InviteBanner: View {
                 Button("Join") {
                     Haptics.turn()
                     watch.clear(inv)
+                    // The same act as typing the friend's code, so the same
+                    // rule: a new table gets the break, and a game this
+                    // device still has a seat in is only the way back.
+                    let returning = store.unfinishedGames.contains { $0.roomId == inv.roomId }
                     store.join(roomId: inv.roomId)
+                    if !returning { InterstitialAd.beforeGame() }
                 }
                 .buttonStyle(MMButtonStyle(kind: .primary))
 

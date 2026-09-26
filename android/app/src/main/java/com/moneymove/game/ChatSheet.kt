@@ -223,7 +223,7 @@ fun ChatSheet(
                         onBlock = block,
                     )
                 } else {
-                    LogTab(state)
+                    LogTab(store.shownLog)
                 }
             }
             ChatGrabber(Modifier.align(Alignment.TopCenter))
@@ -854,11 +854,14 @@ internal fun ChatComposer(
  * line and following new ones in. Each kind of line wears its own glyph and
  * colour, so a scroll back through thirty turns can be read by shape before
  * it is read by word.
+ *
+ * [log] is the store's [GameStore.shownLog]: the table's window less the
+ * lines a piece still walking has not earned yet, so opening the log mid-walk
+ * cannot read out the rent before the board has shown it.
  */
 @Composable
-private fun ColumnScope.LogTab(state: GameState) {
+private fun ColumnScope.LogTab(log: List<LogLine>) {
     val p = P.current
-    val log = state.log
     // LogLine.key is a time and a hash, and two identical lines in the same
     // millisecond would share one. A LazyColumn throws on a repeated key, so
     // a repeat gets a count on the end.
@@ -871,7 +874,10 @@ private fun ColumnScope.LogTab(state: GameState) {
         }
     }
     val listState = rememberLazyListState()
-    FollowNewest(listState, log.size, keys.lastOrNull())
+    // The count as well as the newest line: a held line released at its
+    // payday lands above one that arrived during the walk, leaving the newest
+    // key where it was, and the list still has to follow it down.
+    FollowNewest(listState, log.size, "${log.size}:${keys.lastOrNull()}")
     LazyColumn(
         state = listState,
         // The thread keeps to its newest line, so lines are forever leaving

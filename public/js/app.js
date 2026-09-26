@@ -121,6 +121,11 @@ const actions = {
   quit: emit('quit'),
   grantTime: (id) => socket?.emit('grantTime', { id }),
   chat: emit('chat'),
+  // A Play-now table's Ready round. Pressed again it is taken back, so the
+  // flag travels with it rather than the server guessing which way it went.
+  ready: (on = true) => socket?.emit('ready', on),
+  // The lobby's "Chat with the table": the same dock the chat button opens.
+  openChat: () => openChatDock(),
   rematch: emit('rematch'),
   makeHost: (id) => socket.emit('makeHost', { id }),
   // A matchmade table breaks up when it ends — going again means finding
@@ -872,8 +877,11 @@ function boot() {
     primed = false;
     dropJourneys();
     reseed();
+    // `canReady` says this client has a Ready button. A seat without one is
+    // counted as ready by the server, so a table never waits on somebody who
+    // has nothing to press.
     socket.emit('join', {
-      roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO,
+      roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO, canReady: true,
     });
   });
   socket.on('you', (d) => { meId = d.playerId; });
@@ -974,10 +982,13 @@ function render() {
   safe('clock', () => syncTurnClock(state, meId));
   safe('modals', () => syncOpenModals(state));
   safe('log', () => {
-    renderLog(state, $('#logList'));
+    // Both feeds read the log as it is shown: a line the walk caused is
+    // printed when its money is, not when the server wrote it.
+    const lines = shownLog(state);
+    renderLog(state, $('#logList'), lines);
     // The board's own quiet feed — same lines, ghosted under the dice.
     const centre = $('#centerLog');
-    if (centre) renderLog(state, centre);
+    if (centre) renderLog(state, centre, lines);
   });
   safe('chatChannels', () => syncChatChannels(state));
   safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
@@ -1172,6 +1183,14 @@ const journeys = new Map();
 const held = new Map();
 /** Players whose bankruptcy has not been shown yet. */
 const heldBusts = new Set();
+/**
+ * Log lines that have not been shown yet, by `lineKey`. The server writes
+ * "Ravi pays $950 rent to Asha" in the same push as the roll, so a log
+ * painted as it arrived read the landing out before the piece had left START
+ * — the same spoiler the purses used to give, one panel over. A line the walk
+ * caused now waits in its entry with the money and lands with it.
+ */
+const heldLines = new Set();
 /** Entries due to land, so walking away from the table can cancel them. */
 const beats = new Set();
 /** False until the first state after a connect has been taken as a position. */
@@ -1210,6 +1229,46 @@ function presented() {
 }
 
 /**
+ * One log line, as something a Set can hold. Lines carry no id, and the
+ * same line arrives as a new object after a resync, so it is named by what
+ * it says and when; two lines saying the same thing in the same millisecond
+ * are one line to the reader anyway.
+ */
+const lineKey = (l) => `${l.at}|${l.kind}|${l.text}`;
+
+/** The log as it is shown: the server's, less the lines still riding on a walk. */
+function shownLog(s) {
+  const log = s.log || [];
+  return heldLines.size ? log.filter((l) => !heldLines.has(lineKey(l))) : log;
+}
+
+/**
+ * The kinds of line that are their own moment, whoever happens to be
+ * walking: the roll is read off the dice as they land, and an auction,
+ * somebody sitting down or leaving, and the turn moving on are all shown as
+ * they happen on every other surface of the table — the log saying them late
+ * would be the log disagreeing with the board. A trade is never held either,
+ * but that is decided a level up: a push with a trade in it opens no
+ * journey (see `exempt`). The one trade line a walk does write — the
+ * deadlock rule moving a street as the piece passes START — is the walk's,
+ * and lands with the money it moved.
+ */
+const NEVER_HELD = new Set(['dice', 'auction', 'join', 'leave', 'turn']);
+
+/**
+ * Which of a push's fresh lines its walk caused. In the push that starts the
+ * walk, the roll's own line comes first and everything after it is what the
+ * walk found — the salary, the landing, the rent, the card, the debt, the
+ * bust, the end of the game — while a line before it (a clock running out,
+ * say) was already true before anyone moved. A push that only joins a walk
+ * already on the board, a bot's scramble to pay, is all consequence.
+ */
+function causedLines(lines, fresh) {
+  const from = fresh ? lines.map((l) => l.kind).lastIndexOf('dice') + 1 : 0;
+  return lines.slice(from).filter((l) => !NEVER_HELD.has(l.kind)).map(lineKey);
+}
+
+/**
  * The latest a journey's money waits for the board to say the piece has
  * landed — a tab in the background, a piece that never got on screen.
  * Modelled on cardFloor: 150ms a tile against the 78–128 a step takes, 1.1s
@@ -1229,6 +1288,7 @@ function dropJourneys() {
   beats.clear();
   held.clear();
   heldBusts.clear();
+  heldLines.clear();
   endHeld = null;
 }
 
@@ -1337,9 +1397,14 @@ function tally(prev, s) {
     const inBusts = busts.filter((id) => target.cast.has(id));
     const outBusts = busts.filter((id) => !target.cast.has(id));
     if (fresh || ended || inBusts.length || Object.keys(inside).length) {
-      target.entries.push(entry(inside, kinds, inBusts, prev, s, target, ended, jailFlight));
+      // The lines ride with the money they describe, so the log reads the
+      // rent out as the purse pays it — never while the piece is still on
+      // its way.
+      const said = causedLines(lines, fresh);
+      target.entries.push(entry(inside, kinds, inBusts, prev, s, target, ended, jailFlight, said));
       for (const [id, d] of Object.entries(inside)) held.set(id, (held.get(id) || 0) + d);
       inBusts.forEach((id) => heldBusts.add(id));
+      said.forEach((k) => heldLines.add(k));
       if (ended && !endHeld) endHeld = prev;
       // Somebody the journey never touched is not kept waiting on it.
       if (Object.keys(outside).length || outBusts.length) {
@@ -1405,16 +1470,17 @@ function journeyFor(turnId, delta, busts) {
 /**
  * One change, as one event: its money, its log, its busts and who they were
  * owed to — a debt names its creditor or the players it is owed to; a bust
- * with no debt behind it came from a card, and the mover collected.
+ * with no debt behind it came from a card, and the mover collected. `lines`
+ * are the keys of the log lines it is holding back (see `heldLines`).
  */
-function entry(delta, kinds, busts, prev, s, j, ended, jailFlight) {
+function entry(delta, kinds, busts, prev, s, j, ended, jailFlight, lines = []) {
   const creditors = {};
   for (const b of busts) {
     const debt = [prev.turn?.debt, s.turn?.debt].find((d) => d?.debtor === b);
     if (debt) creditors[b] = debt.creditor ? [debt.creditor] : [...(debt.owedTo || [])];
     else creditors[b] = j?.card && j.mover !== b ? [j.mover] : [];
   }
-  return { delta, kinds, busts, creditors, ended, jailFlight };
+  return { delta, kinds, busts, creditors, ended, jailFlight, lines };
 }
 
 /** Past the fourth, a landing's entries are folded into one: it has said enough. */
@@ -1428,6 +1494,7 @@ function mergeEntries(a, b) {
     creditors: { ...a.creditors, ...b.creditors },
     ended: a.ended || b.ended,
     jailFlight: a.jailFlight || b.jailFlight,
+    lines: [...a.lines, ...b.lines],
   };
 }
 
@@ -1472,6 +1539,7 @@ function settle(e) {
     if (left) held.set(id, left); else held.delete(id);
   }
   e.busts.forEach((id) => heldBusts.delete(id));
+  e.lines.forEach((k) => heldLines.delete(k));
   if (e.ended) endHeld = null;
   // A sound that fails is a sound missed; the money is shown regardless.
   try { voice(e); } catch (err) { console.error('voice', err); }
@@ -2325,6 +2393,13 @@ function paintChatBadge() {
   const open = document.body.classList.contains('chat-open');
   chatDockBtn.classList.toggle('has-unread', unread > 0 && !open);
   chatDockBtn.dataset.unread = unread > 99 ? '99+' : String(unread);
+  // A Play-now lobby's "Chat with the table" wears the same count — it is the
+  // same chat, one button nearer to where the strangers are sitting.
+  const lobbyChat = $('#cChat');
+  if (lobbyChat) {
+    lobbyChat.classList.toggle('has-unread', unread > 0 && !open);
+    lobbyChat.dataset.unread = chatDockBtn.dataset.unread;
+  }
 }
 
 if (chatDockBtn) {

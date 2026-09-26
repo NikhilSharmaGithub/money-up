@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
-import { GameRoom, COLORS, rollQuickSettings } from './game.js';
+import { GameRoom, COLORS, rollQuickSettings, pickQuickRoom } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
 import { sendTurnPush, pushSends } from './push.js';
 import * as cup from './tournament.js';
@@ -1680,9 +1680,33 @@ function dressCupTable(room, matchId) {
 }
 
 /**
- * Find the quick-match table a player should drop into: the one that already
- * has people waiting (fullest first, so tables fill instead of fragmenting),
- * otherwise a fresh one on a 20-second fuse.
+ * The Play-now lobby's clocks, shortened for a test that has to watch a whole
+ * lobby go by: MM_QUICK_MS='{"gatherMs":300,"startWindowMs":1500,...}'. Only
+ * the names GameRoom.QUICK already has are taken, and only as the kind of
+ * value each already is, so a typo cannot leave a live table with no clock.
+ * Unset — as it is on every real server — nothing changes.
+ */
+if (process.env.MM_QUICK_MS) {
+  try {
+    const asked = JSON.parse(process.env.MM_QUICK_MS);
+    for (const [k, v] of Object.entries(asked || {})) {
+      const was = GameRoom.QUICK[k];
+      if (typeof was === 'number' && Number.isFinite(Number(v)) && Number(v) >= 0) GameRoom.QUICK[k] = Number(v);
+      else if (Array.isArray(was) && Array.isArray(v) && v.length === 2 && v.every((n) => Number.isFinite(n))) {
+        GameRoom.QUICK[k] = [Number(v[0]), Number(v[1])];
+      }
+    }
+    console.log('quick: lobby clocks from MM_QUICK_MS', GameRoom.QUICK);
+  } catch (err) {
+    console.error('quick: MM_QUICK_MS is not JSON — keeping the house clocks', err.message);
+  }
+}
+
+/**
+ * Find the quick-match table a player should drop into: one still in its
+ * lobby that they can reach before it deals — fullest first, so tables fill
+ * instead of fragmenting — otherwise a fresh one. The choosing is
+ * pickQuickRoom's, beside the lobby it reads.
  *
  * A fresh one is also dealt its own house rules — see the roll below. An
  * existing one is not re-rolled: the people sitting in it have already read
@@ -1690,18 +1714,11 @@ function dressCupTable(room, matchId) {
  * lobby a thing not worth reading.
  */
 function quickMatchRoom() {
-  // Seats are counted in people: the house players filling a quick lobby give
-  // their chair back the moment someone real wants it, so a table only reads
-  // as full once it is full of humans.
-  const humansIn = (r) => r.players.filter((p) => !p.isBot).length;
-  const waiting = [...rooms.values()]
-    .filter((r) => r.quick && r.status === 'lobby' && humansIn(r) < r.settings.maxPlayers)
-    .sort((a, b) => humansIn(b) - humansIn(a));
-  if (waiting.length) {
-    // Someone new arriving is worth a moment's grace for others to land too.
-    const room = waiting[0];
-    if (humansIn(room) === room.settings.maxPlayers - 1) room.armQuickStart(6);
-    return room;
+  const waiting = pickQuickRoom(rooms.values(), Date.now());
+  if (waiting) {
+    // They are a round trip away; the table holds still until they land.
+    waiting.expectArrival();
+    return waiting;
   }
   const room = getRoom(newRoomId());
   // A quick game should not be the same game every time. The board is drawn
@@ -2121,8 +2138,11 @@ io.on('connection', (socket) => {
     else socket.emit('roomCreated', { roomId: room.id });
   }));
 
+  // `canReady: true` comes from a build that has the Play-now lobby's Ready
+  // button. Silence means one that does not, and that seat counts as ready
+  // throughout, so nobody at a mixed table waits on a button that isn't there.
   socket.on('join', safely('join', ({
-    roomId, token, name, flag, proto,
+    roomId, token, name, flag, proto, canReady,
   } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     // The banned find out at the door, plainly — no seat, no spectating.
@@ -2161,7 +2181,7 @@ io.on('connection', (socket) => {
         spectate: true,
       });
     } else {
-      const res = room.addPlayer({ id: playerId, name, flag });
+      const res = room.addPlayer({ id: playerId, name, flag, canReady: canReady === true });
       if (res.error) {
         socket.emit('joinFailed', { message: res.error, spectate: true });
       }
@@ -2174,13 +2194,9 @@ io.on('connection', (socket) => {
         avatar: emojiFor(wallet.equipped.avatar),
       });
     }
-    // "Filled" is measured in people here too — house players pad the seat
-    // count long before kick-off, and starting the moment they do would cut
-    // the fuse short and strand the next human queueing on a fresh table.
-    if (room.quick && room.status === 'lobby'
-        && room.players.filter((p) => !p.isBot).length >= room.settings.maxPlayers) {
-      room.startQuickMatch();
-    }
+    // A Play-now table full of people no longer starts here the moment the
+    // last one sits: the room ends its own search when that happens, and the
+    // lobby that follows is what the people at the table are there to read.
     // A cup match starts itself. Both players were drawn for it and both are
     // now sitting at it; making one of them press a button first is a chance
     // for the other to wait, wonder, and leave.
@@ -2231,6 +2247,9 @@ io.on('connection', (socket) => {
     ok(room.updateSettings(playerId, d));
   }));
   socket.on('addBot', guard(() => {
+    // A Play-now table seats its own house players, on its own clock, into
+    // chairs matchmaking may still be about to fill with a person.
+    if (room.quick) return fail('A Play-now table fills its own seats');
     if (playerId !== room.hostId) return fail('Only the host can add bots');
     // A cup match is between the two who were drawn. A house player at that
     // table is a free win, so there is no house player at that table.
@@ -2241,6 +2260,9 @@ io.on('connection', (socket) => {
   // someone else is translated back to the real token at the door. A caller's
   // own real token still passes through untouched — see GameRoom.resolveId.
   socket.on('kick', guard((targetId) => {
+    // The host of a Play-now table is only whoever sat down first; that is
+    // not a licence to throw strangers out of the game matchmaking gave them.
+    if (room.quick) return fail('Nobody is removed from a Play-now table');
     if (playerId !== room.hostId) return fail('Only the host can remove players');
     // Removing your opponent is not a way to win a cup match.
     if (room.cupMatch) return fail('Not at a cup table');
@@ -2262,7 +2284,12 @@ io.on('connection', (socket) => {
     if (playerId !== room.hostId) return fail('Only the host can shuffle the teams');
     room.balanceTeams();
   }));
-  socket.on('start', guard(() => ok(room.start(playerId))));
+  // A private table starts on the host's word, as it always has. A Play-now
+  // table asks first — is the search over, is everyone else ready — and a
+  // refusal comes back as a toast that says which.
+  socket.on('start', guard(() => ok(room.requestStart(playerId))));
+  // "I'm ready", or `false` to take it back. Only a Play-now lobby has one.
+  socket.on('ready', guard((on) => ok(room.setReady(playerId, on !== false))));
 
   /** Like `guard`, but the move also resets this player's shot clock. */
   const onTurn = (fn) => guard((...args) => {

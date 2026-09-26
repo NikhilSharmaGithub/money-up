@@ -261,10 +261,15 @@ private fun WinnerHeadline(state: GameState) {
  * table does not reconvene either: offering "the same players" would tell the
  * room the seats were never strangers, so it finds a fresh one. Anywhere
  * else, whoever presses first takes the host chair.
+ *
+ * Finding a fresh one is Play now again, so it carries Play now's break, at
+ * the tap. A private rematch carries none: the room waits on whoever presses
+ * first, and a break in front of them would hold up everybody else.
  */
 @Composable
 private fun RematchAction(store: GameStore, account: AccountStore, state: GameState, onDismiss: () -> Unit) {
     val p = P.current
+    val context = LocalContext.current
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -291,10 +296,18 @@ private fun RematchAction(store: GameStore, account: AccountStore, state: GameSt
                 )
             }
             state.quick == true -> {
+                // The tabs keep a break loaded, but the player is still at a
+                // table here and has been for the whole game — so the result
+                // asks for its own, while the standings are being read.
+                LaunchedEffect(account.ads) { PreGameAd.preload(context, account.ads) }
                 MMButton(
                     "Play again", kind = BtnKind.PRIMARY, big = true, icon = "replay",
                     modifier = Modifier.fillMaxWidth(),
-                ) { onDismiss(); store.playAgainQuick() }
+                ) {
+                    onDismiss()
+                    PreGameAd.beforeGame(context, account)
+                    store.playAgainQuick()
+                }
                 Caption("Finds you a fresh table.")
             }
             else -> {

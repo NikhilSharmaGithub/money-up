@@ -312,31 +312,25 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * The pre-game break, driven off state rather than off a button.
+     * The pre-game break, kept loaded.
      *
-     * iOS shows it from inside the Play button's own tap. Here the tap lives
-     * in PlayTab and the search in GameStore, and neither needs to know an
-     * ad exists: the moment GameStore says a quick match is being looked for,
-     * the break goes up — at the START of the wait, as on iOS, with the
-     * search carrying on behind it. Any other moment on the tabs is a chance
-     * to have one ready, which costs nothing when none is due.
+     * It goes up from the taps themselves now — Play now, a private game, a
+     * code, a friend's lobby, the quick Play again — through
+     * PreGameAd.beforeGame, as iOS's buttons show it from their own action.
+     * A watcher here could only see a search starting, so it covered Play
+     * now and none of the other doors to a new table.
      *
-     * Only on the rising edge of a search, so coming back to the app halfway
-     * through one does not throw an ad at somebody who never tapped anything
-     * since; and never over a rewarded break already on screen.
+     * What stays here is the having one ready: any moment on the tabs that is
+     * not already a search is a chance, which costs nothing when none is due.
+     * The result of a matchmade game loads its own, because the player is
+     * still at the table then (GameOverSheet).
      */
     private fun watchPreGameBreak() {
-        var wasSearching = false
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 snapshotFlow { Triple(account.ads, store.roomId == null, store.quickSearching) }
                     .collect { (ads, atTabs, searching) ->
-                        if (searching && !wasSearching && account.adPlaying == null) {
-                            PreGameAd.showIfReady(this@MainActivity, ads)
-                        } else if (!searching && atTabs) {
-                            PreGameAd.preload(this@MainActivity, ads)
-                        }
-                        wasSearching = searching
+                        if (atTabs && !searching) PreGameAd.preload(this@MainActivity, ads)
                     }
             }
         }

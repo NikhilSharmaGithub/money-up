@@ -165,10 +165,10 @@ fun PlayTab(
                 // nothing at all until the server turns ads on, and nothing
                 // again once the day's views are spent.
                 FreeCoinsOffer(account, store)
-                QuickPlayCard(store)
-                PrivateTableCard(store)
+                QuickPlayCard(store, account)
+                PrivateTableCard(store, account)
                 LeaderboardCard(account)
-                PublicRoomsCard(store)
+                PublicRoomsCard(store, account)
             }
         }
 
@@ -795,8 +795,9 @@ private fun FreeCoinsOffer(account: AccountStore, store: GameStore) {
  * in flight only this button waits, and create and join stay live below.
  */
 @Composable
-private fun QuickPlayCard(store: GameStore) {
+private fun QuickPlayCard(store: GameStore, account: AccountStore) {
     val p = P.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val searching = store.quickSearching
     LandingCard(padding = 16.dp) {
@@ -809,6 +810,11 @@ private fun QuickPlayCard(store: GameStore) {
         ) {
             Haptics.tap()
             SoundKit.click()
+            // The break goes at the START of the wait, as iOS's does: at the
+            // tap, so it is spent inside the lobby's search rather than over
+            // the first turn. The request below carries on behind it either
+            // way — nothing about the game waits on this line.
+            PreGameAd.beforeGame(context, account)
             scope.launch {
                 val room = store.quickplay()
                 when {
@@ -842,8 +848,9 @@ private fun QuickPlayCard(store: GameStore) {
  * — one place for who you are, rather than two copies drifting apart.
  */
 @Composable
-private fun PrivateTableCard(store: GameStore) {
+private fun PrivateTableCard(store: GameStore, account: AccountStore) {
     val p = P.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var code by remember { mutableStateOf("") }
     var creating by remember { mutableStateOf(false) }
@@ -852,6 +859,9 @@ private fun PrivateTableCard(store: GameStore) {
     fun join() {
         val room = code.trim().lowercase()
         if (room.isEmpty() || creating) return
+        // A code is a new table as much as Play now is, so it gets the same
+        // break at the same moment — the join runs on behind it.
+        PreGameAd.beforeGame(context, account)
         store.connect(room)
     }
 
@@ -887,6 +897,10 @@ private fun PrivateTableCard(store: GameStore) {
             lead = { ink -> Icon("dice", size = 19.dp, tint = ink) },
         ) {
             creating = true
+            // At the tap, before the room is even asked for: the break never
+            // waits on the server, and nobody is sitting at this table yet
+            // for it to hold up.
+            PreGameAd.beforeGame(context, account)
             scope.launch {
                 val room = store.createRoom()
                 creating = false
@@ -1148,10 +1162,11 @@ private fun LeaderboardRow(rank: Int, entry: LeaderRow, isMe: Boolean, modifier:
  * while the list is empty, as on iOS: no "nobody's playing" line.
  */
 @Composable
-private fun PublicRoomsCard(store: GameStore) {
+private fun PublicRoomsCard(store: GameStore, account: AccountStore) {
     val rooms = store.publicRooms
     if (rooms.isEmpty()) return
     val p = P.current
+    val context = LocalContext.current
     LandingCard(padding = 16.dp) {
         PanelTitle("Public rooms")
         Spacer(Modifier.height(10.dp))
@@ -1167,7 +1182,13 @@ private fun PublicRoomsCard(store: GameStore) {
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(p.sunken)
-                        .clickable { store.connect(room.id) }
+                        .clickable {
+                            // A seat is a new game and gets its break; a
+                            // table only to watch is somebody else's game
+                            // already running, and gets none.
+                            if (room.canSit) PreGameAd.beforeGame(context, account)
+                            store.connect(room.id)
+                        }
                         .padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

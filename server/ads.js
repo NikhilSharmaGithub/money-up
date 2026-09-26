@@ -167,7 +167,7 @@ const defaults = () => ({
     preGame: {
       enabled: false,
       everyMinutes: 5,
-      description: 'One break while a quick match is being found',
+      description: 'One break before a new table — Play now, a new private game, or a code',
     },
   },
   caps: {

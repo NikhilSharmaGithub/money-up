@@ -83,7 +83,11 @@ import kotlinx.coroutines.launch
  *
  * Only the host may change anything, and only in the lobby; everybody else
  * gets the same rows, dimmed, which is how you find out what you have sat
- * down to. The seats are not here: iOS keeps them, Add player and the kick in
+ * down to. At a Play-now table the host gets only what the server lets a
+ * matchmade table change — the bankroll, the five rolled rules and the board
+ * — and the rest stays as matchmaking set it, dimmed the same way; there are
+ * no teams to pick among strangers, so that card is not drawn at all. The
+ * seats are not here: iOS keeps them, Add player and the kick in
  * the lobby panel under the board (ActionPanel.kt), and a second copy would be
  * a second place to kick.
  *
@@ -150,10 +154,15 @@ fun LobbySetup(
     onTheme: ((MMTheme) -> Unit)? = null,
 ) {
     val state = game.state ?: return
-    // iOS's canEdit, and only that: the host, while the table is still in the
-    // lobby. The lobby panel never offers this sheet at a cup table or to a
-    // quick table waiting on its fuse, exactly as iOS's does not.
-    val editable = game.isHost && state.isLobby
+    // iOS's canEdit: the host, while the table is still in the lobby — and,
+    // at a Play-now table, only for a key the server lists as the host's to
+    // change. A quick table on a server with no lobby lists none, which is
+    // the whole sheet read-only, as that server would refuse any of it. The
+    // lobby panel never offers this sheet at a cup table.
+    val can: (String) -> Boolean = { key ->
+        game.isHost && state.isLobby && (state.quick != true || state.quickLobby?.mayEdit(key) == true)
+    }
+    val boardEditable = can("mapId")
 
     // The two sheets that can stand on this one. A board id here is the shop,
     // open on that board.
@@ -184,7 +193,7 @@ fun LobbySetup(
                 .padding(top = SETTINGS_BAR + 12.dp, bottom = 12.dp),
         ) {
             SettingsFace(
-                store, game, state, editable, onTheme,
+                store, game, state, can, onTheme,
                 onOpenAll = { allBoards = true },
                 onShop = { shopping = it },
             )
@@ -201,7 +210,7 @@ fun LobbySetup(
             bar = { close -> AllBoardsBar(store, close) },
         ) { close ->
             AllBoards(
-                store, game, editable,
+                store, game, boardEditable,
                 // Picking one is the answer to what the list was opened for,
                 // so the list goes, as iOS's does.
                 onPick = { id ->
@@ -234,7 +243,7 @@ fun LobbySetup(
                         // and, as on iOS, a host who bought it from the list
                         // is done with the list too. Anyone else is still
                         // looking, so their list stays.
-                        if (editable) {
+                        if (boardEditable) {
                             game.updateSettings(mapOf("mapId" to id))
                             allBoards = false
                         }
@@ -310,14 +319,15 @@ private val TEAM_COUNTS = listOf(0, 2, 3, 4)
 
 /**
  * The settings themselves, the six cards of iOS's SettingsSheet. They bring
- * no gutter of their own; [LobbySetup] gives them iOS's.
+ * no gutter of their own; [LobbySetup] gives them iOS's. [can] says, key by
+ * key, whether this phone may change a row.
  */
 @Composable
 private fun SettingsFace(
     store: AccountStore,
     game: GameStore,
     state: GameState,
-    editable: Boolean,
+    can: (String) -> Boolean,
     onTheme: ((MMTheme) -> Unit)?,
     onOpenAll: () -> Unit,
     onShop: (String) -> Unit,
@@ -326,10 +336,22 @@ private fun SettingsFace(
     val s = state.settings
     val teams = s.teams ?: 0
     val clock = s.turnSeconds ?: 90
+    val quick = state.quick == true
+    val hosting = game.isHost && state.isLobby
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (!editable) {
-            LockedNote(
+        when {
+            // The host of a Play-now table is told the one thing their
+            // changes do to everybody else before they make one: everyone
+            // who said they were ready is asked again, so nobody plays rules
+            // they never got to read.
+            hosting && quick && state.quickLobby != null ->
+                LockedNote("Changing a rule un-readies everyone so they can read it.")
+            // A server with no Play-now lobby lets nobody touch a matchmade
+            // table, its host included.
+            // iOS's words for it (SettingsSheet.swift, lockedText).
+            hosting && quick -> LockedNote("A Play-now table plays the rules it rolled.")
+            !hosting -> LockedNote(
                 if (state.isLobby) "Only the host can change the settings."
                 else "Settings are locked once the game starts.",
             )
@@ -342,7 +364,7 @@ private fun SettingsFace(
                 Icon("map", size = 13.dp, tint = p.ink2)
                 PanelTitle("Board")
             }
-            BoardBoxes(store, game, editable, onOpenAll = onOpenAll, onShop = onShop)
+            BoardBoxes(store, game, can("mapId"), onOpenAll = onOpenAll, onShop = onShop)
         }
 
         SettingsCard {
@@ -350,29 +372,33 @@ private fun SettingsFace(
             MenuRow(
                 "Max players", "${s.maxPlayers}",
                 MAX_PLAYERS.map { "$it players" to it },
-                s.maxPlayers, editable,
+                s.maxPlayers, can("maxPlayers"),
             ) { game.updateSettings(mapOf("maxPlayers" to it)) }
             Rule()
             ToggleRow(
                 "Private room", "Hidden from the public room list — invite link only.",
-                s.isPrivate ?: true, editable,
+                s.isPrivate ?: true, can("isPrivate"),
             ) { game.updateSettings(mapOf("isPrivate" to it)) }
             Rule()
             ToggleRow(
                 "Allow bots", "Empty seats are filled with bots when the game starts.",
-                s.allowBots ?: false, editable,
+                s.allowBots ?: false, can("allowBots"),
             ) { game.updateSettings(mapOf("allowBots" to it)) }
         }
 
-        SettingsCard {
-            PanelTitle("Teams")
-            MenuRow(
-                "Teams", teamsLabel(teams),
-                TEAM_COUNTS.map { teamsLabel(it) to it },
-                teams, editable,
-            ) { game.updateSettings(mapOf("teams" to it)) }
-            if (teams > 0) BalanceTeams(game, editable)
-            Caption("Teammates never charge each other rent and win together")
+        // Strangers cannot be asked to pick a side, so a Play-now table has
+        // no teams to show — not even locked ones.
+        if (!quick) {
+            SettingsCard {
+                PanelTitle("Teams")
+                MenuRow(
+                    "Teams", teamsLabel(teams),
+                    TEAM_COUNTS.map { teamsLabel(it) to it },
+                    teams, can("teams"),
+                ) { game.updateSettings(mapOf("teams" to it)) }
+                if (teams > 0) BalanceTeams(game, can("teams"))
+                Caption("Teammates never charge each other rent and win together")
+            }
         }
 
         if (onTheme != null) {
@@ -387,7 +413,7 @@ private fun SettingsFace(
             MenuRow(
                 "Starting cash", money(s.startingCash),
                 STARTING_CASH.map { money(it) to it },
-                s.startingCash, editable,
+                s.startingCash, can("startingCash"),
             ) { game.updateSettings(mapOf("startingCash" to it)) }
         }
 
@@ -398,43 +424,43 @@ private fun SettingsFace(
             MenuRow(
                 "Turn clock", if (clock == 0) "Off" else "${clock}s",
                 TURN_CLOCK.map { (if (it == 0) "Off" else "$it seconds") to it },
-                clock, editable,
+                clock, can("turnSeconds"),
             ) { game.updateSettings(mapOf("turnSeconds" to it)) }
             Caption("Run out of time and the table moves on without you.")
             Rule()
             ToggleRow(
                 "x2 rent on full sets", "Unimproved streets earn double once you own the whole set.",
-                s.x2rent ?: false, editable,
+                s.x2rent ?: false, can("x2rent"),
             ) { game.updateSettings(mapOf("x2rent" to it)) }
             Rule()
             ToggleRow(
                 "Vacation cash", "Taxes and fees pile up on Vacation for whoever lands there.",
-                s.vacationCash ?: false, editable,
+                s.vacationCash ?: false, can("vacationCash"),
             ) { game.updateSettings(mapOf("vacationCash" to it)) }
             Rule()
             ToggleRow(
                 "Auction", "Skipped properties go under the hammer instead of staying unsold.",
-                s.auction ?: true, editable,
+                s.auction ?: true, can("auction"),
             ) { game.updateSettings(mapOf("auction" to it)) }
             Rule()
             ToggleRow(
                 "No rent while jailed", "Owners collect nothing while they sit in prison.",
-                s.noRentInPrison ?: false, editable,
+                s.noRentInPrison ?: false, can("noRentInPrison"),
             ) { game.updateSettings(mapOf("noRentInPrison" to it)) }
             Rule()
             ToggleRow(
                 "Mortgage", "Properties can be mortgaged to the bank for quick cash.",
-                s.mortgage ?: true, editable,
+                s.mortgage ?: true, can("mortgage"),
             ) { game.updateSettings(mapOf("mortgage" to it)) }
             Rule()
             ToggleRow(
                 "Even build", "Houses must be spread evenly across a colour set.",
-                s.evenBuild ?: true, editable,
+                s.evenBuild ?: true, can("evenBuild"),
             ) { game.updateSettings(mapOf("evenBuild" to it)) }
             Rule()
             ToggleRow(
                 "Randomize order", "Shuffle the turn order when the game starts.",
-                s.randomizeOrder ?: true, editable,
+                s.randomizeOrder ?: true, can("randomizeOrder"),
             ) { game.updateSettings(mapOf("randomizeOrder" to it)) }
         }
     }

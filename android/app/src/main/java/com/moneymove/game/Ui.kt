@@ -96,6 +96,7 @@ import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.Role
@@ -691,6 +692,72 @@ fun MMButton(
         }
     }
 }
+
+/**
+ * The switch, drawn, because Material's is a different object. iOS's —
+ * measured off the game-settings sheet on an iPhone — is a 63 by 28 capsule
+ * holding a white 37 by 24 capsule of a knob two points in from either end:
+ * the table's accent when on, the system's faint grey when off, and the same
+ * white knob either way. Material's is shorter and taller, with a round knob
+ * that shrinks while it is off, a keyline round the well and, in the dark
+ * Felt table, a knob in the accent's own near-black; one of those beside the
+ * iPhone's reads as a different control, which is what Settings used to show
+ * while the game sheet drew this one.
+ *
+ * It is only the picture. The row around it is the control, as iOS's Toggle
+ * is: `toggleable` with [Role.Switch] on the whole row, which is what tells a
+ * screen reader it is a switch and what gives the thumb more than 28 to hit.
+ * [enabled] false fades the switch by the system's usual half, on top of
+ * whatever the row does to its words, as a disabled SwiftUI Toggle does.
+ *
+ * The knob settles in about a quarter of a second with no bounce. Under
+ * Reduce Motion it is simply at the other end, and the well's colour still
+ * crossfades rather than cuts, because on or off is the information.
+ */
+@Composable
+fun MMSwitch(on: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val p = P.current
+    // The system's grey, so it follows the phone's light or dark and not the
+    // table: every table's day palette is light and its night one dark, so
+    // this is also the side of the card the switch is sitting on.
+    val offWell = systemFaintGrey(LocalAppearanceDark.current)
+    val reduceMotion = rememberReduceMotion()
+    val knob by animateFloatAsState(
+        if (on) 1f else 0f,
+        if (reduceMotion) snap<Float>() else SWITCH_SETTLE,
+        label = "mm.switch",
+    )
+    val fill by animateFloatAsState(
+        if (on) 1f else 0f,
+        if (reduceMotion) tween<Float>(GlassMotion.REDUCED_MS) else SWITCH_SETTLE,
+        label = "mm.switch.fill",
+    )
+    Canvas(modifier.alpha(if (enabled) 1f else 0.5f).size(width = 63.dp, height = 28.dp)) {
+        val h = size.height
+        drawRoundRect(lerp(offWell, p.red, fill), cornerRadius = CornerRadius(h / 2))
+        val inset = 2.dp.toPx()
+        val knobW = 37.dp.toPx()
+        val knobH = h - inset * 2
+        drawRoundRect(
+            Color.White,
+            topLeft = Offset(inset + (size.width - inset * 2 - knobW) * knob, inset),
+            size = Size(knobW, knobH),
+            cornerRadius = CornerRadius(knobH / 2),
+        )
+    }
+}
+
+/** iOS's spring(duration: 0.25): no bounce, a quarter-second settle. */
+private val SWITCH_SETTLE: AnimationSpec<Float> = spring(dampingRatio = 1f, stiffness = 630f)
+
+/**
+ * iOS's faint system grey — its tertiary label colour, a third of the way to
+ * the label ink — under an off switch. iOS's own rather than a table ink, so
+ * it is the same on every style; the dark value is what the iPhone draws
+ * under an off switch on the Felt card, to within a unit or two a channel.
+ */
+private fun systemFaintGrey(dark: Boolean): Color =
+    if (dark) Color(0x4DEBEBF5) else Color(0x4D3C3C43)
 
 /**
  * A panel: the card surface everything on a screen sits inside — iOS's MMCard,

@@ -25,6 +25,14 @@ const money = (n) => {
   return `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString('en-US')}`;
 };
 
+/**
+ * A drawn tick, the Ready round's mark — the app has no check glyph, and a
+ * typed one comes out as a coloured emoji on half the phones reading it. It
+ * paints with currentColor, so it takes whatever ink it is printed in.
+ */
+const TICK = `<svg class="ico tick" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 // ─────────────────────────────────────────────────────────────── toasts ──
 const MAX_TOASTS = 3;
 
@@ -184,19 +192,27 @@ function cityIn(text, flags) {
   return best;
 }
 
-export function renderLog(state, el) {
-  const sig = `${state.log.length}:${state.log[state.log.length - 1]?.at || 0}`;
+/**
+ * `lines` is the log as the caller shows it — app.js holds back a line the
+ * walk caused until the piece lands and its money moves (see "the purse
+ * ledger"), so a feed with nothing held is simply the server's log.
+ */
+export function renderLog(state, el, lines = state.log) {
+  // How many lines are shown belongs in the key as well as how many exist: a
+  // held line let go lands in the middle of the feed, not at its end, and
+  // leaves the server's own log exactly as it was.
+  const sig = `${state.log.length}:${state.log[state.log.length - 1]?.at || 0}:${lines.length}`;
   if (el.dataset.sig === sig) return;
   const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60 || !el.dataset.sig;
   el.dataset.sig = sig;
   const flags = cityFlags(state);
-  el.innerHTML = state.log.map((l) => {
+  el.innerHTML = lines.map((l) => {
     // A line about a street wears that street's flag, the same coin the
     // board wears — you can read the log by colour alone.
     const city = cityIn(l.text, flags);
     const mark = city ? `<span class="log-flag">${circleFlag(city.mark, '#888', 15)}</span>` : '';
     return `<div class="log-line ${l.kind}">
-      <span class="log-ico">${icon(LOG_ICON[l.kind]) || '·'}</span>${mark}<span>${escapeHtml(l.text)}</span>
+      <span class="log-ico">${LOG_ICON[l.kind] ? icon(LOG_ICON[l.kind]) : '·'}</span>${mark}<span>${escapeHtml(l.text)}</span>
     </div>`;
   }).join('');
   if (wasAtBottom) el.scrollTop = el.scrollHeight;
@@ -449,9 +465,16 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
         + (utils ? `<i class="chip plain" title="Utilities">${icon('bulb')}${utils}</i>` : '');
       const final = html || `<span class="dim">${out ? 'nothing left' : 'no property yet'}</span>`;
       if (chips.dataset.v !== final) { chips.dataset.v = final; chips.innerHTML = final; }
-    } else if (chips.dataset.v !== 'lobby') {
-      chips.dataset.v = 'lobby';
-      chips.innerHTML = '<span class="dim">ready</span>';
+    } else {
+      // Only a Play-now table's Ready round gives "ready" a meaning. It said
+      // so of every seat at every lobby, which was never true of anyone —
+      // and is now the one word at that table somebody can be waiting on.
+      // The host has nothing to press but Start, so it says that instead.
+      const lobbyNote = !state.quickLobby ? '<span class="dim">in the lobby</span>'
+        : p.id === state.hostId ? '<span class="dim">starts the game</span>'
+        : p.ready ? `<span class="lobby-ready">${TICK} Ready</span>`
+        : '<span class="dim">Not ready</span>';
+      if (chips.dataset.v !== lobbyNote) { chips.dataset.v = lobbyNote; chips.innerHTML = lobbyNote; }
     }
 
     // buttons
@@ -602,16 +625,43 @@ function lapSig(state) {
   return state.players.map((p) => p.blockedLaps || 0).join('');
 }
 
+/**
+ * What a Play-now lobby's panel shows that the settings do not: who is in
+ * which seat and who has pressed Ready, which phase the table is in, whether
+ * an empty chair is being found, and which rules the host has moved off the
+ * roll. The deadline itself is left out on purpose — it moves with every
+ * arrival and every change, and the panel holds the name field somebody may
+ * be typing in; the countdown lives in the well, which ticks on its own.
+ */
+function quickSig(state) {
+  const q = state.quickLobby;
+  if (!q) return state.quickStartAt ? 'counting' : '';
+  return `${q.phase}:${q.canStart ? 1 : 0}:${q.backfillAt ? 1 : 0}:${(q.editable || []).join(',')}:`
+    + `${state.players.map((p) => `${p.id}${p.ready ? '+' : ''}`).join(',')}:${(state.quickRoll?.edited || []).join(',')}`;
+}
+
 export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   const sig = state.status === 'lobby'
-    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${state.quickStartAt || 0}`
+    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${quickSig(state)}`
     : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
+  // A lobby repaints under whoever is typing their name — somebody sat
+  // down, somebody pressed Ready, the host changed a rule — and a field
+  // rebuilt mid-word loses the word. It is put back as it was, caret and all.
+  const field = document.activeElement?.id === 'nameField' && el.contains(document.activeElement)
+    ? document.activeElement : null;
+  const typing = field && { value: field.value, from: field.selectionStart, to: field.selectionEnd };
   if (state.status !== 'lobby') renderMyStuff(state, meId, el, actions);
   else if (state.quick) renderQuickLobby(state, meId, el, actions);
   else renderSettings(state, meId, el, actions);
+  const again = typing && $('#nameField', el);
+  if (again) {
+    again.value = typing.value;
+    again.focus();
+    again.setSelectionRange(typing.from, typing.to);
+  }
 }
 
 const LOOK_COLORS = ['#4ade80', '#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
@@ -745,14 +795,23 @@ function boardBoxesHTML(state, isHost) {
     <div class="board-clock" id="boardClock"></div>`;
 }
 
-/** Paint the boxes into whatever lobby is on screen, and wire them. */
-function paintBoards(state, el, token, actions, isHost) {
+/**
+ * Paint the boxes into whatever lobby is on screen, and wire them.
+ *
+ * `mayRent` is whether a one-game rent is offered, which is the host's to
+ * spend — except at a Play-now table, where the host is whoever has sat
+ * there longest and the chair can pass to a stranger mid-lobby, taking a
+ * paid game with it. The server refuses a rent there; this keeps the button
+ * from being offered in the first place.
+ */
+function paintBoards(state, el, token, actions, isHost, mayRent = isHost) {
   const host = $('#boardPick', el);
   if (!host) return;
+  const again = () => paintBoards(state, el, token, actions, isHost, mayRent);
   // The table's own id goes with every ask: a rented board is only rented
   // here, and the shelf cannot say so without being told where "here" is.
   if (!boardShelf || boardShelfRoom !== (state.id || '')) {
-    loadBoardShelf(token, false, state.id).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+    loadBoardShelf(token, false, state.id).then((d) => { if (d) again(); });
     return;
   }
   host.innerHTML = boardBoxesHTML(state, isHost);
@@ -766,7 +825,7 @@ function paintBoards(state, el, token, actions, isHost) {
         // guess: the server owns the calendar, and the two new boards are
         // the only thing on this panel that changes without being touched.
         clock.textContent = 'New boards…';
-        loadBoardShelf(token, true, state.id).then((d) => { if (d) paintBoards(state, el, token, actions, isHost); });
+        loadBoardShelf(token, true, state.id).then((d) => { if (d) again(); });
         return;
       }
       clock.textContent = `Two new free boards in ${longCountdownText(left)}`;
@@ -784,8 +843,8 @@ function paintBoards(state, el, token, actions, isHost) {
         // away. That is what they were reaching for when they tapped it.
         return openBoardBuy(token, id, (bought) => {
           if (isHost) actions.settings({ mapId: bought });
-          paintBoards(state, el, token, actions, isHost);
-        }, state.id, isHost);
+          again();
+        }, state.id, mayRent);
       }
       actions.settings({ mapId: id });
     };
@@ -796,7 +855,7 @@ function paintBoards(state, el, token, actions, isHost) {
       sfx.click();
       // The same host-ness the boxes were painted with — a cup table and a
       // guest's chair are both already folded into it.
-      openBoardModal(state, actions, token, () => paintBoards(state, el, token, actions, isHost), isHost);
+      openBoardModal(state, actions, token, again, mayRent);
     };
   }
 }
@@ -1111,49 +1170,175 @@ function wireLookPanel(state, meId, el, actions) {
 }
 
 /**
+ * The phrases a Play-now table's roll is told in, in the server's reading
+ * order (quickRollParts), each paired with the setting it describes — so a
+ * chip can say which rule it is when the host has moved it off the roll.
+ */
+const QUICK_PART_KEYS = ['mapId', 'startingCash', 'x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild'];
+
+/** The five house rules a Play-now table rolls, as the settings name them. */
+const ROLLED_RULES = ['x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild'];
+
+/**
  * What a matchmade table dealt itself. Nobody sitting at one picked the board
  * or the rules, so the least it can do is show them before the dice start —
  * in the server's own words, so a phone at the same table reads the same
- * table. The first phrase is the board, which the lobby head already says.
+ * table. Whatever the host has since moved off the roll wears the accent's
+ * ring and is counted in the heading, so a stranger can see which rules a
+ * person chose and which the dice did.
  */
-function rolledRulesHTML(state) {
+function rolledChipsHTML(state) {
   const parts = state.quickRoll?.parts || [];
-  if (!parts.length) return '';
+  const edited = new Set(state.quickRoll?.edited || []);
+  return `<div class="rolled-rules">${parts.map((p, i) => {
+    const changed = edited.has(QUICK_PART_KEYS[i]);
+    return `<span class="rolled-chip${changed ? ' edited' : ''}"${changed ? ' title="Changed by the host"' : ''}>${escapeHtml(p)}</span>`;
+  }).join('')}</div>`;
+}
+
+function rolledHeading(state) {
+  const n = state.quickRoll?.edited?.length || 0;
+  return n ? `This table's rules · host changed ${n}` : 'This table rolled';
+}
+
+function rolledRulesHTML(state) {
+  if (!state.quickRoll?.parts?.length) return '';
   return `<div class="panel">
-      <div class="panel-title">${icon('dice')} This table rolled</div>
-      <div class="rolled-rules">${parts
-        .map((p) => `<span class="rolled-chip">${escapeHtml(p)}</span>`).join('')}</div>
+      <div class="panel-title">${icon('dice')} ${rolledHeading(state)}</div>
+      ${rolledChipsHTML(state)}
+    </div>`;
+}
+
+/** One on/off rule as a lobby row — the private lobby's and the Play-now one's. */
+function toggleRow(state, d, dis) {
+  return `<div class="setting">
+      <span class="s-icon">${icon(d.icon)}</span>
+      <div class="s-body"><div class="s-name">${d.name}</div><div class="s-desc">${d.desc}</div></div>
+      <label class="switch">
+        <input type="checkbox" data-set="${d.key}" ${state.settings[d.key] ? 'checked' : ''} ${dis} />
+        <span class="track"></span><span class="thumb"></span>
+      </label>
+    </div>`;
+}
+
+/** Every lobby control that names a setting sends it the same way. */
+function wireSettingInputs(root, actions) {
+  root.querySelectorAll('[data-set]').forEach((input) => {
+    if (input.disabled) return;
+    input.onchange = () => {
+      const key = input.dataset.set;
+      let value = input.type === 'checkbox' ? input.checked : input.value;
+      if (['maxPlayers', 'startingCash', 'turnSeconds'].includes(key)) value = Number(value);
+      sfx.click();
+      actions.settings({ [key]: value });
+    };
+  });
+}
+
+const STARTING_CASH = [500, 1000, 1500, 2000, 2500, 3000, 5000];
+const cashOptions = (current) => {
+  const n = Number(current) || 0;
+  return STARTING_CASH.includes(n) ? STARTING_CASH : [...STARTING_CASH, n].sort((a, b) => a - b);
+};
+
+/**
+ * A Play-now table's rules: the chips it rolled, then the controls under
+ * them. Its host may change exactly what the server lists in `editable` —
+ * the money, the board and the five house rules the table rolled — from the
+ * same rows a private host uses. Everything else a stranger sat down under
+ * is shown locked, and everybody else reads every row switched off. A board
+ * is never rented here (see paintBoards).
+ */
+function quickRulesHTML(state, meId) {
+  const q = state.quickLobby;
+  const isHost = state.hostId === meId;
+  const can = (k) => isHost && (q.editable || []).includes(k);
+  const dis = (k) => (can(k) ? '' : 'disabled');
+  const rolled = RULES.filter((d) => ROLLED_RULES.includes(d.key));
+  const fixed = RULES.filter((d) => !ROLLED_RULES.includes(d.key));
+  return `<div class="panel quick-rules" id="quickRules">
+      <div class="panel-title">${icon('dice')} ${rolledHeading(state)}</div>
+      ${rolledChipsHTML(state)}
+      <div class="qr-note">${isHost
+        ? 'You can change the money, the board and these five rules. Changing one un-readies everyone so they can read it.'
+        : 'The host can change the money, the board and these five rules — and a change un-readies everyone, so you get to read it first.'}</div>
+      <div class="setting board-setting">
+        <div class="s-body">
+          <div class="s-name">${icon('map')} Board</div>
+          <div class="s-desc">${can('mapId') ? 'Today\'s free boards, or any board you own.' : 'The host picks the board.'}</div>
+        </div>
+        <div id="boardPick" class="board-pick"></div>
+      </div>
+      <div class="setting">
+        <span class="s-icon">${icon('cash')}</span>
+        <div class="s-body"><div class="s-name">Starting cash</div><div class="s-desc">Lower cash means faster, meaner games</div></div>
+        <select data-set="startingCash" ${dis('startingCash')}>
+          ${cashOptions(state.settings.startingCash).map((n) => `<option value="${n}" ${Number(state.settings.startingCash) === n ? 'selected' : ''}>$${n}</option>`).join('')}
+        </select>
+      </div>
+      ${rolled.map((d) => toggleRow(state, d, dis(d.key))).join('')}
+      <div class="qr-locked">
+        <div class="look-label">${icon('key')} Set by Play now</div>
+        ${fixed.map((d) => toggleRow(state, d, 'disabled')).join('')}
+        <div class="setting">
+          <span class="s-icon">${icon('snooze')}</span>
+          <div class="s-body"><div class="s-name">Turn timer</div>
+            <div class="s-desc">A timeout costs karma, so strangers keep the clock they sat down under</div></div>
+          <span class="qr-value">${clockOptionLabel(Number(state.settings.turnSeconds) || 0)}</span>
+        </div>
+        <div class="s-desc qr-foot">${state.settings.maxPlayers} public seats, and house players take any seat nobody does — matchmaking stands on them.</div>
+      </div>
     </div>`;
 }
 
 /**
- * A Quick Play table runs itself — nobody sitting here owns its settings, so
- * the panel is about who has turned up rather than what to switch on.
+ * A Play-now table between the tap and the deal. Nobody picked this table,
+ * so the panel is about who has turned up and what they are about to play
+ * by: the seats, with the host marked and everybody's Ready beside them, and
+ * then the rules. A server from before the Ready round sends no
+ * `quickLobby`, and gets the panel it always had.
  */
 function renderQuickLobby(state, meId, el, actions) {
+  const lobby = state.quickLobby;
   const seats = state.settings.maxPlayers;
   const open = Math.max(0, seats - state.players.length);
+  // The host starts the table rather than readying for it, so the host's
+  // row says so; everybody else's says whether they are ready yet.
+  const seatNote = (p) => {
+    if (!lobby) return '';
+    if (p.id === state.hostId) return `<i class="tag host">${icon('crown')} HOST</i>`;
+    return p.ready
+      ? `<span class="qs-ready" title="Ready">${TICK}</span>`
+      : '<span class="qs-wait">not ready</span>';
+  };
   el.innerHTML = `
     <div class="panel">
       <div class="panel-title">${icon('bolt')} Quick Play</div>
-      <div class="quick-blurb">A public table with whoever is online. It deals
-        itself in as soon as the seats fill${state.quickStartAt ? ', or when the countdown runs out' : ''}.</div>
+      <div class="quick-blurb">${lobby
+        ? 'A public table with whoever is online. When the search ends the host starts it once everyone is ready — or it deals itself in when the clock in the middle runs out.'
+        : `A public table with whoever is online. It deals itself in as soon as the seats fill${state.quickStartAt ? ', or when the countdown runs out' : ''}.`}</div>
       <div class="quick-seats">
         ${state.players.map((p) => `<div class="quick-seat">
           <span class="avatar sm ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}</span>
           <span class="qs-name">${escapeHtml(p.name)}</span>
           ${p.id === meId ? '<i class="tag you">YOU</i>' : ''}
+          ${seatNote(p)}
         </div>`).join('')}
         ${Array.from({ length: open }, () => `<div class="quick-seat open">
           <span class="avatar sm ghost-seat">+</span>
-          <span class="qs-name dim">Open seat</span>
+          <span class="qs-name dim">${lobby?.backfillAt ? 'Finding a player…' : 'Open seat'}</span>
         </div>`).join('')}
       </div>
-      <div class="dim small">${state.players.length} of ${seats} seats taken</div>
+      <div class="dim small">${state.players.length} of ${seats} seated</div>
     </div>
-    ${rolledRulesHTML(state)}
+    ${lobby ? quickRulesHTML(state, meId) : rolledRulesHTML(state)}
     ${lookPanel(state, meId)}`;
   wireLookPanel(state, meId, el, actions);
+  if (!lobby) return;
+  const rules = $('#quickRules', el);
+  wireSettingInputs(rules, actions);
+  const mayPickBoard = state.hostId === meId && (lobby.editable || []).includes('mapId');
+  paintBoards(state, rules, meId, actions, mayPickBoard, false);
 }
 
 // The turn clock, in the lengths a table actually picks. The iOS sheet offers
@@ -1171,15 +1356,7 @@ function renderSettings(state, meId, el, actions) {
   // A cup table is set by the cup: two seats, no bots, nothing to argue over.
   // The server refuses all of it anyway; this is so nobody is invited to try.
   const dis = isHost && !state.cup ? '' : 'disabled';
-
-  const toggle = (d) => `<div class="setting">
-      <span class="s-icon">${icon(d.icon)}</span>
-      <div class="s-body"><div class="s-name">${d.name}</div><div class="s-desc">${d.desc}</div></div>
-      <label class="switch">
-        <input type="checkbox" data-set="${d.key}" ${state.settings[d.key] ? 'checked' : ''} ${dis} />
-        <span class="track"></span><span class="thumb"></span>
-      </label>
-    </div>`;
+  const toggle = (d) => toggleRow(state, d, dis);
 
   el.innerHTML = `
     ${lookPanel(state, meId)}
@@ -1228,7 +1405,7 @@ function renderSettings(state, meId, el, actions) {
         <span class="s-icon">${icon('cash')}</span>
         <div class="s-body"><div class="s-name">Starting cash</div><div class="s-desc">Lower cash means faster, meaner games</div></div>
         <select data-set="startingCash" ${dis}>
-          ${[500, 1000, 1500, 2000, 2500, 3000, 5000].map((n) => `<option value="${n}" ${state.settings.startingCash === n ? 'selected' : ''}>$${n}</option>`).join('')}
+          ${cashOptions(state.settings.startingCash).map((n) => `<option value="${n}" ${Number(state.settings.startingCash) === n ? 'selected' : ''}>$${n}</option>`).join('')}
         </select>
       </div>
       <div class="setting">
@@ -1255,15 +1432,7 @@ function renderSettings(state, meId, el, actions) {
       : '<div class="panel waiting"><span class="pulse-dot"></span> Waiting for the host to start…</div>'}
   `;
 
-  el.querySelectorAll('[data-set]').forEach((input) => {
-    input.onchange = () => {
-      const key = input.dataset.set;
-      let value = input.type === 'checkbox' ? input.checked : input.value;
-      if (['maxPlayers', 'startingCash', 'turnSeconds'].includes(key)) value = Number(value);
-      sfx.click();
-      actions.settings({ [key]: value });
-    };
-  });
+  wireSettingInputs(el, actions);
   wireLookPanel(state, meId, el, actions);
   // A cup fixes its own board; the server refuses the change either way.
   paintBoards(state, el, meId, actions, isHost && !state.cup);
@@ -1730,12 +1899,17 @@ export function renderCenter(state, meId, actions) {
   const turnPlayer = state.turn ? state.players.find((p) => p.id === state.turn.playerId) : null;
   const myTurn = state.turn?.playerId === meId;
   cardEl.innerHTML = '';
-  syncQuickCountdown(state.status === 'lobby' && state.quick ? state.quickStartAt : null);
+  syncQuickCountdown(quickDeadline(state));
   // Which long-lived scene the action well is showing. The quick-play wait
   // carries a looping deck animation, so that scene is written once and left
   // alone; every other branch repaints and drops the mark.
   const wasMode = actionEl.dataset.mode || '';
   actionEl.dataset.mode = '';
+  // The line under the buttons is kept the same way, for the lobby only:
+  // its seat faces pop in when they are drawn, and a Ready round pushes a
+  // state for every tap at the table.
+  const statusWas = statusEl.dataset.sig || '';
+  statusEl.dataset.sig = '';
 
   const on = (id, fn, sound) => {
     const b = $(id);
@@ -1746,15 +1920,18 @@ export function renderCenter(state, meId, actions) {
   if (state.status === 'lobby') {
     const seated = state.players.length;
     const seats = state.settings.maxPlayers;
-    // A Quick Play table deals itself in on its own clock, so it shows the
-    // wait instead of controls nobody at this table owns — with the still-
-    // undealt deck riffling above the search line. The deck loops, so this
-    // scene is painted once; the countdown and table talk tick themselves.
-    const searching = !!(state.quick && state.quickStartAt);
-    // The mark carries the room id: a well left over from an earlier table's
-    // wait gets repainted for this one, not trusted.
-    const waitMode = `quick-wait:${state.id}`;
-    if (searching) {
+    // A Play-now table runs itself in two acts (see quickLobbyWell). A
+    // server from before the Ready round sends only the deadline, and gets
+    // the wait it always had: the deck riffling over the search line, and
+    // nothing to press, because that server has nothing for it to do.
+    const lobby = state.quick ? state.quickLobby || null : null;
+    const legacy = !!(state.quick && !lobby && state.quickStartAt);
+    if (lobby) {
+      quickLobbyWell(state, meId, actions, actionEl, wasMode);
+    } else if (legacy) {
+      // The mark carries the room id: a well left over from an earlier
+      // table's wait gets repainted for this one, not trusted.
+      const waitMode = `quick-wait:${state.id}`;
       actionEl.dataset.mode = waitMode;
       if (wasMode !== waitMode) {
         actionEl.innerHTML = `${deckMarkup('idle')}
@@ -1767,9 +1944,24 @@ export function renderCenter(state, meId, actions) {
         ? `<button class="btn primary big" id="cStart">${icon('dice')} Start Game</button>`
         : '<div class="waiting"><span class="pulse-dot"></span> Waiting for the host…</div>';
     }
-    statusEl.innerHTML = `
+    // At a Play-now table the host wears the crown — the longest-seated real
+    // person, so it never lands on a house player — and anybody who has
+    // pressed Ready wears the tick. A chair somebody just left says it is
+    // being found rather than sitting there looking abandoned.
+    const seatHtml = (p) => {
+      if (!p) return `<div class="seat-slot open"><span class="seat-face"></span><span class="seat-name">${lobby?.backfillAt ? 'finding…' : 'open'}</span></div>`;
+      const face = p.avatar || (p.name[0] || '?').toUpperCase();
+      const crown = lobby && p.id === state.hostId;
+      const ready = lobby && !crown && p.ready;
+      return `<div class="seat-slot${crown ? ' host' : ''}${ready ? ' ready' : ''}">
+          <span class="seat-face" style="background:${p.color}">${escapeHtml(face)}${crown ? `<i class="seat-crown">${icon('crown')}</i>` : ''}${ready ? `<i class="seat-tick">${TICK}</i>` : ''}</span>
+          <span class="seat-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+        </div>`;
+    };
+    const quick = !!lobby || legacy;
+    const status = `
       <div class="lobby-head">
-        <div class="room-code">${searching ? `${icon('bolt')} Quick Play`
+        <div class="room-code">${quick ? `${icon('bolt')} Quick Play`
           : state.cup ? `${icon('trophy')} Cup match`
           : `Room <b>${escapeHtml(state.id)}</b>`}</div>
         <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
@@ -1777,21 +1969,14 @@ export function renderCenter(state, meId, actions) {
           // The board is already on the line above, so this picks up the rules.
           ? `<div class="lobby-rolled">${escapeHtml(state.quickRoll.parts.slice(1).join(' · '))}</div>` : ''}
       </div>
-      <div class="seat-row">${Array.from({ length: seats }, (_, i) => {
-        const p = state.players[i];
-        // Waiting is nicer when you can see the table filling up, so each seat
-        // shows who took it rather than an anonymous dot.
-        if (!p) return '<div class="seat-slot open"><span class="seat-face"></span><span class="seat-name">open</span></div>';
-        const face = p.avatar || (p.name[0] || '?').toUpperCase();
-        return `<div class="seat-slot">
-          <span class="seat-face" style="background:${p.color}">${escapeHtml(face)}</span>
-          <span class="seat-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
-        </div>`;
-      }).join('')}</div>
+      <div class="seat-row${lobby ? ' marked' : ''}">${Array.from({ length: seats }, (_, i) => seatHtml(state.players[i])).join('')}</div>
       <div class="dim small">${state.cup && seated < seats
         ? 'Waiting for the player drawn against you'
-        : `${seated} of ${seats} ${seated === 1 ? 'seat' : 'seats'} taken`}</div>
+        : lobby ? `${seated} of ${seats} seated`
+        : `${seated} of ${seats} seats taken`}</div>
       ${state.cup ? '<div class="dim small cup-note">Winner goes through. Loser is out of the cup.</div>' : ''}`;
+    if (statusWas !== status) statusEl.innerHTML = status;
+    statusEl.dataset.sig = status;
     on('#cStart', actions.start);
     paintQuickCountdown();
     return;
@@ -1805,7 +1990,7 @@ export function renderCenter(state, meId, actions) {
         <button class="btn" id="cStandings">${icon('chart')} Final standings</button>
         <button class="btn ghost" id="cHome">${icon('door')} Back to home</button>
       </div>
-      ${state.hostId === meId && !state.cup
+      ${(state.quick || state.hostId === meId) && !state.cup
         ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again</button>`
         : ''}
       ${state.cup ? `<div class="cup-note dim small">${icon('trophy')} A cup match is played once — the bracket has your result.</div>` : ''}`;
@@ -1814,7 +1999,11 @@ export function renderCenter(state, meId, actions) {
       : '<div class="win-line">Game over</div>';
     on('#cStandings', () => showGameOver(state, meId, actions));
     on('#cHome', () => actions.goHome?.());
-    on('#cAgain', actions.rematch);
+    // A matchmade table breaks up when it ends, and the server refuses to
+    // reconvene it: going again from one means Play now finding a fresh
+    // table, for whoever presses it — the same as the result sheet's button
+    // and the side panel's.
+    on('#cAgain', state.quick ? () => actions.newTable?.() : actions.rematch);
     return;
   }
 
@@ -1995,26 +2184,147 @@ function tableTalkHTML() {
   return `<div class="table-talk" id="tableTalk">${talkSpan('')}</div>`;
 }
 
+// ─────────────────────────────────────────────────── the Play-now lobby ──
+/**
+ * The well at a Play-now table, in two acts, in the phones' words.
+ *
+ * First the search: the table looks for real people and only pads itself
+ * out with house players in its last few seconds, and a big gold number
+ * counts it down. Then the Ready round: everybody reads what the table
+ * rolled, says hello, and presses Ready; the host starts once they have — or
+ * the table deals itself in at the server's deadline, because a host who
+ * wandered off must not be able to hold three strangers for ever. Ready can
+ * be pressed from the moment you sit; only Start waits for the search.
+ *
+ * The search carries the looping deck, so each act's scene is painted once
+ * and left alone; the buttons under it are repainted only when what they
+ * say changes, so a tap already on its way is never swallowed by a rebuild.
+ */
+function quickLobbyWell(state, meId, actions, actionEl, wasMode) {
+  const q = state.quickLobby;
+  const gathering = q.phase !== 'ready';
+  const mode = `quick:${state.id}:${gathering ? 'search' : 'ready'}`;
+  actionEl.dataset.mode = mode;
+  if (wasMode !== mode) {
+    actionEl.innerHTML = gathering
+      ? `${deckMarkup('idle')}
+        <div class="quick-search"><span class="pulse-dot"></span> <b id="quickPhase">Finding players…</b></div>
+        <div class="quick-big"><b id="quickCount">…</b><span id="quickCap">SECONDS TO FIND PLAYERS</span></div>
+        <div id="quickControls" class="quick-controls"></div>
+        ${tableTalkHTML()}`
+      : `<div class="quick-ready" id="quickReady">
+          <div class="quick-head" id="quickHead"></div>
+          <div class="quick-count" id="quickCount"></div>
+        </div>
+        <div id="quickControls" class="quick-controls"></div>`;
+  }
+
+  const isHost = state.hostId === meId;
+  const me = state.players.find((p) => p.id === meId);
+  // The server counts who it is waiting on; one that sends the list instead
+  // of the number, or neither, is counted here the same way.
+  const waiting = Array.isArray(q.waitingOn) ? q.waitingOn.length
+    : Number.isFinite(q.waitingOn) ? q.waitingOn
+    : state.players.filter((p) => p.id !== state.hostId && !p.ready).length;
+  const allSet = !!q.canStart || waiting === 0;
+
+  const head = $('#quickHead', actionEl);
+  if (head) {
+    const html = allSet
+      ? `<span class="qh-mark good">${TICK}</span> Everyone's ready`
+      : `<span class="pulse-dot"></span> Waiting for ${waiting} to get ready`;
+    if (head.dataset.v !== html) { head.dataset.v = html; head.innerHTML = html; }
+    $('#quickReady', actionEl)?.classList.toggle('set', allSet);
+  }
+
+  const box = $('#quickControls', actionEl);
+  if (!box) return;
+  const open = !gathering && !!q.canStart;
+  const ready = !!me?.ready;
+  const sig = `${isHost ? 'host' : me ? 'seat' : 'watch'}:${open ? 1 : 0}:${gathering ? 1 : 0}:${ready ? 1 : 0}`;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  // Start for the host, Ready for everybody else seated. A spectator — a
+  // full table watched from the landing — gets neither, only the chat.
+  const main = isHost
+    // The server has the last word (Start is refused while anybody is still
+    // reading); the button only says what it will answer.
+    ? `<button class="btn primary big" id="cStart" ${open ? '' : 'disabled'}>${icon('dice')} Start game</button>
+       ${gathering ? '<div class="quick-note-host">You\'re the host. Start unlocks when the search ends.</div>' : ''}`
+    : me
+      // Pressed, it turns green and says so; pressed again it takes it
+      // back — a player who needs a moment is not trapped by a tap.
+      ? `<button class="btn ${ready ? 'good' : 'primary'} big" id="cReady" aria-pressed="${ready}">${ready ? `Ready ${TICK}` : 'I\'m ready'}</button>`
+      : '';
+  box.innerHTML = `${main}
+    <div class="row-2 quick-more">
+      <button class="btn ghost" id="cRules">${icon(isHost ? 'toolbox' : 'scales')} ${isHost ? 'Change rules' : 'See all rules'}</button>
+      <button class="btn ghost quick-chat" id="cChat">${icon('chat')} Chat with the table</button>
+    </div>`;
+  const start = $('#cStart', box);
+  if (start) start.onclick = () => { sfx.click(); actions.start(); };
+  const press = $('#cReady', box);
+  if (press) press.onclick = () => { sfx.click(); actions.ready?.(!ready); };
+  // The rules are the side panel's, where a private host sets theirs: on a
+  // desktop that is the rail beside the board, on a phone the page under it.
+  // Either way the button takes you there and lights the panel you landed on.
+  $('#cRules', box).onclick = () => {
+    sfx.click();
+    const rules = document.getElementById('quickRules');
+    if (!rules) return;
+    rules.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+    rules.classList.remove('flash');
+    void rules.offsetWidth;
+    rules.classList.add('flash');
+  };
+  $('#cChat', box).onclick = () => { sfx.click(); actions.openChat?.(); };
+}
+
 // ──────────────────────────────────────────────── quick play countdown ──
 // The deal-in deadline rides along with the state, but the seconds are counted
 // here: a state push can be a minute old after a sleeping tab, and a number
 // frozen mid-countdown reads as a table that has given up on you.
+//
+// Which deadline depends on the act: the search counts to its own end, the
+// Ready round to the moment the table deals itself in, and a server from
+// before the Ready round to the only deadline it has.
 let quickEndsAt = null;
+let quickAct = 'legacy';
 let quickTimer = null;
+
+/** The deadline a Play-now lobby is counting to, or null when it is not one. */
+function quickDeadline(state) {
+  if (state.status !== 'lobby' || !state.quick) { quickAct = 'legacy'; return null; }
+  const q = state.quickLobby;
+  if (!q) { quickAct = 'legacy'; return state.quickStartAt; }
+  quickAct = q.phase === 'ready' ? 'ready' : 'search';
+  return quickAct === 'ready' ? q.startBy ?? state.quickStartAt : q.gatherUntil;
+}
+
+/** "0:24" — the Ready round runs up to a couple of minutes, so it reads as a time. */
+const minSec = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
 function paintQuickCountdown() {
   const el = document.getElementById('quickCount');
   if (!el) return; // the searching state isn't on screen
   const secs = quickEndsAt ? Math.max(0, Math.ceil((quickEndsAt - Date.now()) / 1000)) : 0;
-  el.textContent = secs ? `${secs}s` : 'a moment';
+  const say = (node, text) => { if (node && node.textContent !== text) node.textContent = text; };
+  if (quickAct === 'ready') {
+    // Everybody sees the deadline, the host included: the table goes at
+    // that moment whether or not anybody pressed anything.
+    say(el, secs ? `Starts by itself in ${minSec(secs)}` : 'Dealing you in…');
+    return;
+  }
+  if (quickAct === 'search') {
+    say(el, secs ? String(secs) : '…');
+    say(document.getElementById('quickCap'), secs ? 'SECONDS TO FIND PLAYERS' : 'STARTING THE READY ROUND');
+  } else {
+    say(el, secs ? `${secs}s` : 'a moment');
+  }
   // The table spends most of the fuse actually looking for people, and only
   // the last few seconds filling the chairs nobody took. Saying which is
   // happening is the difference between "nobody came" and "it lied to me".
-  const phase = document.getElementById('quickPhase');
-  if (phase) {
-    const next = secs > 5 ? 'Finding players…' : 'Filling the table…';
-    if (phase.textContent !== next) phase.textContent = next;
-  }
+  say(document.getElementById('quickPhase'), secs > 5 ? 'Finding players…' : 'Filling the table…');
 }
 
 function syncQuickCountdown(endsAt) {

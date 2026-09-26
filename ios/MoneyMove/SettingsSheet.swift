@@ -1,6 +1,13 @@
 // The lobby settings sheet: board picker, seats, teams, money and house
 // rules. Only the host can change anything, and only while the game is
 // still in the lobby — everyone else sees the same rows, disabled.
+//
+// At a Play-now table the host may change only what the server lists in
+// quickLobby.editable — the bankroll, the five rolled house rules and the
+// board. The seats, privacy and house players are what matchmaking stands
+// on; the turn clock costs strangers karma; mortgage off turns ordinary rent
+// into bankruptcy; a fixed order would always put the host first. Those rows
+// stay on screen, locked, so everybody can still read what they are.
 
 import SwiftUI
 
@@ -16,19 +23,44 @@ struct SettingsSheet: View {
     /// Seconds on the turn clock; 0 hands the table all the time in the world.
     private static let turnClockOptions = [0, 30, 60, 90, 120, 180]
 
-    private var canEdit: Bool { store.isHost && store.state?.isLobby == true }
+    /// The host, in the lobby — the whole of the rule at a private table.
+    private var isHostInLobby: Bool { store.isHost && store.state?.isLobby == true }
+
+    /// A Play-now table, where the host's hand is limited to a list.
+    private var isQuick: Bool { store.state?.quick == true }
+
+    /// What a Play-now table never hands its host, whatever list arrives —
+    /// the reasons are in the header above. The server refuses them too; this
+    /// is so nobody is shown a switch that only ever answers with a toast.
+    private static let quickLocked: Set<String> = [
+        "maxPlayers", "isPrivate", "allowBots", "teams", "turnSeconds", "mortgage", "randomizeOrder",
+    ]
+
+    /// Whether this one setting can be changed from here. At a Play-now table
+    /// only the keys the server names are open; a server that names none —
+    /// one from before the Ready lobby — has opened none.
+    private func canEdit(_ key: String) -> Bool {
+        guard isHostInLobby else { return false }
+        guard isQuick else { return true }
+        guard !Self.quickLocked.contains(key) else { return false }
+        return store.state?.quickLobby?.editable?.contains(key) ?? false
+    }
 
     var body: some View {
         let P = Palette.current(scheme)
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
-                    if !canEdit {
+                    if isHostInLobby, isQuick, store.state?.quickLobby != nil {
+                        quickHostNote(P)
+                    } else if !isHostInLobby || isQuick {
                         lockedNote(P)
                     }
                     boardSection(P)
                     playersSection(P)
-                    teamsSection(P)
+                    // Strangers cannot pick teams, so a Play-now table has none
+                    // to show.
+                    if !isQuick { teamsSection(P) }
                     styleSection(P)
                     moneySection(P)
                     rulesSection(P)
@@ -62,9 +94,7 @@ struct SettingsSheet: View {
             Image(systemName: "lock.fill")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(P.ink3)
-            Text(store.state?.isLobby == true
-                 ? "Only the host can change the settings."
-                 : "Settings are locked once the game starts.")
+            Text(lockedText)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(P.ink2)
         }
@@ -74,12 +104,44 @@ struct SettingsSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
+    private var lockedText: String {
+        guard store.state?.isLobby == true else { return "Settings are locked once the game starts." }
+        // A host at a Play-now table on a server from before the Ready lobby:
+        // that server lets nobody change anything.
+        if isQuick && store.isHost { return "A Play-now table plays the rules it rolled." }
+        return "Only the host can change the settings."
+    }
+
+    /// What a Play-now host is told before they touch anything: a change
+    /// costs everybody their Ready, because a rule changed under somebody
+    /// who already agreed to the old one is a rule they never agreed to.
+    private func quickHostNote(_ P: Palette) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(P.gold)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Changing a rule un-readies everyone so they can read it.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink)
+                Text("Seats, privacy, house players, the turn clock, mortgage and turn order stay as Play now set them.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.gold.opacity(0.5), lineWidth: 1))
+    }
+
     /// The same three boxes the lobby shows, so there is exactly one board
     /// picker in the app. This used to be a second, independent list of every
     /// board — which meant the lobby could hide a locked board and this
     /// sheet would offer it one tap away.
     private func boardSection(_ P: Palette) -> some View {
-        MMCard { BoardBoxes(canEdit: canEdit) }
+        MMCard { BoardBoxes(canEdit: canEdit("mapId")) }
     }
 
 
@@ -88,7 +150,7 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 12) {
                 PanelTitle("Players")
 
-                menuRow(title: "Max players", value: "\(currentMaxPlayers)", P: P) {
+                menuRow(title: "Max players", value: "\(currentMaxPlayers)", key: "maxPlayers", P: P) {
                     ForEach(2...8, id: \.self) { n in
                         Button {
                             store.updateSettings(["maxPlayers": n])
@@ -106,6 +168,7 @@ struct SettingsSheet: View {
 
                 toggleRow(title: "Private room",
                           caption: "Hidden from the public room list — invite link only.",
+                          key: "isPrivate",
                           binding: boolSetting("isPrivate", { $0.isPrivate }, default: true),
                           P: P)
 
@@ -113,11 +176,11 @@ struct SettingsSheet: View {
 
                 toggleRow(title: "Allow bots",
                           caption: "Empty seats are filled with bots when the game starts.",
+                          key: "allowBots",
                           binding: boolSetting("allowBots", { $0.allowBots }, default: false),
                           P: P)
             }
         }
-        .disabled(!canEdit)
     }
 
     /// Personal, not a room setting — every player can pick their own table.
@@ -137,7 +200,7 @@ struct SettingsSheet: View {
 
                 menuRow(title: "Teams",
                         value: currentTeams == 0 ? "Off" : "\(currentTeams) teams",
-                        P: P) {
+                        key: "teams", P: P) {
                     ForEach([0, 2, 3, 4], id: \.self) { n in
                         Button {
                             store.updateSettings(["teams": n])
@@ -155,6 +218,7 @@ struct SettingsSheet: View {
                 if currentTeams > 0 {
                     Button("⇄  Balance teams") { store.balanceTeams() }
                         .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+                        .disabled(!canEdit("teams"))
                 }
 
                 Text("Teammates never charge each other rent and win together")
@@ -162,7 +226,6 @@ struct SettingsSheet: View {
                     .foregroundStyle(P.ink3)
             }
         }
-        .disabled(!canEdit)
     }
 
     private func moneySection(_ P: Palette) -> some View {
@@ -170,7 +233,7 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 12) {
                 PanelTitle("Money")
 
-                menuRow(title: "Starting cash", value: money(currentStartingCash), P: P) {
+                menuRow(title: "Starting cash", value: money(currentStartingCash), key: "startingCash", P: P) {
                     ForEach(Self.startingCashOptions, id: \.self) { n in
                         Button {
                             store.updateSettings(["startingCash": n])
@@ -185,7 +248,6 @@ struct SettingsSheet: View {
                 }
             }
         }
-        .disabled(!canEdit)
     }
 
     private func rulesSection(_ P: Palette) -> some View {
@@ -194,7 +256,8 @@ struct SettingsSheet: View {
                 PanelTitle("Rules")
 
                 menuRow(title: "Turn clock",
-                        value: currentTurnSeconds == 0 ? "Off" : "\(currentTurnSeconds)s", P: P) {
+                        value: currentTurnSeconds == 0 ? "Off" : "\(currentTurnSeconds)s",
+                        key: "turnSeconds", P: P) {
                     ForEach(Self.turnClockOptions, id: \.self) { n in
                         Button {
                             store.updateSettings(["turnSeconds": n])
@@ -214,47 +277,57 @@ struct SettingsSheet: View {
                 divider(P)
                 toggleRow(title: "x2 rent on full sets",
                           caption: "Unimproved streets earn double once you own the whole set.",
+                          key: "x2rent",
                           binding: boolSetting("x2rent", { $0.x2rent }, default: false),
                           P: P)
                 divider(P)
                 toggleRow(title: "Vacation cash",
                           caption: "Taxes and fees pile up on Vacation for whoever lands there.",
+                          key: "vacationCash",
                           binding: boolSetting("vacationCash", { $0.vacationCash }, default: false),
                           P: P)
                 divider(P)
                 toggleRow(title: "Auction",
                           caption: "Skipped properties go under the hammer instead of staying unsold.",
+                          key: "auction",
                           binding: boolSetting("auction", { $0.auction }, default: true),
                           P: P)
                 divider(P)
                 toggleRow(title: "No rent while jailed",
                           caption: "Owners collect nothing while they sit in prison.",
+                          key: "noRentInPrison",
                           binding: boolSetting("noRentInPrison", { $0.noRentInPrison }, default: false),
                           P: P)
                 divider(P)
                 toggleRow(title: "Mortgage",
                           caption: "Properties can be mortgaged to the bank for quick cash.",
+                          key: "mortgage",
                           binding: boolSetting("mortgage", { $0.mortgage }, default: true),
                           P: P)
                 divider(P)
                 toggleRow(title: "Even build",
                           caption: "Houses must be spread evenly across a colour set.",
+                          key: "evenBuild",
                           binding: boolSetting("evenBuild", { $0.evenBuild }, default: true),
                           P: P)
                 divider(P)
                 toggleRow(title: "Randomize order",
                           caption: "Shuffle the turn order when the game starts.",
+                          key: "randomizeOrder",
                           binding: boolSetting("randomizeOrder", { $0.randomizeOrder }, default: true),
                           P: P)
             }
         }
-        .disabled(!canEdit)
     }
 
     // MARK: - row builders
 
-    private func toggleRow(title: String, caption: String, binding: Binding<Bool>, P: Palette) -> some View {
-        Toggle(isOn: binding) {
+    /// Each row answers for its own setting, because at a Play-now table one
+    /// card holds rows the host may change beside rows nobody may.
+    private func toggleRow(title: String, caption: String, key: String,
+                           binding: Binding<Bool>, P: Palette) -> some View {
+        let open = canEdit(key)
+        return Toggle(isOn: binding) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 14.5, weight: .semibold, design: .rounded))
@@ -266,16 +339,19 @@ struct SettingsSheet: View {
             }
         }
         .tint(P.red)
-        .opacity(canEdit ? 1 : 0.6)
+        .opacity(open ? 1 : 0.6)
+        .disabled(!open)
     }
 
     private func menuRow<Items: View>(
         title: String,
         value: String,
+        key: String,
         P: Palette,
         @ViewBuilder items: () -> Items
     ) -> some View {
-        Menu {
+        let open = canEdit(key)
+        return Menu {
             items()
         } label: {
             HStack {
@@ -291,8 +367,9 @@ struct SettingsSheet: View {
                     .foregroundStyle(P.ink3)
             }
             .contentShape(Rectangle())
-            .opacity(canEdit ? 1 : 0.6)
+            .opacity(open ? 1 : 0.6)
         }
+        .disabled(!open)
     }
 
     private func divider(_ P: Palette) -> some View {

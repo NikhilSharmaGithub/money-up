@@ -151,7 +151,7 @@ private fun BoxScope.PlayingWell(
     val p = P.current
     BoxWithConstraints(Modifier.matchParentSize()) {
         val wide = maxWidth
-        WellFeed(store, state, Modifier.fillMaxSize())
+        WellFeed(store, Modifier.fillMaxSize())
 
         Column(
             Modifier.fillMaxSize(),
@@ -206,11 +206,15 @@ private fun BoxScope.PlayingWell(
  * since kick-off: a game opens on a quiet table and fills as it goes, instead
  * of dumping the lobby's backlog all at once. Newest at the bottom, the older
  * lines running off the top under a fade, the whole of it at half strength.
+ *
+ * Read off the log as the store shows it, not as the server sent it: the
+ * rent a walk has not reached yet is not murmured here either (see the purse
+ * ledger in GameStore.kt).
  */
 @Composable
-private fun WellFeed(store: GameStore, state: GameState, modifier: Modifier) {
+private fun WellFeed(store: GameStore, modifier: Modifier) {
     val floor = store.logFloor
-    val lines = state.log.filter { it.at > floor }.takeLast(12)
+    val lines = store.shownLog.filter { it.at > floor }.takeLast(12)
     Box(
         modifier
             .clipToBounds()

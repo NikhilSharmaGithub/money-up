@@ -468,11 +468,15 @@ struct ChatLogSheet: View {
 
     // MARK: log
 
+    /// The whole record, less what an act on stage is still holding — the
+    /// store's shown log, the same one the centre well reads, so a rent line
+    /// never turns up here before the piece has reached the street.
     private func logTab(_ P: Palette) -> some View {
-        ScrollViewReader { proxy in
+        let log = store.shownLog
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 9) {
-                    ForEach(store.state?.log ?? []) { line in
+                    ForEach(log) { line in
                         logRow(line, P).id(line.id)
                     }
                 }
@@ -482,14 +486,16 @@ struct ChatLogSheet: View {
             // cut against it. The bottom runs to the sheet's own edge.
             .sheetScrollEdge(top: 12)
             .onAppear {
-                if let last = store.state?.log.last?.id {
+                if let last = log.last?.id {
                     proxy.scrollTo(last, anchor: .bottom)
                 }
             }
-            .onChange(of: store.state?.log.last?.id) { _, new in
-                guard let new else { return }
+            // The count as well as the newest line: a held line released at
+            // its payday can land above one that arrived during the walk.
+            .onChange(of: "\(log.count):\(log.last?.id ?? "")") {
+                guard let last = store.shownLog.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(new, anchor: .bottom)
+                    proxy.scrollTo(last, anchor: .bottom)
                 }
             }
         }
@@ -961,8 +967,20 @@ struct GameOverSheet: View {
                     Haptics.tap()
                     dismiss()
                     store.leaveRoom()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { store.quickPlay() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        store.quickPlay()
+                        // A fresh Play now, so the same break the landing
+                        // screen's button takes, at the tap, never awaited —
+                        // the search runs on behind it. It waits out the
+                        // sheet's exit: an ad presented over a sheet still
+                        // closing is an ad UIKit refuses to present.
+                        InterstitialAd.beforeGame()
+                    }
                 }
+                // Loaded while the result is being read, so there is one ready
+                // by the time somebody wants the next table. Quiet when none
+                // is due: preload asks nothing of the network then.
+                .task { InterstitialAd.shared.preload(AdDesk.shared.config) }
                 Text("Finds you a fresh table.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)

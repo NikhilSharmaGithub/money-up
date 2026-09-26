@@ -200,24 +200,42 @@ final class GameStore: ObservableObject {
         /// The push's fresh log kinds, less the dice and the auction — those
         /// are never held.
         var kinds: [String] = []
+        /// The log lines themselves (by id) that wait with the money. "Riya
+        /// pays $950 rent to Arjun" printed while the piece is still two
+        /// squares short is the same spoiler as the purse falling early.
+        var lines: [String] = []
         var busts: [String] = []
         /// Who put each bust out, as far as this device can tell.
         var creditors: [String: [String]] = [:]
         var ended = false
 
-        var isEmpty: Bool { delta.isEmpty && kinds.isEmpty && busts.isEmpty && !ended }
+        var isEmpty: Bool {
+            delta.isEmpty && kinds.isEmpty && lines.isEmpty && busts.isEmpty && !ended
+        }
 
         mutating func merge(_ other: Entry) {
             for (pid, d) in other.delta { delta[pid, default: 0] += d }
             for k in other.kinds where !kinds.contains(k) { kinds.append(k) }
+            for l in other.lines where !lines.contains(l) { lines.append(l) }
             for b in other.busts where !busts.contains(b) { busts.append(b) }
             creditors.merge(other.creditors) { mine, _ in mine }
             ended = ended || other.ended
         }
     }
 
+    /// Log kinds never held, whatever push they ride: the dice are thrown in
+    /// front of everybody, an auction runs in the open, and somebody arriving
+    /// or leaving is nothing the walk did. A trade is held only when the walk
+    /// caused it — the deadlock rule's forced sale on landing — because a
+    /// trade anybody proposed arrives on a push of its own, which the ledger
+    /// never holds.
+    private static let unheldLogKinds: Set<String> = ["dice", "auction", "join", "leave"]
+
     /// Money that has moved on the server but not yet on screen, per player.
     @Published private(set) var held: [String: Int] = [:]
+    /// Log lines (by id) the server has written but the table has not yet
+    /// seen happen. Every log view reads `shownLog`, which leaves these out.
+    @Published private(set) var heldLines: Set<String> = []
     /// Bankruptcies waiting for their act to land. Published because a bust
     /// can land with no money of its own left to move.
     @Published private var heldBusts: Set<String> = []
@@ -509,6 +527,10 @@ final class GameStore: ObservableObject {
                 // Say we can stitch diffs and the table stops re-sending the
                 // board thirty times a minute. Silence keeps the old contract.
                 "proto": StateMirror.protocolVersion,
+                // This seat has a Ready button. A Play-now lobby counts a
+                // client that never says so as always ready, so a table is
+                // never left waiting on a phone that cannot press it.
+                "canReady": true,
             ] as [String: Any]])
         }
     }
@@ -991,9 +1013,12 @@ final class GameStore: ObservableObject {
         }
         // The log lines describe the money: they go where it goes. A fresh act
         // keeps its lines even when nobody paid anything (a walked jailing
-        // clanks when the piece reaches the cell, not as it sets off).
+        // clanks when the piece reaches the cell, not as it sets off). The
+        // words wait too, not only their sounds: the line is the same news
+        // as the figure, and the log is read by people watching the piece.
         if opened != nil || !onStage.delta.isEmpty || !onStage.busts.isEmpty {
             onStage.kinds = kinds
+            onStage.lines = lines.filter { !Self.unheldLogKinds.contains($0.kind) }.map(\.id)
         } else {
             atOnce.kinds = kinds
         }
@@ -1009,6 +1034,7 @@ final class GameStore: ObservableObject {
             }
             for (pid, d) in onStage.delta { held[pid, default: 0] += d }
             heldBusts.formUnion(onStage.busts)
+            if !onStage.lines.isEmpty { heldLines.formUnion(onStage.lines) }
             if onStage.ended { endOnStage = true }
         }
         if !atOnce.isEmpty { voice(atOnce) }
@@ -1055,6 +1081,7 @@ final class GameStore: ObservableObject {
             if left == 0 { held.removeValue(forKey: pid) } else { held[pid] = left }
         }
         if !e.busts.isEmpty { heldBusts.subtract(e.busts) }
+        if !e.lines.isEmpty { heldLines.subtract(e.lines) }
         voice(e)
     }
 
@@ -1164,6 +1191,7 @@ final class GameStore: ObservableObject {
         journeys = []
         if !held.isEmpty { held = [:] }
         if !heldBusts.isEmpty { heldBusts = [] }
+        if !heldLines.isEmpty { heldLines = [] }
         finaleTask?.cancel()
         finaleTask = nil
         finalePending = false
@@ -1210,6 +1238,16 @@ final class GameStore: ObservableObject {
     }
 
     var shownPlayers: [PlayerState] { (state?.players ?? []).map(shown) }
+
+    /// The game log as the table should read it right now: every line but
+    /// the ones an act on stage is still holding. The centre well's feed and
+    /// the History sheet both read this, so a line appears in each at the
+    /// same payday as its money. A (re)connect is a position and holds
+    /// nothing, so it shows the log exactly as the server sent it.
+    var shownLog: [LogLine] {
+        let log = state?.log ?? []
+        return heldLines.isEmpty ? log : log.filter { !heldLines.contains($0.id) }
+    }
 
     /// The act a leg stamp belongs to, while it is still on stage. The walker
     /// plays only these, on their clock — anything else is a position.
@@ -1520,6 +1558,9 @@ final class GameStore: ObservableObject {
     }
 
     func start() { emit("start") }
+    /// Pressed, or un-pressed, in a Play-now lobby. The host has no Ready of
+    /// their own — their Start is the answer.
+    func setReady(_ on: Bool) { emit("ready", [on]) }
     func addBot() { emit("addBot") }
     func kick(_ playerId: String) { emit("kick", [playerId]) }
     /// Hand the host chair to someone else at the table.
@@ -1604,7 +1645,17 @@ final class GameStore: ObservableObject {
     func hasTeamChat(for seat: String) -> Bool {
         (state?.settings.teams ?? 0) > 0 && state?.player(seat)?.team != nil
     }
-    func rematch() { emit("rematch") }
+    /// Run the table back. A Play-now table does not reconvene — the server
+    /// turns that down, because four strangers are not a group that asked for
+    /// another round under whoever pressed first — so from one of those the
+    /// dock's "Play again" does what the result sheet's does: out of this
+    /// table and into a fresh Play now, with the break every new table takes.
+    func rematch() {
+        guard state?.quick == true, state?.cup != true else { return emit("rematch") }
+        leaveRoom()
+        quickPlay()
+        InterstitialAd.beforeGame()
+    }
     func refreshAdsConfig() {
         Task { [weak self] in
             let cfg: AdsConfig? = try? await self?.fetchJSON("/api/ads/config")
