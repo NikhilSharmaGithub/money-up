@@ -1,22 +1,28 @@
 package com.moneymove.game
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -26,14 +32,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,14 +67,17 @@ import java.util.Locale
  */
 
 /**
- * The bell, for a top bar. [count] is `messaging.unread`.
+ * The bell, for the top of the Social tab — iOS's NoticeBell. [count] is
+ * `messaging.unread`.
  *
- * There is no bell in the shared glyph set, and drawing one only for Android
- * would put a picture on this client that the browser and the iPhone do not
- * have. The ticket is the closest thing in the set that still takes the ink
- * it is given — which matters more than the shape does, because a glyph with
- * a colour of its own could not go quiet, and a bell that is gold whether or
- * not anything is waiting is a bell nobody looks at twice.
+ * iOS draws its own bell here, the filled one, and the bell with a dot on it
+ * once something is waiting; icons.js has no bell, so SafetySheets.kt draws
+ * both on the glyph grid. Quiet ink with nothing waiting, gold with
+ * something, and the count in a red coin off the top corner that stops at
+ * nine, as iOS's does.
+ *
+ * No sound of its own: iOS's bell knocks through whoever hosts it, and the
+ * Social tab does that.
  */
 @Composable
 fun NoticeBell(count: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -71,127 +85,140 @@ fun NoticeBell(count: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val waiting = count > 0
     Box(
         modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(99.dp))
-            .clickable {
-                SoundKit.click()
-                onClick()
-            },
-        contentAlignment = Alignment.Center,
+            .size(38.dp)
+            .semantics { contentDescription = if (waiting) "$count unread notes" else "Notes" },
     ) {
         Box(
             Modifier
                 .size(38.dp)
-                .clip(RoundedCornerShape(99.dp))
+                .clip(CircleShape)
                 .background(p.sunken)
-                .border(1.dp, if (waiting) p.gold else p.rule, RoundedCornerShape(99.dp)),
+                .border(1.dp, if (waiting) p.gold else p.rule, CircleShape)
+                .clickable { onClick() },
             contentAlignment = Alignment.Center,
         ) {
-            Icon("ticket", size = 18.dp, tint = if (waiting) p.gold else p.ink3)
+            SfMark(if (waiting) "bell.badge.fill" else "bell.fill", 20.dp, if (waiting) p.gold else p.ink3)
         }
         if (waiting) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = (-1).dp, y = 1.dp)
+                    .offset(x = 3.dp, y = (-2).dp)
                     .size(17.dp)
-                    .clip(RoundedCornerShape(99.dp))
+                    .clip(CircleShape)
                     .background(p.red),
                 contentAlignment = Alignment.Center,
             ) {
-                // Past nine the exact number stops being information and the
-                // digits stop fitting.
                 Text(
-                    if (count > 9) "9+" else "$count",
-                    color = p.accentInk, fontSize = 9.sp, fontWeight = FontWeight.Black,
+                    "${count.coerceAtMost(9)}",
+                    color = p.accentInk, fontSize = 10.sp, fontWeight = FontWeight.Black,
                 )
             }
         }
     }
 }
 
+/**
+ * The list — iOS's NoticesSheet: the full height of the screen on the page
+ * colour, "Notes" in the middle of the bar and Done on the right, a card per
+ * note, and a bell with a line through it when there are none.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
     val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
     val notices = messaging.notices
 
-    // Which notes were new is decided once, as they arrive, and then held for
-    // as long as the sheet is up. Marking the list read is the server being
-    // told they are not new any more, and the poll behind this sheet would
-    // then take the dots away at whatever moment it next happened to land —
-    // usually while somebody is still on the first line, and always without
-    // being asked.
-    var wereNew by remember { mutableStateOf(emptySet<String>()) }
-    LaunchedEffect(notices) {
-        val fresh = notices.filter { it.unread }.map { it.id }
-        if (fresh.isNotEmpty()) wereNew = wereNew + fresh
+    fun close() {
+        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
     }
 
+    // Reading it is reading it — but the dots stay up for a beat so somebody
+    // can see which ones were new, then go, as iOS's do. The server is told
+    // at the same moment; until the next poll brings the notes back unmarked
+    // it is this that keeps the dots down.
+    var read by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         // Waited on rather than fired and forgotten: marking a list read
         // before it has arrived says "seen" about notes nobody has been shown
         // yet, and the server stamps the moment it is told rather than
         // anything this app sends, so there is no taking it back.
         messaging.refreshNotices().join()
-        // Opening the list is reading it — but the dots are the only thing
-        // that says which notes were new, so they get a moment to be seen
-        // before the count is given up.
         delay(1_200)
         messaging.markNoticesRead()
+        read = true
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
+        containerColor = p.page,
         dragHandle = null,
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
-            Spacer(Modifier.height(14.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon("ticket", size = 18.dp, tint = p.red)
-                Spacer(Modifier.width(8.dp))
-                Text("Notes", color = p.ink, fontSize = 18.sp, fontWeight = FontWeight.Black)
-                Spacer(Modifier.weight(1f))
-                MMButton("Close", kind = BtnKind.GHOST) { onDismiss() }
-            }
-            Spacer(Modifier.height(12.dp))
-
+        Column(Modifier.fillMaxWidth().fillMaxHeight()) {
+            NotesBar { close() }
             if (notices.isEmpty()) {
-                Box(
-                    Modifier.fillMaxWidth().heightIn(min = 200.dp),
-                    contentAlignment = Alignment.Center,
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 30.dp)
+                        .padding(top = 70.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
-                    Column(
-                        Modifier.padding(horizontal = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Icon("ticket", size = 26.dp, tint = p.ink3)
-                        Spacer(Modifier.height(9.dp))
-                        Text(
-                            "Nothing yet",
-                            color = p.ink2, fontSize = 15.sp, fontWeight = FontWeight.Black,
-                        )
-                        Spacer(Modifier.height(5.dp))
-                        Hint(
-                            "Announcements about tournaments — when a round opens, when a prize " +
-                                "is on its way — turn up here.",
-                        )
-                    }
+                    SfMark("bell.slash", 32.dp, p.ink3)
+                    Text(
+                        "Nothing yet",
+                        color = p.ink2, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        "Announcements about tournaments — when a round opens, when a prize " +
+                            "is on its way — turn up here.",
+                        color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp,
+                        fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                    )
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 460.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(notices.size) { i ->
-                        NoticeRow(notices[i], isNew = notices[i].id in wereNew)
+                    items(notices) { n ->
+                        NoticeRow(n, isNew = n.unread && !read)
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * iOS's inline bar: "Notes" in the middle, Done on the right in the accent —
+ * regular weight, as iOS's trailing toolbar button is.
+ */
+@Composable
+private fun NotesBar(onDone: () -> Unit) {
+    val p = P.current
+    Box(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 16.dp)) {
+        Text(
+            "Notes",
+            color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.align(Alignment.Center),
+        )
+        Text(
+            "Done",
+            color = p.red, fontSize = 17.sp, fontWeight = FontWeight.Normal,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onDone() }
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+        )
     }
 }
 
@@ -209,7 +236,10 @@ private fun NoticeRow(n: Notice, isNew: Boolean) {
             .background(if (n.personal) p.goldSoft else p.sunken)
             .border(1.dp, if (n.personal) p.gold else p.rule, shape)
             .padding(13.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // The heading line is always there, as iOS's is, even when it holds
+        // nothing but the space before the words.
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (n.personal) {
                 Text(
@@ -226,43 +256,41 @@ private fun NoticeRow(n: Notice, isNew: Boolean) {
                 Spacer(Modifier.width(7.dp))
             }
             if (n.title.isNotBlank()) {
-                Text(n.title, color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.Black)
+                Text(
+                    n.title,
+                    color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(4.dp))
             if (isNew) {
-                Box(Modifier.size(8.dp).clip(RoundedCornerShape(99.dp)).background(p.red))
+                Box(Modifier.size(8.dp).clip(CircleShape).background(p.red))
             }
         }
-        if (n.personal || n.title.isNotBlank()) Spacer(Modifier.height(6.dp))
         Text(
             n.text,
             color = p.ink2, fontSize = 13.5.sp, lineHeight = 19.sp,
             fontWeight = FontWeight.Medium,
         )
-        Spacer(Modifier.height(6.dp))
         Text(
-            whenSaid(n.at),
+            whenWritten(n.at),
             color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
         )
     }
 }
 
 /**
- * When it was written, in the shortest form that is still true.
- *
- * A note is usually read minutes after it lands, and "14:32" makes somebody
- * work out for themselves whether that was today. Anything older than a week
- * has stopped being news and gets a date instead.
+ * When it was written, the way iOS writes it: the short weekday, the day and
+ * the short month, and the time — "Thu, 25 Sep, 14:32" in the reader's own
+ * locale's order and clock, which is what `.dateTime` with those fields asks
+ * of the phone.
  */
-private fun whenSaid(at: Double): String {
+private fun whenWritten(at: Double): String {
     val ms = at.toLong()
     if (ms <= 0L) return ""
-    val gap = System.currentTimeMillis() - ms
-    return when {
-        gap < 60_000L -> "just now"
-        gap < 3_600_000L -> "${gap / 60_000L}m ago"
-        gap < 86_400_000L -> "${gap / 3_600_000L}h ago"
-        gap < 7L * 86_400_000L -> "${gap / 86_400_000L}d ago"
-        else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(ms))
-    }
+    val locale = Locale.getDefault()
+    val pattern = DateFormat.getBestDateTimePattern(locale, "EEEdMMMjmm")
+    return SimpleDateFormat(pattern, locale).format(Date(ms))
 }

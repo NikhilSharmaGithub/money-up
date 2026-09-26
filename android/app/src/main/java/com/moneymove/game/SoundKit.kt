@@ -1,14 +1,19 @@
 package com.moneymove.game
 
+import android.content.ContentResolver
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
+import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,19 +40,24 @@ object SoundKit {
 
     private const val RATE = 44_100
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var vibrator: Vibrator? = null
 
     var enabled: Boolean = true
 
-    fun attach(context: Context, on: Boolean) {
+    fun attach(@Suppress("UNUSED_PARAMETER") context: Context, on: Boolean) {
         enabled = on
-        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        }
     }
+
+    /**
+     * Nothing to warm, on purpose.
+     *
+     * iOS has to start its AVAudioEngine on a user gesture or the first sound
+     * of a session is swallowed, so GameStore.swift calls warmUp() on create,
+     * quick play and join. Every sound here builds its own AudioTrack at play
+     * time, so there is no engine to start. It exists so a line carried over
+     * from the iOS source compiles and means the same thing: "about to make
+     * noise".
+     */
+    fun warmUp() {}
 
     private enum class Wave { SINE, TRIANGLE, SQUARE }
 
@@ -199,16 +209,26 @@ object SoundKit {
         tone(jitter(260.0), to = 175.0, dur = 0.1, wave = Wave.TRIANGLE, vol = 0.09f, after = t + 0.02)
     }
 
-    /** One footstep of a token hop — alternates so a run has texture. */
+    /**
+     * One footstep of a token hop — alternates so a run has texture.
+     *
+     * The hop is felt as well as heard: iOS knocks the phone once per tile
+     * (BoardView.swift, a light impact at 0.55) right beside this call. The
+     * walker that calls it is not this file's, so the knock rides along here
+     * instead — and like iOS's, it is not silenced by the sound switch.
+     */
     private var stepFlip = false
     fun step() {
         stepFlip = !stepFlip
         tone(jitter(if (stepFlip) 620.0 else 690.0, 0.03), dur = 0.04, vol = 0.07f)
+        Haptics.step()
     }
 
+    /** The last hop of a walk: the piece set down, and the same knock as a step. */
     fun land() {
         tone(jitter(300.0), to = 235.0, dur = 0.1, wave = Wave.TRIANGLE, vol = 0.13f)
         tone(jitter(1500.0), dur = 0.03, vol = 0.04f, after = 0.012)
+        Haptics.step()
     }
 
     /** A warm strum, each note doubled an octave up very quietly. */
@@ -220,6 +240,7 @@ object SoundKit {
         }
     }
 
+    /** Somebody else's money moving — the till, not your pocket. */
     fun cash() {
         tone(880.0, to = 1320.0, dur = 0.14, wave = Wave.TRIANGLE, vol = 0.16f)
         tone(1320.0, dur = 0.14, vol = 0.1f, after = 0.1)
@@ -227,7 +248,12 @@ object SoundKit {
 
     fun rent() = tone(420.0, to = 200.0, dur = 0.26, wave = Wave.TRIANGLE, vol = 0.15f)
 
-    /** A whole country in one hand — a short triumphant flourish. */
+    /**
+     * A whole country in one hand — a short triumphant flourish.
+     *
+     * Sound only. iOS pairs it with Haptics.turn() at the call site
+     * (GameStore.swift, the set-completion scan), and so should Android.
+     */
     fun setComplete() {
         for ((i, f) in listOf(523.0, 659.0, 784.0, 1047.0).withIndex()) {
             tone(jitter(f, 0.006), dur = 0.3, wave = Wave.TRIANGLE, vol = 0.14f, after = i * 0.07)
@@ -235,13 +261,13 @@ object SoundKit {
         tone(jitter(1568.0), dur = 0.4, vol = 0.08f, after = 0.32)
     }
 
-    /** Money arriving in YOUR pocket: a bright rising coin ding. */
+    /** Money arriving in YOUR pocket: a bright rising coin ding. Pair with Haptics.tap(). */
     fun gain() {
         tone(988.0, to = 1319.0, dur = 0.12, wave = Wave.TRIANGLE, vol = 0.17f)
         tone(1568.0, dur = 0.18, vol = 0.12f, after = 0.1)
     }
 
-    /** Money leaving YOUR pocket: a little hiss and a sagging "ishh…". */
+    /** Money leaving YOUR pocket: a little hiss and a sagging "ishh…". Pair with Haptics.warn(). */
     fun lose() {
         noise(dur = 0.2, vol = 0.1f, bright = 0.7)
         tone(330.0, to = 165.0, dur = 0.34, wave = Wave.TRIANGLE, vol = 0.16f, after = 0.04)
@@ -254,83 +280,272 @@ object SoundKit {
         tone(jitter(880.0), dur = 0.06, vol = 0.05f, after = 0.26)
     }
 
-    /** A doorbell third with a hint of shimmer, not two flat beeps. */
+    /**
+     * A doorbell third with a hint of shimmer, not two flat beeps: each note
+     * has a faint twin a few cents sharp, which is where the shimmer lives.
+     *
+     * It knocks as well, as it always has on Android. iOS makes the same two
+     * calls side by side at its call site (GameStore.swift, the turn change),
+     * and a Haptics.turn() added beside this one is folded into the same knock
+     * rather than felt twice — see Haptics.
+     */
     fun turn() {
         tone(jitter(587.0, 0.006), dur = 0.14, vol = 0.12f)
         tone(jitter(589.0, 0.006), dur = 0.14, vol = 0.05f)
         tone(jitter(880.0, 0.006), dur = 0.2, vol = 0.1f, after = 0.11)
+        tone(jitter(884.0, 0.006), dur = 0.2, vol = 0.04f, after = 0.11)
         Haptics.turn()
     }
 
-    /** A door, and then the bolt. */
+    /** A cell door: a metallic clank, then a low slam. */
     fun jail() {
-        noise(dur = 0.1, vol = 0.18f, bright = 0.25)
-        tone(jitter(150.0), to = 90.0, dur = 0.22, wave = Wave.SQUARE, vol = 0.1f, after = 0.02)
-        tone(jitter(1200.0), dur = 0.05, vol = 0.06f, after = 0.16)
+        noise(dur = 0.05, vol = 0.12f, bright = 0.95)
+        tone(jitter(520.0), to = 490.0, dur = 0.09, wave = Wave.SQUARE, vol = 0.06f, after = 0.01)
+        tone(jitter(150.0), to = 110.0, dur = 0.3, wave = Wave.TRIANGLE, vol = 0.15f, after = 0.12)
+        noise(dur = 0.12, vol = 0.08f, bright = 0.2, after = 0.12)
     }
 
+    /** The gavel opening an auction: two woody knocks. Once per auction, not per bid. */
     fun auction() {
-        tone(jitter(700.0), dur = 0.07, wave = Wave.TRIANGLE, vol = 0.16f)
-        tone(jitter(520.0), dur = 0.12, wave = Wave.TRIANGLE, vol = 0.14f, after = 0.09)
+        noise(dur = 0.035, vol = 0.13f, bright = 0.7)
+        tone(jitter(820.0), dur = 0.05, wave = Wave.TRIANGLE, vol = 0.09f, after = 0.002)
+        noise(dur = 0.035, vol = 0.11f, bright = 0.7, after = 0.16)
+        tone(jitter(760.0), dur = 0.05, wave = Wave.TRIANGLE, vol = 0.08f, after = 0.162)
     }
 
-    /** Pitched by how high the bid is, so a bidding war audibly climbs. */
+    /**
+     * A paddle shoots up: a crisp tick, then a ding that climbs with the
+     * stakes — bigger bids literally ring higher, so a bidding war audibly
+     * climbs. Pass the new bid; pair with Haptics.tap() as iOS does.
+     */
     fun bid(amount: Int = 0) {
-        val lift = (amount.coerceIn(0, 2000) / 2000.0) * 500
-        tone(jitter(640.0 + lift), dur = 0.06, wave = Wave.TRIANGLE, vol = 0.12f)
+        val lift = amount.coerceIn(0, 1200) * 0.35
+        noise(dur = 0.025, vol = 0.1f, bright = 0.85)
+        tone(jitter(620.0 + lift), to = 940.0 + lift, dur = 0.16, wave = Wave.TRIANGLE, vol = 0.16f, after = 0.012)
+        tone(jitter(1240.0 + lift, 0.008), dur = 0.14, vol = 0.07f, after = 0.055)
     }
 
+    /** A deal struck: a rising arpeggio with a soft bell on top. */
     fun trade() {
-        tone(jitter(600.0), to = 800.0, dur = 0.1, wave = Wave.TRIANGLE, vol = 0.13f)
-        tone(jitter(800.0), to = 600.0, dur = 0.1, wave = Wave.TRIANGLE, vol = 0.1f, after = 0.1)
+        for ((i, f) in listOf(440.0, 587.0, 740.0).withIndex()) {
+            tone(jitter(f, 0.008), dur = 0.26, wave = Wave.TRIANGLE, vol = 0.11f, after = slop(i * 0.08))
+        }
+        tone(jitter(1174.0), dur = 0.18, vol = 0.05f, after = 0.24)
     }
 
+    /** Hammer taps with a little wood resonance under each. */
     fun build() {
-        noise(dur = 0.06, vol = 0.12f, bright = 0.4)
-        tone(jitter(420.0), dur = 0.08, wave = Wave.TRIANGLE, vol = 0.12f, after = 0.03)
+        for (i in 0 until 3) {
+            val at = maxOf(0.0, i * 0.11 + Random.nextDouble(-0.01, 0.01))
+            noise(dur = 0.03, vol = 0.1f, bright = 0.75, after = at)
+            tone(
+                jitter(Random.nextDouble(320.0, 420.0)), dur = 0.06, wave = Wave.TRIANGLE,
+                vol = 0.08f, after = at + 0.002,
+            )
+        }
     }
 
     fun bankrupt() {
-        tone(400.0, to = 120.0, dur = 0.7, wave = Wave.TRIANGLE, vol = 0.17f)
-        noise(dur = 0.4, vol = 0.08f, bright = 0.3, after = 0.1)
+        tone(jitter(400.0), to = 90.0, dur = 0.7, wave = Wave.TRIANGLE, vol = 0.15f)
+        noise(dur = 0.4, vol = 0.06f, bright = 0.15, after = 0.15)
     }
 
-    /** The deck dealing a board out. */
+    /**
+     * The deck dealing a board out: an accelerating riffle of card snaps, a
+     * breath of the deck settling, then a rising run as the tiles land.
+     */
     fun shuffleDeal() {
-        for (i in 0 until 7) {
-            noise(dur = 0.05, vol = 0.07f, bright = 0.55, after = i * 0.045)
+        var t = 0.0
+        var gap = 0.085
+        for (i in 0 until 9) {
+            noise(dur = 0.03, vol = (0.07 + i * 0.006).toFloat(), bright = 0.65, after = t)
+            t += gap
+            gap = maxOf(0.028, gap * 0.82)   // the riffle speeds up
+        }
+        noise(dur = 0.24, vol = 0.1f, bright = 0.4, after = t)
+        for ((i, f) in listOf(392.0, 494.0, 587.0, 784.0).withIndex()) {
+            tone(jitter(f, 0.006), dur = 0.18, wave = Wave.TRIANGLE, vol = 0.1f, after = t + 0.18 + i * 0.07)
         }
     }
 
     fun win() {
         for ((i, f) in listOf(523.0, 659.0, 784.0, 1047.0, 1319.0).withIndex()) {
-            tone(jitter(f, 0.004), dur = 0.45, wave = Wave.TRIANGLE, vol = 0.16f, after = i * 0.1)
+            val at = slop(i * 0.09)
+            tone(jitter(f, 0.006), dur = 0.5, wave = Wave.TRIANGLE, vol = 0.14f, after = at)
+            tone(jitter(f * 2, 0.006), dur = 0.3, vol = 0.04f, after = at + 0.02)
         }
     }
 }
 
-/** The three taps the app uses, and nothing else. */
+/**
+ * The phone's knock, in the four grades the iOS app uses and no others.
+ *
+ * iOS has exactly three feedback calls (GameStore.swift, `enum Haptics`) plus
+ * the token's footstep, and every buzz in that app is one of them:
+ *
+ *  - [tap]  — UIImpactFeedbackGenerator(.light). Buttons that do something:
+ *             build, sell, mortgage, a bid, money arriving, a street ticked
+ *             into a trade.
+ *  - [step] — the same light impact at 0.55 intensity, once per tile a token
+ *             hops. Lighter than a tap because there are a dozen in a row.
+ *  - [turn] — UINotificationFeedbackGenerator(.success). The moments that are
+ *             an outcome: your turn, a country completed, a trade accepted,
+ *             a friend added.
+ *  - [warn] — UINotificationFeedbackGenerator(.warning). Money leaving you.
+ *
+ * There is no "medium" or "heavy" on purpose: iOS never uses one, and a
+ * fifth grade here would be a feel the other platform does not have.
+ *
+ * Android has no feedback generator, so each grade is built from the nearest
+ * thing each Android version offers: the tuned composition primitives on 11+
+ * where the motor supports them, the system's own click and tick on 10, a
+ * shaped one-shot or waveform on 8–9, and a bare pulse on 7. The two
+ * notification grades are two knocks, as they are on iOS — rising for
+ * success, falling for a warning — so they cannot be mistaken for a tap.
+ *
+ * Two switches are honoured. The system's touch-feedback setting is the
+ * Android twin of the one iOS's generators obey (a player who turned System
+ * Haptics off feels nothing from any app). [enabled] is the app's own, which
+ * Settings sets.
+ *
+ * Callable from any thread: the vibrator service is.
+ */
 object Haptics {
     private var vibrator: Vibrator? = null
+    private var resolver: ContentResolver? = null
+
+    /**
+     * The app's own switch. Settings ties it to the sound switch today; iOS
+     * has no such tie — its haptics fire with sound off, which is how a player
+     * with a muted phone still feels the rent go — so leaving this true is
+     * the iOS behaviour.
+     */
     var enabled: Boolean = true
 
     fun attach(context: Context) {
+        val app = context.applicationContext ?: context
+        resolver = app.contentResolver
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            (app.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            app.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
     }
 
-    private fun buzz(ms: Long, amplitude: Int) {
+    private enum class Grade { TAP, STEP, SUCCESS, WARNING }
+
+    fun tap() = knock(Grade.TAP)
+    fun step() = knock(Grade.STEP)
+    fun turn() = knock(Grade.SUCCESS)
+    fun warn() = knock(Grade.WARNING)
+
+    /**
+     * The same grade twice inside this window is one knock. A port that
+     * mirrors iOS line for line ends up calling Haptics.turn() beside a
+     * SoundKit.turn() that already knocks, and two success patterns on top of
+     * each other feel like an error, not a success.
+     */
+    private const val COALESCE_MS = 50L
+    @Volatile private var lastGrade: Grade? = null
+    @Volatile private var lastAt = 0L
+
+    private fun knock(grade: Grade) {
         if (!enabled) return
         val v = vibrator ?: return
-        if (!v.hasVibrator()) return
-        runCatching { v.vibrate(VibrationEffect.createOneShot(ms, amplitude)) }
+        if (!v.hasVibrator() || !systemAllows()) return
+        val now = SystemClock.uptimeMillis()
+        if (grade == lastGrade && now - lastAt < COALESCE_MS) return
+        lastGrade = grade
+        lastAt = now
+        runCatching { vibrate(v, grade) }
     }
 
-    fun tap() = buzz(12, 60)
-    fun warn() = buzz(30, 150)
-    fun turn() = buzz(22, 110)
+    /**
+     * The system's touch-feedback switch — on unless the player turned it off.
+     *
+     * From Android 13 the vibrator applies it itself: every knock is sent with
+     * the touch usage, and a touch intensity of "off" swallows it. Before 13
+     * an app's vibration ignores that switch entirely, so it is read here, on
+     * every knock, because a player can flip it with the app open.
+     */
+    private fun systemAllows(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return true
+        val r = resolver ?: return true
+        return runCatching {
+            @Suppress("DEPRECATION")
+            Settings.System.getInt(r, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0
+        }.getOrDefault(true)
+    }
+
+    private fun vibrate(v: Vibrator, grade: Grade) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            // Android 7 has on and off and nothing between: the grades differ
+            // only in length and in the number of knocks.
+            @Suppress("DEPRECATION")
+            when (grade) {
+                Grade.TAP -> v.vibrate(12)
+                Grade.STEP -> v.vibrate(8)
+                Grade.SUCCESS -> v.vibrate(longArrayOf(0, 14, 70, 22), -1)
+                Grade.WARNING -> v.vibrate(longArrayOf(0, 22, 90, 14), -1)
+            }
+            return
+        }
+        val effect = effectFor(v, grade)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Touch usage puts every grade under the player's touch-feedback
+            // intensity, which is the slider these belong to.
+            v.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+        } else {
+            @Suppress("DEPRECATION")
+            v.vibrate(effect, SONIFICATION)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun effectFor(v: Vibrator, grade: Grade): VibrationEffect {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            v.areAllPrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_CLICK)
+        ) {
+            val c = VibrationEffect.startComposition()
+            when (grade) {
+                Grade.TAP -> c.addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 0.8f)
+                Grade.STEP -> c.addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 0.55f)
+                Grade.SUCCESS -> c
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 0.5f)
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 1f, 80)
+                Grade.WARNING -> c
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 1f)
+                    .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 0.5f, 100)
+            }
+            return c.compose()
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            when (grade) {
+                Grade.TAP -> return VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)
+                Grade.STEP -> return VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)
+                else -> Unit   // no predefined success or warning: shaped below
+            }
+        }
+        val amp = v.hasAmplitudeControl()
+        fun a(level: Int) = if (amp) level else VibrationEffect.DEFAULT_AMPLITUDE
+        return when (grade) {
+            Grade.TAP -> VibrationEffect.createOneShot(12, a(70))
+            Grade.STEP -> VibrationEffect.createOneShot(8, a(45))
+            Grade.SUCCESS -> VibrationEffect.createWaveform(
+                longArrayOf(0, 14, 70, 22), intArrayOf(0, a(90), 0, a(200)), -1,
+            )
+            Grade.WARNING -> VibrationEffect.createWaveform(
+                longArrayOf(0, 22, 90, 14), intArrayOf(0, a(200), 0, a(110)), -1,
+            )
+        }
+    }
+
+    /** Below Android 13, sonification is the usage the touch-feedback intensity governs. */
+    private val SONIFICATION: AudioAttributes by lazy {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+    }
 }

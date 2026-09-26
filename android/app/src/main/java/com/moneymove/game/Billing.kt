@@ -407,7 +407,7 @@ class Billing(app: Application) : AndroidViewModel(app) {
                 // here; this line has to stand on its own.
                 Log.w(TAG, "grant refused for $productId")
                 notice = reply?.get("error").asString()
-                    ?: "Couldn't reach the coin vault — we'll try again."
+                    ?: "Couldn't reach the coin vault — we'll retry."
                 return@launch
             }
 
@@ -425,8 +425,8 @@ class Billing(app: Application) : AndroidViewModel(app) {
             // is worth a sound, and a purchase being settled for the second
             // time is not.
             if (!reply.flag("duplicate")) {
-                SoundKit.cash()
-                Haptics.tap()
+                // iOS's shop plays its purchase strum for a credited pack.
+                SoundKit.buy()
             }
 
             // Cleared, never written to. [notice] is the failure line — the

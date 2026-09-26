@@ -2,9 +2,14 @@ package com.moneymove.game
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import kotlin.math.pow
 
 /**
  * The design system, ported whole from the iOS app so the two clients are the
@@ -241,7 +246,433 @@ object P {
 
 @Composable
 fun MoneyMoveTheme(theme: MMTheme, dark: Boolean, content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalPalette provides if (dark) theme.dark else theme.light) {
+    CompositionLocalProvider(
+        LocalPalette provides theme.palette(dark),
+        // The glass needs the table itself, not just the palette it is wearing:
+        // a bar over a bright ad frame inside a Midnight Felt night table wears
+        // the LIGHT face, and its ink has to come from the light palette of the
+        // same table. Handing down only one of the two would make that
+        // impossible to express.
+        LocalTheme provides theme,
+        LocalAppearanceDark provides dark,
+    ) {
         content()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Liquid Glass — the token set
+//
+// Nine colours and a dozen scalars per palette, and not one of them is typed
+// out by hand. Seven tables times light and dark is fourteen palettes; hand
+// authoring the glass would have been 126 hexes on this client alone and 378
+// across the three, and they would have drifted inside a month. Everything
+// below is derived, by the same six formulas the iOS and web clients use, from
+// slots the palettes already carry — so the three clients cannot disagree
+// unless somebody edits the formula.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which of the material's two faces a piece of glass is wearing.
+ *
+ * This is not the app's light/dark setting. A bar floating over a rewarded
+ * video wears the light face while the rest of a Midnight Felt night table
+ * stays dark, because the material takes its cue from whatever is behind *it*,
+ * one surface at a time. That per-surface flip is the single property that
+ * separates glass from a blur: photograph a bar over the cream paper and the
+ * same bar over the dark felt board, and if the two look the same, what got
+ * built is a frost.
+ */
+enum class GlassAppearance { Light, Dark }
+
+/**
+ * Regular carries its own film and adapts. Clear is mostly backdrop and does
+ * not — which is why it is banned over [BackdropKind.Media], where it measured
+ * 2.85:1 against a dimmed bright frame.
+ */
+enum class GlassVariant { Regular, Clear }
+
+/**
+ * What we *placed* behind a piece of glass.
+ *
+ * Nothing here reads pixels. The app owns every pixel behind every bar, so the
+ * backdrop is declared at the call site and its luminance comes straight out
+ * of the palette. That is why the adaptive flip behaves identically on an
+ * API 24 phone that has no blur at all and on an API 34 one running the whole
+ * lens — the flip is information, not an optical effect, and it survives every
+ * tier.
+ */
+enum class BackdropKind {
+    /** The page gradient, `page` → `page2`. A linear ramp; its luminance is exact. */
+    Page,
+
+    /** Scrolling content cards — a `Panel` over the page. */
+    Paper,
+
+    /** The live board. */
+    Felt,
+
+    /** A sheet platter. */
+    Sheet,
+
+    /** Ads, rewarded video, avatar photos. Unpredictable pixels; see [luminance]. */
+    Media,
+
+    /** Over another bar. Rare, and never stack glass on glass — this is for the exceptions. */
+    Chrome,
+}
+
+/** The palette this table wears in the given mode. */
+fun MMTheme.palette(dark: Boolean): Palette = if (dark) this.dark else this.light
+
+/**
+ * WCAG relative luminance — the same number the 1,225-backdrop contrast sweep
+ * was run against, so a value measured there means the same thing here.
+ */
+fun Color.relativeLuminance(): Float {
+    fun channel(v: Float): Float =
+        if (v <= 0.03928f) v / 12.92f else ((v + 0.055f) / 1.055f).pow(2.4f)
+    return 0.2126f * channel(red) + 0.7152f * channel(green) + 0.0722f * channel(blue)
+}
+
+/**
+ * A straight component mix in sRGB.
+ *
+ * Compose's own `lerp(Color, Color, Float)` interpolates through Oklab, which
+ * is the better answer for a gradient and the wrong answer here: the published
+ * token table was computed as a plain component mix, and a perceptual path
+ * between the same two endpoints lands somewhere else. Every glass colour in
+ * this file goes through this function so the three clients agree to the digit.
+ */
+internal fun mixSrgb(a: Color, b: Color, t: Float): Color = Color(
+    red = a.red + (b.red - a.red) * t,
+    green = a.green + (b.green - a.green) * t,
+    blue = a.blue + (b.blue - a.blue) * t,
+    alpha = 1f,
+)
+
+/**
+ * The nine derived colours, for one table in one of the material's two faces.
+ *
+ * There is deliberately no `ink3` here. The quietest ink in the palette
+ * measures 1.53:1 on the material — it is not quiet on glass, it is illegible
+ * — so every hint and caption that lands on a bar promotes to [ink2], which
+ * is itself lifted 62% of the way towards [ink] for the same reason.
+ */
+@Immutable
+data class GlassTokens(
+    val appearance: GlassAppearance,
+
+    /**
+     * The material's own colour, mixed 8% towards the table's brass.
+     *
+     * The brass is the one thing the fourteen palettes agree on: `gold` spans
+     * 35.5°–43.3° of hue across all of them, while the accent slot spans 316°
+     * (cyan on Deep Marine, violet on Purple Royale). Deriving the film from
+     * the accent would give a different-coloured material on every table,
+     * which is another way of saying no material at all.
+     */
+    val film: Color,
+
+    /**
+     * What the film composites to over the page at Regular's alpha — the
+     * colour Reduce Transparency paints, designed rather than nudged.
+     */
+    val solid: Color,
+
+    /** Body ink on the material. Worst case anywhere in the app: 8.00:1. */
+    val ink: Color,
+
+    /** Secondary ink, lifted 62% towards [ink]. Worst case: 5.82:1. */
+    val ink2: Color,
+
+    /**
+     * The warm stop of the specular rim. Hue 39° on all fourteen tables: the
+     * tint changes with the table, the brass reflection does not, because it
+     * is a property of the light in the room and not of the surface.
+     */
+    val rimWarm: Color,
+)
+
+private fun computeGlass(p: Palette, appearance: GlassAppearance): GlassTokens {
+    val film = if (appearance == GlassAppearance.Light) {
+        // Light tables land between #F6F3EE and #F9F4ED — the warm cream paper
+        // that is this app's identity, come back as the material itself.
+        mixSrgb(Color.White, p.gold, 0.08f)
+    } else {
+        // Dark tables keep their own character: marine stays at 207°, royale at
+        // 284°, while sands and noir land at 38–43° because those tables
+        // already are brass.
+        mixSrgb(mixSrgb(p.card, p.ink, 0.14f), p.gold, 0.08f)
+    }
+    return GlassTokens(
+        appearance = appearance,
+        film = film,
+        solid = mixSrgb(p.page, film, GlassSpec.alpha(GlassVariant.Regular, appearance)),
+        ink = p.ink,
+        ink2 = mixSrgb(p.ink2, p.ink, 0.62f),
+        rimWarm = p.gold,
+    )
+}
+
+/**
+ * This table's glass, in one of the two faces. Cached per table because it is
+ * read once per glass surface per frame and the arithmetic, while cheap, is
+ * not free.
+ */
+fun MMTheme.glass(appearance: GlassAppearance): GlassTokens =
+    if (appearance == GlassAppearance.Dark) glassDarkTokens else glassLightTokens
+
+private val MMTheme.glassLightTokens: GlassTokens
+    get() = GlassCache.light.getOrPut(this) { computeGlass(light, GlassAppearance.Light) }
+
+private val MMTheme.glassDarkTokens: GlassTokens
+    get() = GlassCache.dark.getOrPut(this) { computeGlass(dark, GlassAppearance.Dark) }
+
+private object GlassCache {
+    val light = java.util.EnumMap<MMTheme, GlassTokens>(MMTheme::class.java)
+    val dark = java.util.EnumMap<MMTheme, GlassTokens>(MMTheme::class.java)
+}
+
+/**
+ * The luminance of what sits behind this backdrop, for this table in this mode.
+ *
+ * [BackdropKind.Media] is the one case we cannot know, so it is declared rather
+ * than guessed: media always arrives under the mandatory 35% dim, and 35%
+ * black over white lands at 0.38 — clear of the crossover in both directions,
+ * so a bar over a video pins to the light face and stays there. That is the
+ * safe pin: over a dimmed white frame the light face measures 11.43:1 and the
+ * dark face only 4.4:1, and a bright frame is the case that actually turns up.
+ */
+fun BackdropKind.luminance(theme: MMTheme, dark: Boolean): Float {
+    val p = theme.palette(dark)
+    return when (this) {
+        // The midpoint of the ramp. A Gaussian convolved with a linear ramp
+        // returns the ramp, so for the page family this is not an approximation.
+        BackdropKind.Page -> mixSrgb(p.page, p.page2, 0.5f).relativeLuminance()
+        BackdropKind.Paper -> p.card.relativeLuminance()
+        BackdropKind.Felt -> p.boardBG.relativeLuminance()
+        BackdropKind.Sheet -> p.sheet.relativeLuminance()
+        BackdropKind.Media -> GlassSpec.DIMMED_MEDIA_LUMINANCE
+        BackdropKind.Chrome -> theme.glass(
+            if (dark) GlassAppearance.Dark else GlassAppearance.Light
+        ).solid.relativeLuminance()
+    }
+}
+
+/**
+ * The scalars: how opaque, how blurred, how bright the rim, how deep the
+ * shadow — and the crossover that decides which face the material wears.
+ *
+ * These are shared with `Glass.swift` and `style.css` value for value. Change
+ * one here and it has to change in all three, which is the point.
+ */
+object GlassSpec {
+
+    // -- The adaptive crossover ---------------------------------------------
+    //
+    // At the film's alpha the light film dominates the composite, so the
+    // break-even where dark glass stops beating light glass sits at L ≈ 0.068,
+    // nowhere near mid-grey. Swept over 1,225 backdrops: at a 0.42 threshold
+    // the worst case in the app is 4.38:1 and fails AA; at 0.07 it is 8.00:1
+    // and clears AAA. The band between the two numbers below is hysteresis, so
+    // a card drifting under a bar cannot make it stutter.
+
+    /** Coming from the light face, go dark below this. */
+    const val ENTER_DARK_BELOW = 0.062f
+
+    /** Coming from the dark face, go light at or above this. */
+    const val LEAVE_DARK_ABOVE = 0.078f
+
+    /** First frame, no history. */
+    const val COLD_START = 0.070f
+
+    /** 35% black over a white frame. See [BackdropKind.luminance]. */
+    const val DIMMED_MEDIA_LUMINANCE = 0.38f
+
+    /**
+     * The flip, with hysteresis. [previous] is null on the surface's first
+     * frame.
+     */
+    fun appearanceFor(luminance: Float, previous: GlassAppearance?): GlassAppearance = when (previous) {
+        GlassAppearance.Dark -> if (luminance < LEAVE_DARK_ABOVE) GlassAppearance.Dark else GlassAppearance.Light
+        GlassAppearance.Light -> if (luminance < ENTER_DARK_BELOW) GlassAppearance.Dark else GlassAppearance.Light
+        null -> if (luminance < COLD_START) GlassAppearance.Dark else GlassAppearance.Light
+    }
+
+    // -- Film ---------------------------------------------------------------
+
+    /**
+     * How much of the film, and so how little of the backdrop.
+     *
+     * Increase Contrast pushes it to 0.82/0.80 rather than turning the glass
+     * off; Reduce Transparency is the setting that turns it off, and it does
+     * so completely, with [GlassTokens.solid].
+     */
+    fun alpha(
+        variant: GlassVariant,
+        appearance: GlassAppearance,
+        increaseContrast: Boolean = false,
+    ): Float {
+        val dark = appearance == GlassAppearance.Dark
+        if (increaseContrast) return if (dark) 0.80f else 0.82f
+        return when (variant) {
+            GlassVariant.Regular -> if (dark) 0.60f else 0.62f
+            GlassVariant.Clear -> if (dark) 0.26f else 0.30f
+        }
+    }
+
+    // -- Backdrop optics ----------------------------------------------------
+
+    /** Regular's blur. Over a live board it drops to [BLUR_OVER_BOARD]. */
+    val BLUR: Dp = 20.dp
+
+    /** The board is already busy; 20dp there is mush and costs more. */
+    val BLUR_OVER_BOARD: Dp = 12.dp
+
+    /** Clear barely blurs — it is mostly the backdrop, on purpose. */
+    val BLUR_CLEAR: Dp = 10.dp
+
+    fun blur(variant: GlassVariant, overLiveBoard: Boolean = false): Dp = when {
+        variant == GlassVariant.Clear -> BLUR_CLEAR
+        overLiveBoard -> BLUR_OVER_BOARD
+        else -> BLUR
+    }
+
+    /** Vibrancy: the backdrop reads more saturated through the material. */
+    fun saturation(variant: GlassVariant, appearance: GlassAppearance): Float {
+        val dark = appearance == GlassAppearance.Dark
+        return when (variant) {
+            GlassVariant.Regular -> if (dark) 1.70f else 1.80f
+            GlassVariant.Clear -> if (dark) 1.40f else 1.45f
+        }
+    }
+
+    /** …and slightly lifted, more so on a dark table where there is less to lift. */
+    fun brightness(variant: GlassVariant, appearance: GlassAppearance): Float {
+        val dark = appearance == GlassAppearance.Dark
+        return when (variant) {
+            GlassVariant.Regular -> if (dark) 1.12f else 1.04f
+            GlassVariant.Clear -> if (dark) 1.06f else 1.02f
+        }
+    }
+
+    // -- The specular rim ---------------------------------------------------
+    //
+    // Additive, angular, and asymmetric. A constant-opacity 1dp border is a
+    // sticker outline; what makes a rim read as a rim is that it is brighter
+    // than the white behind it and hottest in two opposite corners.
+
+    fun rimWidth(appearance: GlassAppearance): Dp =
+        if (appearance == GlassAppearance.Dark) 1.25.dp else 1.0.dp
+
+    /** The hot corner. On dark tables this is brass; on light ones, white. */
+    const val RIM_HOT = 0.85f
+
+    /** Below this the hot stop vanishes on noir and felt. */
+    const val RIM_HOT_FLOOR_DARK = 0.35f
+
+    /** The quarter turns between the hot corner and the bounce. */
+    const val RIM_DIM = 0.10f
+
+    /**
+     * The far-edge bounce, always brass. Brass on glass measures 5.73–8.40 on
+     * dark tables but only 3.22–4.36 on light ones, so in daylight the brass
+     * steps back from the hot corner to here and white takes the hot stop.
+     */
+    fun rimBounce(appearance: GlassAppearance): Float =
+        if (appearance == GlassAppearance.Dark) 0.53f else 0.30f
+
+    /**
+     * A second stroke, one dp in from the first, at this fraction of the hot
+     * stop. This is what reads as *thickness*, and leaving it out is the
+     * commonest way a hand-built glass comes out flat.
+     */
+    const val RIM_INNER = 0.35f
+    val RIM_INNER_INSET: Dp = 1.dp
+    val RIM_INNER_WIDTH: Dp = 1.dp
+
+    /** For when the film and the backdrop happen to match and the rim alone is not enough. */
+    val HAIRLINE: Dp = 0.5.dp
+
+    fun hairline(appearance: GlassAppearance): Color =
+        if (appearance == GlassAppearance.Dark) Color.White.copy(alpha = 0.08f)
+        else Color.Black.copy(alpha = 0.10f)
+
+    /** A top-weighted inner glow, for convexity. */
+    fun glowAlpha(appearance: GlassAppearance): Float =
+        if (appearance == GlassAppearance.Dark) 0.10f else 0.12f
+
+    /**
+     * How far down the glow reaches before it is gone. The spec draws a 4dp
+     * band and blurs it by 4; a soft gradient over twice that span is the same
+     * picture without an offscreen pass, which matters because tier 0 has no
+     * blur to spend.
+     */
+    val GLOW_SPAN: Dp = 12.dp
+
+    // -- Where the light is coming from -------------------------------------
+    //
+    // No gyroscope. Nobody can tell "the light moved because I scrolled" from
+    // "because I tilted the phone", and this is a game people play for forty
+    // minutes at a time; a 20 Hz sensor poll buys nothing.
+
+    const val LIGHT_ANGLE = 135f
+
+    /** Scroll swings the highlight this far and no further. */
+    const val LIGHT_ANGLE_SWING = 22f
+
+    /** A press throws it this far, and the rim catches up on the way back. */
+    const val LIGHT_ANGLE_PRESS = 40f
+
+    // -- The shadow ---------------------------------------------------------
+    //
+    // Two states, and it has to move between them: a shadow that never
+    // deepens as content scrolls under the bar is a pasted card, and it is on
+    // the reject list. Driven by scroll offset, board-busy or a sheet above —
+    // never by a timer.
+
+    fun shadowY(heightDp: Float, busy: Boolean): Dp =
+        if (busy) (0.30f * heightDp).coerceIn(6f, 16f).dp
+        else (0.22f * heightDp).coerceIn(4f, 12f).dp
+
+    fun shadowBlur(heightDp: Float, busy: Boolean): Dp =
+        if (busy) (2.2f * heightDp).coerceIn(16f, 44f).dp
+        else (1.9f * heightDp).coerceIn(12f, 32f).dp
+
+    fun shadowAlpha(appearance: GlassAppearance, busy: Boolean): Float {
+        val dark = appearance == GlassAppearance.Dark
+        return if (busy) (if (dark) 0.52f else 0.22f) else (if (dark) 0.30f else 0.10f)
+    }
+
+    // -- The lens -----------------------------------------------------------
+    //
+    // Edge refraction: the property that makes this a lens and not a 2013
+    // frost. Displacement is exactly zero outside the rim band, which is what
+    // turns it from an area cost into a perimeter one — a 390x700 sheet is
+    // 26,160 rim pixels against 273,000 area pixels, and that tenfold is what
+    // pays for the lens inside the frame budget.
+
+    /** The band, in dp, measured inward from the edge. */
+    fun lensBand(radiusDp: Float): Float = (0.50f * radiusDp).coerceIn(8f, 20f)
+
+    /** Peak displacement, in dp. Thicker glass bends more. */
+    fun lensPeak(bandDp: Float, minDimensionDp: Float): Float =
+        (0.55f * bandDp).coerceIn(4f, 14f) * (minDimensionDp / 88f).coerceIn(0.70f, 1.35f)
+
+    /** Below the size at which anybody could name it as fringing. */
+    const val CHROMA_SPLIT_PX = 0.6f
+
+    /** Smaller than this and the lens is invisible at the same cost per pixel. */
+    val LENS_MIN_WIDTH: Dp = 20.dp
+    val LENS_MIN_HEIGHT: Dp = 44.dp
+}
+
+/**
+ * The table in scope, as opposed to the palette it happens to be wearing.
+ * Glass needs both — see [MoneyMoveTheme].
+ */
+val LocalTheme: ProvidableCompositionLocal<MMTheme> = staticCompositionLocalOf { MMTheme.FELT }
+
+/** Whether the app is currently on the night side of the table in scope. */
+val LocalAppearanceDark: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { true }

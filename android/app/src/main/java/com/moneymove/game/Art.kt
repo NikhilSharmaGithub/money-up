@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,18 +48,50 @@ import androidx.compose.ui.unit.sp
  */
 object Art {
 
-    /** Path data is parsed once per glyph and kept — sixty-two of them, tiny. */
+    /** Path data is parsed once per glyph and kept — sixty-odd of them, tiny. */
     private val cache = HashMap<String, List<Pair<GlyphPart, Path>>>()
 
     private fun parts(name: String): List<Pair<GlyphPart, Path>> = cache.getOrPut(name) {
-        (GLYPHS[name] ?: emptyList()).map { part ->
+        shapesOf(name).map { part ->
             val path = PathParser().parsePathString(part.d).toPath()
             path.fillType = if (part.evenOdd) PathFillType.EvenOdd else PathFillType.NonZero
             part to path
         }
     }
 
-    fun has(name: String): Boolean = GLYPHS.containsKey(name)
+    /** The generated set first; the couple drawn here only fill its gaps. */
+    internal fun shapesOf(name: String): List<GlyphPart> =
+        GLYPHS[name] ?: DRAWN_HERE[name] ?: emptyList()
+
+    fun has(name: String): Boolean = GLYPHS.containsKey(name) || DRAWN_HERE.containsKey(name)
+
+    /**
+     * The two glyphs icons.js has no drawing for, because the web makes do
+     * with a stand-in (people for Share, a key for Copy). iOS uses its system
+     * symbols — square.and.arrow.up on the table bar, the result sheet and
+     * the friend code, doc.on.doc beside it — and Android's own share mark is
+     * a different drawing altogether, three joined dots. So these are iOS's
+     * two shapes redrawn in this set's own hand: the same 32×32 grid, a pale
+     * body and a solid mark, like `door`.
+     *
+     * Kept out of Glyphs.kt on purpose, since that file is regenerated from
+     * icons.js and would drop them. If the web ever grows its own, the
+     * generated one wins (see [shapesOf]) and these can go.
+     */
+    private val DRAWN_HERE: Map<String, List<GlyphPart>> = mapOf(
+        "share" to listOf(
+            // The tray, pale so the arrow reads over it.
+            GlyphPart("M8 12.4h16a2.4 2.4 0 0 1 2.4 2.4v10.8a2.4 2.4 0 0 1-2.4 2.4H8a2.4 2.4 0 0 1-2.4-2.4V14.8A2.4 2.4 0 0 1 8 12.4z", fill = INK, alpha = 0.32f),
+            GlyphPart("M16 20.2V4.2", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
+            GlyphPart("M10.8 9.4 16 4.2l5.2 5.2", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1, join = 1),
+        ),
+        "copy" to listOf(
+            // The sheet behind, only where the front one does not cover it.
+            GlyphPart("M6.4 4h11.2a2.4 2.4 0 0 1 2.4 2.4V8H10v14H6.4A2.4 2.4 0 0 1 4 19.6V6.4A2.4 2.4 0 0 1 6.4 4z", fill = INK, alpha = 0.32f),
+            // The sheet in front, with two lines of text cut out of it.
+            GlyphPart("M14.4 10h11.2a2.4 2.4 0 0 1 2.4 2.4v13.2a2.4 2.4 0 0 1-2.4 2.4H14.4a2.4 2.4 0 0 1-2.4-2.4V12.4a2.4 2.4 0 0 1 2.4-2.4zM15.8 15.4v2.2h8.4v-2.2zM15.8 20.4v2.2h8.4v-2.2z", fill = INK, evenOdd = true),
+        ),
+    )
 
     /** Whether this country's flag is one of the ones actually drawn. */
     fun hasFlag(mark: String?): Boolean = !mark.isNullOrBlank() && FLAGS.containsKey(mark)
@@ -104,9 +137,13 @@ object Art {
                 // on the way out, so asking for it directly drew a crown
                 // nearly three times the coin it sits in, hanging off the
                 // tile and over the street's name.
+                // Measured at the screen's density with the font scale held
+                // at one: iOS's coin ignores Dynamic Type, and a pictograph
+                // grown by the phone's font-size setting is just cropped.
                 val laid = measurer.measure(
                     pictograph,
                     style = TextStyle(fontSize = (radius * 1.12f / density).sp),
+                    density = Density(density, 1f),
                 )
                 // Clipped to the disc, exactly as iOS clips the whole
                 // medallion: a glyph with a long descender is cropped by the
@@ -194,6 +231,36 @@ object Art {
         }
     }
 
+    /**
+     * A glyph drawn the way Apple draws its `.circle.fill` symbols: the pale
+     * disc the web art sits on comes out solid in [disc], and the mark is cut
+     * out of it — painted in [hole], the colour of whatever the coin sits on,
+     * which reads as the same hole.
+     *
+     * The Surprise tile is why. iOS draws it as `questionmark.circle.fill`
+     * in the table's red: a red coin with the tile showing through the
+     * question mark. The web glyph tinted red is the opposite picture, a pink
+     * wash with a red mark on it, and the two tiles side by side read as two
+     * different games.
+     */
+    fun DrawScope.drawKnockout(name: String, size: Float, disc: Color, hole: Color) {
+        val shapes = parts(name)
+        if (shapes.isEmpty()) return
+        val k = size / GRID
+        scale(k, k, pivot = Offset.Zero) {
+            shapes.forEachIndexed { i, (part, path) ->
+                val ink = if (i == 0) disc else hole
+                part.fill?.let { drawPath(path, colourOf(it, ink), style = Fill) }
+                part.stroke?.let {
+                    drawPath(
+                        path, colourOf(it, ink),
+                        style = Stroke(width = part.strokeWidth, cap = capOf(part.cap), join = joinOf(part.join)),
+                    )
+                }
+            }
+        }
+    }
+
     /** The generator writes colours as 0xAARRGGBB; INK means "use the tint". */
     private fun colourOf(raw: Long, tint: Color): Color =
         if (raw == INK) tint else Color(raw.toInt())
@@ -228,7 +295,7 @@ fun Icon(
     alpha: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
-    val shapes = remember(name) { GLYPHS[name] ?: emptyList() }
+    val shapes = remember(name) { Art.shapesOf(name) }
     if (shapes.isEmpty()) return
     Canvas(modifier.size(size)) {
         with(Art) { drawGlyph(name, this@Canvas.size.minDimension, tint, alpha) }

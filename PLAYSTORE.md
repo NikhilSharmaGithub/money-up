@@ -82,13 +82,26 @@ Until that lands, `/api/store/redeem/play` refuses every purchase and says so
 in those words — a verifier that cannot verify must never say yes. The boot
 log tells you which of the two states the server is in.
 
-### e. AdMob and push — optional, and deliberately absent
-- **AdMob**: create the Android app in AdMob, then add its `APPLICATION_ID`
-  to the manifest and `com.google.android.gms:play-services-ads` to
-  `app/build.gradle.kts`. There is no SDK in this build on purpose: it does
-  not warn without an app id, it crashes the app on launch. Meanwhile the
-  whole rewarded path — offer, ticket, view, server-verified reward, daily
-  caps — is live and carried by the house ad.
+### e. AdMob — an Android app in the account; push — optional
+- **AdMob**: the SDK is in the build now, the same ads the iPhone serves —
+  the two rewarded placements and the pre-game interstitial, all npa=1. What
+  it is waiting for is an Android app in the AdMob account: Google treats the
+  iPhone app and the Android app as two apps with two sets of ids, and will
+  not fill an Android request from the iPhone's. `ADMOB-ANDROID.md` is the
+  five-minute console walk-through — the app, its three units, the
+  verification URL, and where each id goes afterwards.
+
+  Nothing about the wait is a crash or a dead button. The app id comes from
+  the `ADMOB_APP_ID` build property, not from source, and a build without a
+  well-formed one still launches; the unit ids come from the server's config,
+  and a missing one is answered with the house ad. The whole rewarded path —
+  offer, ticket, view, server-verified reward, daily caps — stays live and
+  carried by the house until the ids arrive, exactly as it is today.
+
+  The store answers change with the first build that carries the SDK, not
+  with the day Android starts serving AdMob. That switch is on the admin desk
+  and needs no new build, so the form cannot wait for it. See *App content*
+  and *Data safety* below.
 - **Push**: needs `google-services.json` from Firebase and the
   firebase-messaging dependency. Without them `PushRegistration` is a
   deliberate, quiet no-op.
@@ -156,7 +169,11 @@ MONOPOLY board game.
 ### Category and tags
 - **Category**: Games → Board
 - **Tags**: board game, multiplayer, property trading, dice, strategy
-- **Contains ads**: yes (rewarded, opt-in only)
+- **Contains ads**: **Yes** — rewarded videos the player chooses to watch,
+  and one interstitial while a quick match is being found. This used to say
+  "opt-in only", which stopped being true the day the pre-game break was
+  added. Answer Yes from the first build with the SDK in it, even while the
+  desk still has Android on house ads.
 - **In-app purchases**: yes — $4.99 to $19.99 per item
 
 ### Content rating questionnaire — the answers
@@ -171,18 +188,93 @@ MONOPOLY board game.
 - Expected rating: **PEGI 3 / ESRB Everyone**, with an "interactive elements:
   users interact, digital purchases" note.
 
+### App content → Advertising ID
+`play-services-ads` declares `com.google.android.gms.permission.AD_ID` in
+its own library manifest, and Gradle merges it into ours without a line of
+our code asking for it. The app targets SDK 36, where an app without that
+permission reads the advertising ID as a string of zeros; with it, the SDK
+reads the real one. npa=1 does not change that — it governs what an ad is
+chosen by, not what the SDK sends — so this is not the iPhone's situation,
+where no ATT prompt means a zeroed id.
+
+The declaration, then:
+
+- **Does your app use advertising ID?** Yes
+- **Purposes**: Advertising or marketing · Analytics · Fraud prevention,
+  security, and compliance — the three Google gives for the SDK. Not
+  *Personalization*: every request is npa=1.
+
+A "No" while the bundle carries the permission is refused at upload, and
+the permission arrives by merge, so check the bundle rather than the source:
+
+```bash
+unzip -p app/build/outputs/bundle/release/app-release.aab base/manifest/AndroidManifest.xml \
+  | grep -a -c 'permission.AD_ID'
+```
+
+Anything above 0: answer as above. 0 means someone has removed it with
+`tools:node="remove"` — the Android cousin of never asking for ATT — and then
+the answer is No, and the advertising ID comes out of the *Device or other
+IDs* row below. The app set ID stays in it either way.
+
+### App content → Target audience and content
+- **Age groups**: 13–15, 16–17, 18 and over. No band under 13. The game is
+  not made for children and does not say it is: strangers talk at every
+  table, coins are sold, and ads are served. Ticking any under-13 band puts
+  the app under the Families policy, which wants every ad request
+  child-directed — a Families-certified setup, child-directed treatment on,
+  no advertising ID — and this build does none of that, rightly, for an app
+  that is not for children.
+- **Could the store listing unintentionally appeal to children?** No.
+- **Ads must fit the audience**, and that is set in AdMob, not Play: AdMob →
+  Blocking controls → maximum ad content rating **T**. Set on *All apps* it
+  covers the iPhone too, which is the point — one game, one ceiling.
+
 ### Data safety form
+The form covers the Google Mobile Ads SDK as well as the game's own code.
+Play counts anything that leaves the phone as collected, whoever's code
+sends it, and an SDK compiled in is ours to declare. The row this replaces
+said "only once AdMob is switched on"; that was right while the SDK was not
+in the binary and is wrong now, because the switch is server-side and the
+form has to describe the build.
+
+Google's disclosure page for the SDK
+(<https://developers.google.com/admob/android/privacy/play-data-disclosure>,
+checked September 2026 — the Next-Gen SDK's page lists the same four) says
+it "collects and shares" four things automatically, for advertising,
+analytics and fraud prevention: the IP address, product interactions,
+diagnostics, and device identifiers. The rows marked *(Ads SDK)* are those.
+
+**Collected *and* shared, and why both.** Collected because it leaves the
+phone. Shared because it goes to Google as a third party that uses it for
+its own network's measurement and fraud prevention — that is not the
+"service provider acting only on our behalf" exemption, and Google's own
+page says *shares*. npa=1 changes what Google may do with it, so never tick
+*Personalization*; it does not change whether it is sent.
+
+**Required, not optional.** The rewarded ads are opt-in; the pre-game
+interstitial is not. A player cannot keep the SDK quiet by never tapping an
+offer, so the SDK rows say *required*.
+
 | Question | Answer |
 | --- | --- |
-| Does your app collect or share user data? | Yes |
+| Does your app collect or share any of the required user data types? | Yes |
+| Location — approximate location *(Ads SDK)* | Collected and shared. Required. Purposes: advertising or marketing, analytics, fraud prevention/security/compliance. The game never asks for location. This is Google estimating a general area from the IP address, which is how its page describes it, and a city-sized estimate is what Play's *approximate* means. |
 | Personal info — name | Collected, not shared. Optional. A nickname the player types; it is never taken from a Google account. Purpose: app functionality. |
 | Personal info — email | Collected, not shared. Optional, only if the player signs in with Google. Purpose: account management. |
 | Photos | Collected, not shared. Optional — the Google profile picture, shown only to its owner. |
 | Messages — in-app | Collected, not shared. Chat and direct messages. Purpose: app functionality. |
-| Device or other IDs | Collected, shared with ad partners. Purpose: advertising. **Only once AdMob is switched on** — while ads are house-served, nothing is shared, and the form must say what is true at the time you submit it. |
+| App activity — app interactions *(Ads SDK)* | Collected and shared. Required. Advertising or marketing, analytics, fraud prevention/security/compliance. Launches, taps and video views, as Google lists them. |
+| App info and performance — diagnostics *(Ads SDK)* | Collected and shared. Required. Advertising or marketing, analytics, fraud prevention/security/compliance. Launch time, hang rate, energy use. The game itself sends no crash reports. |
+| Device or other IDs | Collected and shared. Required. Two sources, one row: the game's own random device token, which a wallet hangs on and which goes nowhere but our server (collected, app functionality); and, from the *Ads SDK*, the Android advertising ID and app set ID (collected and shared with Google — advertising or marketing, analytics, fraud prevention/security/compliance). |
 | Purchase history | Collected, not shared. Purpose: app functionality. |
-| Is data encrypted in transit? | Yes |
-| Can users request deletion? | Yes — Settings → delete account, and at <https://www.moneymove.live/privacy.html> |
+| Is data encrypted in transit? | Yes — ours over HTTPS, the SDK's over TLS, per Google's page. |
+| Can users request deletion? | Yes — Settings → delete account, and at <https://www.moneymove.live/privacy.html>. The advertising ID is the player's to reset or delete in Android Settings; that control is Google's, and the form asks nothing more of it. |
+
+**The privacy policy has to agree with the form.** `public/privacy.html`
+→ *Advertising* still begins "The iOS app includes the Google Mobile Ads
+SDK". It must name the Android app too before the first build with the SDK
+is submitted — Play reviewers read the policy against these answers.
 
 ### URLs
 - Privacy policy: `https://www.moneymove.live/privacy.html`
@@ -206,10 +298,17 @@ MONOPOLY board game.
 cd android
 MM_KEYSTORE=/absolute/path/moneymove-release.jks \
 MM_KEYSTORE_PASSWORD=… MM_KEY_ALIAS=moneymove MM_KEY_PASSWORD=… \
+ADMOB_APP_ID=ca-app-pub-1179201999959612~… \
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ANDROID_HOME="$HOME/Library/Android/sdk" \
   ./gradlew bundleRelease
 ```
+
+`ADMOB_APP_ID` is the *Android* app's id from AdMob — a tilde in it, not a
+slash — and can live in `android/local.properties` instead of the
+environment. It is the one ad id baked in at build time; the unit ids come
+from the server. Left out, the build still launches and every ad is the
+house's, so a release built without it is not broken, only unpaid.
 
 The AAB lands at `app/build/outputs/bundle/release/app-release.aab`. Upload it
 to a **Closed testing** track first — Play now requires a period of closed

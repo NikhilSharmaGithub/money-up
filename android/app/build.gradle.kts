@@ -1,8 +1,59 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+}
+
+/**
+ * The AdMob application id this build carries in its manifest.
+ *
+ * Not a secret — it ships inside every app that serves AdMob — but the Google
+ * Mobile Ads SDK reads it from a content provider of its own that runs before
+ * Application.onCreate, and a missing or malformed one is an exception thrown
+ * there: the app dies at launch before a line of ours has run, and nothing we
+ * write can catch it. That is exactly how the SDK came out of this app the
+ * first time.
+ *
+ * So the id lives where iOS keeps its own, in the build rather than the source
+ * — the ADMOB_APP_ID Gradle property, looked for as `-P`, in gradle.properties
+ * (this project's or ~/.gradle's), then in local.properties, then in the
+ * environment — and whatever is found has to look like an AdMob app id before
+ * it is let near the manifest. Anything else, including nothing at all, puts
+ * Google's own published sample id there instead. That id is always
+ * well-formed, so the worst a missing id can do is make every rewarded break a
+ * house ad; AdMobNetwork refuses to spend live units under Google's sample app,
+ * and says so. Pasting the real id in is one line, and no source changes.
+ */
+val googleSampleAdmobAppId = "ca-app-pub-3940256099942544~3347511713"
+val admobAppId: String = run {
+    val local = rootProject.file("local.properties").takeIf { it.isFile }?.let { f ->
+        Properties().apply { f.inputStream().use { load(it) } }.getProperty("ADMOB_APP_ID")
+    }
+    val found = listOf(
+        providers.gradleProperty("ADMOB_APP_ID").orNull,
+        local,
+        providers.environmentVariable("ADMOB_APP_ID").orNull,
+    ).map { it?.trim().orEmpty() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+    when {
+        found.matches(Regex("""ca-app-pub-\d+~\d+""")) -> found
+        found.isEmpty() -> {
+            logger.warn(
+                "MoneyMove: no ADMOB_APP_ID — the manifest carries Google's sample app id, " +
+                    "so AdMob serves test ads at most and every other break is a house ad.",
+            )
+            googleSampleAdmobAppId
+        }
+        else -> {
+            logger.warn(
+                "MoneyMove: ADMOB_APP_ID \"$found\" is not an AdMob app id " +
+                    "(ca-app-pub-<digits>~<digits>) — using Google's sample id instead of crashing at launch.",
+            )
+            googleSampleAdmobAppId
+        }
+    }
 }
 
 android {
@@ -17,6 +68,9 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        // Read by the manifest's APPLICATION_ID line. Always a well-formed id
+        // by the time it gets here — see admobAppId above for why that matters.
+        manifestPlaceholders["admobAppId"] = admobAppId
     }
 
     /**
@@ -106,12 +160,18 @@ dependencies {
     // costs real money, and Play is the only way to take it on Android.
     implementation("com.android.billingclient:billing:7.1.1")
 
-    // No AdMob SDK yet, deliberately. It refuses to start without an
-    // APPLICATION_ID in the manifest — it does not warn, it crashes the app on
-    // launch — and there is no Android app in the AdMob account to give it an
-    // id from. The whole rewarded path (offer, ticket, view, server-verified
-    // reward, daily caps) is live and carried by the house ad; adding the SDK
-    // is then one dependency, one manifest line and one adapter.
+    // Google Mobile Ads, the same network the iOS app sells its breaks on.
+    // Its own minSdk is 23, under this app's 24, so nothing about who can
+    // install the game changes by adding it. Pinned at 24.8.0 on evidence:
+    // from 24.9.0 on, the SDK ships Kotlin 2.2 and then 2.3 metadata, and the
+    // 2.0.21 compiler this project uses reads one version ahead and no
+    // further — 25.5.0 fails compileDebugKotlin outright. Moving past this
+    // line means raising the Kotlin plugin in the root build first.
+    //
+    // It is safe to link before the AdMob account has an Android app in it
+    // only because the manifest's APPLICATION_ID can never be missing or
+    // malformed — see admobAppId at the top of this file.
+    implementation("com.google.android.gms:play-services-ads:24.8.0")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
 

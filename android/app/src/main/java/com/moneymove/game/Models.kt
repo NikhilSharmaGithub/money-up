@@ -1,6 +1,5 @@
 package com.moneymove.game
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -89,6 +88,44 @@ data class GameState(
     val isEnded: Boolean get() = status == "ended"
 
     /**
+     * Whole seconds until a matchmade table deals itself in, measured against
+     * the server's own deadline — so somebody who walks in late sees what is
+     * really left rather than a fresh fifteen. Null once it has dealt.
+     */
+    fun quickSecondsLeft(now: Long = System.currentTimeMillis()): Int? =
+        quickStartAt?.let { clockSecondsLeft(it, now) }
+
+    /** Chairs nobody is sitting in yet. */
+    val openSeats: Int get() = maxOf(0, settings.maxPlayers - players.size)
+
+    /** A team by its index into [teamInfo], or null for none or a stale index. */
+    fun team(index: Int?): TeamInfo? = index?.let { teamInfo?.getOrNull(it) }
+
+    /** The team a seat plays for, if it plays for one. */
+    fun teamOf(player: PlayerState?): TeamInfo? = team(player?.team)
+
+    /** The team that took the table, when it was a team game. */
+    val winningTeamInfo: TeamInfo? get() = team(winningTeam)
+
+    /**
+     * Whoever took it, named the way the result headline names them: a team
+     * by its team name, anyone else by theirs.
+     */
+    val winnerLabel: String
+        get() = winningTeamInfo?.let { "Team ${it.name}" } ?: winner?.name ?: "Somebody"
+
+    /** How many deeds a seat holds — the count its chip carries. */
+    fun ownedCount(playerId: String): Int = ownership.values.count { it.owner == playerId }
+
+    /**
+     * How many of one kind of tile a seat holds — airports and utilities,
+     * whose rent is priced by the set rather than by the street.
+     */
+    fun ownedOfType(playerId: String, type: String): Int = ownership.count { (key, own) ->
+        own.owner == playerId && map.tiles.getOrNull(key.toIntOrNull() ?: -1)?.type == type
+    }
+
+    /**
      * Where an open debt streams, written the way a sentence needs it: the
      * creditor's name, the still-owed players of a payEach split, or plain
      * "the bank" when the money simply leaves the game.
@@ -127,7 +164,13 @@ data class QuickRoll(
 @Serializable
 data class GameSettings(
     val maxPlayers: Int = 4,
-    @SerialName("private") val isPrivate: Boolean? = null,
+    /**
+     * Hidden from the public room list — true unless the host opens it up.
+     * The server's own key, which is why it carries no rename: this used to
+     * read "private", a key the server never writes, so the flag never
+     * decoded at all and no screen could tell a private room from a public one.
+     */
+    val isPrivate: Boolean? = null,
     val allowBots: Boolean? = null,
     val mapId: String? = null,
     val x2rent: Boolean? = null,
@@ -136,7 +179,8 @@ data class GameSettings(
     val noRentInPrison: Boolean? = null,
     val mortgage: Boolean? = null,
     val evenBuild: Boolean? = null,
-    val startingCash: Int = 1500,
+    /** DEFAULT_SETTINGS in server/game.js; only read if a push ever omits it. */
+    val startingCash: Int = 2500,
     val randomizeOrder: Boolean? = null,
     val teams: Int? = null,
     /** Seconds a human gets per turn before the table moves on; 0 = clock off. */
@@ -181,6 +225,24 @@ data class TileData(
     val percent: Int? = null,
 ) {
     val isOwnable: Boolean get() = type == "property" || type == "airport" || type == "utility"
+
+    /** What the bank lends against it: half the price, rounded down, as the server pays it. */
+    val mortgageValue: Int? get() = price?.let { it / 2 }
+
+    /** What lifting the mortgage costs — the loan plus ten percent, rounded up like the server. */
+    val unmortgageCost: Int? get() = price?.let { kotlin.math.ceil(it / 2.0 * 1.1).toInt() }
+
+    companion object {
+        /**
+         * Airport rent by how many the owner holds, one to four — rentFor() in
+         * server/game.js, 25 doubling per airport. The map never ships these;
+         * both clients have always written them down.
+         */
+        val AIRPORT_RENTS = listOf(25, 50, 100, 200)
+
+        /** Utility rent as a multiple of the dice: one held, then two. */
+        val UTILITY_MULTIPLIERS = listOf(4, 10)
+    }
 }
 
 @Serializable
@@ -231,6 +293,25 @@ data class PlayerState(
 
     val lapsBlocked: Int get() = blockedLaps ?: 0
     val lapsToRelief: Int get() = maxOf(0, RELIEF_LAPS - lapsBlocked)
+
+    /**
+     * A house player. Quick tables mask `isBot` so strangers cannot tell who
+     * is who, but the house still carries the server's "bot:" id prefix —
+     * which only matters for the things a person can be, like a friend.
+     */
+    val isHouse: Boolean get() = isBot == true || id.startsWith("bot:")
+
+    /**
+     * What happened to a seat that is out, in the words its chip uses: only a
+     * seat the game actually beat is "bankrupt" — one the clock took, or one
+     * that walked out, reads as what really happened. Null while still in.
+     */
+    val outcomeWord: String?
+        get() = when {
+            !isBankrupt -> null
+            wasRemoved -> if (removedFor == "quit") "left" else "timed out"
+            else -> "bankrupt"
+        }
 
     companion object {
         /** RELIEF_LAPS in server/game.js. */
@@ -311,14 +392,38 @@ data class AuctionState(
     val leader: String? = null,
     val inRace: List<String> = emptyList(),
     val endsAt: Double? = null,
-)
+) {
+    /**
+     * The window the countdown is measured against. The room opens on twenty
+     * seconds and every bid resets it to twelve; measuring both against twenty
+     * made the bar jump back after a bid and read as nearly out of time.
+     */
+    val windowSeconds: Double get() = if (leader == null) 20.0 else 12.0
+
+    /** The smallest bid the server will take next. */
+    val nextBid: Int get() = if (bid == 0) 10 else bid + 10
+
+    /**
+     * What a seat can actually put up. The leading bid is held in escrow — it
+     * already left the leader's wallet — so their ceiling is cash in hand plus
+     * the money sitting on the table.
+     */
+    fun purse(seat: String, cash: Int): Int = cash + if (leader == seat) bid else 0
+
+    /** The three paddle amounts the dock offers, minus any this purse cannot cover. */
+    fun steps(purse: Int): List<Int> = listOf(nextBid, nextBid + 40, nextBid + 90).filter { it <= purse }
+}
 
 @Serializable
 data class TradeSide(
     val money: Int = 0,
     val tiles: List<Int> = emptyList(),
+    /** Get-out-of-prison cards. The server values them, and so does the meter. */
     val cards: Int = 0,
-)
+) {
+    /** Nothing on this side at all — the server refuses a deal that is empty on both. */
+    val isEmpty: Boolean get() = money <= 0 && tiles.isEmpty() && cards <= 0
+}
 
 @Serializable
 data class TradeOffer(
@@ -332,7 +437,12 @@ data class TradeOffer(
     val ignored: Boolean? = null,
     /** Player ids currently looking at this offer. */
     val viewers: List<String>? = null,
-)
+) {
+    /** Set aside for later: it waits behind the "N offers set aside" chip, not in the dock. */
+    val isSetAside: Boolean get() = ignored == true
+
+    val viewerIds: List<String> get() = viewers ?: emptyList()
+}
 
 @Serializable
 data class LogLine(val text: String = "", val kind: String = "", val at: Double = 0.0) {
@@ -505,6 +615,152 @@ data class PlayerResult(
         }
     }
 }
+
+/**
+ * A finished game as this device remembers it, for History.
+ *
+ * iOS's `MatchRecord`, field for field, plus the room it was played in so the
+ * same result reported twice — a reconnect onto a table that has already
+ * ended — is filed once. `outcome` and `results` are optional for the same
+ * reason they are there: records written before them still have to decode.
+ */
+@Serializable
+data class MatchRecord(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    /** Epoch milliseconds the result was filed. */
+    val date: Long = 0L,
+    val mapName: String = "",
+    /** The server's own mark for the board; drawn through mapGlyph() at render. */
+    val mapIcon: String = "",
+    val players: List<String> = emptyList(),
+    /** "Team Crimson", a player's name, or "Nobody". */
+    val winner: String = "",
+    val won: Boolean = false,
+    val myWorth: Int = 0,
+    val turns: Int = 0,
+    /** "won" | "lost" | "left". */
+    val outcome: String? = null,
+    /** The full report card — standings, stats, titles — as the live sheet showed it. */
+    val results: List<PlayerResult>? = null,
+    val roomId: String? = null,
+)
+
+/**
+ * A table this device walked away from mid-game. The server holds the seat —
+ * a bot plays it — so these stay rejoinable until the game actually ends,
+ * unlike [MatchRecord], which is the story of a game already over.
+ */
+@Serializable
+data class UnfinishedGame(
+    val roomId: String = "",
+    val mapName: String = "",
+    val mapIcon: String = "",
+    val players: List<String> = emptyList(),
+    /** Epoch milliseconds this device last saw the table live. */
+    val leftAt: Long = 0L,
+    /** Pass & play seats this device also held there, so a resume re-seats every one. */
+    val guests: Int = 0,
+)
+
+/**
+ * One open table from `GET /api/rooms`. The list carries games already under
+ * way too, and those are a different offer: a seat to sit in, or a table to
+ * watch — which is what [canSit] says before anybody taps.
+ */
+@Serializable
+data class PublicRoom(
+    val id: String = "",
+    val players: Int = 0,
+    val maxPlayers: Int = 0,
+    /** The board's name. */
+    val map: String = "",
+    /** "lobby" | "playing". */
+    val status: String? = null,
+    /** A lobby with a seat still free. Anything else you can only watch. */
+    val joinable: Boolean? = null,
+    /** Came out of Quick Play matchmaking. */
+    val quick: Boolean? = null,
+) {
+    val canSit: Boolean get() = joinable ?: (status != "playing" && players < maxPlayers)
+    val isPlaying: Boolean get() = status == "playing"
+}
+
+/**
+ * The quick-match waiting room's small talk, `/data/tips.json`: gameplay
+ * tips and city facts, dealt alternately while the clock runs.
+ */
+@Serializable
+data class TableTalk(
+    val facts: List<TableFact> = emptyList(),
+    val tips: List<String> = emptyList(),
+) {
+    /** The facts the way the ticker reads them out: "City — fact". */
+    val factLines: List<String> get() = facts.map { "${it.city} — ${it.text}" }
+
+    companion object {
+        /** What the ticker says when the file cannot be reached. */
+        const val FALLBACK =
+            "The table deals itself in when the clock runs out — every seat gets filled either way."
+    }
+}
+
+@Serializable
+data class TableFact(val city: String = "", val text: String = "")
+
+/**
+ * Whole seconds left before a deadline stamped in epoch milliseconds, or null
+ * when there is no deadline — which is how the server says a table runs no
+ * shot clock, and must draw nothing rather than "0s".
+ *
+ * Rounded up, as iOS rounds it, so the last second reads 1 and not 0. `cap`
+ * is the turn length: a phone whose own clock sits minutes behind the
+ * server's would otherwise show 9:58 on a sixty-second turn, and the turn
+ * length is the honest ceiling. Leave it null to match iOS exactly.
+ */
+fun clockSecondsLeft(endsAt: Double?, now: Long = System.currentTimeMillis(), cap: Int? = null): Int? {
+    if (endsAt == null) return null
+    val left = kotlin.math.ceil((endsAt - now) / 1000.0).toInt()
+    val capped = if (cap != null && cap > 0) minOf(left, cap) else left
+    return maxOf(0, capped)
+}
+
+/**
+ * The first turn of the winner's final, unbroken stretch on top — where the
+ * game turned. Null when there is no winner, too little history to say, or
+ * the winner led from the very first point: leading from turn one is not a
+ * turning point. Ported from the net-worth chart on iOS.
+ */
+fun turningPoint(history: List<WorthPoint>?, winnerId: String?): Int? {
+    if (winnerId == null || history == null || history.size < 3) return null
+    var flip: Int? = null
+    for (point in history) {
+        val mine = point.w[winnerId] ?: 0
+        val best = point.w.values.maxOrNull() ?: 0
+        if (mine >= best) {
+            if (flip == null) flip = point.t
+        } else {
+            flip = null
+        }
+    }
+    return if (flip == history.first().t) null else flip
+}
+
+/**
+ * A utility tile's power source, as a glyph name. The server marks utilities
+ * with an emoji, which is another vendor's artwork and draws differently on
+ * every phone, so the mark is only ever read as an identifier. Mirrors
+ * `utilityGlyph` on iOS and `utilityName()` in public/js/icons.js.
+ */
+fun utilityGlyph(mark: String?): String =
+    // U+FE0F off first: half the marks on the wire carry the variation
+    // selector and half do not, and a `when` sees two different strings.
+    when (mark.orEmpty().filter { it.code != 0xFE0F }) {
+        "🚰", "💧" -> "droplet"
+        "🛢" -> "flame"
+        "☀" -> "sun"
+        "🌬" -> "turbine"
+        else -> "bolt"
+    }
 
 /**
  * Mirrors codeFor() in server/social.js: a friend code is a pure hash of the

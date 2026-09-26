@@ -14,10 +14,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 
 /**
@@ -80,6 +83,13 @@ class MainActivity : ComponentActivity() {
         // server never heard about — has no reason to open the shop again.
         billing.start(account)
 
+        // Google's full-screen ads need an Activity to launch from, and the
+        // offer loop lives in a ViewModel that must never hold one. This says
+        // when this one is in front, weakly. It starts nothing and asks
+        // Google for nothing; see AdMobNetwork.
+        AdMobNetwork.attach(this)
+        watchPreGameBreak()
+
         setContent {
             val prefs = store.prefs
             var theme by remember { mutableStateOf(prefs.theme) }
@@ -99,6 +109,37 @@ class MainActivity : ComponentActivity() {
                     onTheme = { theme = it; prefs.theme = it },
                     onAppearance = { appearance = it; prefs.appearance = it },
                 )
+            }
+        }
+    }
+
+    /**
+     * The pre-game break, driven off state rather than off a button.
+     *
+     * iOS shows it from inside the Play button's own tap. Here the tap lives
+     * in PlayTab and the search in GameStore, and neither needs to know an
+     * ad exists: the moment GameStore says a quick match is being looked for,
+     * the break goes up — at the START of the wait, as on iOS, with the
+     * search carrying on behind it. Any other moment on the tabs is a chance
+     * to have one ready, which costs nothing when none is due.
+     *
+     * Only on the rising edge of a search, so coming back to the app halfway
+     * through one does not throw an ad at somebody who never tapped anything
+     * since; and never over a rewarded break already on screen.
+     */
+    private fun watchPreGameBreak() {
+        var wasSearching = false
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                snapshotFlow { Triple(account.ads, store.roomId == null, store.quickSearching) }
+                    .collect { (ads, atTabs, searching) ->
+                        if (searching && !wasSearching && account.adPlaying == null) {
+                            PreGameAd.showIfReady(this@MainActivity, ads)
+                        } else if (!searching && atTabs) {
+                            PreGameAd.preload(this@MainActivity, ads)
+                        }
+                        wasSearching = searching
+                    }
             }
         }
     }

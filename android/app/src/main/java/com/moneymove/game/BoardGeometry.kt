@@ -22,7 +22,15 @@ import androidx.compose.ui.geometry.Size
  * The numbers match `BoardGeometry` in the iOS app and the web client's grid,
  * so a tile is the same shape and in the same place on all three.
  */
-class BoardGeometry(private val layout: MapLayout, val size: Size) {
+class BoardGeometry(
+    private val layout: MapLayout,
+    val size: Size,
+    /**
+     * The most one iOS point may be, in pixels — the screen's density, so a
+     * point is never bigger than a dp. See [pt].
+     */
+    private val maxPt: Float = Float.MAX_VALUE,
+) {
 
     /** A corner is this much wider than a tile. */
     private val cornerScale = 1.42f
@@ -32,6 +40,28 @@ class BoardGeometry(private val layout: MapLayout, val size: Size) {
         get() = size.width / (layout.top.size + 2 * cornerScale)
 
     val corner: Float get() = unit * cornerScale
+
+    /**
+     * One iOS point, in this board's pixels.
+     *
+     * iOS draws its board the width of the phone less 12pt, whatever the map
+     * — about 390pt, where an ordinary tile of the forty-tile board is 33pt
+     * across — and sets every word and mark on a tile in fixed points. So a
+     * size read off BoardView.swift scales by the board, not by the tile it
+     * sits on: a Blitz tile is bigger than a Worldwide one on both phones,
+     * and the words on it are the same size on both. Measuring against the
+     * tile instead drew every mark on a corner 1.42 times the size of iOS's,
+     * because a corner is 1.42 tiles across.
+     *
+     * Capped at one point per dp. A phone's board is about the iPhone's, so
+     * the scale only ever trims the words down on a smaller screen; but an
+     * iPad keeps its 6.8pt names and 20pt pieces on a tabletop board twice
+     * the size, and growing with the board drew them twice as big on a tablet.
+     */
+    val pt: Float get() = minOf(size.width / IPHONE_BOARD_PT, maxPt)
+
+    /** Whether this index is one of the four corners. */
+    fun isCorner(index: Int): Boolean = layout.corners.contains(index)
 
     /**
      * The tile's rectangle, or an empty one for an index this board has no
@@ -77,7 +107,20 @@ class BoardGeometry(private val layout: MapLayout, val size: Size) {
 
     enum class Side { TOP, RIGHT, BOTTOM, LEFT }
 
-    /** The open middle of the board, inset from the tile ring. */
+    /**
+     * The open middle of the board, inset from the tile ring by iOS's 4pt —
+     * points, not pixels, or the well comes out a hair from the tiles on one
+     * phone and a clear gap on the other.
+     */
     val centerWell: Rect
-        get() = Rect(corner + 4f, corner + 4f, size.width - corner - 4f, size.height - corner - 4f)
+        get() {
+            val inset = corner + 4f * pt
+            return Rect(inset, inset, size.width - inset, size.height - inset)
+        }
 }
+
+/**
+ * The iPhone's board, in points: thirty-three for each of the nine ordinary
+ * tiles of a side plus two corners of 1.42 tiles each. See [BoardGeometry.pt].
+ */
+private const val IPHONE_BOARD_PT = 33f * (9f + 2f * 1.42f)

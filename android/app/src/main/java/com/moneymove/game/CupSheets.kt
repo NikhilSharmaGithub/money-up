@@ -1,5 +1,13 @@
 package com.moneymove.game
 
+import androidx.lifecycle.viewModelScope
+import android.text.format.DateFormat
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,18 +21,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -39,13 +51,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -63,12 +84,12 @@ import java.util.Locale
  * server owns every bit of that — this file asks `/api/cup` every few seconds
  * and draws whatever came back.
  *
- * The one decision that shaped all three screens: the card is a poster and
- * nothing else. It says what the cup is, when it opens, how many have entered
- * and carries a single button, because a landing screen that grows a code
- * box, a leave button and a bracket is a landing screen nobody can find the
- * Play button on any more. Entering, leaving, the rules and the chart all
- * live behind that one button.
+ * Four screens, each iOS's own: the card on the Social tab (CupCard.swift),
+ * which is where a player joins, leaves, types a code and walks to their
+ * table; the poster behind "What is a cup?"; the tournament room behind the
+ * card's header; and the chart behind that. The card carries the controls
+ * because that is where the iPhone carries them — a player comparing the two
+ * phones should find Join in the same place on both.
  *
  * It draws nothing at all unless the owner has switched cups on. That is the
  * point of the switch: the feature can ship, be tested against the real
@@ -213,7 +234,8 @@ data class CupYou(
     val survived: Int = 0,
     val round: Int? = null,
     val roundLabel: String? = null,
-    val left: Int = 0,
+    /** Still in the cup. Absent before the draw, when everybody still is. */
+    val left: Int? = null,
     val next: CupNext? = null,
 )
 
@@ -302,7 +324,7 @@ data class CupBracketMatch(
  * created ABOVE the tab bar — a poll that only runs while the Social tab is
  * open is a poll that never seats the player who is waiting on the Play tab.
  */
-class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
+class CupStore private constructor(private val game: GameStore, private val scope: CoroutineScope) {
 
     private val api get() = Api(game.prefs.server, game.token)
 
@@ -347,17 +369,24 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
     /**
      * Ask, wait, ask again — closer together the more there is to miss.
      *
-     * A failure backs off but never gives up. Stopping after a handful of
-     * misses, which is what the iOS app does, means a phone that lost signal
-     * in a lift stops asking for good, and the player is knocked out of a
-     * round whose door opened while their app sat there holding a stale card.
+     * iOS's CupWatch, miss for miss: a failure backs off five, ten, fifteen,
+     * twenty seconds, and after the fourth in a row it stops and the card
+     * stays as it was. Coming back to the home tabs asks afresh (see
+     * [ensureWatching]), as iOS's landing screen restarts its watcher when it
+     * appears again. While this device sits at a table the poll rests, as
+     * iOS's does with the landing screen out of sight.
      */
     suspend fun watch() {
         var misses = 0
         while (true) {
+            if (game.roomId != null) {
+                delay(5_000L)
+                continue
+            }
             if (!load()) {
                 misses++
-                delay(minOf(misses.toLong(), 12L) * 5_000L)
+                if (misses > 4) return
+                delay(misses * 5_000L)
                 continue
             }
             misses = 0
@@ -392,39 +421,40 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
             busy = true
             notice = null
             // `code` and `cupId` are the names the route reads out of the
-            // body; the token is added by Api.post.
-            val body = api.post(
+            // body; the token is added by the post. The refusal comes back in
+            // the server's own words — "That code does not match", "This one
+            // is full" — which is the only sentence somebody holding the
+            // wrong code can act on.
+            val reply = api.postOrError(
                 "/api/cup/join",
                 mapOf("code" to code.trim(), "cupId" to cupId),
             )
-            // The card's own poll, asked straight afterwards, is also the
-            // answer to which kind of null that was. [Api] flattens a refusal
-            // and a dead socket into the same null, and guessing between them
-            // is how somebody holding the RIGHT code gets told it does not
-            // match and retypes it until the doors shut.
-            val answered = load()
-            if (body == null) {
-                notice = if (answered) whyNot(code)
-                else "Could not reach the server — try that again."
-            } else {
+            if (reply.ok) {
                 Haptics.turn()
                 game.showToast("Joined — good luck")
+                load()
+            } else {
+                // iOS's words when the server gave none, or never answered.
+                val why = reply.error ?: "Could not enter the cup"
+                notice = why
+                game.showToast(why, isError = true)
             }
             busy = false
         }
     }
 
+    /**
+     * Out again, before the doors shut. Nothing is said either way, as on
+     * iOS: the card is re-read straight after, and it shows which it was —
+     * back to Join, or still in.
+     */
     fun leave() {
         val cupId = showing
         scope.launch {
             busy = true
             notice = null
-            val body = api.post("/api/cup/leave", mapOf("cupId" to cupId))
-            val answered = load()
-            if (body == null) {
-                notice = if (answered) "Too late to withdraw — the doors have shut."
-                else "Could not reach the server — try that again."
-            }
+            api.postOrError("/api/cup/leave", mapOf("cupId" to cupId))
+            load()
             busy = false
         }
     }
@@ -472,351 +502,638 @@ class CupStore(private val game: GameStore, private val scope: CoroutineScope) {
         }
     }
 
-    /**
-     * Why the server said no.
-     *
-     * [Api] hands back null for anything that is not a 2xx, so the sentence
-     * the server wrote — "That code does not match", "This one is full" —
-     * never reaches here. The likeliest reason is worked out from the cup
-     * already on screen instead, because "Could not enter" tells somebody
-     * holding the wrong code nothing they can act on.
-     */
-    private fun whyNot(code: String): String {
-        val cup = live
-        return when {
-            cup == null -> "No cup is open."
-            cup.state == "scheduled" -> "Not open yet — joining opens at the announced time."
-            cup.state != "joining" -> "Joining has closed on this one."
-            cup.maxPlayers > 0 && cup.entrants >= cup.maxPlayers -> "This one is full."
-            others.any { it.joined } ->
-                "You are already in another cup — leave that one first."
-            cup.needsCode && code.isBlank() -> "This one needs a join code."
-            cup.needsCode -> "That code does not match."
-            else -> "Could not enter. A prize needs somebody to pay, so entering needs a sign-in."
+    private var watching: kotlinx.coroutines.Job? = null
+
+    /** Starts the poll if it is not running — the first time, or after it gave up. */
+    fun ensureWatching() {
+        if (watching?.isActive == true) return
+        watching = scope.launch { watch() }
+    }
+
+    companion object {
+        private var shared: CupStore? = null
+
+        /**
+         * The one poll the app has, on the table store's own lifetime: a
+         * watcher rebuilt with each tab forgot the cup the player picked,
+         * forgot where it had already walked them, and stopped asking on the
+         * Store, History and Settings tabs. iOS keeps one for the whole
+         * landing screen; so does this.
+         */
+        fun shared(game: GameStore): CupStore {
+            shared?.takeIf { it.game === game }?.let { return it }
+            return CupStore(game, game.viewModelScope).also { shared = it }
         }
+
+        /**
+         * The poll the screen in front is running, so the card can join and
+         * leave through the same one the tournament room reads.
+         *
+         * The card is handed only the cup by the tab that draws it, and iOS's
+         * card holds the whole watcher. Rather than start a second poll —
+         * two polls is two walks into the same table — the one already
+         * running says where it is. Only one tab is composed at a time, so
+         * there is only ever one in front.
+         */
+        var front: CupStore? by mutableStateOf(null)
     }
 }
 
 /**
- * The store, alive for as long as the screen that made it. Put this above the
- * tab bar rather than inside a tab — see [CupStore] on why.
+ * The app's one cup poll, the same instance whichever tab asks — see
+ * [CupStore.shared]. Asking for it is what (re)starts the watch, and it is not
+ * torn down when the tab that asked goes away.
  */
 @Composable
 fun rememberCupStore(game: GameStore): CupStore {
-    val scope = rememberCoroutineScope()
-    val cups = remember(game) { CupStore(game, scope) }
-    LaunchedEffect(cups) { cups.watch() }
+    val cups = remember(game) { CupStore.shared(game) }
+    LaunchedEffect(cups) { cups.ensureWatching() }
+    DisposableEffect(cups) {
+        CupStore.front = cups
+        onDispose { }
+    }
     return cups
 }
 
 // ──────────────────────────────────────────────────────────────── the card ──
 
 /**
- * The poster on the landing screen: what this cup is, when it opens, how many
- * have entered, and one button that opens everything else.
+ * The cup on the Social tab, face for face with iOS's CupCard: announced,
+ * open for joining, being played, and over — each with the controls that
+ * state wants, on the card itself.
  *
  * Draws nothing at all when there is no cup, which is also what happens when
- * the owner has cups switched off — [CupStore.live] is null either way.
+ * the owner has cups switched off — [CupStore.live] is null either way. A
+ * finished cup with no standings draws nothing either, exactly as on iOS.
+ *
+ * [onOpen] is the tournament room, which the header and "Open the tournament"
+ * lead to. Everything else the card does itself: the poll it joins and leaves
+ * through is [CupStore.front], and the account and the table come from the
+ * activity's own stores, the same instances the tab above was handed.
  */
 @Composable
 fun CupCard(cup: CupView?, onOpen: () -> Unit) {
     if (cup == null) return
+    if (cup.state !in CARD_STATES) return
+    val standings = cup.standings
+    if (cup.state == "done" && standings == null) return
+
+    val cups = CupStore.front
+    val game: GameStore = viewModel()
+    val account: AccountStore = viewModel()
+    // Entering needs an account — a prize needs somebody it can be paid to —
+    // and the Social tab reads "signed in" the same way when it opens the room.
+    val signedIn = account.me?.provider != null
+    val busy = cups?.busy == true
+    var poster by remember { mutableStateOf(false) }
+    var code by remember(cup.id) { mutableStateOf("") }
     val p = P.current
-    Panel {
-        CupHead(cup)
-        Spacer(Modifier.height(12.dp))
 
-        when (cup.state) {
-            "scheduled" -> {
-                DoorCountdown("Joining opens in", cup.openedAt)
-                val opens = whenText(cup.openedAt, LONG_DATE)
-                if (opens != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon("snooze", size = 13.dp, tint = p.ink3)
-                        Spacer(Modifier.width(6.dp))
-                        Hint(opens + windowNote(cup))
+    // A tap that has nowhere to go opens the room, which says what to do —
+    // only reachable if the tab never started its poll, which it always does.
+    fun join(withCode: String = "") = cups?.enter(withCode) ?: onOpen()
+
+    LandingCard(padding = 16.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            when (cup.state) {
+                // Announced, not open. Everybody can see it and count down to
+                // it, and nobody can enter yet — a cup that opens the second
+                // the owner presses a button is only played by whoever
+                // happened to be online at that second.
+                "scheduled" -> {
+                    CupHead(cup, "Knockout — last one standing takes ${cupMoney(cup, CupPlace.FIRST)}", "soon", onOpen)
+                    cup.openedAt?.let { opens ->
+                        val now = tick(1000)
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                "Joining opens in",
+                                color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f).alignByBaseline(),
+                            )
+                            Text(
+                                countdown(opens.toLong() - now),
+                                color = p.gold, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold,
+                                style = TABULAR, modifier = Modifier.alignByBaseline(),
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon("snooze", size = 13.dp)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                (whenText(opens, LONG_DATE) ?: "") + windowNote(cup),
+                                color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                            )
+                        }
                     }
+                    PrizeRow(cup.prize, cup.local)
+                    CardNote("Come back then — joining takes one tap.", p.ink3)
+                    MoreButton("What is a cup?", "question") { poster = true }
+                    OtherCups(cups)
                 }
-                Spacer(Modifier.height(12.dp))
-                PrizeRow(cup.prize, cup.local)
-                Spacer(Modifier.height(10.dp))
-                Hint("Come back then — entering takes one tap.")
-            }
 
-            "joining" -> {
-                DoorBar(cup)
-                Spacer(Modifier.height(12.dp))
-                PrizeRow(cup.prize, cup.local)
-                if (cup.you.joined) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "You are in. Your first game starts when joining closes.",
-                        color = p.good, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-                    )
-                } else if (cup.needsCode) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon("key", size = 13.dp, tint = p.ink3)
-                        Spacer(Modifier.width(6.dp))
-                        Hint("Invite only — you need the code from whoever set it up.")
+                "joining" -> {
+                    CupHead(cup, "Knockout — last one standing takes ${cupMoney(cup, CupPlace.FIRST)}", null, onOpen)
+                    DoorClock(cup)
+                    PrizeRow(cup.prize, cup.local)
+                    when {
+                        !signedIn -> Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(p.sunken)
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon("key", size = 14.dp)
+                            Spacer(Modifier.width(7.dp))
+                            // The sign-in buttons are on the account card,
+                            // directly above this one on the same tab.
+                            Text(
+                                "Sign in above to join — a prize needs somebody to pay",
+                                color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+
+                        cup.you.joined -> {
+                            CardNote("Joined. Your first game starts when joining closes.", p.good)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                MoreButton("How it works", "question", Modifier.weight(1f)) { poster = true }
+                                // Only as wide as its word, in the middle of
+                                // its half — iOS frames Leave outside its
+                                // style, so the well hugs the label.
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                    LandingButton("Leave", LandingKind.GHOST, enabled = !busy) { cups?.leave() }
+                                }
+                            }
+                        }
+
+                        else -> {
+                            if (cup.needsCode) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    // Empty because the app genuinely does not
+                                    // know the answer: the server never sends
+                                    // an invite cup's code, only that one is
+                                    // wanted.
+                                    CodeField(code, Modifier.weight(1f)) { code = it }
+                                    LandingButton(
+                                        "",
+                                        LandingKind.GOLD,
+                                        enabled = !busy,
+                                        lead = { ink ->
+                                            Row(
+                                                Modifier.padding(horizontal = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                if (busy) LandingSpinner(ink, size = 17.dp) else Icon("trophy", size = 17.dp)
+                                                Spacer(Modifier.width(7.dp))
+                                                Text(
+                                                    if (busy) "…" else "Join",
+                                                    color = ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                                )
+                                            }
+                                        },
+                                    ) { join(code) }
+                                }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon("key", size = 13.dp)
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        "Invite only — you need the code from whoever set it up.",
+                                        color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            } else {
+                                LandingButton(
+                                    if (busy) "Joining…" else "Join",
+                                    LandingKind.GOLD,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !busy,
+                                    lead = { ink ->
+                                        if (busy) LandingSpinner(ink, size = 18.dp) else Icon("trophy", size = 18.dp)
+                                    },
+                                ) { join() }
+                            }
+                            MoreButton("What is a cup?", "question") { poster = true }
+                        }
                     }
+                    OtherCups(cups)
                 }
-            }
 
-            "running" -> {
-                Text(
-                    roundName(cup.round),
-                    color = p.ink2, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                )
-                val matches = cup.round?.matches.orEmpty()
-                if (matches.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    TableLights(matches.take(60).map { it.state != "done" })
+                "running" -> {
+                    CupHead(cup, roundName(cup.round), null, onOpen)
+                    val matches = cup.round?.matches.orEmpty()
+                    if (matches.isNotEmpty()) TableLights(matches.take(60).map { it.state != "done" })
+                    PrizeRow(cup.prize, cup.local)
+                    CardNote(standingLine(cup), if (cup.you.roomId != null) p.good else p.ink3)
+                    cup.you.roomId?.let { room ->
+                        LandingButton(
+                            "Go to your table",
+                            LandingKind.PRIMARY,
+                            modifier = Modifier.fillMaxWidth(),
+                            // In the table's ink, not the button's: iOS hands
+                            // this drawing no tint, and an untinted drawing
+                            // paints itself in ink rather than taking the
+                            // label's colour.
+                            lead = { Icon("dice", size = 18.dp) },
+                        ) {
+                            Haptics.tap()
+                            game.connect(room)
+                        }
+                    }
+                    MoreButton("Open the tournament", "chart") { onOpen() }
+                    OtherCups(cups)
                 }
-                Spacer(Modifier.height(12.dp))
-                PrizeRow(cup.prize, cup.local)
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    standingLine(cup),
-                    color = if (cup.you.roomId != null) p.good else p.ink3,
-                    fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-                )
-            }
 
-            "done" -> {
-                val s = cup.standings
-                Text(
-                    s?.first?.name?.let { "$it takes it" } ?: "Nobody finished this one",
-                    color = p.ink2, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                )
-                // A cup nobody finished has a standings object with three
-                // empty places in it, and three dashes is not a podium.
-                if (s?.first != null) {
-                    Spacer(Modifier.height(10.dp))
-                    PodiumRow("1st", s.first, cupMoney(cup.prize, cup.local, CupPlace.FIRST),
-                        gold = true, mine = cup.you.placed == "first")
-                    Spacer(Modifier.height(6.dp))
-                    PodiumRow("2nd", s.second, cupMoney(cup.prize, cup.local, CupPlace.SECOND),
-                        gold = false, mine = cup.you.placed == "second")
-                    Spacer(Modifier.height(6.dp))
-                    PodiumRow("3rd", s.third, cupMoney(cup.prize, cup.local, CupPlace.THIRD),
-                        gold = false, mine = cup.you.placed == "third")
-                }
-                if (cup.you.placed != null) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "You finished ${cup.you.placed}. The prize is paid by hand — " +
-                            "hold on to your friend code.",
-                        color = p.good, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                // Over. The server keeps a finished cup in front of everyone
+                // for a few minutes, because one that vanishes the moment it
+                // is won never tells the winner they won it.
+                else -> {
+                    val s = standings ?: return@Column
+                    CupHead(
+                        cup,
+                        s.first?.let { "${it.name ?: "Somebody"} takes it" } ?: "Nobody finished this one",
+                        null, onOpen,
                     )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PlaceRow("1st", s.first, cupMoney(cup, CupPlace.FIRST), gold = true,
+                            mine = cup.you.placed == "first", style = PlaceStyle.CARD)
+                        PlaceRow("2nd", s.second, cupMoney(cup, CupPlace.SECOND), gold = false,
+                            mine = cup.you.placed == "second", style = PlaceStyle.CARD)
+                        PlaceRow("3rd", s.third, cupMoney(cup, CupPlace.THIRD), gold = false,
+                            mine = cup.you.placed == "third", style = PlaceStyle.CARD)
+                    }
+                    if (cup.you.placed != null) {
+                        CardNote(
+                            "You finished ${cup.you.placed}. The prize is paid by hand — hold on to your friend code.",
+                            p.good,
+                        )
+                    }
+                    MoreButton("Open the tournament", "chart") { onOpen() }
+                    OtherCups(cups)
                 }
             }
         }
-
-        Spacer(Modifier.height(14.dp))
-        // One button, whatever the cup is doing. Entering, leaving, the rules
-        // and the chart are all one tap behind it — a card that grew a code
-        // box and a Leave button would bury the Play button below it.
-        MMButton(
-            label = openLabel(cup),
-            kind = if (cup.state == "joining" && !cup.you.joined) BtnKind.GOLD else BtnKind.GHOST,
-            icon = if (cup.state == "running" || cup.state == "done") "chart" else "trophy",
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onOpen,
-        )
     }
+
+    if (poster) CupPosterSheet(cup) { poster = false }
 }
 
-private fun openLabel(cup: CupView): String = when {
-    cup.state == "scheduled" -> "What is a cup?"
-    cup.state == "joining" && cup.you.joined -> "You are in — open it"
-    cup.state == "joining" -> "Enter the cup"
-    cup.state == "done" -> "See how it finished"
-    else -> "Open the tournament"
-}
+private val CARD_STATES = setOf("scheduled", "joining", "running", "done")
 
+/**
+ * The top of every face: the trophy, the name and one line under it, and on
+ * the right a chevron and the head-count. The whole row opens the room.
+ */
 @Composable
-private fun CupHead(cup: CupView) {
+private fun CupHead(cup: CupView, subtitle: String, countLabel: String?, onOpen: () -> Unit) {
     val p = P.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val tile = RoundedCornerShape(13.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(tile)
+            .clickable { Haptics.tap(); onOpen() },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(
             Modifier
                 .size(42.dp)
-                .clip(RoundedCornerShape(13.dp))
+                .clip(tile)
                 .background(p.goldSoft)
-                .border(1.dp, p.gold, RoundedCornerShape(13.dp)),
+                .border(1.dp, p.gold, tile),
             contentAlignment = Alignment.Center,
         ) { Icon("trophy", size = 20.dp) }
         Spacer(Modifier.width(11.dp))
-        Column(Modifier.weight(1f)) {
-            Text(cup.name, color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(2.dp))
-            Hint(
-                "Knockout — last one standing takes " +
-                    cupMoney(cup.prize, cup.local, CupPlace.FIRST)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                cup.name,
+                color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                subtitle,
+                color = p.ink3, fontSize = 11.5.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.width(8.dp))
-        Chip(
-            if (cup.maxPlayers > 0) "${cup.entrants}/${cup.maxPlayers}" else "${cup.entrants}",
-            icon = "people",
-            tint = if (cup.state == "joining") p.gold else p.ink2,
+        // iOS's Spacer(minLength: 6) between two eleven-point gaps.
+        Spacer(Modifier.width(28.dp))
+        RowChevron(p.ink3, size = 11.dp)
+        Spacer(Modifier.width(11.dp))
+        val announced = countLabel != null
+        Text(
+            countLabel
+                ?: if (cup.maxPlayers > 0) "${cup.entrants}/${cup.maxPlayers} joined" else "${cup.entrants} joined",
+            modifier = Modifier
+                .clip(RoundedCornerShape(99.dp))
+                .background(if (announced) p.goldSoft else p.sunken)
+                .border(1.dp, if (announced) p.gold else p.rule, RoundedCornerShape(99.dp))
+                .padding(horizontal = 9.dp, vertical = 4.dp),
+            color = if (announced) p.gold else p.ink2,
+            fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR, maxLines = 1,
         )
     }
 }
 
-/** The three places, first among them louder — it is what everybody is here for. */
+/** "What is a cup?", "How it works", "Open the tournament": a plain well, full width. */
 @Composable
-private fun PrizeRow(prize: CupPrize, local: CupLocalPrize?) {
+private fun MoreButton(title: String, glyph: String, modifier: Modifier = Modifier.fillMaxWidth(), onTap: () -> Unit) {
+    LandingButton(
+        title,
+        LandingKind.GHOST,
+        modifier = modifier,
+        gap = 7.dp,
+        lead = { ink -> Icon(glyph, size = 14.dp, tint = ink) },
+    ) {
+        Haptics.tap()
+        onTap()
+    }
+}
+
+/** One sentence on the card, in whichever ink the moment calls for. */
+@Composable
+private fun CardNote(text: String, tone: Color) {
+    Text(
+        text,
+        modifier = Modifier.fillMaxWidth(),
+        color = tone, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
+    )
+}
+
+/** The box a join code goes in: wide, heavy and monospaced, in capitals. */
+@Composable
+private fun CodeField(value: String, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
+    val p = P.current
+    val shape = RoundedCornerShape(12.dp)
+    val face = TextStyle(
+        color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace,
+    )
+    BasicTextField(
+        value = value,
+        onValueChange = { onChange(it.uppercase().take(16)) },
+        modifier = modifier,
+        singleLine = true,
+        textStyle = face,
+        cursorBrush = SolidColor(p.red),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Characters,
+            autoCorrectEnabled = false,
+        ),
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+                    .clip(shape)
+                    .background(p.sunken)
+                    .border(1.dp, p.rule, shape)
+                    .padding(horizontal = 13.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) Text("JOIN CODE", style = face.copy(color = p.ink3))
+                inner()
+            }
+        },
+    )
+}
+
+/**
+ * The three places, first among them wider in weight — it is what everybody
+ * is here for. The poster pads them a point taller than the card does.
+ */
+@Composable
+private fun PrizeRow(prize: CupPrize, local: CupLocalPrize?, tall: Boolean = false) {
     val p = P.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PrizePill("1st", cupMoney(prize, local, CupPlace.FIRST), p.gold, p.goldSoft, true,
-            Modifier.weight(1f))
-        PrizePill("2nd", cupMoney(prize, local, CupPlace.SECOND), p.ink3, p.sunken, false,
-            Modifier.weight(1f))
-        PrizePill("3rd", cupMoney(prize, local, CupPlace.THIRD), p.ink3, p.sunken, false,
-            Modifier.weight(1f))
+        PrizePill("1st", cupMoney(prize, local, CupPlace.FIRST), true, tall, Modifier.weight(1f))
+        PrizePill("2nd", cupMoney(prize, local, CupPlace.SECOND), false, tall, Modifier.weight(1f))
+        PrizePill("3rd", cupMoney(prize, local, CupPlace.THIRD), false, tall, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun PrizePill(
-    place: String,
-    amount: String,
-    tint: Color,
-    fill: Color,
-    big: Boolean,
-    modifier: Modifier = Modifier,
-) {
+private fun PrizePill(place: String, amount: String, big: Boolean, tall: Boolean, modifier: Modifier = Modifier) {
     val p = P.current
     val shape = RoundedCornerShape(12.dp)
     Column(
         modifier
             .clip(shape)
-            .background(fill)
-            .border(1.dp, if (big) tint else p.rule, shape)
-            .padding(vertical = 8.dp, horizontal = 6.dp),
+            .background(if (big) p.goldSoft else p.sunken)
+            .border(1.dp, if (big) p.gold else p.rule, shape)
+            .padding(vertical = if (tall) 9.dp else 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             place.uppercase(),
-            color = if (big) tint else p.ink3,
-            fontSize = 10.sp, letterSpacing = 0.9.sp, fontWeight = FontWeight.Black,
+            color = if (big) p.gold else p.ink3,
+            fontSize = 10.sp, letterSpacing = 0.9.sp, fontWeight = FontWeight.ExtraBold,
         )
-        Spacer(Modifier.height(2.dp))
-        Text(
+        // Shrinks rather than cuts, down to seven-tenths: "≈₹16,700" is the
+        // whole point of the pill and cannot lose its last digit.
+        FitText(
             amount,
             color = if (big) p.gold else p.ink,
-            fontSize = if (big) 16.sp else 13.sp,
-            fontWeight = FontWeight.Black,
-            maxLines = 1,
+            fontSize = if (big) 17.sp else 14.sp,
+            fontWeight = FontWeight.ExtraBold,
+            minScale = 0.7f,
+            textAlign = TextAlign.Center,
         )
     }
 }
 
 /**
- * The door, drawn as a bar that empties.
- *
- * A number on its own makes the reader do the arithmetic; a bar says at a
- * glance whether there is time to think about it.
+ * The door, drawn as a bar that empties. A number on its own makes the reader
+ * do the arithmetic; a bar says at a glance whether there is time to think.
  */
 @Composable
-private fun DoorBar(cup: CupView) {
+private fun DoorClock(cup: CupView) {
     val p = P.current
     val closes = cup.closesAt ?: return
     val now = tick(500)
     val left = (closes.toLong() - now).coerceAtLeast(0L)
     val opened = cup.openedAt?.toLong() ?: (closes.toLong() - 300_000L)
     val span = (closes.toLong() - opened).coerceAtLeast(1L)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Hint("Joining closes in", Modifier.weight(1f))
-        Text(
-            countdown(left),
-            // Under half a minute the clock stops being information and
-            // starts being a nudge.
-            color = if (left <= 30_000L) p.bad else p.ink,
-            fontSize = 15.sp, fontWeight = FontWeight.Black,
-        )
-    }
-    Spacer(Modifier.height(6.dp))
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(6.dp)
-            .clip(RoundedCornerShape(99.dp))
-            .background(p.sunken)
-            .border(1.dp, p.rule, RoundedCornerShape(99.dp)),
-    ) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(
+                "Joining closes in",
+                color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f).alignByBaseline(),
+            )
+            Text(
+                countdown(left),
+                // Under half a minute the clock stops being information and
+                // starts being a nudge.
+                color = if (left <= 30_000L) p.bad else p.ink,
+                fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
         Box(
             Modifier
-                .fillMaxWidth((left.toFloat() / span.toFloat()).coerceIn(0f, 1f))
-                .height(6.dp)
+                .fillMaxWidth()
+                .height(5.dp)
                 .clip(RoundedCornerShape(99.dp))
-                .background(Brush.horizontalGradient(listOf(p.gold, p.red)))
-        )
-    }
-}
-
-/** A plain countdown, for a door that has not opened yet. */
-@Composable
-private fun DoorCountdown(label: String, at: Double?) {
-    val p = P.current
-    if (at == null) return
-    val now = tick(1000)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Hint(label, Modifier.weight(1f))
-        Text(
-            countdown((at.toLong() - now).coerceAtLeast(0L)),
-            color = p.gold, fontSize = 17.sp, fontWeight = FontWeight.Black,
-        )
+                .background(p.sunken)
+                .border(1.dp, p.rule, RoundedCornerShape(99.dp)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth((left.toFloat() / span.toFloat()).coerceIn(0f, 1f))
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(Brush.horizontalGradient(listOf(p.gold, p.red))),
+            )
+        }
     }
 }
 
 /**
- * One light per table in the round being played, lit while it is still being
- * fought over.
- *
- * A big cup has fifty of these, so they wrap. Drawn rather than laid out
- * because fifty composed dots to say "how much of this round is left" is
- * fifty composables for one sentence.
+ * One light per table in the round being played: lit and breathing while it
+ * is still being fought over, dim once it is decided. A big cup has fifty of
+ * them, so they wrap — eight-point dots, thirteen-point columns five apart,
+ * as iOS's adaptive grid lays them.
  */
 @Composable
 private fun TableLights(live: List<Boolean>) {
     val p = P.current
-    val step = 13.dp
-    val radius = 4.dp
+    val column = 13.dp
+    val gutter = 5.dp
+    val dot = 8.dp
+    val pulse by rememberInfiniteTransition(label = "lights").animateFloat(
+        1f, 0.4f,
+        infiniteRepeatable(tween(1_600, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "pulse",
+    )
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val perRow = ((maxWidth / step).toInt()).coerceAtLeast(1)
-        val rows = (live.size + perRow - 1) / perRow
+        val perRow = (((maxWidth + gutter) / (column + gutter)).toInt()).coerceAtLeast(1)
+        val rows = ((live.size + perRow - 1) / perRow).coerceAtLeast(1)
         val density = LocalDensity.current
-        val stepPx = with(density) { step.toPx() }
-        val radiusPx = with(density) { radius.toPx() }
-        Canvas(Modifier.fillMaxWidth().height(step * rows.coerceAtLeast(1))) {
+        val stepX = with(density) { (column + gutter).toPx() }
+        val stepY = with(density) { (dot + gutter).toPx() }
+        val half = with(density) { (dot / 2).toPx() }
+        val centreX = with(density) { (column / 2).toPx() }
+        Canvas(Modifier.fillMaxWidth().height(dot * rows + gutter * (rows - 1))) {
             live.forEachIndexed { i, on ->
                 drawCircle(
                     color = if (on) p.gold else p.rule2,
-                    radius = radiusPx,
+                    radius = half,
                     center = Offset(
-                        x = (i % perRow) * stepPx + radiusPx,
-                        y = (i / perRow) * stepPx + radiusPx,
+                        x = (i % perRow) * stepX + centreX,
+                        y = (i / perRow) * stepY + half,
                     ),
+                    alpha = if (on) pulse else 1f,
                 )
             }
         }
     }
 }
 
+/**
+ * The cups this card is not showing. A screen has room for one card and a
+ * person can be interested in more than one cup.
+ */
 @Composable
-private fun PodiumRow(
+private fun OtherCups(cups: CupStore?) {
+    val others = cups?.others.orEmpty()
+    if (others.isEmpty()) return
+    val p = P.current
+    // One clock read at the top and handed down the list: [tick] starts a
+    // coroutine per call, and six cups counting towards six different minutes
+    // do not need six of them to agree on the same second.
+    val now = tick(1000)
+    Column(Modifier.padding(top = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Rule()
+        Text(
+            "ALSO ON",
+            color = p.ink3, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.ExtraBold,
+        )
+        for (o in others) {
+            OtherCupRow(o, now) {
+                Haptics.tap()
+                cups?.show(o.id)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OtherCupRow(o: CupBrief, now: Long, onPick: () -> Unit) {
+    val p = P.current
+    val shape = RoundedCornerShape(11.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.sunken)
+            .border(1.dp, p.rule, shape)
+            .clickable { onPick() }
+            .padding(vertical = 9.dp, horizontal = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                o.name, color = p.ink, fontSize = 13.sp,
+                fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (o.joined) {
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "JOINED", color = p.good, fontSize = 8.5.sp,
+                    letterSpacing = 0.6.sp, fontWeight = FontWeight.Black,
+                )
+            }
+        }
+        val count = if (o.maxPlayers > 0) "${o.entrants}/${o.maxPlayers}" else "${o.entrants}"
+        val code = if (o.needsCode) " · invite only" else ""
+        Text(
+            when (o.state) {
+                "scheduled" -> "opens in ${countdown((o.openedAt?.toLong() ?: 0L) - now)} · $count$code"
+                "joining" -> "closes in ${countdown((o.closesAt?.toLong() ?: 0L) - now)} · $count$code"
+                "running" -> "being played · $count"
+                else -> "finished"
+            },
+            color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/** Which of iOS's three standings rows a [PlaceRow] is drawn as. */
+private enum class PlaceStyle { CARD, ROOM, CHART }
+
+/**
+ * One place on the podium: "1ST", who, and what it pays.
+ *
+ * iOS draws it three times, a little differently each time — tighter on the
+ * card, with the friend code and an add button in the room, plain on the
+ * chart — and [style] says which. [onAdd] is the room's add button; [asked]
+ * turns it into a tick once the request has gone.
+ */
+@Composable
+private fun PlaceRow(
     place: String,
     who: CupPlacing?,
     amount: String,
     gold: Boolean,
     mine: Boolean,
+    style: PlaceStyle,
+    asked: Boolean = false,
+    onAdd: (() -> Unit)? = null,
 ) {
     val p = P.current
-    val shape = RoundedCornerShape(12.dp)
+    val card = style == PlaceStyle.CARD
+    val shape = RoundedCornerShape(if (card) 11.dp else 12.dp)
+    val code = who?.code.orEmpty()
     Row(
         Modifier
             .fillMaxWidth()
@@ -827,42 +1144,157 @@ private fun PodiumRow(
                 if (mine) p.good else if (gold) p.gold else p.rule,
                 shape,
             )
-            .padding(vertical = 9.dp, horizontal = 12.dp),
+            .padding(vertical = if (card) 8.dp else 9.dp, horizontal = if (card) 11.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            when (place) {
-                "1st" -> "medalGold"
-                "2nd" -> "medalSilver"
-                else -> "medalBronze"
-            },
-            size = 16.dp,
-        )
-        Spacer(Modifier.width(9.dp))
         Text(
-            who?.name ?: "—",
-            color = p.ink, fontSize = 13.5.sp, fontWeight = FontWeight.Black,
-            maxLines = 1, modifier = Modifier.weight(1f),
+            place.uppercase(),
+            modifier = Modifier.width(26.dp),
+            color = if (gold) p.gold else p.ink3,
+            fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+            letterSpacing = if (card) 0.9.sp else 0.sp,
+            maxLines = 1,
         )
+        Spacer(Modifier.width(if (style == PlaceStyle.ROOM) 10.dp else 9.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                who?.name ?: "—",
+                color = p.ink, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (style == PlaceStyle.ROOM && code.isNotEmpty()) {
+                Text(
+                    code,
+                    color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+        }
         Spacer(Modifier.width(6.dp))
         Text(
             amount,
             color = if (gold) p.gold else p.ink2,
-            fontSize = 13.sp, fontWeight = FontWeight.Black,
+            fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
+        )
+        // Playing somebody is the best introduction there is, so the people
+        // you just played are one tap from being friends.
+        if (onAdd != null) {
+            Spacer(Modifier.width(10.dp))
+            Box(
+                Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(p.card)
+                    .clickable(enabled = !asked) { onAdd() },
+                contentAlignment = Alignment.Center,
+            ) {
+                // iOS's person.badge.plus and checkmark, both drawn here: the
+                // generated set has neither a person with a plus nor a tick.
+                if (asked) Tick(p.good, 13.dp) else PersonPlus(p.ink2, 15.dp)
+            }
+        }
+    }
+}
+
+/**
+ * iOS's person.badge.plus, drawn: a head and shoulders with a plus at the
+ * shoulder, in strokes the weight of the tick that replaces it.
+ */
+@Composable
+private fun PersonPlus(tint: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.12f
+        // The head, and the shoulders under it as a half-round.
+        drawCircle(tint, radius = w * 0.17f, center = Offset(w * 0.36f, h * 0.30f), style = Stroke(width = stroke))
+        val shoulders = Path().apply {
+            moveTo(w * 0.06f, h * 0.90f)
+            cubicTo(w * 0.06f, h * 0.58f, w * 0.66f, h * 0.58f, w * 0.66f, h * 0.90f)
+        }
+        drawPath(shoulders, tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        // The plus, up by the shoulder, where iOS's badge sits.
+        val cx = w * 0.82f
+        val cy = h * 0.42f
+        val arm = w * 0.15f
+        drawLine(tint, Offset(cx - arm, cy), Offset(cx + arm, cy), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawLine(tint, Offset(cx, cy - arm), Offset(cx, cy + arm), strokeWidth = stroke, cap = StrokeCap.Round)
+    }
+}
+
+/** A tick, drawn: iOS's checkmark, for a request that has gone. */
+@Composable
+private fun Tick(tint: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val path = Path().apply {
+            moveTo(w * 0.12f, h * 0.55f)
+            lineTo(w * 0.40f, h * 0.82f)
+            lineTo(w * 0.90f, h * 0.20f)
+        }
+        drawPath(
+            path, tint,
+            style = Stroke(width = w * 0.16f, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }
 }
 
-// ─────────────────────────────────────────────────────────────── the sheet ──
+// ─────────────────────────────────────────────────────────────── the sheets ──
 
 /**
- * The room behind the card: the clock, the rules, and the two buttons that
- * put somebody in a cup or take them out of it.
- *
- * What happens next goes at the top, because that is the question a player in
- * a cup actually has at nine in the evening. Everything below it is history
- * and timetable.
+ * The bar iOS's navigation stack draws over a sheet: the title centred, and
+ * the way out on the right in the table's accent. It stays put while the page
+ * scrolls under it, as the iPhone's does.
  */
+@Composable
+private fun CupNavBar(title: String, action: String, onAction: () -> Unit) {
+    val p = P.current
+    Box(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 16.dp)) {
+        Text(
+            title,
+            modifier = Modifier.align(Alignment.Center).padding(horizontal = 64.dp),
+            color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            action,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onAction() }
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            color = p.red, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+/** iOS's section label in the room and the chart: small, heavy, spaced capitals. */
+@Composable
+private fun CupLabel(text: String) {
+    Text(
+        text.uppercase(),
+        color = P.current.ink3, fontSize = 10.5.sp, letterSpacing = 1.sp, fontWeight = FontWeight.ExtraBold,
+    )
+}
+
+/**
+ * The tournament room — iOS's CupDetailSheet. It exists to answer the
+ * question a player in a cup actually has at nine in the evening: not "what
+ * round am I in" but "who do I play, when does the door open, and what
+ * happens if I miss it". That goes at the top; everything else is history.
+ *
+ * Joining is not here. It is on the card, as it is on iOS, and a player who
+ * has not joined is told where to find it.
+ *
+ * The whole chart is a sheet of its own over the room, as on iOS, under the
+ * bar iOS gives it: its Done closes it back onto the room, which has kept its
+ * place underneath.
+ *
+ * [signedIn] is no longer read: the sign-in note lives on the card now. It
+ * stays in the signature for the tab that opens this.
+ */
+@Suppress("UNUSED_PARAMETER")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CupDetailSheet(
@@ -872,12 +1304,13 @@ fun CupDetailSheet(
     onDismiss: () -> Unit,
 ) {
     val p = P.current
-    // A cup that ends while somebody is reading about it takes its sheet with
-    // it, rather than leaving them looking at a screen about nothing — but as
-    // an effect rather than mid-draw. Calling back into the caller's state
-    // from inside composition sets the sheet and its owner fighting over the
-    // same frame.
-    val cup = cups.live
+    // The cup this room was opened on, kept: iOS's room shows the watcher's
+    // live copy only while it is the same cup, and its own snapshot
+    // otherwise — so a finished cup ageing off the server does not shut the
+    // room mid-read, and a server that moves on to another cup does not turn
+    // this room into that one under the reader.
+    val opened = remember { cups.live }
+    val cup = cups.live?.takeIf { it.id == opened?.id } ?: opened
     if (cup == null) {
         LaunchedEffect(Unit) { onDismiss() }
         return
@@ -888,38 +1321,60 @@ fun CupDetailSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
+        containerColor = p.page,
         dragHandle = null,
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 28.dp),
-        ) {
-            Spacer(Modifier.height(16.dp))
-
-            if (chart) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        cup.name, color = p.ink, fontSize = 20.sp,
-                        fontWeight = FontWeight.Black, modifier = Modifier.weight(1f),
-                    )
-                    MMButton("Back", kind = BtnKind.GHOST) { chart = false }
+        Box(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
+                CupNavBar(cup.name, "Done", onDismiss)
+                Column(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
+                        .padding(bottom = 12.dp),
+                ) {
+                    DetailBody(cup, game, onDismiss) { chart = true }
                 }
-                Spacer(Modifier.height(14.dp))
-                // Drawn in place rather than in a second sheet on top of this
-                // one: two stacked sheets on a phone leave about an inch of
-                // chart between the two drag shadows.
-                CupBracket(cups, cup.id)
-            } else {
-                DetailBody(cups, cup, game, signedIn, onDismiss) { chart = true }
             }
+            // A sheet is a window over the one the app's toast is drawn in;
+            // iOS floats its toasts over every sheet, so the podium's "Request
+            // sent" and "Your cup table is ready" are drawn here too.
+            ToastPill(game, Modifier.align(Alignment.BottomCenter))
+        }
+    }
 
-            Spacer(Modifier.height(14.dp))
-            MMButton("Close", kind = BtnKind.GHOST, modifier = Modifier.fillMaxWidth()) {
-                onDismiss()
+    if (chart) CupChartSheet(cups, cup.id) { chart = false }
+}
+
+/**
+ * The chart — iOS's CupChartSheet — over the room: the bracket's own name in
+ * the bar once it has landed, "The chart" until then, and Done to go back.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CupChartSheet(cups: CupStore, cupId: String, onDismiss: () -> Unit) {
+    val p = P.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = p.page,
+        dragHandle = null,
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            val b = cups.bracket?.takeIf { it.id == cupId }
+            CupNavBar(b?.name ?: "The chart", "Done", onDismiss)
+            Column(
+                Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .padding(bottom = 12.dp),
+            ) {
+                CupBracket(cups, cupId)
             }
         }
     }
@@ -927,138 +1382,164 @@ fun CupDetailSheet(
 
 @Composable
 private fun DetailBody(
-    cups: CupStore,
     cup: CupView,
     game: GameStore,
-    signedIn: Boolean,
     onDismiss: () -> Unit,
     onChart: () -> Unit,
 ) {
     val p = P.current
+    val scope = rememberCoroutineScope()
+    var asked by remember { mutableStateOf(emptySet<String>()) }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .size(54.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(p.goldSoft)
-                .border(1.dp, p.gold, RoundedCornerShape(15.dp)),
-            contentAlignment = Alignment.Center,
-        ) { Icon("trophy", size = 26.dp) }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(cup.name, color = p.ink, fontSize = 20.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                if (cup.needsCode) "Invite only" else "Open to everyone",
-                color = p.ink3, fontSize = 10.sp,
-                letterSpacing = 0.8.sp, fontWeight = FontWeight.Black,
-            )
+    // Playing somebody is the best introduction there is, so the people on
+    // the podium are one tap from being friends — iOS's add button, and its
+    // two answers, in its words when the server gives none. The friends list
+    // behind this sheet keeps itself live, so it catches up on its own.
+    fun ask(code: String) {
+        scope.launch {
+            val reply = game.api.postOrError("/api/friends", mapOf("code" to code))
+            if (reply.ok) {
+                asked = asked + code
+                Haptics.tap()
+                game.showToast("Request sent")
+            } else {
+                game.showToast(reply.error ?: "Could not send that", isError = true)
+            }
         }
     }
 
-    scheduleLine(cup.schedule)?.let {
-        Spacer(Modifier.height(10.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // The banner: who may enter, what it pays, and when it runs.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon("snooze", size = 12.dp, tint = p.ink3)
-            Spacer(Modifier.width(6.dp))
-            Hint(it)
-        }
-    }
-
-    Spacer(Modifier.height(14.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Tile("Prize pool", poolMoney(cup.prize, cup.local), Modifier.weight(1f))
-        Tile(
-            if (cup.state == "done") "Finished" else "Round",
-            if (cup.state == "done") "—" else "${cup.you.round ?: cup.rounds} of ${depth(cup.entrants)}",
-            Modifier.weight(1f),
-        )
-        Tile("Still in", "${if (cup.you.left > 0) cup.you.left else cup.entrants}", Modifier.weight(1f))
-    }
-
-    cup.you.next?.let {
-        Spacer(Modifier.height(14.dp))
-        NextMatch(it, cup, game, onDismiss)
-    }
-
-    Spacer(Modifier.height(14.dp))
-    JoinBox(cups, cup, signedIn)
-
-    val run = yourRun(cup)
-    if (run.isNotEmpty()) {
-        Spacer(Modifier.height(16.dp))
-        SectionLabel("Your run")
-        Spacer(Modifier.height(8.dp))
-        for (rung in run) {
-            RunRung(rung)
-            Spacer(Modifier.height(6.dp))
-        }
-    }
-
-    cup.standings?.takeIf { it.first != null }?.let { s ->
-        Spacer(Modifier.height(16.dp))
-        SectionLabel("Final standings", icon = "trophy")
-        Spacer(Modifier.height(8.dp))
-        PodiumRow("1st", s.first, cupMoney(cup.prize, cup.local, CupPlace.FIRST),
-            gold = true, mine = cup.you.placed == "first")
-        Spacer(Modifier.height(6.dp))
-        PodiumRow("2nd", s.second, cupMoney(cup.prize, cup.local, CupPlace.SECOND),
-            gold = false, mine = cup.you.placed == "second")
-        Spacer(Modifier.height(6.dp))
-        PodiumRow("3rd", s.third, cupMoney(cup.prize, cup.local, CupPlace.THIRD),
-            gold = false, mine = cup.you.placed == "third")
-    }
-
-    if (cup.plan.isNotEmpty()) {
-        Spacer(Modifier.height(16.dp))
-        SectionLabel("The whole plan", icon = "snooze")
-        Spacer(Modifier.height(8.dp))
-        for (r in cup.plan) {
-            PlanRow(r)
-            Spacer(Modifier.height(6.dp))
-        }
-    }
-
-    Spacer(Modifier.height(14.dp))
-    MMButton(
-        "See the whole chart",
-        kind = BtnKind.GHOST, icon = "chart", big = true,
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onChart,
-    )
-
-    Spacer(Modifier.height(16.dp))
-    SectionLabel("How it works", icon = "question")
-    Spacer(Modifier.height(8.dp))
-    for (line in ruleLines(cup)) {
-        Row(Modifier.fillMaxWidth().padding(bottom = 7.dp)) {
             Box(
                 Modifier
-                    .padding(top = 6.dp)
-                    .size(4.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(p.ink3)
-            )
-            Spacer(Modifier.width(9.dp))
-            Hint(line)
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(p.goldSoft)
+                    .border(1.dp, p.gold, RoundedCornerShape(15.dp)),
+                contentAlignment = Alignment.Center,
+            ) { Icon("trophy", size = 26.dp) }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    if (cup.needsCode) "Invite only" else "Open to everyone",
+                    color = p.ink3, fontSize = 10.sp,
+                    letterSpacing = 0.8.sp, fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    "Knockout — last one standing takes ${cupMoney(cup, CupPlace.FIRST)}",
+                    color = p.ink2, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold,
+                )
+                scheduleLine(cup.schedule)?.let {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon("snooze", size = 12.dp)
+                        Spacer(Modifier.width(5.dp))
+                        Text(it, color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
         }
-    }
 
-    val others = cups.others
-    if (others.isNotEmpty()) {
-        Spacer(Modifier.height(10.dp))
-        Rule()
-        Spacer(Modifier.height(12.dp))
-        SectionLabel("Also on")
-        Spacer(Modifier.height(8.dp))
-        // One clock read at the top and handed down the list: [tick] starts a
-        // coroutine per call, and six cups counting towards six different
-        // minutes do not need six of them to agree on the same second.
-        val now = tick(1000)
-        for (o in others) {
-            OtherCupRow(o, now) { cups.show(o.id) }
-            Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Tile("Prize pool", poolMoney(cup.prize, cup.local), Modifier.weight(1f))
+            Tile(
+                if (cup.state == "done") "Finished" else "Round",
+                if (cup.state == "done") "—" else "${cup.you.round ?: cup.rounds} of ${depth(cup.entrants)}",
+                Modifier.weight(1f),
+            )
+            Tile("Still in", "${cup.you.left ?: cup.entrants}", Modifier.weight(1f))
+        }
+
+        cup.you.next?.let { NextMatch(it, cup, game, onDismiss) }
+
+        if (!cup.you.joined) {
+            if (cup.state == "joining") {
+                Text(
+                    "You have not joined this one. Close this and tap Join on the card.",
+                    color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
+                )
+            } else if (cup.you.out) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(p.sunken)
+                        .padding(11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon("skull", size = 15.dp)
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "You are out of this one. The chart below shows how it finished.",
+                        color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+
+        val run = yourRun(cup)
+        if (run.isNotEmpty()) {
+            CupLabel("Your run")
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (rung in run) RunRung(rung)
+            }
+        }
+
+        cup.standings?.takeIf { it.first != null }?.let { s ->
+            CupLabel("Final standings")
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for ((label, who, place) in listOf(
+                    Triple("1st", s.first, CupPlace.FIRST),
+                    Triple("2nd", s.second, CupPlace.SECOND),
+                    Triple("3rd", s.third, CupPlace.THIRD),
+                )) {
+                    val code = who?.code.orEmpty()
+                    val mine = code.isNotEmpty() && code == cup.you.code
+                    PlaceRow(
+                        label, who, cupMoney(cup, place),
+                        gold = place == CupPlace.FIRST, mine = mine, style = PlaceStyle.ROOM,
+                        asked = code in asked,
+                        onAdd = if (code.isNotEmpty() && !mine) ({ ask(code) }) else null,
+                    )
+                }
+            }
+        }
+
+        if (cup.plan.isNotEmpty()) {
+            CupLabel("The whole plan")
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (r in cup.plan) PlanRow(r)
+            }
+        }
+
+        LandingButton(
+            "See the whole chart",
+            LandingKind.GHOST,
+            big = true,
+            lead = { ink -> Icon("chart", size = 16.dp, tint = ink) },
+        ) {
+            Haptics.tap()
+            onChart()
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            CupLabel("How it works")
+            for (line in ruleLines(cup)) {
+                Row(Modifier.fillMaxWidth()) {
+                    Box(
+                        Modifier
+                            .padding(top = 6.dp)
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(p.ink3),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        line,
+                        color = p.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
         }
     }
 }
@@ -1072,17 +1553,21 @@ private fun Tile(label: String, value: String, modifier: Modifier = Modifier) {
             .clip(shape)
             .background(p.sunken)
             .border(1.dp, p.rule, shape)
-            .padding(vertical = 11.dp, horizontal = 6.dp),
+            .padding(vertical = 11.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(
-            label.uppercase(),
-            color = p.ink3, fontSize = 10.sp,
-            letterSpacing = 0.7.sp, fontWeight = FontWeight.Black,
-            textAlign = TextAlign.Center,
+            label,
+            color = p.ink3, fontSize = 10.5.sp,
+            letterSpacing = 0.7.sp, fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center, maxLines = 1,
         )
-        Spacer(Modifier.height(3.dp))
-        Text(value, color = p.ink, fontSize = 16.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        FitText(
+            value,
+            color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Black,
+            minScale = 0.6f, textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -1099,13 +1584,13 @@ private fun NextMatch(next: CupNext, cup: CupView, game: GameStore, onDismiss: (
             .background(if (next.open) p.goldSoft else p.sunken)
             .border(if (next.open) 1.5.dp else 1.dp, if (next.open) p.gold else p.rule, shape)
             .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
     ) {
         Text(
             if (next.open) "YOUR MATCH IS OPEN" else "YOUR NEXT MATCH",
             color = if (next.open) p.good else p.ink3,
-            fontSize = 10.5.sp, letterSpacing = 0.9.sp, fontWeight = FontWeight.Black,
+            fontSize = 10.5.sp, letterSpacing = 0.9.sp, fontWeight = FontWeight.ExtraBold,
         )
-        Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Contender(cup.you.name ?: "You", mine = true, modifier = Modifier.weight(1f))
             Text(
@@ -1116,19 +1601,18 @@ private fun NextMatch(next: CupNext, cup: CupView, game: GameStore, onDismiss: (
         }
 
         if (!next.open && next.opensAt != null) {
-            Spacer(Modifier.height(9.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon("snooze", size = 13.dp, tint = p.ink3)
+                Icon("snooze", size = 13.dp)
                 Spacer(Modifier.width(6.dp))
-                Hint(
+                Text(
                     "Opens in ${countdown(next.opensAt.toLong() - now)} · " +
-                        (whenText(next.opensAt, SHORT_TIME) ?: "")
+                        (whenText(next.opensAt, SHORT_TIME) ?: ""),
+                    color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
                 )
             }
         } else if (next.open && next.closesAt != null) {
-            Spacer(Modifier.height(9.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon("warning", size = 13.dp, tint = p.bad)
+                Icon("warning", size = 13.dp)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "Door shuts in ${countdown(next.closesAt.toLong() - now)} — " +
@@ -1138,35 +1622,29 @@ private fun NextMatch(next: CupNext, cup: CupView, game: GameStore, onDismiss: (
             }
         }
 
-        // The whistle on a game already being played. Being cut off is
-        // survivable; being cut off at a time nobody told you is not.
-        if (next.endsAt != null) {
-            Spacer(Modifier.height(7.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon("scales", size = 13.dp, tint = p.ink3)
-                Spacer(Modifier.width(6.dp))
-                Hint(
-                    "Whistle at ${whenText(next.endsAt, SHORT_TIME) ?: "the hour"} — " +
-                        "whoever is ahead on net worth goes through."
-                )
-            }
-        }
-
         val room = next.roomId
         if (room != null) {
-            Spacer(Modifier.height(12.dp))
-            MMButton(
+            LandingButton(
                 "Play your match",
-                kind = BtnKind.PRIMARY, icon = "dice", big = true,
-                modifier = Modifier.fillMaxWidth(),
+                LandingKind.PRIMARY,
+                big = true,
+                // The table's ink, as on the card's "Go to your table": iOS
+                // gives this drawing no tint of its own.
+                lead = { Icon("dice", size = 18.dp) },
             ) {
                 Haptics.turn()
                 onDismiss()
                 game.connect(room)
             }
         } else if (next.open) {
-            Spacer(Modifier.height(10.dp))
-            Hint("Making your table…")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LandingSpinner(p.gold, size = 16.dp)
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "Making your table…",
+                    color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                )
+            }
         }
     }
 }
@@ -1178,153 +1656,21 @@ private fun Contender(name: String, mine: Boolean, modifier: Modifier = Modifier
     Box(
         modifier
             .clip(shape)
-            .background(p.card)
+            .background(if (mine) p.card else p.card.copy(alpha = p.card.alpha * 0.6f))
             .border(1.dp, if (mine) p.gold else p.rule, shape)
-            .padding(vertical = 10.dp, horizontal = 8.dp),
+            .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             name,
             color = if (mine) p.ink else p.ink2,
-            fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1,
+            fontSize = 14.sp, fontWeight = FontWeight.ExtraBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-/**
- * Entering and leaving.
- *
- * A prize needs somebody it can be paid to, so a device with no account is
- * told that instead of being given a button that fails — the same reason the
- * daily coin asks, only more so.
- */
-@Composable
-private fun JoinBox(cups: CupStore, cup: CupView, signedIn: Boolean) {
-    val p = P.current
-    var draft by remember { mutableStateOf("") }
-
-    cups.notice?.let {
-        Text(
-            it, color = p.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
-        )
-    }
-
-    when {
-        // Leaving is only ever offered while the doors are open — the server
-        // refuses a withdrawal after that, and a button that comes back
-        // refused is worse than no button.
-        cup.state != "joining" -> when {
-            cup.you.out -> Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(p.sunken)
-                    .padding(11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon("skull", size = 15.dp, tint = p.ink3)
-                Spacer(Modifier.width(8.dp))
-                Hint("You are out of this one. The chart shows how it finished.")
-            }
-
-            cup.you.joined -> Hint(
-                if (cup.state == "done") "That was your cup — the standings are below."
-                else "You are still in. Your next match is above."
-            )
-
-            cup.state == "scheduled" ->
-                Hint("Not open yet. Come back when the doors open — entering takes one tap.")
-
-            else -> Hint("Joining has closed on this one. The chart below is the whole field.")
-        }
-
-        !signedIn -> {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(p.sunken)
-                    .padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon("key", size = 14.dp, tint = p.ink3)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Sign in on the Settings tab to enter — a prize needs somebody to pay.",
-                    color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-
-        cup.you.joined -> {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "You are in.",
-                    color = p.good, fontSize = 13.sp, fontWeight = FontWeight.Black,
-                    modifier = Modifier.weight(1f),
-                )
-                MMButton("Leave", kind = BtnKind.GHOST, enabled = !cups.busy) { cups.leave() }
-            }
-        }
-
-        cup.needsCode -> {
-            // The box starts empty because the app genuinely does not know the
-            // answer: the server never sends an invite cup's code to a player,
-            // only that one is wanted.
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    BasicTextField(
-                        value = draft,
-                        onValueChange = { draft = it.uppercase().take(16) },
-                        singleLine = true,
-                        textStyle = TextStyle(
-                            color = p.ink, fontSize = 16.sp,
-                            fontWeight = FontWeight.Black, letterSpacing = 2.sp,
-                        ),
-                        cursorBrush = SolidColor(p.red),
-                        decorationBox = { inner ->
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(p.sunken)
-                                    .border(1.dp, p.rule, RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 13.dp, vertical = 13.dp),
-                            ) {
-                                if (draft.isEmpty()) {
-                                    Text(
-                                        "JOIN CODE", color = p.ink3, fontSize = 16.sp,
-                                        fontWeight = FontWeight.Black, letterSpacing = 2.sp,
-                                    )
-                                }
-                                inner()
-                            }
-                        },
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                MMButton(
-                    if (cups.busy) "…" else "Join",
-                    kind = BtnKind.GOLD, icon = "trophy", enabled = !cups.busy,
-                ) { cups.enter(draft) }
-            }
-            Spacer(Modifier.height(7.dp))
-            Hint("Invite only — you need the code from whoever set it up.")
-        }
-
-        else -> {
-            MMButton(
-                if (cups.busy) "Joining…" else "Join the cup",
-                kind = BtnKind.GOLD, icon = "trophy", big = true,
-                enabled = !cups.busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { cups.enter() }
-        }
-    }
-}
-
-private class Rung(val label: String, val line: String, val kind: Int)
+private class Rung(val label: String, val line: String, val kind: Int, val players: Int = 0)
 
 /**
  * Where this player has got to, built from the round the card already
@@ -1338,11 +1684,7 @@ private fun yourRun(cup: CupView): List<Rung> {
         val other = if (m.a == me) m.b else m.a
         val won = m.winner == me
         Rung(
-            label = when (round.kind) {
-                "final" -> "The final"
-                "thirdPlace" -> "Third place"
-                else -> "Round ${round.n}"
-            },
+            label = if (round.kind == "final") "The final" else "Round ${round.n}",
             line = when {
                 m.state != "done" -> "playing ${other ?: "…"}"
                 won -> "beat ${other ?: "a walkover"}"
@@ -1361,22 +1703,33 @@ private fun RunRung(rung: Rung) {
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (rung.kind == 2) p.goldSoft else p.sunken)
-            .border(1.dp, if (rung.kind == 2) p.gold else p.rule, shape)
+            .background(p.sunken)
+            .border(1.dp, p.rule, shape)
             .padding(vertical = 9.dp, horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(9.dp)
-                .clip(RoundedCornerShape(99.dp))
-                .background(if (rung.kind == 2) p.gold else if (rung.kind == 1) p.good else p.bad)
-        )
+        RungDot(rung.kind)
         Spacer(Modifier.width(10.dp))
-        Text(rung.label, color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.width(8.dp))
-        Text(rung.line, color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(rung.label, color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            rung.line,
+            color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
+}
+
+/** Gold while it is still being played, green for a win, red for the loss. */
+@Composable
+private fun RungDot(kind: Int) {
+    val p = P.current
+    Box(
+        Modifier
+            .size(9.dp)
+            .clip(CircleShape)
+            .background(if (kind == 2) p.gold else if (kind == 1) p.good else p.bad),
+    )
 }
 
 /**
@@ -1404,81 +1757,45 @@ private fun PlanRow(r: CupPlanRound) {
         Box(
             Modifier
                 .size(22.dp)
-                .clip(RoundedCornerShape(99.dp))
+                .clip(CircleShape)
                 .background(if (r.yours) p.goldSoft else p.card)
-                .border(1.dp, if (r.yours) p.gold else p.rule, RoundedCornerShape(99.dp)),
+                .border(1.dp, if (r.yours) p.gold else p.rule, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text("${r.n}", color = p.ink2, fontSize = 11.sp, fontWeight = FontWeight.Black)
+            Text(
+                "${r.n}",
+                color = if (r.done) p.ink3 else p.ink2,
+                fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
+            )
         }
         Spacer(Modifier.width(11.dp))
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 r.label,
                 color = if (r.done) p.ink3 else p.ink,
-                fontSize = 13.sp, fontWeight = FontWeight.Black,
+                fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
             )
-            Hint("${r.players} players → ${(r.players + 1) / 2} through")
+            Text(
+                "${r.players} players → ${(r.players + 1) / 2} through",
+                color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+            )
         }
         Spacer(Modifier.width(6.dp))
-        Column(horizontalAlignment = Alignment.End) {
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(1.dp)) {
             whenText(r.opensAt, SHORT_DATE)?.let {
                 Text(
                     it,
                     color = if (r.done) p.ink3 else p.ink2,
-                    fontSize = 12.sp, fontWeight = FontWeight.Black,
+                    fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
                 )
             }
-            Text(
-                when {
-                    r.done -> "played"
-                    r.projected -> "planned"
-                    r.closesAt != null -> "shuts ${whenText(r.closesAt, SHORT_TIME)}"
-                    else -> ""
-                },
-                color = p.ink3, fontSize = 9.5.sp, fontWeight = FontWeight.Black,
-            )
-        }
-    }
-}
-
-@Composable
-private fun OtherCupRow(o: CupBrief, now: Long, onPick: () -> Unit) {
-    val p = P.current
-    val shape = RoundedCornerShape(11.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(p.sunken)
-            .border(1.dp, p.rule, shape)
-            .clickable { onPick() }
-            .padding(vertical = 9.dp, horizontal = 11.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                o.name, color = p.ink, fontSize = 13.sp,
-                fontWeight = FontWeight.Black, maxLines = 1,
-            )
-            if (o.joined) {
-                Spacer(Modifier.width(7.dp))
+            if (r.done || r.projected) {
                 Text(
-                    "JOINED", color = p.good, fontSize = 8.5.sp,
-                    letterSpacing = 0.6.sp, fontWeight = FontWeight.Black,
+                    if (r.done) "played" else "planned",
+                    color = p.ink3, fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold,
                 )
             }
         }
-        Spacer(Modifier.height(2.dp))
-        val count = if (o.maxPlayers > 0) "${o.entrants}/${o.maxPlayers}" else "${o.entrants}"
-        val code = if (o.needsCode) " · invite only" else ""
-        Hint(
-            when (o.state) {
-                "scheduled" -> "opens in ${countdown((o.openedAt?.toLong() ?: 0L) - now)} · $count$code"
-                "joining" -> "closes in ${countdown((o.closesAt?.toLong() ?: 0L) - now)} · $count$code"
-                "running" -> "being played · $count"
-                else -> "finished"
-            }
-        )
     }
 }
 
@@ -1486,7 +1803,8 @@ private fun OtherCupRow(o: CupBrief, now: Long, onPick: () -> Unit) {
  * The rules that catch people out, in the order they catch them.
  *
  * The last line is not decoration: a prize contest inside an app has to say
- * plainly that the shop it was downloaded from has nothing to do with it.
+ * plainly that the shop it was downloaded from has nothing to do with it. iOS
+ * names Apple; this names Google, whose shop this one came from.
  */
 private fun ruleLines(cup: CupView): List<String> {
     val out = mutableListOf("Win your match and you go through. Lose it and you are out.")
@@ -1494,172 +1812,430 @@ private fun ruleLines(cup: CupView): List<String> {
     if (sched != null) {
         out += "Each round opens at its time and stays open ${sched.windowMinutes} minutes. " +
             "Turn up inside that window or you are out — even if you would have won."
-        out += "A game still running when the next round is due is decided on net worth, so " +
-            "one long game never holds up everybody else's evening."
+        out += "A game still running when the next round is due is decided on net worth — " +
+            "whoever is ahead goes through, so one long game never holds up everybody else's evening."
     }
     out += "Free to enter — no coins, no purchase, no payment of any kind."
-    // Every figure on these screens is already in the reader's own money, and
-    // nothing else says the prize is not set in it. The server converts as a
-    // reading aid and never touches the sum that actually gets paid, so a
-    // player owed two hundred dollars should not be left expecting rupees.
-    if (cup.local != null) {
-        val set = cup.prize.currency.ifBlank { "USD" }
-        out += "Prizes are set in $set and shown here in your own money at today's rate — " +
-            "every figure marked ≈ is approximate."
-    }
     out += "Prizes are awarded and paid by hand by MoneyMove, the organiser. Keep your friend code."
     out += "Google is not a sponsor of this tournament and is not involved in it in any way."
     return out
 }
 
-// ────────────────────────────────────────────────────────────── the chart ──
+// ─────────────────────────────────────────────────────────────── the poster ──
 
 /**
- * The bracket: a column per round, scrolled sideways, with this reader's own
- * match marked in every round they appear in.
- *
- * A cup of two hundred draws a hundred tables in its first round, and a
- * column of a hundred names is not a chart anybody reads — so each round
- * shows a window of tables around the reader's own, numbered, with the rest
- * counted at the bottom. The one match that matters to the reader is always
- * in the window, which is the whole job of the screen.
- *
- * Content rather than a sheet of its own, so a caller can put it wherever it
- * belongs — [CupDetailSheet] draws it in place of its own body.
+ * What a cup is — iOS's CupPosterSheet — in the order somebody deciding
+ * whether to enter wants it: the prize, the shape of the thing, and the rules
+ * that catch people out. Opened by "What is a cup?" and "How it works" on the
+ * card, which is not inside a sheet, so this is a sheet of its own.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CupBracket(cups: CupStore, cupId: String, modifier: Modifier = Modifier) {
-    LaunchedEffect(cupId) { cups.openBracket(cupId) }
-    val b = cups.bracket
+private fun CupPosterSheet(cup: CupView, onDismiss: () -> Unit) {
+    val p = P.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = p.page,
+        dragHandle = null,
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            CupNavBar("The cup", "Done", onDismiss)
+            Column(
+                Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(62.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(p.goldSoft)
+                        .border(1.dp, p.gold, RoundedCornerShape(20.dp)),
+                    contentAlignment = Alignment.Center,
+                ) { Icon("trophy", size = 30.dp) }
 
-    Column(modifier.fillMaxWidth()) {
-        if (b == null) {
-            Hint(
-                if (cups.bracketFailed) "Could not load the chart." else "Drawing the chart…"
-            )
-            return@Column
-        }
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        cup.name,
+                        color = p.ink, fontSize = 23.sp, fontWeight = FontWeight.Black,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        "Knockout · winner takes ${cupMoney(cup, CupPlace.FIRST)}",
+                        color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
 
-        b.standings?.takeIf { it.first != null }?.let { s ->
-            SectionLabel("Final standings", icon = "trophy")
-            Spacer(Modifier.height(8.dp))
-            PodiumRow("1st", s.first, cupMoney(b.prize, b.local, CupPlace.FIRST),
-                gold = true, mine = s.first?.code != null && s.first?.code == b.you?.code)
-            Spacer(Modifier.height(6.dp))
-            PodiumRow("2nd", s.second, cupMoney(b.prize, b.local, CupPlace.SECOND),
-                gold = false, mine = s.second?.code != null && s.second?.code == b.you?.code)
-            Spacer(Modifier.height(6.dp))
-            PodiumRow("3rd", s.third, cupMoney(b.prize, b.local, CupPlace.THIRD),
-                gold = false, mine = s.third?.code != null && s.third?.code == b.you?.code)
-            Spacer(Modifier.height(16.dp))
-        }
+                PrizeRow(cup.prize, cup.local, tall = true)
 
-        SectionLabel("The chart", icon = "chart")
-        Spacer(Modifier.height(4.dp))
-        Hint("${b.entrants} entered · ${b.rounds.size} rounds drawn")
-        Spacer(Modifier.height(10.dp))
+                PosterRungs(cup)
 
-        val scroll = rememberScrollState()
-        val density = LocalDensity.current
-        // Open on the reader's own match rather than at the top of somebody
-        // else's: the last round they appear in is where they are.
-        LaunchedEffect(b.id, b.rounds.size) {
-            val i = b.rounds.indexOfLast { r -> r.matches.any { it.mine } }
-            if (i > 0) scroll.animateScrollTo(with(density) { ((COLUMN + GUTTER) * i).roundToPx() })
-        }
+                cup.schedule?.takeIf { it.times.isNotEmpty() }?.let { WhenBox(cup, it) }
 
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(scroll),
-            horizontalArrangement = Arrangement.spacedBy(GUTTER),
-        ) {
-            for (r in b.rounds) RoundColumn(r)
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    PosterRule(
+                        "Everyone enters at once.",
+                        "When joining shuts the whole field is paired off — a hundred players make fifty tables.",
+                    )
+                    PosterRule(
+                        "Win and you go through. Lose and you are out.",
+                        "One defeat ends your tournament: there is no second chance and no losers' bracket.",
+                    )
+                    cup.schedule?.takeIf { it.times.isNotEmpty() }?.let { sched ->
+                        PosterRule(
+                            "Turn up inside the window.",
+                            "Each round opens at its time and stays open ${sched.windowMinutes} minutes. " +
+                                "Miss it and you are out — even if you would have won.",
+                        )
+                        PosterRule(
+                            "Every game is ${sched.matchMinutes} minutes.",
+                            "Nobody bankrupt by then? The player with the higher net worth goes through.",
+                        )
+                    }
+                    PosterRule(
+                        "Two seats, no bots.",
+                        "A cup table cannot be filled with house players, and the link cannot seat a third.",
+                    )
+                }
+
+                // iOS names Apple here, as its guidelines ask; the shop this
+                // copy came from is Google's, so Google is the one named.
+                Text(
+                    if (cup.local == null) {
+                        "Free to enter; an account is needed so a prize can be paid. Prizes are paid by " +
+                            "hand by MoneyMove — keep your friend code. Google is not a sponsor of this " +
+                            "tournament and is not involved in any way."
+                    } else {
+                        "Prizes are set in ${cup.prize.currency.ifBlank { "USD" }} and shown here in your " +
+                            "own money at today’s rate. Free to enter; an account is needed so a prize " +
+                            "can be paid. Google is not a sponsor of this tournament and is not involved " +
+                            "in any way."
+                    },
+                    modifier = Modifier.padding(top = 2.dp),
+                    color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp,
+                    fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
 
-private val COLUMN = 190.dp
-private val GUTTER = 12.dp
-
-/** How many tables one column shows before it starts counting instead. */
-private const val WINDOW = 12
-
+/** The ladder a cup of this size actually runs: 100 → 50 → 25 → … → the cup. */
 @Composable
-private fun RoundColumn(r: CupBracketRound) {
+private fun PosterRungs(cup: CupView) {
     val p = P.current
-    val mine = r.matches.indexOfFirst { it.mine }
-    // The window is centred on the reader's own table when they have one, and
-    // is the top of the round when they do not.
-    val start = if (mine < 0) 0 else (mine - WINDOW / 2).coerceIn(0, maxOf(0, r.matches.size - WINDOW))
-    val shown = r.matches.drop(start).take(WINDOW)
-    val hidden = r.matches.size - shown.size
-
-    Column(Modifier.width(COLUMN)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val steps = mutableListOf<Int>()
+    var left = maxOf(2, cup.entrants)
+    while (left > 1 && steps.size < 9) {
+        steps += left
+        left = (left + 1) / 2
+    }
+    val box = RoundedCornerShape(9.dp)
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (n in steps) {
             Text(
-                r.label.ifBlank { "Round ${r.n}" },
-                color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.Black,
+                "$n",
+                modifier = Modifier
+                    .clip(box)
+                    .background(p.sunken)
+                    .border(1.dp, p.rule, box)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
             )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "${r.players}", color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Black,
-            )
+            Text("→", color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.height(8.dp))
-        shown.forEachIndexed { i, m ->
-            MatchCard(m, start + i + 1)
-            Spacer(Modifier.height(8.dp))
-        }
-        if (hidden > 0) {
-            Hint("+ $hidden more tables in this round")
-            Spacer(Modifier.height(8.dp))
-        }
+        Box(
+            Modifier
+                .clip(box)
+                .background(p.goldSoft)
+                .border(1.dp, p.gold, box)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) { Icon("trophy", size = 15.dp) }
     }
 }
 
+/** What this cup commits its players to, in dates and hours. */
 @Composable
-private fun MatchCard(m: CupBracketMatch, number: Int) {
+private fun WhenBox(cup: CupView, sched: CupSchedule) {
     val p = P.current
-    val done = m.state == "done"
-    val shape = RoundedCornerShape(11.dp)
+    val clock = sched.times.joinToString(" and ") { "%02d:%02d".format(it / 60, it % 60) }
+    var n = maxOf(2, if (cup.maxPlayers > 0) cup.maxPlayers else cup.entrants)
+    var rounds = 0
+    while (n > 1) {
+        n = (n + 1) / 2
+        rounds++
+    }
+    val perNight = maxOf(1, sched.times.size)
+    val evenings = (rounds + perNight - 1) / perNight
+    val shape = RoundedCornerShape(13.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (m.mine) p.goldSoft else p.sunken)
-            .border(if (m.mine) 1.5.dp else 1.dp, if (m.mine) p.gold else p.rule, shape)
-            .padding(vertical = 6.dp, horizontal = 9.dp)
-            .alpha(if (m.state == "pending") 0.6f else 1f),
+            .background(p.sunken)
+            .border(1.dp, p.rule, shape)
+            .padding(horizontal = 13.dp, vertical = 4.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "T$number", color = p.ink3, fontSize = 9.sp,
-                letterSpacing = 0.5.sp, fontWeight = FontWeight.Black,
-                modifier = Modifier.weight(1f),
+        WhenLine("Joining shuts", whenText(cup.closesAt, LONG_DATE) ?: "—")
+        WhenLine("Rounds", clock)
+        WhenLine("Evenings", "$evenings · $rounds rounds")
+        whenText(cup.plan.lastOrNull()?.opensAt, LONG_DATE)?.let { WhenLine("The final", it) }
+    }
+}
+
+@Composable
+private fun WhenLine(label: String, value: String) {
+    val p = P.current
+    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            value,
+            modifier = Modifier.weight(1f),
+            color = p.ink, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
+@Composable
+private fun PosterRule(head: String, body: String) {
+    val p = P.current
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.sunken)
+            .border(1.dp, p.rule, shape)
+            .padding(11.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(head, color = p.ink, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold)
+        Text(body, color = p.ink2, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// ────────────────────────────────────────────────────────────── the chart ──
+
+/**
+ * The chart — iOS's CupChartSheet, as content: the podium once there is one,
+ * this reader's own run, and the bracket itself, a column per round scrolled
+ * sideways and opened on the reader's own match.
+ *
+ * Asked for on demand. A two-hundred-entrant bracket is two hundred matches,
+ * and re-sending that on the card's four-second poll to draw a countdown
+ * would be silly.
+ */
+@Composable
+fun CupBracket(cups: CupStore, cupId: String, modifier: Modifier = Modifier) {
+    val p = P.current
+    LaunchedEffect(cupId) { cups.openBracket(cupId) }
+    val b = cups.bracket?.takeIf { it.id == cupId }
+
+    if (b == null) {
+        Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            if (cups.bracketFailed) {
+                Text(
+                    "Could not load the chart.",
+                    modifier = Modifier.padding(40.dp),
+                    color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                )
+            } else {
+                Box(Modifier.padding(60.dp)) { LandingSpinner(p.gold) }
+            }
+        }
+        return
+    }
+
+    val you = b.you
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        b.standings?.takeIf { it.first != null }?.let { s ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                PlaceRow("1st", s.first, cupMoney(b.prize, b.local, CupPlace.FIRST), gold = true,
+                    mine = s.first?.code != null && s.first?.code == you?.code, style = PlaceStyle.CHART)
+                PlaceRow("2nd", s.second, cupMoney(b.prize, b.local, CupPlace.SECOND), gold = false,
+                    mine = s.second?.code != null && s.second?.code == you?.code, style = PlaceStyle.CHART)
+                PlaceRow("3rd", s.third, cupMoney(b.prize, b.local, CupPlace.THIRD), gold = false,
+                    mine = s.third?.code != null && s.third?.code == you?.code, style = PlaceStyle.CHART)
+            }
+        }
+
+        val run = chartRun(b)
+        if (run.isNotEmpty()) {
+            CupLabel("Your run")
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (rung in run) LadderRung(rung)
+            }
+        }
+
+        CupLabel("The chart")
+        ChartTree(b)
+    }
+}
+
+/**
+ * One row per round this reader played, in order — the short answer to
+ * "where am I", and the only part of a chart that stays readable when a
+ * hundred people entered.
+ */
+private fun chartRun(b: CupBracketView): List<Rung> {
+    val me = b.you?.name ?: return emptyList()
+    return b.rounds.mapNotNull { r ->
+        val m = r.matches.firstOrNull { it.mine } ?: return@mapNotNull null
+        val other = if (m.a == me) m.b else m.a
+        val won = m.winner == me
+        Rung(
+            label = r.label,
+            line = when {
+                m.state != "done" -> other?.let { "playing $it" } ?: "waiting for a table"
+                m.voided -> "nobody came"
+                won -> "beat ${other ?: "a walkover"}"
+                else -> "lost to ${m.winner ?: "the other side"}"
+            },
+            kind = if (m.state != "done") 2 else if (won) 1 else 0,
+            players = r.players,
+        )
+    }
+}
+
+@Composable
+private fun LadderRung(rung: Rung) {
+    val p = P.current
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (rung.kind == 2) p.goldSoft else p.sunken)
+            .border(
+                1.dp,
+                when (rung.kind) {
+                    2 -> p.gold
+                    1 -> p.good.copy(alpha = 0.45f)
+                    else -> p.rule
+                },
+                shape,
             )
-            if (m.mine) {
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(99.dp))
-                        .background(p.gold)
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                ) {
-                    Text(
-                        "YOU", color = p.accentInk, fontSize = 8.sp,
-                        letterSpacing = 0.6.sp, fontWeight = FontWeight.Black,
-                    )
+            .padding(vertical = 9.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RungDot(rung.kind)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(rung.label, color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+            Text(rung.line, color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "${rung.players}",
+            modifier = Modifier
+                .clip(RoundedCornerShape(99.dp))
+                .background(p.card)
+                .border(1.dp, p.rule, RoundedCornerShape(99.dp))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
+        )
+    }
+}
+
+private val COLUMN = 186.dp
+private val GUTTER = 14.dp
+
+/** The bracket: a column per round, scrolled sideways, every table in it. */
+@Composable
+private fun ChartTree(b: CupBracketView) {
+    val p = P.current
+    val scroll = rememberScrollState()
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val viewport = maxWidth
+        // Open on the reader's own match rather than at the top of somebody
+        // else's: the last round they appear in is where they are, brought
+        // to the middle of the screen a beat after the chart lands.
+        LaunchedEffect(b.id, b.rounds.size) {
+            val i = b.rounds.indexOfLast { r -> r.matches.any { it.mine } }
+            if (i < 0) return@LaunchedEffect
+            delay(350)
+            val x = (COLUMN + GUTTER) * i - (viewport - COLUMN) / 2
+            scroll.animateScrollTo(with(density) { x.roundToPx() }.coerceAtLeast(0))
+        }
+        Row(
+            Modifier.horizontalScroll(scroll).padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(GUTTER),
+            verticalAlignment = Alignment.Top,
+        ) {
+            for (r in b.rounds) {
+                Column(Modifier.width(COLUMN), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            r.label.ifBlank { "Round ${r.n}" },
+                            color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "${r.players}", color = p.ink3, fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold, style = TABULAR,
+                        )
+                    }
+                    for (m in r.matches) MatchCard(m)
                 }
             }
         }
-        Spacer(Modifier.height(3.dp))
-        MatchSide(m.a, m.aScore, won = m.winner != null && m.winner == m.a, done = done)
-        Rule(Modifier.padding(vertical = 4.dp))
-        MatchSide(m.b, m.bScore, won = m.winner != null && m.winner == m.b, done = done)
-        if (m.walkover || m.voided) {
-            Spacer(Modifier.height(3.dp))
+    }
+}
+
+@Composable
+private fun MatchCard(m: CupBracketMatch) {
+    val p = P.current
+    val done = m.state == "done"
+    val shape = RoundedCornerShape(11.dp)
+    Box {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .alpha(if (m.state == "pending") 0.6f else 1f)
+                .clip(shape)
+                .background(if (m.mine) p.goldSoft else p.sunken)
+                .border(if (m.mine) 1.5.dp else 1.dp, if (m.mine) p.gold else p.rule, shape)
+                .padding(vertical = 5.dp, horizontal = 9.dp),
+        ) {
+            MatchSide(m.a, m.aScore, won = m.winner != null && m.winner == m.a, done = done)
+            Rule()
+            MatchSide(m.b, m.bScore, won = m.winner != null && m.winner == m.b, done = done)
+            if (m.walkover || m.voided) {
+                Text(
+                    if (m.voided) "VOID" else "WALKOVER",
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = p.ink3, fontSize = 8.5.sp,
+                    letterSpacing = 0.7.sp, fontWeight = FontWeight.ExtraBold,
+                )
+            }
+        }
+        if (m.mine) {
             Text(
-                if (m.voided) "VOID — NOBODY CAME" else "WALKOVER",
-                color = p.ink3, fontSize = 8.5.sp,
-                letterSpacing = 0.7.sp, fontWeight = FontWeight.Black,
+                "YOU",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-6).dp, y = (-7).dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(p.gold)
+                    .padding(horizontal = 6.dp, vertical = 1.5.dp),
+                color = p.card, fontSize = 8.sp,
+                letterSpacing = 0.6.sp, fontWeight = FontWeight.Black,
             )
         }
     }
@@ -1668,23 +2244,26 @@ private fun MatchCard(m: CupBracketMatch, number: Int) {
 @Composable
 private fun MatchSide(name: String?, score: Int?, won: Boolean, done: Boolean) {
     val p = P.current
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
             name ?: "—",
             color = if (name == null) p.ink3 else if (won) p.ink else p.ink2,
             fontSize = 12.5.sp,
-            fontWeight = if (won) FontWeight.Black else FontWeight.Medium,
-            maxLines = 1,
+            fontWeight = if (won) FontWeight.ExtraBold else FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         // A score is the net worth a game was cut off at, so it only means
         // anything once the game is over.
         if (done && score != null) {
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 grouped(score),
                 color = if (won) p.good else p.ink3,
-                fontSize = 11.sp, fontWeight = FontWeight.Black,
+                fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
             )
         }
     }
@@ -1693,6 +2272,11 @@ private fun MatchSide(name: String?, score: Int?, won: Boolean, done: Boolean) {
 // ───────────────────────────────────────────────────────────────── the words ──
 
 private enum class CupPlace { FIRST, SECOND, THIRD }
+
+/** Figures that line up as they count, as iOS's monospacedDigit does. */
+private val TABULAR = TextStyle(fontFeatureSettings = "tnum")
+
+private fun cupMoney(cup: CupView, place: CupPlace): String = cupMoney(cup.prize, cup.local, place)
 
 /**
  * A prize written the way the reader reads money.
@@ -1737,38 +2321,41 @@ private fun grouped(n: Int): String {
     return if (n < 0) "-$digits" else digits
 }
 
-/** "3d 4h", "5h 12m", "4:26" — whichever the wait deserves. */
+/**
+ * "3d 4h", "5h 12m", "4:26" — whichever the wait deserves. Rounded to the
+ * nearest second as iOS rounds it, so the two phones read the same number.
+ */
 private fun countdown(ms: Long): String {
-    val left = (ms.coerceAtLeast(0L) / 1000L).toInt()
+    val left = ((ms.coerceAtLeast(0L) + 500L) / 1000L).toInt()
     if (left >= 86400) return "${left / 86400}d ${left % 86400 / 3600}h"
     if (left >= 3600) return "${left / 3600}h ${left % 3600 / 60}m"
     return "%d:%02d".format(left / 60, left % 60)
 }
 
-private const val SHORT_TIME = "HH:mm"
-private const val SHORT_DATE = "EEE HH:mm"
-private const val LONG_DATE = "EEE d MMM, HH:mm"
+// The instants, as iOS's Date.formatted writes them: the parts are fixed and
+// the locale decides their order, and whether the clock runs to twelve or to
+// twenty-four — a player who reads "8:00 PM" everywhere else on their phone
+// should not meet "20:00" here.
+private const val SHORT_TIME = "jmm"
+private const val SHORT_DATE = "EEEjmm"
+private const val LONG_DATE = "EEEdMMMjmm"
 
 /** An instant, in the reader's own clock — which is the only one they can act on. */
-private fun whenText(epochMs: Double?, pattern: String): String? = epochMs?.let {
-    SimpleDateFormat(pattern, Locale.getDefault()).format(Date(it.toLong()))
+private fun whenText(epochMs: Double?, skeleton: String): String? = epochMs?.let {
+    val locale = Locale.getDefault()
+    SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(Date(it.toLong()))
 }
 
 /**
- * "Rounds at 20:00 and 22:00, organiser's clock · 10 minutes to turn up".
- *
- * The times in a schedule are minutes past midnight where the OWNER is, not
- * where the reader is, so they are printed as written and labelled as such.
- * The plan below them carries real instants and is the thing somebody should
- * plan an evening around — a player in London reading an unlabelled "20:00"
- * from a cup run out of Delhi would be four and a half hours wrong.
+ * "Rounds at 20:00 and 22:00 · 10 minutes to turn up" — the times as the
+ * organiser wrote them, word for word as iOS prints them.
  */
 private fun scheduleLine(sched: CupSchedule?): String? {
     val times = sched?.times?.takeIf { it.isNotEmpty() } ?: return null
     val clocks = times.map { "%02d:%02d".format(it / 60, it % 60) }
     val joined = if (clocks.size == 1) clocks[0]
     else clocks.dropLast(1).joinToString(", ") + " and " + clocks.last()
-    return "Rounds at $joined, organiser's clock · ${sched.windowMinutes} minutes to turn up"
+    return "Rounds at $joined · ${sched.windowMinutes} minutes to turn up"
 }
 
 private fun windowNote(cup: CupView): String {
@@ -1797,7 +2384,7 @@ private fun roundName(round: CupRound?): String {
 }
 
 private fun standingLine(cup: CupView): String = when {
-    !cup.you.joined -> "Being played now — the doors are shut."
+    !cup.you.joined -> "Running now — the doors are shut."
     cup.you.out -> "You are out of this one."
     cup.you.roomId != null && cup.you.opponent != null ->
         "Your table is open — you are playing ${cup.you.opponent}."

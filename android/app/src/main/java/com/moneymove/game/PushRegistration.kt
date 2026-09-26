@@ -35,6 +35,15 @@ import java.util.concurrent.TimeUnit
  *     and skipped. FCM is a second sender to write, not a second key to
  *     paste — which is what that file's own closing line already says.
  *
+ * That filter is also why a friend's invite never reaches an Android phone
+ * by push: POST /api/invite sends it through the same sendTurnPush, under the
+ * collapse id "invite". The in-app half does not wait on any of this —
+ * MessagingStore.watchInvites polls /api/invite every ten seconds while the
+ * app is on screen, which is iOS's primary channel too; the push there is
+ * only what wakes a phone that is in somebody's pocket. When an FCM sender
+ * lands, the thing to do with an "invite" message is MessagingStore's
+ * refreshInvite(), so the banner is up by the time the app is.
+ *
  * Why the FCM token is fetched by reflection rather than imported: adding
  * firebase-messaging without google-services.json does not degrade, it breaks
  * the build outright — the google-services plugin fails when the file is

@@ -2,6 +2,7 @@ package com.moneymove.game
 
 import android.util.Log
 import io.socket.client.IO
+import io.socket.client.Manager
 import io.socket.client.Socket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -44,13 +45,24 @@ val MMJson: Json = Json {
  * store; a transport that starts interpreting is a transport that has to be
  * kept in step with the rules.
  */
-class GameSocket(private val serverUrl: String) {
+class GameSocket(
+    private val serverUrl: String,
+    /**
+     * A connection of its own rather than a share of one already open to the
+     * same server. Only a pass & play guest asks for it: the server binds a
+     * seat to the connection that joined it, so two players on one phone need
+     * two real connections, and multiplexing would quietly hand the second one
+     * the first one's line.
+     */
+    private val forceNew: Boolean = false,
+) {
 
     private var socket: Socket? = null
     private val listeners = mutableMapOf<String, (JsonObject?) -> Unit>()
     private var onConnected: (() -> Unit)? = null
     private var onDisconnected: (() -> Unit)? = null
     private var onError: ((String) -> Unit)? = null
+    private var onRetrying: (() -> Unit)? = null
 
     val isConnected: Boolean get() = socket?.connected() == true
 
@@ -67,6 +79,13 @@ class GameSocket(private val serverUrl: String) {
     fun onDisconnect(block: () -> Unit) { onDisconnected = block }
     fun onFailure(block: (String) -> Unit) { onError = block }
 
+    /**
+     * The line dropped and the client is dialling again. Distinct from a plain
+     * disconnect so a table can say "reconnecting" while it is actually
+     * trying, rather than looking dead between one attempt and the next.
+     */
+    fun onReconnecting(block: () -> Unit) { onRetrying = block }
+
     fun connect() {
         if (socket != null) return
         val opts = IO.Options.builder()
@@ -77,6 +96,7 @@ class GameSocket(private val serverUrl: String) {
             .setReconnectionDelay(500)
             .setReconnectionDelayMax(4_000)
             .setTimeout(20_000)
+            .setForceNew(forceNew)
             .build()
         val s = IO.socket(URI.create(serverUrl), opts)
         socket = s
@@ -89,6 +109,9 @@ class GameSocket(private val serverUrl: String) {
         s.on(Socket.EVENT_CONNECT_ERROR) { args ->
             onError?.invoke(args.firstOrNull()?.toString() ?: "connection failed")
         }
+        // Retries are the manager's business, not the socket's, so the hook
+        // hangs off the manager — and comes off it again in [disconnect].
+        onRetrying?.let { retry -> s.io().on(Manager.EVENT_RECONNECT_ATTEMPT) { retry() } }
         s.connect()
     }
 
@@ -112,6 +135,7 @@ class GameSocket(private val serverUrl: String) {
     }
 
     fun disconnect() {
+        socket?.io()?.off(Manager.EVENT_RECONNECT_ATTEMPT)
         socket?.off()
         socket?.disconnect()
         socket?.close()
@@ -153,10 +177,13 @@ internal fun Any?.toJsonObject(): JsonObject? = when (this) {
  */
 class Api(private val baseUrl: String, private val token: String) {
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    /**
+     * One client for the whole app. An Api is cheap and made on every access
+     * (`store.api`), and the public room list asks every eight seconds; an
+     * OkHttpClient each time would be a connection pool and a thread pool each
+     * time, and none of them ever reused.
+     */
+    private val http: OkHttpClient get() = SHARED
 
     /** A GET whose query already carries the token, plus anything extra. */
     suspend fun get(path: String, query: Map<String, String> = emptyMap()): String? =
@@ -168,6 +195,16 @@ class Api(private val baseUrl: String, private val token: String) {
     suspend fun getPublic(path: String, query: Map<String, String> = emptyMap()): String? =
         withContext(Dispatchers.IO) {
             request(Request.Builder().url(url(path, query)).get())
+        }
+
+    /**
+     * [get], but with the status and the body whatever the answer was — for a
+     * question whose refusal is something the player should be told, the way
+     * [postOrError] is for an action.
+     */
+    suspend fun getOrError(path: String, query: Map<String, String> = emptyMap()): Reply =
+        withContext(Dispatchers.IO) {
+            call(Request.Builder().url(url(path, query + ("token" to token))).get())
         }
 
     suspend fun post(path: String, body: Map<String, Any?> = emptyMap()): String? =
@@ -212,6 +249,17 @@ class Api(private val baseUrl: String, private val token: String) {
         val ok: Boolean get() = code in 200..299
         /** True when nothing answered — a tunnel, not a refusal. */
         val offline: Boolean get() = code == 0
+
+        /**
+         * The server's own sentence for a refusal — every endpoint answers
+         * `{ error: "…" }` — or null when there is none to show.
+         */
+        val error: String?
+            get() = if (ok) null else body?.let { raw ->
+                runCatching {
+                    (MMJson.parseToJsonElement(raw) as? JsonObject)?.get("error").asString()
+                }.getOrNull()
+            }
     }
 
     private fun call(builder: Request.Builder): Reply = try {
@@ -225,4 +273,11 @@ class Api(private val baseUrl: String, private val token: String) {
 
     private fun request(builder: Request.Builder): String? =
         call(builder).let { if (it.ok) it.body else null }
+
+    private companion object {
+        val SHARED: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
 }

@@ -1,5 +1,9 @@
 package com.moneymove.game
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -66,12 +70,12 @@ import kotlinx.coroutines.delay
  * ones still carrying a price. A locked board is a door into the shop, never
  * a dead tap — the same manners the piece shelf keeps.
  *
- * iOS presents the two big screens here as sheets on top of the lobby. This
- * client cannot: the lobby IS a sheet, and the cup bracket already established
- * what a second sheet on top of a first one looks like on a phone — about an
- * inch of content between two drag shadows. So [AllBoards] and [BoardShop]
- * are ordinary composables that the lobby draws in place of its rules, with a
- * way back, exactly as CupDetailSheet draws its bracket.
+ * [AllBoards] and [BoardShop] are the two big pages, iOS's BoardPickerSheet
+ * and BoardBuySheet. They are content rather than sheets so whoever opens them
+ * decides where they sit — the table's lobby puts them in a sheet of its own,
+ * the Store puts the shop in one over the tab — and each starts with the same
+ * bar iOS's navigation stack draws: the title in the middle, the way out on
+ * the right, in the table's accent.
  */
 
 // ─────────────────────────────────────────────────────────────── the drawing ──
@@ -381,14 +385,15 @@ fun BoardBoxes(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("All boards", color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.Black)
+            Text("All boards", color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
             Spacer(Modifier.weight(1f))
-            // No chevron: the drawn set has no arrow in it, and a row that
-            // reads as a row needs one less than an invented glyph would cost.
             Text(
                 "${all.size} boards · ${all.count { !it.playable }} locked",
                 color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
             )
+            // iOS's chevron.right: the row goes somewhere, and says so.
+            Spacer(Modifier.width(6.dp))
+            RowChevron(p.ink3, size = 10.dp)
         }
 
         shelf?.until?.takeIf { it > 0 }?.let { BoardClock(store, it) }
@@ -415,25 +420,34 @@ private fun BoardBox(
                 if (selected) p.gold else p.rule,
                 RoundedCornerShape(14.dp),
             )
-            .clickable(enabled = editable) { SoundKit.click(); Haptics.tap(); onClick() }
+            .clickable(enabled = editable) { SoundKit.click(); onClick() }
             .padding(horizontal = 6.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        MiniBoard(
-            board,
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(p.page)
-                .padding(3.dp),
-            dim = !board.playable,
-        )
+        val preview = board.preview
+        if (preview != null) {
+            MiniBoard(
+                preview,
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(p.page)
+                    .padding(3.dp),
+                dim = !board.playable,
+            )
+        } else {
+            // No drawing to show: the board's own mark, at iOS's twenty-six,
+            // in a square the size the drawing would have had.
+            Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+                Icon(mapGlyph(board.icon), size = 26.dp, tint = p.ink2)
+            }
+        }
         // Floored lower than anywhere else the name is drawn, because this is
         // the narrowest place it has to fit: a third of a phone, and the shelf
         // is carrying "The Great White North".
         FitText(
             board.name,
-            color = p.ink, fontSize = 11.5.sp, fontWeight = FontWeight.Black,
+            color = p.ink, fontSize = 11.5.sp, fontWeight = FontWeight.ExtraBold,
             minScale = 0.75f, textAlign = TextAlign.Center,
         )
         BoardTag(board)
@@ -467,7 +481,7 @@ fun BoardClock(store: AccountStore, until: Double, modifier: Modifier = Modifier
  * Every board there is, on three shelves, in the order somebody shops: what
  * is free right now, what they already own, and what still has a price.
  *
- * Drawn into the lobby's own scroll, which is why the grid is chunked rows
+ * Drawn into its caller's own scroll, which is why the grid is chunked rows
  * rather than a LazyVGrid — a lazy grid inside a scrolling column is an
  * unbounded height, and Compose says so by crashing.
  */
@@ -479,6 +493,12 @@ fun AllBoards(
     onPick: (String) -> Unit,
     onShop: (String) -> Unit,
     onBack: () -> Unit,
+    /**
+     * False when the sheet around this lays [AllBoardsBar] out itself, above
+     * its scroll, so the bar stays put while the list moves under it as
+     * iOS's navigation bar does.
+     */
+    showBar: Boolean = true,
 ) {
     val p = P.current
     val current = game.state?.mapId ?: game.state?.settings?.mapId ?: "classic"
@@ -494,34 +514,125 @@ fun AllBoards(
     val locked = all.filter { it.how == "locked" }
     val coins = store.wallet?.coins ?: shelf?.coins ?: 0
 
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Boards", color = p.ink, fontSize = 19.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.width(8.dp))
-            Chip("$coins", icon = "coin", tint = p.gold)
-            Spacer(Modifier.weight(1f))
-            MMButton("Back", kind = BtnKind.GHOST) { onBack() }
+    Column {
+        if (showBar) {
+            AllBoardsBar(store, onBack)
+            Spacer(Modifier.height(8.dp))
         }
 
-        shelf?.until?.takeIf { it > 0 }?.let { BoardClock(store, it) }
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            shelf?.until?.takeIf { it > 0 }?.let { BoardClock(store, it, Modifier.padding(top = 2.dp)) }
 
-        BoardShelfGroup(
-            free, "Playable now",
-            "Classic is free forever. Two more rotate every day — every board " +
-                "comes round once every ${shelf?.cycleDays ?: 9} days.",
-            current, editable, onPick, onShop,
-        )
-        BoardShelfGroup(
-            mine, "Yours", "Bought and kept. Play them whenever you like.",
-            current, editable, onPick, onShop,
-        )
-        BoardShelfGroup(
-            locked, "In the store",
-            "Buy one and it is yours for good — or pay ${shelf?.rent?.price ?: 1} coin to play " +
-                "it once at this table. Only the host needs it; everyone plays it with you.",
-            current, editable, onPick, onShop,
-        )
+            BoardShelfGroup(
+                free, "Playable now",
+                "Classic is free forever. Two more rotate every day — every board " +
+                    "comes round once every ${shelf?.cycleDays ?: 12} days.",
+                current, editable, onPick, onShop,
+            )
+            BoardShelfGroup(
+                mine, "Yours", "Bought and kept. Play them whenever you like.",
+                current, editable, onPick, onShop,
+            )
+            BoardShelfGroup(
+                locked, "In the store",
+                "Buy one and it is yours for good — or pay ${shelf?.rent?.price ?: 1} coin to play " +
+                    "it once at this table. Only the host needs it; everyone plays it with you.",
+                current, editable, onPick, onShop,
+            )
+        }
     }
+}
+
+/**
+ * The Boards page's bar: the purse on the left, where the back button would
+ * sit, because it is the one number a player reads before a price; the title;
+ * and Done.
+ */
+@Composable
+fun AllBoardsBar(store: AccountStore, onBack: () -> Unit) {
+    val p = P.current
+    val coins = store.wallet?.coins ?: store.boards?.coins ?: 0
+    NavBar("Boards", "Done", onBack) {
+        BarCapsule {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon("coin", size = 12.dp)
+                Spacer(Modifier.width(4.dp))
+                Text("$coins", color = p.gold, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
+            }
+        }
+    }
+}
+
+/** The shop page's bar: its title, and Close. */
+@Composable
+fun ShopBar(onBack: () -> Unit) {
+    NavBar("Unlock a board", "Close", onBack)
+}
+
+/**
+ * The bar iOS's navigation stack draws over a sheet: the title centred, and
+ * its toolbar items as the system draws them — the same pale 44-point capsule
+ * the settings' Done wears, the word in the system's label colour (nothing
+ * tints these; only the settings sheet tints its own Done), and no sound of
+ * their own. Forty-four high, as the iPhone's is.
+ */
+@Composable
+private fun NavBar(
+    title: String,
+    action: String,
+    onAction: () -> Unit,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    val p = P.current
+    val label = if (p.sheet.luminance() < 0.5f) Color.White else Color.Black
+    Box(Modifier.fillMaxWidth().height(44.dp)) {
+        if (leading != null) {
+            Box(Modifier.align(Alignment.CenterStart)) { leading() }
+        }
+        Text(
+            title,
+            modifier = Modifier.align(Alignment.Center).padding(horizontal = 72.dp),
+            color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        BarCapsule(Modifier.align(Alignment.CenterEnd), onClick = onAction) {
+            Text(action, color = label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
+/**
+ * One toolbar item's capsule: 44 high, the card a shade toward the sunken
+ * fill, with the faint lighter rim the iPhone draws round it.
+ */
+@Composable
+private fun BarCapsule(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    val p = P.current
+    Box(
+        modifier
+            .height(44.dp)
+            .clip(CircleShape)
+            .background(lerp(p.card, p.sunken, 0.5f))
+            .border(1.dp, p.rule2, CircleShape)
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button) { onClick() } else Modifier)
+            .padding(horizontal = 15.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+/** iOS's PanelTitle: small capitals, one point apart, in the quietest ink. */
+@Composable
+private fun PanelTitle(text: String) {
+    Text(
+        text.uppercase(),
+        color = P.current.ink3, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+    )
 }
 
 /** One shelf, and nothing at all when the shelf is empty. */
@@ -536,12 +647,19 @@ private fun BoardShelfGroup(
     onShop: (String) -> Unit,
 ) {
     if (list.isEmpty()) return
+    val p = P.current
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        SectionLabel(title)
-        Hint(sub)
+        PanelTitle(title)
+        Text(sub, color = p.ink3, fontSize = 11.5.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium)
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             for (row in list.chunked(2)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Centred against each other, as a grid row on the iPhone
+                // centres a shorter card beside a taller one.
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     for (board in row) {
                         PickerCard(board, board.id == current, editable, Modifier.weight(1f)) {
                             if (!board.playable) onShop(board.id) else onPick(board.id)
@@ -577,7 +695,7 @@ private fun PickerCard(
                 if (selected) p.gold else p.rule,
                 RoundedCornerShape(16.dp),
             )
-            .clickable(enabled = live) { SoundKit.click(); Haptics.tap(); onClick() }
+            .clickable(enabled = live) { SoundKit.click(); onClick() }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -593,15 +711,13 @@ private fun PickerCard(
             Spacer(Modifier.width(5.dp))
             FitText(
                 board.name,
-                color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.Black,
+                color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
             )
         }
-        // Two lines whether or not it needs two, so the pair of cards in a row
-        // are the same height — the phone has no grid measuring them together.
         Text(
             board.description,
             color = p.ink3, fontSize = 11.sp, lineHeight = 14.sp,
-            fontWeight = FontWeight.Medium, minLines = 2, maxLines = 2,
+            fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
         )
         // Three of the places on it. A description tells you what a board is
         // about; the names tell you whether it is yours.
@@ -609,7 +725,7 @@ private fun PickerCard(
             Text(
                 board.teaser,
                 color = p.ink2, fontSize = 10.5.sp, lineHeight = 13.sp,
-                fontWeight = FontWeight.SemiBold, minLines = 2, maxLines = 2,
+                fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -636,25 +752,38 @@ private fun PickerCard(
  * The second button is the one-coin door: one game, at this table. It is
  * offered only from a lobby this player is hosting, because a pass is good at
  * one table and the board is only ever read against the host's wallet —
- * anywhere else the coin would buy nothing.
+ * anywhere else the coin would buy nothing. [game] is null where there is no
+ * table at all — the Store — and the door is simply not there.
  *
- * Both answers are given here in the body rather than as a toast: the toast
- * layer lives under this sheet's window, so a refusal shown that way would be
- * a refusal nobody saw. A purchase that worked needs no sentence — it closes
- * onto three boxes with this board sitting in them, dealt.
+ * A refusal is iOS's error toast. Both sheets this page is drawn in at a
+ * table (the lobby's list, and the settings' stacked pages) draw the table's
+ * toast over themselves, so it is seen there. With no table in hand — the
+ * Store — there is no toast to raise from here, and the refusal is said in
+ * the body of the page instead. A purchase that worked closes the page, and
+ * its sentence goes up as a toast as iOS's does.
  */
 @Composable
 fun BoardShop(
     store: AccountStore,
-    game: GameStore,
+    game: GameStore?,
     board: BoardListing,
     onBought: (String) -> Unit,
     onBack: () -> Unit,
+    /** False when the sheet around this lays [ShopBar] out above its scroll. */
+    showBar: Boolean = true,
 ) {
     val p = P.current
     var busy by remember { mutableStateOf(false) }
     var renting by remember { mutableStateOf(false) }
     var refused by remember(board.id) { mutableStateOf<String?>(null) }
+    // A refusal the server gave no words for is iOS's own sentence, not the
+    // account store's general one.
+    fun refusal(error: String): String =
+        if (error == NOTHING_CHANGED) "Couldn't reach the shop — try again." else error
+    val say: (String) -> Unit = { error ->
+        val words = refusal(error)
+        if (game != null) game.showToast(words, isError = true) else refused = words
+    }
 
     // The balance matters more here than anywhere else in the app.
     LaunchedEffect(board.id) { store.refreshStore() }
@@ -672,9 +801,9 @@ fun BoardShop(
     // could never be spent there. The server turns those rents down for the
     // same reason — this is so nobody is invited to reach for a coin button
     // that cannot work.
-    val state = game.state
+    val state = game?.state
     val spendable = state != null && state.isLobby && state.cup != true && state.quick != true
-    val rentRoom = game.roomId?.takeIf { it.isNotBlank() && spendable && game.isHost }
+    val rentRoom = game?.roomId?.takeIf { it.isNotBlank() && spendable && game?.isHost == true }
 
     // A game already paid for and never played. It moves rather than being
     // charged for twice — the server decides that; this only reads it.
@@ -695,15 +824,18 @@ fun BoardShop(
         else -> "Paid for and waiting. It is spent when this table deals, and only then."
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Unlock a board", color = p.ink, fontSize = 19.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.weight(1f))
-            MMButton("Back", kind = BtnKind.GHOST) { onBack() }
+    Column {
+        if (showBar) {
+            ShopBar(onBack)
+            Spacer(Modifier.height(8.dp))
         }
 
-        board.preview?.let {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            board.preview?.let {
                 MiniBoard(
                     it,
                     Modifier
@@ -714,169 +846,187 @@ fun BoardShop(
                         .padding(8.dp),
                 )
             }
-        }
 
-        Column(
-            Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Text(board.name, color = p.ink, fontSize = 21.sp, fontWeight = FontWeight.Black)
-            Text(
-                board.description,
-                color = p.ink2, fontSize = 13.sp, lineHeight = 18.sp,
-                fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
-            )
-        }
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BoardStat("${board.size}", "tiles")
-            if (board.streets > 0) { Spacer(Modifier.width(14.dp)); BoardStat("${board.streets}", "streets") }
-            if (board.countries > 0) { Spacer(Modifier.width(14.dp)); BoardStat("${board.countries}", "sets") }
-        }
-
-        // The board itself, in words. A rim of coloured chips says a board
-        // exists; this says whether you want it — and it is the only thing on
-        // this screen anybody reads twice.
-        if (board.sets.isNotEmpty()) {
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(p.sunken)
-                    .border(1.dp, p.rule, RoundedCornerShape(14.dp))
-                    .padding(13.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                SectionLabel("What's on it")
-                for (set in board.sets) {
-                    Row {
-                        Box(
-                            Modifier
-                                .padding(top = 3.dp)
-                                .size(9.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(cssColor(set.color, p.red)),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                set.name,
-                                color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.Black,
+                Text(board.name, color = p.ink, fontSize = 21.sp, fontWeight = FontWeight.Black)
+                Text(
+                    board.description,
+                    color = p.ink2, fontSize = 13.sp, lineHeight = 18.sp,
+                    fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BoardStat("${board.size}", "tiles")
+                if (board.streets > 0) { Spacer(Modifier.width(14.dp)); BoardStat("${board.streets}", "streets") }
+                if (board.countries > 0) { Spacer(Modifier.width(14.dp)); BoardStat("${board.countries}", "sets") }
+            }
+
+            // The board itself, in words. A rim of coloured chips says a board
+            // exists; this says whether you want it — and it is the only thing
+            // on this page anybody reads twice.
+            if (board.sets.isNotEmpty()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(p.sunken)
+                        .border(1.dp, p.rule, RoundedCornerShape(14.dp))
+                        .padding(13.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "WHAT'S ON IT",
+                        color = p.ink3, fontSize = 10.sp, letterSpacing = 0.7.sp, fontWeight = FontWeight.Black,
+                    )
+                    for (set in board.sets) {
+                        Row {
+                            Box(
+                                Modifier
+                                    .padding(top = 3.dp)
+                                    .size(9.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(cssColor(set.color, p.red)),
                             )
-                            Text(
-                                set.cities.joinToString(", "),
-                                color = p.ink2, fontSize = 11.5.sp, lineHeight = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    set.name,
+                                    color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+                                )
+                                Text(
+                                    set.cities.joinToString(", "),
+                                    color = p.ink2, fontSize = 11.5.sp, lineHeight = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        Hint(
-            "Buy it once and it is yours for good. Only the host needs to own a board — " +
-                "everyone at your table plays it with you.",
-            Modifier.fillMaxWidth(),
-        )
+            Text(
+                "Buy it once and it is yours for good. Only the host needs to own a board — " +
+                    "everyone at your table plays it with you.",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                color = p.ink3, fontSize = 12.sp, lineHeight = 16.sp,
+                fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+            )
 
-        // The old price rides on the button itself, struck through in front of
-        // the new one — this is the one surface in the app that actually
-        // charges for the sale, and it was the only one not mentioning it.
-        // And while the call is out the label says so: a disabled button is
-        // the same button, and six hundred coins leaving a wallet deserves a
-        // word rather than a pause.
-        MMButton(
-            when {
-                busy -> "Unlocking…"
-                short > 0 -> "$short more coins needed"
-                else -> "Unlock for ${board.price}"
-            },
-            kind = if (short > 0) BtnKind.GHOST else BtnKind.PRIMARY,
-            icon = "coin",
-            was = board.was.takeIf { short == 0 },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !busy && short == 0,
-        ) {
-            busy = true
-            refused = null
-            SoundKit.click()
-            store.buyBoard(board, quiet = true) { error ->
-                busy = false
-                refused = error
-                if (error == null) {
-                    SoundKit.buy()
-                    onBought(board.id)
-                }
-            }
-        }
-
-        Text(
-            when {
-                short > 0 ->
-                    "You have $coins. Win a game, collect the daily reward, or top up in the Store tab."
-                board.was != null -> "You have $coins coins. On sale today — three boards are, every day."
-                else -> "You have $coins coins."
-            },
-            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
-        )
-
-        // One coin, one game. Offered under the price rather than beside it:
-        // buying the board is still the thing this screen is for, and this is
-        // the cheaper way in.
-        if (board.rentable && rentRoom != null && (coins >= rentPrice || holding != null)) {
-            MMButton(
-                // The same word the button above uses, because the sheet is
-                // titled "Unlock a board" and this is the cheaper way to do
-                // it. It matters more here than there: a ghost button going
-                // disabled barely changes, so without the label there is no
-                // sign at all that the tap landed. [rentLine] underneath is
-                // untouched and still says which of the three things is
-                // being paid for.
-                if (renting) "Unlocking…" else rentLabel,
-                kind = BtnKind.GHOST,
-                icon = "coin",
+            // The price on a button, and the old one struck through in front of
+            // it while there really is a sale. While the call is out the coin
+            // gives way to a spinner, as iOS's does — the button itself stays
+            // solid and simply stops answering.
+            val buyKind = if (short > 0) LandingKind.GHOST else LandingKind.PRIMARY
+            LandingButton(
+                "",
+                buyKind,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !busy && !renting,
+                enabled = !busy && short == 0,
+                lead = { ink ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (busy) LandingSpinner(ink, size = 16.dp) else Icon("coin", size = 16.dp)
+                        Spacer(Modifier.width(7.dp))
+                        if (board.was != null && short == 0) {
+                            Text(
+                                "${board.was}",
+                                color = ink.copy(alpha = 0.55f), fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                textDecoration = TextDecoration.LineThrough,
+                            )
+                            Spacer(Modifier.width(7.dp))
+                        }
+                        Text(
+                            if (short > 0) "$short more coins needed" else "Unlock for ${board.price}",
+                            color = ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                },
             ) {
-                renting = true
+                busy = true
                 refused = null
                 SoundKit.click()
-                // What was charged is deliberately dropped: iOS turns two
-                // toasts on it, and this sheet has already said which of the
-                // two will happen, above the button, before the tap. Telling
-                // somebody afterwards what they were just told is noise.
-                store.rentBoard(board.id, rentRoom, quiet = true) { error, _ ->
-                    renting = false
-                    refused = error
+                store.buyBoard(board, quiet = true) { error ->
+                    busy = false
+                    error?.let(say)
                     if (error == null) {
                         SoundKit.buy()
+                        game?.showToast("${board.name} is yours!")
                         onBought(board.id)
                     }
                 }
             }
-            Text(
-                rentLine,
-                color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp,
-                fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
-            )
-        }
 
-        refused?.let {
             Text(
-                it,
-                modifier = Modifier.fillMaxWidth(),
-                color = p.bad, fontSize = 12.5.sp, lineHeight = 17.sp,
-                fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                when {
+                    short > 0 ->
+                        "You have $coins. Win a game, collect the daily reward, or top up in the Store tab."
+                    board.was != null -> "You have $coins coins. On sale today — three boards are, every day."
+                    else -> "You have $coins coins."
+                },
+                color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold,
             )
+
+            // One coin, one game. Offered under the price rather than beside it:
+            // buying the board is still the thing this page is for, and this is
+            // the cheaper way in.
+            if (board.rentable && rentRoom != null && (coins >= rentPrice || holding != null)) {
+                LandingButton(
+                    "",
+                    LandingKind.GHOST,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && !renting,
+                    lead = { ink ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (renting) LandingSpinner(ink, size = 15.dp) else Icon("coin", size = 15.dp)
+                            Spacer(Modifier.width(7.dp))
+                            Text(rentLabel, color = ink, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
+                        }
+                    },
+                ) {
+                    renting = true
+                    refused = null
+                    SoundKit.click()
+                    // What was charged says which of iOS's two sentences this
+                    // is: a game sold, or an unplayed one moved here for
+                    // nothing.
+                    store.rentBoard(board.id, rentRoom, quiet = true) { error, charged ->
+                        renting = false
+                        error?.let(say)
+                        if (error == null) {
+                            SoundKit.buy()
+                            game?.showToast(
+                                if (charged > 0) "${board.name} for one game — good at this table"
+                                else "Your unplayed game moved to ${board.name}",
+                            )
+                            onBought(board.id)
+                        }
+                    }
+                }
+                Text(
+                    rentLine,
+                    color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp,
+                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                )
+            }
+
+            refused?.let {
+                Text(
+                    it,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = p.bad, fontSize = 12.5.sp, lineHeight = 17.sp,
+                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
+
+/** AccountStore's words for a refusal that came with none of the server's own. */
+private const val NOTHING_CHANGED = "That didn't go through, and nothing has changed. Try again."
 
 /** One number with its word under it, three of them across. */
 @Composable
@@ -913,7 +1063,8 @@ private fun boardTick(everyMs: Long): Long {
  * deadline — a cup door shuts once, this comes round every night.
  */
 private fun freeBoardCountdown(ms: Long): String {
-    val left = (ms.coerceAtLeast(0L) / 1000L).toInt()
+    // To the nearest second, as iOS rounds it, so both phones say the same.
+    val left = ((ms.coerceAtLeast(0L) + 500L) / 1000L).toInt()
     if (left >= 86400) return "${left / 86400}d ${left % 86400 / 3600}h"
     if (left >= 3600) return "${left / 3600}h ${left % 3600 / 60}m"
     return "%d:%02d".format(left / 60, left % 60)

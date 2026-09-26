@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -19,6 +20,36 @@
         android:usesCleartextTraffic="false"
         android:hardwareAccelerated="true"
         android:theme="@style/Theme.MoneyMove">
+
+        <!-- Google Mobile Ads reads this from its own content provider before
+             the app's first line runs, and a missing or malformed value is an
+             exception thrown there — a crash at launch nothing can catch. The
+             placeholder is filled by app/build.gradle.kts, which only ever
+             puts a well-formed id in it: the owner's ADMOB_APP_ID, or Google's
+             sample id when there is none yet. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
+        <!-- The SDK's start-up and its ad loading moved off the main thread.
+             Current SDKs default both to true; they are said out loud here so
+             an SDK that changes its mind cannot quietly put that work back on
+             the thread that draws the board. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.flag.OPTIMIZE_INITIALIZATION"
+            android:value="true"
+            tools:replace="android:value" />
+        <meta-data
+            android:name="com.google.android.gms.ads.flag.OPTIMIZE_AD_LOADING"
+            android:value="true"
+            tools:replace="android:value" />
+        <!-- Nothing is measured at launch. The SDK otherwise starts sending
+             its own app-measurement events the moment the process starts;
+             with this it waits until the app starts the SDK or loads an ad,
+             and this app does neither until somebody taps an offer or a
+             pre-game break is due. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.DELAY_APP_MEASUREMENT_INIT"
+            android:value="true" />
 
         <activity
             android:name=".MainActivity"

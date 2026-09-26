@@ -1,5 +1,7 @@
 package com.moneymove.game
 
+import android.app.Activity
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,271 +11,536 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * The shop.
+ * The shop, laid out the way the iPhone lays out its Store tab: the title and
+ * the purse, one line on where coins come from, the coin packs, and then every
+ * shelf at once — pieces, faces, boards — one under the other.
  *
- * Everything here is style. Coins buy a piece to push round the board, a face
+ * Every shelf at once, not a row of buttons choosing one. The owner held the
+ * two phones side by side, and a shop that hides two thirds of itself behind
+ * a toggle is a different shop from one you can scroll.
+ *
+ * Everything on it is style. Coins buy a piece to push round the board, a face
  * for the chip beside your name, and a game on a board somebody else paid to
  * make — never an advantage, because a board game you can buy your way
- * through is not a board game anybody wants to lose at fairly.
+ * through is not a board game anybody wants to lose at fairly. That is said
+ * out loud under the title rather than left to be discovered, because it is
+ * the one thing a player wants to know before they read a price.
  *
- * That is said out loud at the top rather than left to be discovered, because
- * it is the single thing a player wants to know before they read a price.
+ * The daily reward and the watch-an-ad offer are not here. iOS keeps both on
+ * the Play tab, and so does this app; the Store is where coins are spent.
  */
 @Composable
 fun StoreTab(store: AccountStore, billing: Billing) {
     val p = P.current
-    var kind by remember { mutableStateOf("token") }
+    // The toast layer is GameStore's and sits over every tab, so the shop
+    // speaks through it the way iOS's does, instead of parking a red line at
+    // the foot of a page nobody has scrolled to the bottom of.
+    val game: GameStore = viewModel()
+    val items = store.store?.items.orEmpty()
 
-
-    LaunchedEffect(Unit) { store.refreshStore() }
-
-    val owned = store.wallet?.owned.orEmpty().toSet()
-    val worn = store.wallet?.equipped.orEmpty()
-    val items = store.store?.items.orEmpty().filter { it.kind == kind }
+    // iOS's storeFailed: AccountStore says the moment a catalogue fetch comes
+    // back empty-handed with nothing cached, and Try again asks again.
+    var attempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(attempt) { store.refreshStore() }
+    val gaveUp = store.storeFailed && store.store == null
 
     Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Store", color = p.ink, fontSize = 26.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.weight(1f))
-            CoinChip(store.coins)
-        }
-        Spacer(Modifier.height(4.dp))
-        Hint("Win games, earn coins, dress your piece. Everything here is pure style — never pay-to-win.")
+        // iOS's tabPage: eighteen between the pieces, twenty off the top, and
+        // no wider than 560 so a tablet reads as a column rather than a banner.
+        Column(
+            Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f).padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("Store", color = p.ink, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(
+                        "Win games, earn coins, dress your piece.",
+                        color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
+                CoinChip(store.coins, Modifier.padding(top = 10.dp))
+            }
 
-        Spacer(Modifier.height(16.dp))
-        CoinWays(store)
+            // What the server actually pays: the daily ladder runs one coin to
+            // seven, a win is worth two and a runner-up one. Promising fifty a
+            // game would make every price on this page read as a rip-off the
+            // first time somebody won and counted.
+            Text(
+                "Collect your daily coins, and take a couple more for every game you win. " +
+                    "Everything here is pure style — never pay-to-win.",
+                modifier = Modifier.fillMaxWidth(),
+                color = p.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+            )
 
-        // Only when the server says there is one. An offer that cannot be
-        // taken is worse than no offer.
-        Spacer(Modifier.height(10.dp))
-        AdOfferRow(store, "freeCoins") { store.watchAd("freeCoins") }
+            CoinPacks(store, billing, game)
 
-        // Coin packs: the one thing in this app that costs real money.
-        Spacer(Modifier.height(12.dp))
-        CoinPacks(store, billing)
-
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((id, label) in listOf("token" to "Pieces", "avatar" to "Faces", "board" to "Boards")) {
-                MMButton(
-                    label,
-                    kind = if (kind == id) BtnKind.PRIMARY else BtnKind.GHOST,
-                    modifier = Modifier.weight(1f),
-                ) { kind = id }
+            if (items.isEmpty()) {
+                ShopPlaceholder(failed = gaveUp) { attempt++ }
+            } else {
+                Shelf(store, game, items, "dice", "Token skins", "Your piece on the board.", "token")
+                Shelf(store, game, items, "people", "Avatars", "Your face in the player chip.", "avatar")
+                // Boards are the one thing in this shop that is not a costume,
+                // so they get a shelf that shows the board rather than an emoji.
+                BoardStoreShelf(store, game)
             }
         }
-
-        Spacer(Modifier.height(14.dp))
-        // The boards are asked for separately and answered separately, so the
-        // shelf is not made to wait on the catalogue the pieces come out of.
-        if (kind == "board") {
-            BoardShelf(store)
-        } else if (store.store == null) {
-            Hint("Opening the shop…")
-        } else {
-            Shelf(store, items, owned, worn[kind])
-        }
-
-        store.notice?.let {
-            Spacer(Modifier.height(12.dp))
-            Text(it, color = p.bad, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Spacer(Modifier.height(28.dp))
     }
+}
 
-    // The ad itself covers everything, because that is what an ad does. The
-    // store asked for it and is waiting on the gate; this completes it.
-    store.adRequest?.let { gate ->
-        // Five seconds, because the server will not settle a claim that
-        // arrives less than three after the ticket was cut — a view nobody
-        // could have watched is the one thing it can refuse on its own.
-        HouseAdOverlay(seconds = 5) { played -> gate.complete(played) }
+/** How long Google Play gets to name its prices before the packs say so. */
+private const val PLAY_PATIENCE_MS = 8_000L
+
+/** Billing's own words for a phone with no Play Store to ask. */
+private const val PLAY_MISSING = "Google Play isn't available on this device."
+
+/** Billing's own words for a purchase parked on somebody's approval. */
+private const val PLAY_PENDING = "Waiting on approval for that purchase."
+
+/** iOS's store purse: a gold capsule, the coin, and the count beside it. */
+@Composable
+private fun CoinChip(coins: Int, modifier: Modifier = Modifier) {
+    val p = P.current
+    Row(
+        modifier
+            .clip(RoundedCornerShape(99.dp))
+            .background(p.goldSoft)
+            .border(1.dp, p.gold.copy(alpha = 0.6f), RoundedCornerShape(99.dp))
+            .padding(horizontal = 13.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon("coin", size = 17.dp)
+        Spacer(Modifier.width(5.dp))
+        Text("$coins", color = p.gold, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
+
+/** iOS's PanelTitle: small capitals, one point apart, in the quietest ink. */
+@Composable
+private fun PanelTitle(text: String) {
+    Text(
+        text.uppercase(),
+        color = P.current.ink3, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+    )
+}
+
+/**
+ * The shelves take a moment to arrive, and they can fail. Either way the tab
+ * has to say so — an empty Store reads as "nothing for sale".
+ */
+@Composable
+private fun ShopPlaceholder(failed: Boolean, onRetry: () -> Unit) {
+    val p = P.current
+    LandingCard(padding = 18.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (failed) {
+                OfflineMark(p.bad, 15.dp)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Couldn't load the shop.",
+                    color = p.ink2, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(6.dp))
+                LandingButton("Try again", LandingKind.GHOST) { onRetry() }
+            } else {
+                LandingSpinner(p.red)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Loading the shop…",
+                    color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 
 /**
- * The coin packs, straight off Play.
+ * iOS's wifi.exclamationmark, drawn: three rings of signal and a warning
+ * stroke beside them, in the table's "bad" ink. The drawn set has no signal
+ * glyph, and its warning triangle keeps a yellow of its own where iOS shows
+ * red — so the mark is made here, in the shop's own file, from strokes.
+ */
+@Composable
+private fun OfflineMark(tint: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val s = this.size.minDimension
+        val stroke = s * 0.11f
+        val hub = Offset(s * 0.40f, s * 0.84f)
+        for (r in listOf(0.18f, 0.35f, 0.52f)) {
+            val radius = s * r
+            drawArc(
+                tint,
+                startAngle = 225f,
+                sweepAngle = 90f,
+                useCenter = false,
+                topLeft = Offset(hub.x - radius, hub.y - radius),
+                size = Size(radius * 2, radius * 2),
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+        }
+        drawCircle(tint, radius = stroke * 0.8f, center = hub)
+        val bang = s * 0.92f
+        drawLine(tint, Offset(bang, s * 0.2f), Offset(bang, s * 0.58f), strokeWidth = stroke, cap = StrokeCap.Round)
+        drawCircle(tint, radius = stroke * 0.65f, center = Offset(bang, s * 0.82f))
+    }
+}
+
+// ────────────────────────────────────────────────────────────── coin packs ──
+
+/**
+ * Paid top-ups. The packs are always listed — the app knows all three without
+ * asking anybody — and whether they can be bought is Google Play's answer,
+ * shown honestly: checking, on sale, or a Try again.
  *
  * Prices come from Play rather than from this app, because a price written
  * here would be wrong in every country but one — Play knows what this player
  * actually pays and in which currency.
  */
 @Composable
-private fun CoinPacks(store: AccountStore, billing: Billing) {
+private fun CoinPacks(store: AccountStore, billing: Billing, game: GameStore) {
     val p = P.current
-    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
-    LaunchedEffect(Unit) { billing.start(store) }
-    Panel {
-        SectionLabel("Coin packs", icon = "bag")
-        Spacer(Modifier.height(10.dp))
-        for (pack in billing.offers) {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon("coin", size = 20.dp)
-                Spacer(Modifier.width(11.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        pack.name,
-                        color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.Bold,
-                    )
-                    Hint("${pack.coins} coins")
-                }
-                // No price until Play has answered, because a price written
-                // here would be wrong in every country but one.
-                MMButton(
-                    pack.price ?: "…", kind = BtnKind.GOLD,
-                    enabled = activity != null && pack.price != null
-                        && billing.onSale && billing.buying == null,
-                ) { activity?.let { billing.buy(it, pack.packId) } }
-            }
+    val activity = LocalContext.current as? Activity
+
+    // Play has no "I looked and there was nothing" signal that reaches this
+    // screen, so the same fair wait the catalogue gets stands in for iOS's
+    // `failed`: past it, with nothing on sale, the line offers a Try again
+    // instead of checking forever. A phone with no Play Store says so at once.
+    var attempt by remember { mutableIntStateOf(0) }
+    var waited by remember { mutableStateOf(false) }
+    LaunchedEffect(attempt) {
+        waited = false
+        billing.start(store)
+        delay(PLAY_PATIENCE_MS)
+        waited = true
+    }
+
+    // What Billing has to say goes up as a toast, as iOS's CoinShop says it:
+    // the pending note plainly, everything else as the failure it is.
+    LaunchedEffect(billing.notice) {
+        val said = billing.notice ?: return@LaunchedEffect
+        if (said == PLAY_MISSING) waited = true
+        game.showToast(said, isError = said != PLAY_PENDING)
+        billing.notice = null
+    }
+
+    // iOS toasts "Coins added" once the server has credited the pack. Billing
+    // keeps that moment to itself, so the purse is watched instead: a balance
+    // that rises by at least the pack's coins after a tap is that moment.
+    var awaiting by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(store.coins, awaiting) {
+        val (before, worth) = awaiting ?: return@LaunchedEffect
+        if (store.coins >= before + worth) {
+            awaiting = null
+            game.showToast("Coins added — go spend them.", glyph = "coin")
         }
-        billing.notice?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = p.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+    }
+    LaunchedEffect(billing.buying) {
+        // Walked out of Play's sheet, or refused: nothing is coming.
+        if (billing.buying == null && awaiting != null) {
+            delay(15_000L)
+            awaiting = null
+        }
+    }
+
+    val failed = !billing.onSale && waited
+    val loading = !billing.onSale && !failed
+    val bonuses = store.store?.packs.orEmpty().associate { it.id to it.bonus?.trim()?.toIntOrNull() }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon("coin", size = 13.dp)
+            Spacer(Modifier.width(6.dp))
+            PanelTitle("Get coins")
+        }
+        if (failed) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Couldn't reach Google Play.",
+                    color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(6.dp))
+                LandingButton("Try again", LandingKind.GHOST) { attempt++ }
+            }
+        } else {
+            Text(
+                if (billing.onSale) "Top up when the wins aren't coming fast enough."
+                else "Checking Google Play…",
+                color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (pack in billing.offers) {
+            val live = billing.onSale && pack.price != null
+            val busy = billing.buying == pack.packId
+            PackRow(
+                pack = pack,
+                bonus = bonuses[pack.packId] ?: BUILT_IN_BONUS[pack.packId] ?: 0,
+                live = live,
+                spinning = busy || (!live && loading),
+                enabled = live && !busy && activity != null,
+            ) {
+                val from = activity ?: return@PackRow
+                awaiting = store.coins to pack.coins
+                billing.buy(from, pack.packId)
+            }
         }
     }
 }
 
+/**
+ * The bonus each pack carries, as the server's catalogue states it. The
+ * served copy wins when it has arrived; this is so the badge is there before
+ * it has, exactly as iOS's built-in packs carry theirs.
+ */
+private val BUILT_IN_BONUS = mapOf("coins.small" to 0, "coins.mid" to 10, "coins.large" to 25)
+
+/**
+ * The drawing each pack wears — iOS's packGlyph, keyed on the pack rather than
+ * on the emoji the server sends, because the pack is what this app knows for
+ * certain. The big one is a chest, not a bank.
+ */
+private fun packGlyph(packId: String): String = when (packId) {
+    "coins.mid" -> "bag"
+    "coins.large" -> "toolbox"
+    else -> "coin"
+}
+
 @Composable
-private fun CoinChip(coins: Int) {
+private fun PackRow(
+    pack: CoinPackOffer,
+    bonus: Int,
+    live: Boolean,
+    spinning: Boolean,
+    enabled: Boolean,
+    onBuy: () -> Unit,
+) {
     val p = P.current
+    val shape = RoundedCornerShape(15.dp)
     Row(
         Modifier
-            .clip(RoundedCornerShape(99.dp))
-            .background(p.goldSoft)
-            .border(1.dp, p.gold, RoundedCornerShape(99.dp))
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .fillMaxWidth()
+            .alpha(if (live) 1f else 0.55f)
+            .clip(shape)
+            .background(p.card)
+            .border(1.dp, p.rule, shape)
+            .clickable(enabled = enabled) { onBuy() }
+            .padding(vertical = 11.dp, horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon("coin", size = 16.dp)
-        Spacer(Modifier.width(7.dp))
-        Text("$coins", color = p.gold, fontSize = 15.sp, fontWeight = FontWeight.Black)
-    }
-}
-
-/** The two ways to get coins that cost nothing: the daily, and winning. */
-@Composable
-private fun CoinWays(store: AccountStore) {
-    val p = P.current
-    val daily = store.daily
-    Panel {
-        SectionLabel("Get coins", icon = "coin")
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+        Icon(packGlyph(pack.packId), size = 32.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Daily reward",
-                    color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    pack.name,
+                    color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
-                Hint(
-                    when {
-                        daily == null -> "Checking…"
-                        !daily.signedIn -> "Sign in and it is yours every day."
-                        daily.claimable -> "${daily.amount} coin${if (daily.amount == 1) "" else "s"} waiting" +
-                            if (daily.streak > 1) " · ${daily.streak}-day streak" else ""
-                        else -> "Collected. Come back tomorrow."
-                    }
+                if (bonus > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "+$bonus%",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(p.gold)
+                            .padding(horizontal = 6.dp, vertical = 2.5.dp),
+                        color = p.accentInk, fontSize = 9.sp,
+                        letterSpacing = 0.4.sp, fontWeight = FontWeight.Black,
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon("coin", size = 13.dp)
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "${pack.coins} coins",
+                    color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
                 )
             }
-            Spacer(Modifier.width(10.dp))
-            MMButton(
-                if (daily?.claimable == true) "Collect" else "Collected",
-                kind = if (daily?.claimable == true) BtnKind.GOLD else BtnKind.GHOST,
-                enabled = daily?.claimable == true,
-            ) { store.claimDaily() }
         }
-        Spacer(Modifier.height(10.dp))
-        Rule()
-        Spacer(Modifier.height(10.dp))
-        Hint("Every game you win pays a couple more. Coins are earned at the table first.")
+        Spacer(Modifier.width(6.dp))
+        if (spinning) {
+            LandingSpinner(p.red)
+        } else if (pack.price != null) {
+            // Only ever Play's own localised price. A hard-coded figure is
+            // wrong everywhere but one country, and printed on a row that
+            // cannot be tapped it reads as a broken shop.
+            Text(
+                pack.price,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(p.red)
+                    .padding(horizontal = 13.dp, vertical = 7.dp),
+                color = p.accentInk, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold,
+            )
+        }
     }
 }
 
-/** Pieces and faces: a grid of things to wear. */
+// ───────────────────────────────────────────────────────── pieces and faces ──
+
+/**
+ * One shelf of things to wear: its heading, the line under it, and three to a
+ * row. Nothing at all when the catalogue has none of this kind.
+ */
 @Composable
-private fun Shelf(store: AccountStore, items: List<StoreItem>, owned: Set<String>, worn: String?) {
+private fun Shelf(
+    store: AccountStore,
+    game: GameStore,
+    catalogue: List<StoreItem>,
+    glyph: String,
+    title: String,
+    sub: String,
+    kind: String,
+) {
     val p = P.current
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val items = catalogue.filter { it.kind == kind }
+    if (items.isEmpty()) return
+    val scope = rememberCoroutineScope()
+    // Bought here and not yet back from the wallet: the card redraws as owned
+    // at once rather than a round trip later, as iOS's does.
+    var bought by remember { mutableStateOf(emptySet<String>()) }
+    val owned = store.wallet?.owned.orEmpty().toSet() + bought
+    val worn = store.wallet?.equipped?.get(kind).orEmpty()
+    val coins = store.coins
+
+    // iOS writes the new look into its wallet the instant it is tapped and
+    // puts the old one back if the server never agreed. The wallet here is
+    // AccountStore's to write, so the guess is held beside it instead: the
+    // tick moves on the tap, the wallet takes back over the moment it agrees,
+    // and a refusal drops the guess there and then.
+    var guess by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(worn) { if (guess == worn) guess = null }
+    val showing = guess ?: worn
+
+    // iOS's Cosmetics.wear. No `itemId` at all is how the server spells
+    // taking one off: the post drops a null before it builds the body.
+    suspend fun wear(item: StoreItem?) {
+        guess = item?.id.orEmpty()
+        val reply = game.api.postOrError("/api/store/equip", mapOf("slot" to kind, "itemId" to item?.id))
+        if (reply.ok) {
+            // The same note the lobby's piece row writes, so the next table
+            // this device sits at agrees about what it is wearing.
+            when (kind) {
+                "token" -> game.prefs.tokenSkin = item?.emoji.orEmpty()
+                "avatar" -> game.prefs.avatar = item?.emoji.orEmpty()
+            }
+        } else {
+            guess = null
+            game.showToast(reply.error ?: "Couldn't change your look — try again.", isError = true)
+        }
+        store.refreshStore()
+    }
+
+    /**
+     * iOS's Cosmetics.buyOrEquip: buy it if it isn't yours yet (buying wears
+     * it), take it off if it is the one you are wearing, and wear it
+     * otherwise. Each refusal is the server's own sentence, and iOS's words
+     * when there is none.
+     */
+    fun tap(item: StoreItem, have: Boolean, on: Boolean) {
+        SoundKit.click()
+        scope.launch {
+            if (!have) {
+                val reply = game.api.postOrError("/api/store/buy", mapOf("itemId" to item.id, "expect" to item.price))
+                if (!reply.ok) {
+                    // A request that never landed must not read as a
+                    // purchase: the coins only moved if the server said so.
+                    game.showToast(reply.error ?: "Couldn't reach the shop — try again.", isError = true)
+                    return@launch
+                }
+                SoundKit.buy()
+                // The purse the reply states, at once, as iOS writes it.
+                store.noteBuyReply(reply.body)
+                game.showToast("${item.emoji} ${item.name} is yours!")
+                bought = bought + item.id
+            }
+            wear(if (on) null else item)
+        }
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(glyph, size = 13.dp, tint = p.ink3)
+            Spacer(Modifier.width(6.dp))
+            PanelTitle(title)
+        }
+        Text(sub, color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         for (row in items.chunked(3)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (item in row) {
                     val have = item.id in owned
-                    val on = item.id == worn
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(p.card)
-                            .border(
-                                if (on) 2.dp else 1.dp,
-                                if (on) p.red else p.rule,
-                                RoundedCornerShape(14.dp),
-                            )
-                            .clickable {
-                                if (have) store.equip(item) else store.buy(item)
-                            }
-                            .padding(vertical = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(item.emoji, fontSize = 30.sp)
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            item.name,
-                            color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center, maxLines = 1,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        if (on) {
-                            Chip("worn", tint = p.red)
-                        } else if (have) {
-                            Chip("owned", tint = p.good)
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon("coin", size = 12.dp)
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "${item.price}",
-                                    color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-                    }
+                    val on = item.id == showing
+                    ItemCard(
+                        item = item,
+                        owned = have,
+                        equipped = on,
+                        // What you cannot afford yet reads as out of reach,
+                        // rather than looking like everything else until the
+                        // tap bounces back an error.
+                        affordable = have || coins >= item.price,
+                        modifier = Modifier.weight(1f),
+                    ) { tap(item, have, on) }
                 }
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
@@ -281,37 +548,85 @@ private fun Shelf(store: AccountStore, items: List<StoreItem>, owned: Set<String
     }
 }
 
+@Composable
+private fun ItemCard(
+    item: StoreItem,
+    owned: Boolean,
+    equipped: Boolean,
+    affordable: Boolean,
+    modifier: Modifier = Modifier,
+    onTap: () -> Unit,
+) {
+    val p = P.current
+    val shape = RoundedCornerShape(15.dp)
+    Column(
+        modifier
+            .alpha(if (affordable) 1f else 0.55f)
+            .clip(shape)
+            .background(if (equipped) p.goldSoft else p.card)
+            .border(if (equipped) 1.5.dp else 1.dp, if (equipped) p.gold else p.rule, shape)
+            .clickable { onTap() }
+            .padding(vertical = 13.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        // A bought skin is the player's own chosen emoji — the one place in
+        // the chrome where an emoji is the thing on sale rather than a
+        // drawing standing in for one.
+        Text(item.emoji, fontSize = 34.sp)
+        Text(
+            item.name,
+            color = p.ink, fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!owned) {
+                Icon("coin", size = 12.dp)
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                when {
+                    equipped -> "✓ Equipped"
+                    owned -> "Tap to equip"
+                    else -> "${item.price}"
+                },
+                color = when {
+                    equipped -> p.good
+                    owned -> p.ink3
+                    affordable -> p.gold
+                    else -> p.ink3
+                },
+                fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────── boards ──
+
 /**
- * Boards.
+ * Boards, alongside the pieces and the faces.
  *
- * A shelf of its own rather than another row of [Shelf], because a board is
- * not a piece: it is bought on the strength of the drawing, so the card
- * carries the board itself rather than an emoji — and it says out loud when
- * one is free today. The shop's job is to sell a board, not to sell somebody
- * a board they could have had for nothing this afternoon.
+ * A shelf of its own rather than another [Shelf], because a board is not a
+ * piece: it is bought on the strength of the drawing, so the card carries the
+ * board itself rather than an emoji — and it says out loud when one is free
+ * today. The shop's job is to sell a board, not to sell somebody a board they
+ * could have had for nothing this afternoon.
  *
- * Two taps rather than one. A piece costs a few wins' worth of coins and buys
- * on the tap; the dearest board here is twelve hundred, which is a whole coin
- * pack, so the first tap only opens the price. iOS spends a whole sheet on
- * that second tap — this does it in the room the card already has.
+ * A tap opens the board's own page, the same one the lobby opens: the drawing
+ * large, what is on it, and the price on a button. The dearest board here is
+ * a whole coin pack, and that deserves a page rather than a card's corner.
  */
 @Composable
-private fun BoardShelf(store: AccountStore) {
-    val listing = store.boards
-    // Which card has been asked its price, and which one is in flight.
-    var asking by remember { mutableStateOf<String?>(null) }
-    var buying by remember { mutableStateOf<String?>(null) }
+private fun BoardStoreShelf(store: AccountStore, game: GameStore) {
+    val p = P.current
+    var shopping by remember { mutableStateOf<String?>(null) }
 
     // A phone that slept through midnight wakes holding yesterday's shelf:
     // yesterday's free pair, yesterday's sale — and a tap on a price that has
     // already turned over comes back refused by the server's `expect` check,
-    // which is a rude way to learn the day changed. The lobby notices for
-    // itself, because the countdown it draws runs out in front of the player.
-    // This shelf has no clock, so it asks again on the way back in.
-    //
-    // Deliberately above the early return: an effect below it would be added
-    // and thrown away again as the boards land, and the one moment it has to
-    // survive is the app being away.
+    // which is a rude way to learn the day changed. So it asks again on the
+    // way back in, as iOS does on willEnterForeground.
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner, store) {
         val watch = LifecycleEventObserver { _, event ->
@@ -321,123 +636,88 @@ private fun BoardShelf(store: AccountStore) {
         onDispose { owner.lifecycle.removeObserver(watch) }
     }
 
-    if (listing == null || listing.boards.isEmpty()) {
-        // Its own fetch, arriving at its own speed: the pieces are a catalogue
-        // anyone may read, and this is an answer about this wallet on this day.
-        Hint("Laying the boards out…")
-        return
-    }
+    val boards = store.boards?.boards.orEmpty()
 
-    // The shelf carries the wallet's own count, and that is the one to read
-    // when /api/wallet has quietly failed. A player holding nine hundred coins
-    // being told they need five hundred more is the bug this fixes.
-    val coins = if (store.wallet != null) store.coins else listing.coins
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon("map", size = 15.dp, tint = p.ink2)
+            Spacer(Modifier.width(7.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text("Boards", color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    "Classic is free forever and two more every day. Three are on sale, " +
+                        "and the shelf is redealt every morning.",
+                    color = p.ink3, fontSize = 11.5.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium,
+                )
+            }
+        }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Hint(
-            "Classic is free forever and two more every day. Three are on sale, " +
-                "and the shelf is redealt every morning.",
-        )
-        for (row in listing.boards.chunked(2)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (row in boards.chunked(2)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 for (board in row) {
-                    BoardCard(
-                        board = board,
-                        coins = coins,
-                        asking = board.id == asking,
-                        busy = board.id == buying,
-                        modifier = Modifier.weight(1f),
-                        onAsk = {
-                            SoundKit.click()
-                            asking = if (asking == board.id) null else board.id
-                        },
-                        onBuy = {
-                            buying = board.id
-                            // A price that turned over while the card sat open
-                            // is refused by the server on `expect` rather than
-                            // quietly charged, and the shelf is re-fetched
-                            // either way — so there is nothing to guard here.
-                            store.buyBoard(board) { error ->
-                                buying = null
-                                if (error == null) {
-                                    SoundKit.buy()
-                                    asking = null
-                                }
-                            }
-                        },
-                    )
+                    BoardCard(board, Modifier.weight(1f)) {
+                        SoundKit.click()
+                        shopping = board.id
+                    }
                 }
                 repeat(2 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
-        // Renting needs a table to rent at, and the shop has no table — so
-        // this says the offer exists and where it lives, rather than showing a
-        // coin button that could only come back refused.
-        Hint(
-            if (listing.rent.holding != null) {
-                "You are holding a game you paid for and never played. Rent any board and " +
-                    "the same game moves there — nothing more to pay."
-            } else {
-                "Or rent a locked board for ${listing.rent.price} coin — one game, at one " +
-                    "table. That offer is in the lobby, where the table is."
-            },
-        )
+    }
+
+    shopping?.let { id ->
+        val board = store.board(id)
+        if (board == null) {
+            LaunchedEffect(id) { shopping = null }
+        } else {
+            BoardShopSheet(
+                store = store,
+                board = board,
+                onClose = { shopping = null },
+                onBought = {
+                    shopping = null
+                    game.showToast("${board.name} is yours!")
+                },
+            )
+        }
     }
 }
 
 /**
- * One board on the shelf.
- *
- * The drawing first and the price last, in that order, because the drawing is
- * the thing being sold: nineteen boards answer to the same handful of glyphs,
- * and a card that leads with a name and an emoji cannot tell Bharat from
- * Canada — which is exactly what this shop was doing.
+ * One board on the shelf: the drawing first and the price last, because the
+ * drawing is the thing being sold. Nineteen boards answer to the same handful
+ * of glyphs, and a card that leads with a name cannot tell Bharat from Canada.
  */
 @Composable
-private fun BoardCard(
-    board: BoardListing,
-    coins: Int,
-    asking: Boolean,
-    busy: Boolean,
-    modifier: Modifier = Modifier,
-    onAsk: () -> Unit,
-    onBuy: () -> Unit,
-) {
+private fun BoardCard(board: BoardListing, modifier: Modifier = Modifier, onTap: () -> Unit) {
     val p = P.current
     // Free forever, or already paid for. Either way there is nothing to sell.
-    val yours = board.how == "house" || board.how == "owned"
+    val owned = board.how == "house" || board.how == "owned"
     val was = board.was
-    val short = (board.price - coins).coerceAtLeast(0)
     val shape = RoundedCornerShape(15.dp)
 
     Column(
         modifier
             .clip(shape)
             .background(p.card)
-            .border(if (asking) 2.dp else 1.dp, if (asking) p.gold else p.rule, shape)
-            .clickable(enabled = !yours) { onAsk() }
+            .border(1.dp, p.rule, shape)
+            .clickable(enabled = !owned) { onTap() }
             .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Box(Modifier.fillMaxWidth()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(p.page)
-                    .padding(4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                // A locked board is drawn faint, the way iOS dims it: plainly
-                // a board, plainly not one of yours yet. `dim` fades the tile
-                // colours themselves rather than the whole drawing, so the
-                // page-coloured well behind it keeps its own weight.
-                //
-                // The board overload, not the preview one: a server too old to
-                // send a preview leaves the board wearing its own glyph rather
-                // than a hole, and that fallback belongs beside the drawing
-                // instead of being written out again in every shelf.
-                MiniBoard(board, dim = board.how == "locked")
+            board.preview?.let {
+                // A locked board is drawn faint: plainly a board, plainly not
+                // one of yours yet.
+                MiniBoard(
+                    it,
+                    Modifier.clip(RoundedCornerShape(10.dp)).background(p.page).padding(4.dp),
+                    dim = board.how == "locked",
+                )
             }
             val badge = Modifier.align(Alignment.TopEnd).padding(5.dp)
             if (board.how == "today") {
@@ -451,68 +731,56 @@ private fun BoardCard(
             }
         }
 
-        Spacer(Modifier.height(7.dp))
-        // Two cards to a row, so a board's name gets half a phone to say
-        // itself in — and "The Great White North" does not fit in it at this
-        // weight. Shrink it a fifth rather than cut it: a name clipped to
-        // "The Great White N…" is the one thing on this card that cannot be
-        // guessed from the drawing above it. iOS shrinks by the same fifth.
-        FitText(
-            board.name,
-            color = p.ink, fontSize = 12.5.sp, fontWeight = FontWeight.Black,
-            textAlign = TextAlign.Center, minScale = 0.8f,
-        )
-        Spacer(Modifier.height(2.dp))
-        // Two lines, always. Half a city name sells nothing — "New York City ·
-        // Boston · San Fra…" — and a card a line taller than the one beside it
-        // leaves the row ragged, so the space is kept whether it is filled or
-        // not.
-        Text(
-            board.teaser,
-            color = p.ink3, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
-            lineHeight = 12.sp, textAlign = TextAlign.Center, maxLines = 2, minLines = 2,
-        )
-        Spacer(Modifier.height(7.dp))
-
-        if (asking) {
-            MMButton(
-                when {
-                    busy -> "Unlocking…"
-                    short > 0 -> "$short more coins needed"
-                    else -> "Unlock for ${board.price}"
-                },
-                kind = if (short > 0) BtnKind.GHOST else BtnKind.GOLD,
-                icon = if (short > 0) null else "coin",
-                enabled = !busy && short == 0,
-                modifier = Modifier.fillMaxWidth(),
-            ) { onBuy() }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!yours) {
-                    Icon("coin", size = 12.dp)
-                    Spacer(Modifier.width(4.dp))
-                }
-                // The old price, struck through, and only while there really is
-                // an old one: a "was" that matches the price is the oldest lie
-                // in retail, which is why the server sends it only when true.
-                if (was != null && !yours) {
-                    Text(
-                        "$was",
-                        color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        textDecoration = TextDecoration.LineThrough,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                }
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            // Shrunk a fifth rather than cut: "The Great White North" clipped
+            // to "The Great White N…" is the one thing on this card that
+            // cannot be guessed from the drawing above it.
+            FitText(
+                board.name,
+                color = p.ink, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center, minScale = 0.8f,
+            )
+            if (board.teaser.isNotEmpty()) {
+                // Two lines, because half a city name is worse than a taller
+                // card: "New York City · Boston · San Fra…" sells nothing.
                 Text(
-                    when {
-                        board.how == "house" -> "Always free"
-                        yours -> "✓ Yours"
-                        else -> "${board.price}"
-                    },
-                    color = if (yours) p.ink3 else p.gold,
-                    fontSize = 10.5.sp, fontWeight = FontWeight.Black,
+                    board.teaser,
+                    color = p.ink3, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold,
+                    lineHeight = 12.sp, textAlign = TextAlign.Center, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!owned) {
+                Icon("coin", size = 12.dp)
+                Spacer(Modifier.width(4.dp))
+            }
+            // The old price, struck through, and only while there really is an
+            // old one: a "was" that matches the price is the oldest lie in
+            // retail, which is why the server sends it only when it is true.
+            if (was != null && !owned) {
+                Text(
+                    "$was",
+                    color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    textDecoration = TextDecoration.LineThrough,
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                when {
+                    board.how == "house" -> "Always free"
+                    owned -> "✓ Yours"
+                    else -> "${board.price}"
+                },
+                color = if (owned) p.ink3 else p.gold,
+                fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
+            )
         }
     }
 }
@@ -527,8 +795,47 @@ private fun BoardBadge(text: String, bg: Color, fg: Color, modifier: Modifier = 
             .background(bg)
             .padding(horizontal = 6.dp, vertical = 2.5.dp),
         color = fg,
-        fontSize = 8.5.sp,
-        letterSpacing = 0.4.sp,
+        fontSize = 8.sp,
         fontWeight = FontWeight.Black,
     )
+}
+
+/**
+ * The board's own page, over the Store — iOS's BoardBuySheet. The page itself
+ * is [BoardShop], the same one the lobby opens, so a board is sold the same
+ * way wherever it was found. There is no table here, so there is no one-game
+ * rent to offer: that door only opens in a lobby this player is hosting.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BoardShopSheet(
+    store: AccountStore,
+    board: BoardListing,
+    onClose: () -> Unit,
+    onBought: () -> Unit,
+) {
+    val p = P.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        sheetState = sheetState,
+        containerColor = p.page,
+        dragHandle = null,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            BoardShop(
+                store = store,
+                game = null,
+                board = board,
+                onBought = { onBought() },
+                onBack = onClose,
+            )
+        }
+    }
 }

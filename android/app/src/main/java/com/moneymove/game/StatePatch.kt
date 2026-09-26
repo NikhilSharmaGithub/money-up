@@ -131,12 +131,23 @@ object StateFeed {
  * between a client that recovers and one that quietly renders a board that
  * never existed.
  */
-class StateMirror {
+class StateMirror(
+    /**
+     * A pass & play guest's socket is only ever read for its team chat — the
+     * main connection carries the state everyone can see. So a guest's mirror
+     * keeps the feeds and the version and lets the rest of every patch go by
+     * unapplied: rebuilding a whole state per push that nobody reads is work
+     * for nothing.
+     */
+    private val feedsOnly: Boolean = false,
+) {
 
     /** What a `statePatch` came to. */
     sealed interface Step {
         /** Rebuilt and whole — decode it exactly like a full push. */
         data class State(val json: JsonObject) : Step
+        /** A feeds-only mirror moved; read [chatArrivals]. */
+        data object Feeds : Step
         /** The thread is lost. Only a fresh full state picks it back up. */
         data object Resync : Step
     }
@@ -150,6 +161,14 @@ class StateMirror {
     private var version: Int? = null
 
     /**
+     * The chat lines the last step actually brought in — the whole feed after
+     * a full state, just the new tail after a patch. Saves a guest seat
+     * re-decoding fifty unchanged messages to find the one that is news.
+     */
+    var chatArrivals: JsonArray = JsonArray(emptyList())
+        private set
+
+    /**
      * Leaving a table, or joining another. Versions count per room, so a patch
      * still in flight for the room we walked out of must never be allowed to
      * line up against the one we walked into.
@@ -158,6 +177,7 @@ class StateMirror {
         lean = JsonObject(emptyMap())
         log = JsonArray(emptyList())
         chat = JsonArray(emptyList())
+        chatArrivals = JsonArray(emptyList())
         version = null
     }
 
@@ -166,6 +186,8 @@ class StateMirror {
         version = (state["version"] as? JsonPrimitive)?.intOrNull
         log = state["log"] as? JsonArray ?: JsonArray(emptyList())
         chat = state["chat"] as? JsonArray ?: JsonArray(emptyList())
+        chatArrivals = chat
+        if (feedsOnly) return
         val rest = LinkedHashMap(state)
         rest.remove("log")
         rest.remove("chat")
@@ -185,12 +207,16 @@ class StateMirror {
             nextLog = StateFeed.apply(log, tail, "at") ?: return Step.Resync
         }
         var nextChat = chat
+        var arrivals = JsonArray(emptyList())
         (message["chat"] as? JsonObject)?.let { tail ->
             nextChat = StateFeed.apply(chat, tail, "id") ?: return Step.Resync
+            arrivals = tail["add"] as? JsonArray ?: arrivals
         }
         var nextLean = lean
-        (message["patch"] as? JsonObject)?.let { patch ->
-            nextLean = StatePatch.apply(lean, patch) ?: return Step.Resync
+        if (!feedsOnly) {
+            (message["patch"] as? JsonObject)?.let { patch ->
+                nextLean = StatePatch.apply(lean, patch) ?: return Step.Resync
+            }
         }
 
         // Every half landed, so now it is safe to be the new truth.
@@ -198,6 +224,8 @@ class StateMirror {
         log = nextLog
         chat = nextChat
         version = next
+        chatArrivals = arrivals
+        if (feedsOnly) return Step.Feeds
 
         // `patch` carries `version` itself, so what we hand back is whole —
         // the same shape a full push arrives in, feeds and all.

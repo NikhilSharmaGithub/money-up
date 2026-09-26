@@ -1,25 +1,21 @@
 package com.moneymove.game
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -30,27 +26,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
- * A conversation with one friend.
+ * A conversation with one friend — iOS's DMSheet, laid out the way it is
+ * there: a grabber, an inline navigation bar with Close at the leading edge,
+ * the friend's flag and name in the middle and the ellipsis menu at the
+ * trailing one, the thread, and the box to write in.
  *
- * Friends only, and the screen says so before anybody types rather than after.
- * The server refuses a message to anyone who is not on your friends list, and
- * it refuses it with a 400 whose sentence this client never gets to read — so
- * the gate is the friends list itself, which is the same list the server
- * checks. Somebody who has been unfriended, or blocked in either direction,
- * gets a line explaining it where the box would have been, instead of typing
- * a paragraph into something that was never going to send it.
+ * Report and Block sit in that menu whether or not they have said anything
+ * yet. Getting rid of somebody should never wait on them writing a word first.
+ * Report is a submenu of reasons, filed from the menu itself, as iOS files it.
+ *
+ * The box is always there. The server refuses a message to anyone who is
+ * not on your friends list, and when it does, its reason comes back as a
+ * toast over the thread — the way iOS says it — and the sentence goes back
+ * in the box rather than being lost.
  *
  * Nothing here is pushed: the thread is polled while the sheet is up, by
  * [MessagingStore], and the poll dies with the sheet.
@@ -67,25 +67,59 @@ fun DMSheet(
      * somebody the player has just blocked.
      */
     onBlocked: (String) -> Unit = {},
+    /**
+     * Somewhere to say a block worked. The sheet closes on it, so the sentence
+     * has to be said by whoever is still on screen afterwards.
+     */
+    onToast: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf("") }
-    var reporting by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    var blocking by remember { mutableStateOf(false) }
+    // iOS answers a report, a failed block and a refused message with its
+    // toast, drawn over the sheet. This is that toast, for this sheet.
+    var toast by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+
+    // Close, and a block that worked, let the sheet slide down before it
+    // goes, as iOS's dismiss() does, rather than vanishing in one frame.
+    val close: () -> Unit = {
+        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+    }
+
+    // The account's own identity, and a refusal's reason kept rather than
+    // flattened into "that didn't go through".
+    val safety = remember(account) { Safety { path, body -> account.postForReason(path, body) } }
 
     LaunchedEffect(friend.code) { messaging.openThread(friend.code) }
-    // The gate below is only as fresh as this list, and a thread is usually
-    // opened minutes after the tab that loaded it.
+    // The name in the bar is only as fresh as this list, and a thread is
+    // usually opened minutes after the tab that loaded it.
     LaunchedEffect(Unit) { account.refreshSocial() }
     DisposableEffect(Unit) { onDispose { messaging.closeThread() } }
+    LaunchedEffect(toast) {
+        if (toast != null) {
+            // iOS's 2.6 seconds.
+            delay(2_600)
+            toast = null
+        }
+    }
+    // The server's reason for refusing a message, said the way iOS says it.
+    LaunchedEffect(messaging.sendError) {
+        messaging.sendError?.let { toast = it to true }
+    }
 
-    val friends = account.social?.friends
-    // A list that has not arrived yet is not evidence of anything. Locking the
-    // box on a null would mean every cold open of this sheet accusing two
-    // friends of not being friends.
-    val canMessage = friends == null || friends.any { it.code == friend.code }
+    // Whoever they are right now: the row this was opened from is as old as
+    // the tab that drew it.
+    val live = account.social?.friends?.firstOrNull { it.code == friend.code } ?: friend
+    val name = live.name.ifBlank { live.code }
+
+    val storedAgree = rememberRulesAgreed()
+    var agreedHere by remember { mutableStateOf(false) }
+    val agreed = storedAgree || agreedHere
 
     val thread = messaging.thread
     LaunchedEffect(thread.size) {
@@ -95,26 +129,48 @@ fun DMSheet(
     val mine = messaging.myCode.ifBlank { account.me?.code.orEmpty() }
     val lastFromThem = thread.lastOrNull { it.from != mine && it.from.isNotBlank() }?.text.orEmpty()
 
-    // The Send button and the keyboard's own send key are the same act, so
+    // The send circle and the keyboard's own send key are the same act, so
     // they are the same lambda; two copies of this drift apart on the first
     // change to either of them.
     val send: () -> Unit = {
         val text = draft.trim()
-        if (text.isNotEmpty() && !messaging.sending) {
+        if (text.isNotEmpty() && agreed && !messaging.sending) {
             draft = ""
             SoundKit.click()
-            Haptics.tap()
             messaging.send(friend.code, text) { ok ->
-                if (!ok) {
-                    // A refused message goes back in the box rather than being
-                    // swallowed, unless something has been typed since — losing
-                    // a sentence somebody wrote is worse than the flicker.
-                    if (draft.isEmpty()) draft = text
-                    // And the reason is in the friends list: the server's own
-                    // "You can only message friends" comes back on a 400 whose
-                    // body never reaches this client.
-                    account.refreshSocial()
-                }
+                // As on iOS the box stays empty and the server's reason is
+                // the toast; a refusal is usually a friendship that has
+                // ended, and the friends list is where that shows for good.
+                if (!ok) account.refreshSocial()
+            }
+        }
+    }
+
+    val report: (SafetyTarget, ReportReason) -> Unit = { who, reason ->
+        scope.launch {
+            val reply = safety.report(who, reason)
+            toast = if (reply.ok) {
+                Haptics.tap()
+                "Thanks — we'll look into it. You can also block ${who.name}." to false
+            } else {
+                (reply.error ?: "Couldn't send that report — try again.") to true
+            }
+        }
+    }
+    // Blocked means no longer friends, so there is no thread left to sit in.
+    val block: (SafetyTarget) -> Unit = block@{ who ->
+        if (blocking) return@block
+        blocking = true
+        scope.launch {
+            val reply = safety.block(who.code)
+            blocking = false
+            if (reply.ok) {
+                Haptics.tap()
+                onBlocked(who.code.trim().uppercase())
+                onToast("Blocked ${who.name}. Their messages are hidden and they can't friend or message you.")
+                close()
+            } else {
+                toast = (reply.error ?: "Couldn't block them — try again.") to true
             }
         }
     }
@@ -125,188 +181,142 @@ fun DMSheet(
         containerColor = p.sheet,
         dragHandle = null,
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
-            Spacer(Modifier.height(14.dp))
+        // iOS's medium detent: half the screen, whatever the thread holds,
+        // with the thread taking what the bar and the box leave.
+        val half = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
+        Box(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().height(half)) {
+                ChatNavBar(
+                    title = listOfNotNull(live.flag.takeIf { it.isNotBlank() }, name).joinToString(" "),
+                    leading = { ChatNavCapsule("Close") { close() } },
+                    trailing = {
+                        Box {
+                            ChatNavCircle("ellipsis.circle", description = "Report or block") { menu = true }
+                            ChatSafetyMenu(
+                                expanded = menu,
+                                onDismiss = { menu = false },
+                                targets = listOf(SafetyTarget(friend.code, name, place = "dm", quote = lastFromThem)),
+                                onReport = report,
+                                onBlock = block,
+                                blockingCode = if (blocking) friend.code else null,
+                            )
+                        }
+                    },
+                )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FriendDisc(friend.name)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        listOfNotNull(friend.flag.takeIf { it.isNotBlank() }, friend.name.ifBlank { friend.code })
-                            .joinToString(" "),
-                        color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Black,
-                    )
-                    Hint(
-                        when {
-                            friend.room != null -> "At a table right now"
-                            friend.online -> "Online"
-                            else -> friend.code
-                        },
-                    )
-                }
-                MMButton("Close", kind = BtnKind.GHOST) { onDismiss() }
-            }
-            Spacer(Modifier.height(12.dp))
-
-            if (thread.isEmpty()) {
-                Box(
-                    Modifier.fillMaxWidth().heightIn(min = 180.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon("chat", size = 26.dp, tint = p.ink3)
-                        Spacer(Modifier.height(7.dp))
-                        // "Say hi" above a panel saying you cannot is a screen
-                        // arguing with itself.
-                        Hint(if (canMessage) "Say hi." else "Nothing was ever said here.")
-                    }
-                }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 380.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(thread.size) { i -> Bubble(thread[i], isMine = thread[i].from == mine) }
-                }
-            }
-
-            // Report and block are one flow and it lives in SafetySheets.kt.
-            // A second copy in here would be a second place to keep the
-            // server's list of reasons in step with the server's list.
-            //
-            // Offered only once they have actually said something: there is
-            // nothing to report until then, and getting rid of somebody who
-            // has never written a word is a job for the friends list.
-            if (lastFromThem.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    MMButton("Report or block", kind = BtnKind.GHOST) { reporting = true }
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            if (!canMessage) {
-                Panel(padding = 12.dp) {
-                    SectionLabel("Friends only", icon = "people")
-                    Spacer(Modifier.height(7.dp))
-                    Hint(
-                        "You can only message friends. ${friend.name.ifBlank { friend.code }} is not on " +
-                            "your friends list any more — add them back from Social and everything said " +
-                            "here is still here.",
-                    )
-                }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) {
-                        BasicTextField(
-                            value = draft,
-                            // The server slices at 300 and the end of a longer
-                            // sentence would just vanish on the way.
-                            onValueChange = { draft = it.take(300) },
-                            singleLine = true,
-                            textStyle = TextStyle(color = p.ink, fontSize = 15.sp),
-                            cursorBrush = SolidColor(p.red),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { send() }),
-                            decorationBox = { inner ->
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(p.sunken)
-                                        .padding(horizontal = 13.dp, vertical = 12.dp),
-                                ) {
-                                    if (draft.isEmpty()) {
-                                        Text(
-                                            "Message ${friend.name.ifBlank { "them" }}…",
-                                            color = p.ink3, fontSize = 15.sp,
-                                        )
-                                    }
-                                    inner()
-                                }
-                            },
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    MMButton(
-                        "Send",
-                        kind = BtnKind.PRIMARY,
-                        enabled = draft.isNotBlank() && !messaging.sending,
+                if (thread.isEmpty()) {
+                    Column(
+                        Modifier.fillMaxWidth().weight(1f).padding(top = 42.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        send()
+                        Icon("chat", size = 26.dp, tint = p.ink3)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Say hi", color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(thread.size) { i ->
+                            val msg = thread[i]
+                            Bubble(
+                                msg,
+                                isMine = msg.from == mine,
+                                // Anything they said can be reported as they said it.
+                                target = SafetyTarget(friend.code, name, place = "dm", quote = msg.text),
+                                onReport = report,
+                            )
+                        }
                     }
                 }
-                messaging.sendError?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, color = p.bad, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+
+                if (!agreed) {
+                    Box(Modifier.padding(horizontal = 12.dp).padding(top = 6.dp)) {
+                        CommunityRulesCard(onAgree = { agreedHere = true })
+                    }
                 }
+                // Shown, dimmed, until the rules are agreed to — the box being
+                // unlocked sits right under the card that unlocks it. Nothing
+                // to send is a dead tap, so the circle greys out to say so.
+                val sendable = draft.isNotBlank()
+                ChatComposer(
+                    draft = draft,
+                    // No cap while typing, as iOS's field has none; the
+                    // server slices at 300.
+                    onDraft = { draft = it },
+                    placeholder = "Message $name…",
+                    enabled = agreed,
+                    sendFill = if (sendable) p.red else p.sunken,
+                    sendInk = if (sendable) p.accentInk else p.ink3,
+                    sendEnabled = sendable && !messaging.sending,
+                    onSend = send,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
             }
+            ChatGrabber(Modifier.align(Alignment.TopCenter))
+            // Seventy-eight up, where iOS's toast window puts it away from a
+            // table — clear of the message box, not on top of it.
+            ChatToastPill(
+                text = toast?.first,
+                isError = toast?.second == true,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                bottom = 78.dp,
+            )
         }
     }
-
-    // Raised beside this sheet rather than inside its content: a sheet
-    // composed within another sheet's window is a window fighting the one it
-    // is drawn in, which is the trap SafetySheets.kt was written around.
-    if (reporting) {
-        ReportSheet(
-            code = friend.code,
-            name = friend.name.ifBlank { friend.code },
-            // One of the four places the server files a report under; it
-            // records anything else as "other".
-            place = "dm",
-            quote = lastFromThem,
-            onBlocked = { code ->
-                onBlocked(code)
-                // Blocking takes the friendship apart on both sides, so there
-                // is no thread left to sit in.
-                reporting = false
-                onDismiss()
-            },
-            onDismiss = { reporting = false },
-        )
-    }
 }
 
-/** One line, on its own side of the screen. */
+/**
+ * One line, on its own side of the screen, with fifty points kept clear on
+ * the other so a long one still says whose it is. A long-press on one of
+ * theirs reports it as it was written — the quote is the line pressed, not
+ * the last.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(msg: DMessage, isMine: Boolean) {
+private fun Bubble(
+    msg: DMessage,
+    isMine: Boolean,
+    target: SafetyTarget,
+    onReport: (SafetyTarget, ReportReason) -> Unit,
+) {
     val p = P.current
+    var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .padding(start = if (isMine) 50.dp else 0.dp, end = if (isMine) 0.dp else 50.dp),
         horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
     ) {
-        Text(
-            msg.text,
-            color = if (isMine) p.accentInk else p.ink,
-            fontSize = 14.5.sp,
-            lineHeight = 20.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier
-                // A bubble that runs the full width is a bubble that no longer
-                // says which side it is on.
-                .widthIn(max = 260.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(if (isMine) p.red else p.card)
-                .padding(horizontal = 13.dp, vertical = 8.dp),
-        )
-    }
-}
-
-/** A disc with an initial, for somebody who is not at this table. */
-@Composable
-private fun FriendDisc(name: String) {
-    val p = P.current
-    Box(
-        Modifier.size(34.dp).clip(RoundedCornerShape(99.dp)).background(p.sunken)
-            .border(1.dp, p.rule, RoundedCornerShape(99.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            (name.firstOrNull() ?: '?').uppercase(),
-            color = p.ink2, fontSize = 15.sp, fontWeight = FontWeight.Black,
-        )
+        Box {
+            Text(
+                msg.text,
+                color = if (isMine) p.accentInk else p.ink,
+                fontSize = 14.5.sp,
+                // The rounded face's own leading, about 1.2 of the size.
+                lineHeight = 17.5.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(if (isMine) p.red else p.card)
+                    .combinedClickable(
+                        enabled = !isMine,
+                        onClick = {},
+                        onLongClick = { Haptics.tap(); menu = true },
+                    )
+                    .padding(horizontal = 13.dp, vertical = 8.dp),
+            )
+            if (!isMine) {
+                ChatSafetyMenu(
+                    expanded = menu,
+                    onDismiss = { menu = false },
+                    targets = listOf(target),
+                    onReport = onReport,
+                )
+            }
+        }
     }
 }

@@ -31,6 +31,14 @@
 # ── Play Billing ───────────────────────────────────────────────────────────
 -keep class com.android.billingclient.api.** { *; }
 
+# ── Google Mobile Ads ──────────────────────────────────────────────────────
+# The SDK ships its own consumer rules for everything it reaches by name, so
+# only what this app adds is here. npa=1 rides in a bundle filed under
+# AdMobAdapter's class name; if R8 renamed the class, the extra would be filed
+# under a name the SDK never looks up and every request would quietly go out
+# personalised — nothing would fail, which is the problem.
+-keep class com.google.ads.mediation.admob.AdMobAdapter
+
 # ── Reflection this app does on purpose ────────────────────────────────────
 # PushRegistration looks up Firebase and Tasks by name so the app still builds
 # and runs without them. If they ARE present, R8 must leave them findable.
