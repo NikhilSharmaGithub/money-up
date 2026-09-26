@@ -126,6 +126,16 @@ final class GameStore: ObservableObject {
     /// priciest streets this game!" — shown as it arrives.
     @Published var reveal: String?
     private var revealTask: Task<Void, Never>?
+
+    /// The kick-off headline ("Japan holds the priciest streets…") and the
+    /// card share the middle of the board, and a bot that draws on the first
+    /// turn lands inside the headline's three seconds — one sentence printed
+    /// over the other. The card is the news, so the headline steps aside.
+    private func showCard(_ card: LastCard) {
+        revealTask?.cancel()
+        reveal = nil
+        cardPopup = card
+    }
     /// Rooms this run of the app has walked in on with the board still
     /// untouched. Only AdSignal cares: it is what stops a reconnect loop in
     /// the opening seconds of a game from reporting the same game twice.
@@ -703,11 +713,11 @@ final class GameStore: ObservableObject {
                     Task { [weak self] in
                         try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
                         guard let self, self.state?.lastCard?.at == card.at else { return }
-                        withAnimation { self.cardPopup = card }
+                        withAnimation { self.showCard(card) }
                         SoundKit.shared.card()
                     }
                 } else {
-                    cardPopup = card
+                    showCard(card)
                     SoundKit.shared.card()
                 }
             }

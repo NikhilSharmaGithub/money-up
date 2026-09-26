@@ -302,20 +302,21 @@ scenario('THE DEADLINE, CASE BY CASE', async (P) => {
   bot.ready = true;
   got = at({ settledAt: T - 5000, allSetAt: null });
   const firstSet = L.allSetAt;
-  P(firstSet != null && got === Math.max(firstSet, T) + Q.settleMs && armed(),
-    'every seat ready pulls the deal in to a settle later', `+${got - T}ms`);
+  P(firstSet != null && got === T + Q.startWindowMs && armed(),
+    'every seat ready unlocks Start but does not pull the deal in — the host deals', `+${got - T}ms`);
 
   got = at({ allSetAt: T - 200 });
-  P(L.allSetAt === T - 200 && got === T + Q.settleMs,
-    'it counts from when they became ready, and never before the search ended', `+${got - T}ms`);
+  P(L.allSetAt === T - 200 && got === T + Q.startWindowMs,
+    'however long they have been ready, the clock is still the start window', `+${got - T}ms`);
 
   got = at({ settledAt: T + 700 });
-  P(got === T + 700 + Q.settleMs, 'an arrival or a change after that still gets its settle', `+${got - T}ms`);
+  P(got === Math.max(T + Q.startWindowMs, T + 700 + Q.settleMs),
+    'an arrival or a change after that still gets its settle', `+${got - T}ms`);
 
   bot.ready = false;
   got = at({});
   P(L.allSetAt === null && got === T + Q.startWindowMs,
-    'one seat un-readied and the pull-in is gone', `+${got - T}ms`);
+    'one seat un-readied: the start window, as before', `+${got - T}ms`);
 
   got = at({ settledAt: L.hardStopAt - 100 });
   P(got === L.hardStopAt, 'no change, however late, pushes past the hard stop', `+${got - T}ms`);
@@ -331,7 +332,7 @@ scenario('THE DEADLINE, CASE BY CASE', async (P) => {
   got = at({ gatherUntil: T - 1000, settledAt: 0, allSetAt: T - 500, searchOver: true });
   const came = Date.now();
   r.addPlayer({ id: 'olde', name: 'Olde', canReady: false });
-  P(got === T - 200 && L.allSetAt === T - 500 && L.startBy >= came + Q.settleMs,
+  P(got === T - 1000 + Q.startWindowMs && L.allSetAt === T - 500 && L.startBy >= came + Q.settleMs,
     'someone new after the search gets a settle before the deal', `+${L.startBy - came}ms`);
   r.dispose();
 });
@@ -353,17 +354,23 @@ scenario('THE CLOCK DEALS', async (P) => {
   P(!!idle.player('bina') && !idle.player('bina').bankrupt, 'the player who never pressed Ready plays');
   idle.dispose();
 
-  // Everyone ready and nobody pressing Start: the clock pulls in.
+  // Everyone ready and nobody pressing Start: Start is there for the host
+  // for the whole window — a host still watching the ad their tap opened
+  // must not come back to a game already dealt — and only then the clock.
   const keen = table('clock-keen');
   keen.addPlayer({ id: 'asha', name: 'Asha' });
   keen.addPlayer({ id: 'bina', name: 'Bina' });
   keen.setReady('bina', true);
   const searchEnd = keen.quickLobby.gatherUntil;
+  await until(() => !keen.quickSearching());
+  await sleep(Q.settleMs + 50);
+  P(keen.status === 'lobby' && keen.quickLobbyView()?.canStart === true,
+    'all ready, a settle after the search: still the lobby, and the host may Start');
   await until(() => keen.status !== 'lobby', Q.startWindowMs + PATIENCE);
   const keenAt = keen.log.find((l) => l.text === 'Game started! Good luck.')?.at || Infinity;
-  P(keen.status === 'playing', 'a table that is all ready deals without the host');
-  P(keenAt - searchEnd >= Q.settleMs - 2 && keenAt - searchEnd < Q.startWindowMs - 600,
-    'a settle after the search, not a start window', `${keenAt - searchEnd}ms after it`);
+  P(keen.status === 'playing', 'a host who never presses Start is dealt in by the clock');
+  P(keenAt - searchEnd >= Q.startWindowMs - 2 && keenAt - searchEnd < Q.startWindowMs + 600,
+    'at the end of the start window, not a settle after the search', `${keenAt - searchEnd}ms after it`);
   keen.dispose();
 
   // A table nobody ever sat down at does nothing when its time comes.

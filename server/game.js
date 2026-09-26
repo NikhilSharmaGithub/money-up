@@ -1267,8 +1267,13 @@ export class GameRoom {
       && this.players.length === this.settings.maxPlayers
       && this.players.every((p) => p.id === this.hostId || p.ready);
     L.allSetAt = allSet ? (L.allSetAt ?? now) : null;
-    let by = Math.max(L.gatherUntil + Q.startWindowMs, L.settledAt + Q.settleMs);
-    if (L.allSetAt != null) by = Math.min(by, Math.max(L.allSetAt, L.gatherUntil, L.settledAt) + Q.settleMs);
+    // Everyone being ready unlocks the host's Start; it does not start the
+    // table. It used to pull the deal in to ten seconds after the last Ready,
+    // and at a table of house players — who are all ready within seconds —
+    // that dealt the game while the host was still watching the ad their own
+    // tap had opened, so the one button this lobby exists for was never
+    // pressed. The clock is only the safety for a host who walked away.
+    const by = Math.max(L.gatherUntil + Q.startWindowMs, L.settledAt + Q.settleMs);
     L.startBy = Math.min(by, L.hardStopAt);
     // The one number a build without the lobby knows how to read: it counts
     // down to it in the waiting room it already has.

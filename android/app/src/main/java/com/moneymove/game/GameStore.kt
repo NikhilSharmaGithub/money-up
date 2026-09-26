@@ -1976,6 +1976,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         if (near != null && abs(card.at - near) >= 2500) return
         pendingCard = null
         if (state?.lastCard?.at != card.at) return
+        // The kick-off headline ("Japan holds the priciest streets…") shares
+        // the middle of the board with the card, and a bot that draws one on
+        // the first turn lands inside its three seconds — two panes, one
+        // sentence printed over the other. The card is the news; the
+        // headline steps aside for it.
+        headlineJob?.cancel()
+        headline = null
         cardPopup = card
         SoundKit.card()
         viewModelScope.launch {
