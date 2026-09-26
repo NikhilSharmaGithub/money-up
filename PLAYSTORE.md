@@ -128,8 +128,9 @@ MoneyMove is a fast online property trading board game for two to eight
 players. Play with friends in a private room, or tap once and land at a table
 with whoever else is playing right now. A game runs about half an hour.
 
-NINETEEN BOARDS
-A world tour, single-country boards from India to Japan, and a few odd ones.
+TWENTY-FIVE BOARDS
+A world tour, a board for each of six continents, single-country boards from
+India to Japan, and a few odd ones.
 Two different boards are free to everyone every day, and any board can be
 rented for a single coin.
 

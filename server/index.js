@@ -459,8 +459,13 @@ app.get('/api/achievements', (req, res) => {
 app.get('/api/cup', (req, res) => {
   // `show` names which cup the client is looking at; without it the server
   // picks the one that matters most to this reader — see publicView.
-  res.json(cup.publicView(String(req.query.token || '').slice(0, 64),
-    String(req.query.show || '').slice(0, 12)));
+  const token = String(req.query.token || '').slice(0, 64);
+  res.json(cup.publicView(token, String(req.query.show || '').slice(0, 12), {
+    // Only this file holds the rooms, so only it can say whether the reader
+    // has sat down at their table yet. Until they have, their table's cup is
+    // the one on the card, whatever cup the client asked to look at.
+    seated: (roomId) => !!rooms.get(roomId)?.player(token),
+  }));
 });
 
 /**
@@ -1079,7 +1084,10 @@ function recordTransitions(room) {
       // but names beside it tells you who went through and nothing about how
       // close it was; net worth is this game's version of a scoreline.
       const worth = {};
-      for (const p of room.players) worth[p.id] = p.bankrupt ? 0 : room.netWorth(p);
+      // At the whistle the sweeper read them before the game was ended.
+      for (const p of room.players) {
+        worth[p.id] = room.cupWorth?.[p.id] ?? (p.bankrupt ? 0 : room.netWorth(p));
+      }
       const out = cup.matchFinished(room.id, room.winner?.id, worth);
       if (out?.roundComplete) seatCupMatches();
     }
@@ -1349,6 +1357,16 @@ app.post('/api/admin/cup', (req, res) => {
     case 'paid':
       result = cup.markPaid(req.body.cupId, req.body.place);
       if (result.ok) audit('cup', req.body.cupId, `${req.body.place} place marked paid`);
+      break;
+    case 'wind':
+      // Test runs only: move the cup clock on and do the housekeeping the
+      // five-second tick would, now. Unknown anywhere the hooks were not
+      // switched on at boot, which is everywhere real — see tournament.js.
+      if (!cup.testHooks) { result = { error: 'Unknown action' }; break; }
+      result = cup.windClock(Number(req.body.minutes || 0) * 60000);
+      try {
+        if (result.ok) cupTick();
+      } catch (e) { result = { error: `cup tick: ${e.message}` }; }
       break;
     default:
       result = { error: 'Unknown action' };
@@ -1870,7 +1888,9 @@ const CUP_LAST_CALL_MS = 3 * 60 * 1000;
  * business inside one. This only ever looks at tables still in the lobby.
  */
 function sweepCupNoShows() {
-  const now = Date.now();
+  // The cup's clock, not the wall's: the doors and whistles below were set by
+  // it. They are the same clock everywhere but a test run.
+  const now = cup.clock();
   for (const m of cup.playingMatches()) {
     // A table this process has never heard of is not an empty table.
     //
@@ -1899,7 +1919,12 @@ function sweepCupNoShows() {
       const behind = standing[standing.length - 1];
       if (behind && standing.length > 1) {
         console.log(`cup: ${m.roomId} ran into the next round — decided on net worth`);
-        room.quit(behind.id);   // the normal game-end path records it in the cup
+        // The scoreline is what each side was worth at the whistle, read NOW.
+        // Quitting the one behind is what ends the game, and it empties their
+        // pockets on the way out — read after it, as recordTransitions did,
+        // every game decided at the whistle went down as won against nought.
+        room.cupWorth = Object.fromEntries(room.players.map((p) => [p.id, worth(p)]));
+        room.quit(behind.id, { whistle: true });   // the normal game-end path records it in the cup
       }
       continue;
     }
@@ -1943,19 +1968,20 @@ setInterval(refreshRates, 6 * 60 * 60 * 1000).unref?.();
 
 // The join window closes on its own clock, and the moment it does the first
 // round needs tables.
+function cupTick() {
+  cup.tick();
+  // Sweep BEFORE seating. The other order judged a table in the same tick
+  // it was created in, which is how a deploy that spanned a round's window
+  // could seat four dead tables and void all four microseconds later.
+  sweepCupNoShows();
+  seatCupMatches();
+  // Then say whatever the calendar has to say: the draw, a quarter of an
+  // hour's warning, and how somebody's tournament ended.
+  for (const r of cup.remindersDue()) sendTurnPush(r.token, r.text, { collapseId: r.collapseId });
+  cup.prune();
+}
 setInterval(() => {
-  try {
-    cup.tick();
-    // Sweep BEFORE seating. The other order judged a table in the same tick
-    // it was created in, which is how a deploy that spanned a round's window
-    // could seat four dead tables and void all four microseconds later.
-    sweepCupNoShows();
-    seatCupMatches();
-    // Then say whatever the calendar has to say: the draw, a quarter of an
-    // hour's warning, and how somebody's tournament ended.
-    for (const r of cup.remindersDue()) sendTurnPush(r.token, r.text, { collapseId: r.collapseId });
-    cup.prune();
-  } catch (e) { console.warn('cup tick:', e.message); }
+  try { cupTick(); } catch (e) { console.warn('cup tick:', e.message); }
 }, 5000).unref?.();
 
 // Reap idle rooms every couple of minutes — bots playing to an empty

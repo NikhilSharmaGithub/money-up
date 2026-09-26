@@ -113,9 +113,35 @@ function save() {
 }
 load();
 
+// ─────────────────────────────────────────────────────────────── the clock ──
+// A cup is measured in hours — a door at eight, a whistle ninety minutes into
+// a game — and a test that proves a whole one end to end cannot sit through
+// that. So a process started with MONEYMOVE_TEST_HOOKS=1 may wind this clock
+// forward, and only such a process: never one on Render, never one running in
+// production, whatever else is set. Everything a cup decides by reads the time
+// from here — doors, windows, whistles, and the sweeper in index.js — so
+// winding it walks the real code through the real sequence rather than a
+// stand-in for it. Anywhere real the skew is nought and nothing can move it.
+
+/** Whether this process may wind the cup clock. Decided once, at boot. */
+export const testHooks = process.env.MONEYMOVE_TEST_HOOKS === '1'
+  && !process.env.RENDER && process.env.NODE_ENV !== 'production';
+
+let skew = 0;
+const now = () => Date.now() + skew;
+
+/** The time every cup decision is made against. The wall clock, in production. */
+export const clock = () => now();
+
+/** Test runs only: move the cup clock forward. Refused everywhere else. */
+export function windClock(ms) {
+  if (!testHooks) return { error: 'Unknown action' };
+  skew += Math.max(0, Math.min(7 * 86400000, Math.floor(Number(ms) || 0)));
+  return { ok: true, now: now() };
+}
+
 // ───────────────────────────────────────────────────────────────── shape ──
 
-const now = () => Date.now();
 const id = () => Math.random().toString(36).slice(2, 8);
 
 /** Every cup still going: announced, taking entries, or being played. */
@@ -159,8 +185,8 @@ const SHOW_RESULT_MS = 10 * 60 * 1000;
  * in, then the one they have joined, then the soonest they could join — and
  * hands back the rest as a short list they can flick through.
  */
-export function publicView(token, wantId) {
-  if (!state.enabled) return { enabled: false, cup: null, others: [] };
+export function publicView(token, wantId, { seated = () => false } = {}) {
+  if (!state.enabled) return { enabled: false, cup: null, others: [], table: null };
   const mine = new Set(cupsOf(token).map((t) => t.id));
   const shown = [
     ...state.cups,
@@ -170,7 +196,23 @@ export function publicView(token, wantId) {
     ...state.history.filter((h) => h.endedAt && !h.cancelled && now() - h.endedAt < SHOW_RESULT_MS
       && mine.has(h.id)),
   ];
-  if (!shown.length) return { enabled: true, cup: null, others: [] };
+  // The table this reader should be sitting at, in whichever cup it is.
+  const live = tableFor(token);
+  const sat = !!live && !!seated(live.m.roomId);
+  const table = live ? {
+    cupId: live.t.id,
+    cup: live.t.name,
+    roomId: live.m.roomId,
+    round: stageOf(live.t, live.i),
+    label: roundLabel(live.r),
+    opponent: live.other ? nameOf(live.t, live.other) : null,
+    opponentCode: live.other ? codeOf(live.t, live.other) : null,
+    closesAt: live.r.closesAt || null,
+    endsAt: whistleFor(live.t, live.r, live.m),
+    // Whether they have sat down at it yet, on any device.
+    seated: sat,
+  } : null;
+  if (!shown.length) return { enabled: true, cup: null, others: [], table };
 
   // Lower sorts first: your live game, then yours, then whatever opens next.
   const rank = (t) => {
@@ -183,10 +225,22 @@ export function publicView(token, wantId) {
     return 5;
   };
   const ordered = [...shown].sort((a, b) => rank(a) - rank(b) || a.openedAt - b.openedAt);
-  const t = (wantId && ordered.find((x) => x.id === wantId)) || ordered[0];
+  // A table that is open and empty outranks whichever cup the client asked to
+  // look at. Every app seats its player from the cup on the card and asks for
+  // the card by the cup it showed last — so somebody who had flicked over to
+  // another cup in "also on" when their own door opened was never taken to
+  // their table, and could sit out the whole window reading about a cup they
+  // are not in. Until they sit down, the card is their table's cup; once they
+  // have, they may look at whatever they like.
+  const t = (live && !sat && live.t)
+    || (wantId && ordered.find((x) => x.id === wantId))
+    || ordered[0];
 
   return {
     enabled: true,
+    // Where this reader should be sitting, in any cup — not only the one on
+    // the card. Null when there is no open table for them anywhere.
+    table,
     cup: cupView(t, token),
     // Enough for a row each: name, what it is doing, and when.
     others: ordered.filter((x) => x.id !== t.id).map((x) => ({
@@ -206,6 +260,16 @@ export function publicView(token, wantId) {
 function cupView(t, token) {
   const mine = token ? t.entrants.find((e) => e.token === token) : null;
   const match = mine ? liveMatchFor(t, token) : null;
+  const plan = planOf(t, token);
+  const where = mine ? standing(t, token) : null;
+  // "Round X of Y", worked out once for every client. X is the reader's own
+  // round — the one they are playing, or the last one they played — and the
+  // round being played for anybody who never entered; Y is the whole plan.
+  // Neither end can slip: X is never nought (before the draw a player is in
+  // round one) and never past Y (the play-off beside the final is the final's
+  // round, not one after it).
+  const x = Math.max(1, where?.round ?? stagesDrawn(t));
+  const shown = shownRound(t, token);
   return {
     id: t.id,
     name: t.name,
@@ -224,35 +288,239 @@ function cupView(t, token) {
     // Whether a code is wanted, never the code itself: an invite-only cup
     // whose code any client could read is not invite-only.
     needsCode: !!t.joinCode,
-    // When the rounds are played, if this cup runs to a clock.
-    schedule: t.schedule || null,
+    // When the rounds are played, if this cup runs to a clock — with `at`, the
+    // next moment each slot strikes, so a client can print them on the
+    // reader's own clock. See scheduleView.
+    schedule: scheduleView(t.schedule),
     // Every round this cup will take, with the nights they fall on. A player
     // should never have to work out how many evenings they are signing up to.
-    plan: planOf(t, token),
-    rounds: t.rounds.length,
-    // The bracket, with names rather than identities.
-    round: t.rounds.length ? roundView(t, t.rounds.length - 1) : null,
+    plan,
+    // The round being played, counted as a player counts: at least one, and
+    // never the play-off's place on the list, which is one past the final.
+    // The apps already on phones print "Round {you.round ?? rounds} of
+    // {depth}", so this is the number a spectator is shown there.
+    rounds: Math.max(1, stagesDrawn(t)),
+    // "Round X of Y", ready to print. New clients read this and nothing else.
+    progress: { round: x, of: Math.max(x, plan.length) },
+    // The round the card shows and the room builds a run from — the one that
+    // matters to this reader. See shownRound.
+    round: shown >= 0 ? roundView(t, shown) : null,
     standings: t.standings || null,
     you: mine ? {
       joined: true,
       code: mine.code,
       name: mine.name,
-      // Losing a semi-final sets `out`, and then the third-place play-off is
-      // drawn from exactly those losers — so both cards read "You are out of
-      // this one" with a live table and a prize sitting behind them. You are
-      // not out while you still have a match to play.
-      out: !!mine.out && !stillIn(t, token),
+      out: isOut(t, mine),
       placed: mine.placed || null,
+      // A place already won that `placed` has not caught up with — see
+      // settledPlace. "first" | "second" | "third", or null.
+      settled: mine.placed ? null : settledPlace(t, token),
       // Where to go, the moment there is somewhere to go.
       roomId: match?.roomId || null,
       opponent: match ? nameOf(t, match.a === token ? match.b : match.a) : null,
       // How far they have come and how many are left with them. This is
       // the whole story of a knockout from one player's seat, and it is
       // four numbers rather than the entire bracket.
-      ...standing(t, token),
+      ...where,
       // The match in front of them: who, when its door opens, when it shuts.
       next: nextMatchFor(t, token),
+      // Every round they have played, one rung each, in order — see runOf.
+      run: runOf(t, token),
     } : { joined: false },
+  };
+}
+
+/**
+ * Out of the cup, and nothing to show for it.
+ *
+ * Losing a semi-final sets `out`, and then the third-place play-off is drawn
+ * from exactly those losers — so both cards read "You are out of this one"
+ * with a live table and a prize sitting behind them. You are not out while
+ * you still have a match to play. Nor once the podium is written with your
+ * name on it: a runner-up lost the final, but "out" beside "you finished
+ * second" is two stories about one evening. Nor in the gap between the two
+ * semi-finals ending — see semiPending — because the one who lost first is
+ * about to be drawn into the play-off, and "out" followed by "one more game"
+ * a few minutes later is the same two stories the other way round.
+ *
+ * A place already won but not yet written (see settledPlace) leaves `out`
+ * standing: the apps on phones print "Waiting for your next table" to anybody
+ * joined and not out, and there is no table coming. Newer apps read
+ * `settled` first and say the place instead.
+ */
+const isOut = (t, e) => !!e.out && !stillIn(t, e.token) && !e.placed && !semiPending(t, e.token);
+
+/**
+ * Lost a semi-final while the other one is still being played.
+ *
+ * The semi-final is the round of two tables — a bye counts as one — that the
+ * final is drawn from, and the play-off for third is drawn from its losers the
+ * moment its last table ends. Whoever lost first has no game for a while,
+ * but they are not out: they are waiting for an opponent.
+ */
+const semiPending = (t, token) => t.state === 'running' && t.rounds.some((r) => r.kind === 'round'
+  && r.matches.length === 2
+  && r.matches.some((m) => m.state !== 'done')
+  && r.matches.some((m) => m.state === 'done' && m.winner && m.winner !== token
+    && (m.a === token || m.b === token)));
+
+/**
+ * A podium place already won while the podium waits on the other game of the
+ * last evening, or null.
+ *
+ * `placed` is written only when both the final and the play-off are in, so
+ * for as long as the slower of the two runs, the faster one's players know
+ * where they finished and the cup does not say so: the two finalists once the
+ * final is decided, the play-off's winner once it is, and — for the whole
+ * final — a semi-final loser left third by default when a bye meant there was
+ * nobody to play off against. That last one is common rather than rare: any
+ * field that reaches the semi-finals three strong has it.
+ */
+function settledPlace(t, token) {
+  if (t.state !== 'running' || !token) return null;
+  if (t.thirdByDefault === token) return 'third';
+  for (const r of t.rounds) {
+    if (r.kind !== 'final' && r.kind !== 'thirdPlace') continue;
+    const m = r.matches.find((x) => x.state === 'done' && x.winner && (x.a === token || x.b === token));
+    if (!m) continue;
+    if (r.kind === 'final') return m.winner === token ? 'first' : 'second';
+    if (m.winner === token) return 'third';
+  }
+  return null;
+}
+
+/**
+ * Which round of the cup this is, counted the way a player counts them.
+ *
+ * The third-place play-off is pushed onto the list right after the final and
+ * played beside it, so its place on the list is one past the last round of
+ * the cup — and "Round 4 of 3" is what a play-off player was shown. It is
+ * played at the final's depth, so it takes the final's number.
+ */
+const stageOf = (t, i) => Math.max(1,
+  t.rounds.slice(0, i + 1).filter((r) => r.kind !== 'thirdPlace').length);
+
+/** How many rounds deep the cup has been drawn, the play-off not counted. */
+const stagesDrawn = (t) => t.rounds.filter((r) => r.kind !== 'thirdPlace').length;
+
+/** The last evening of a cup: the final, and the play-off beside it. */
+const lastStage = (r) => r?.kind === 'final' || r?.kind === 'thirdPlace';
+
+/**
+ * Which round the card's `round` shows this reader, as an index, or -1.
+ *
+ * It used to be simply the newest one — and the newest round on the last
+ * evening of a cup is the third-place play-off, pushed onto the list after the
+ * final. So the card over the final read "Third place" for everybody, the two
+ * finalists included, and the room built each player's run from a round the
+ * finalists were not in: the two people playing for the cup saw no run at
+ * all. The apps already on phones build both from this one field, so it now
+ * names the round that matters to whoever is reading — the one they are
+ * playing in; their own last game once the cup is over, or once it is over
+ * for them on its last evening; and otherwise the deepest round being played,
+ * which is the final and not the play-off beside it.
+ */
+function shownRound(t, token) {
+  const last = t.rounds.length - 1;
+  if (last < 0) return -1;
+  let mineAt = -1;
+  let open = -1;
+  t.rounds.forEach((r, i) => {
+    const m = token ? r.matches.find((x) => x.a === token || x.b === token) : null;
+    if (!m) return;
+    mineAt = i;
+    if (m.state !== 'done') open = i;
+  });
+  if (open >= 0) return open;
+  if (mineAt >= 0 && (t.state === 'done' || lastStage(t.rounds[mineAt]))) return mineAt;
+  return t.rounds[last].kind === 'thirdPlace' && last > 0 ? last - 1 : last;
+}
+
+/**
+ * One player's cup, a rung per round they were drawn in.
+ *
+ * The apps built this from the single round the card carries, so a player
+ * three rounds deep saw one rung — and on the last evening, when that round
+ * was the play-off, the finalists saw none and the play-off players saw
+ * "Round 4". The server knows every round, so it says every round, each one
+ * named as the chart names it and each one with how it went:
+ *
+ *   waiting  drawn, its table not made yet     playing  the table is open
+ *   won      went through (walkover: the other side never came)
+ *   lost     went out     (walkover: this player never came)
+ *   bye      nobody to play; straight through  void     neither of them came
+ */
+function runOf(t, token) {
+  const out = [];
+  t.rounds.forEach((r, i) => {
+    const m = r.matches.find((x) => x.a === token || x.b === token);
+    if (!m) return;
+    const bye = !!m.walkover && !m.b;
+    const other = m.a === token ? m.b : m.a;
+    const result = bye ? 'bye'
+      : m.state === 'pending' ? 'waiting'
+        : m.state === 'playing' ? 'playing'
+          : !m.winner ? 'void'
+            : m.winner === token ? 'won' : 'lost';
+    const yours = m.a === token ? m.aScore : m.bScore;
+    const theirs = m.a === token ? m.bScore : m.aScore;
+    out.push({
+      round: stageOf(t, i),
+      label: roundLabel(r),
+      kind: r.kind,
+      result,
+      walkover: !bye && !!m.walkover && !!m.winner,
+      opponent: other ? nameOf(t, other) : null,
+      opponentCode: other ? codeOf(t, other) : null,
+      // Net worth when it was decided — the cup's scoreline — once known.
+      worth: yours != null || theirs != null ? { you: yours ?? null, them: theirs ?? null } : null,
+      opensAt: r.opensAt || null,
+    });
+  });
+  return out;
+}
+
+/**
+ * The table a player should be sitting at right now, in whichever cup.
+ *
+ * A player is in one cup at a time with one exception — a semi-final loser
+ * waiting on the play-off may enter the next cup — so this is almost always
+ * the only answer; when it is not, the older cup's table comes first.
+ */
+function tableFor(token) {
+  if (!token) return null;
+  for (const t of state.cups) {
+    if (t.state !== 'running') continue;
+    for (let i = 0; i < t.rounds.length; i++) {
+      const r = t.rounds[i];
+      const m = r.matches.find((x) => x.state === 'playing' && x.roomId && (x.a === token || x.b === token));
+      if (m) return { t, r, i, m, other: m.a === token ? m.b : m.a };
+    }
+  }
+  return null;
+}
+
+/**
+ * The schedule as a client should read it.
+ *
+ * `times` are minutes past midnight on the ORGANISER's clock, and every app
+ * printed them as they stand — while the plan beneath printed each round's
+ * instant on the reader's clock. A player in London looking at a cup run from
+ * Delhi read "Rounds at 20:00 and 22:00" over a plan that said 14:30 and
+ * 16:30, both on one screen. `at` is the same slots as instants — the next
+ * time each one strikes, in the order of `times` — which any client can print
+ * on the reader's own clock, exactly as it prints the plan.
+ */
+function scheduleView(sch) {
+  if (!sch) return null;
+  const offset = (Number(sch.offsetMinutes) || 0) * 60000;
+  const dayStart = Math.floor((now() + offset) / 86400000) * 86400000;
+  return {
+    ...sch,
+    at: (sch.times || []).map((m) => {
+      const at = dayStart + m * 60000 - offset;
+      return at > now() ? at : at + 86400000;
+    }),
   };
 }
 
@@ -276,7 +544,11 @@ function standing(t, token) {
   }
   return {
     survived,
-    round: currentRound == null ? null : currentRound + 1,
+    // Counted as the plan counts, so the play-off beside the final is the
+    // final's round rather than one past the end of the cup. Before the draw
+    // an entrant is in round one — nought is not a round anybody plays, and
+    // "Round 0 of 7" is what every app printed for the whole join window.
+    round: currentRound == null ? 1 : stageOf(t, currentRound),
     roundLabel: currentRound == null ? null : roundLabel(t.rounds[currentRound]),
     // Everyone still capable of winning it, this player included. Somebody
     // playing off for third is out of the running for the cup, so they are
@@ -325,7 +597,7 @@ export function bracketView(token, cupId) {
       entrants: t.entrants.length,
       you: mine ? {
         code: mine.code, name: mine.name,
-        out: !!mine.out && !stillIn(t, token),
+        out: isOut(t, mine),
         placed: mine.placed || null,
       } : null,
       standings: t.standings || null,
@@ -364,7 +636,9 @@ function roundView(t, n) {
   const r = t.rounds[n];
   if (!r) return null;
   return {
-    n: n + 1,
+    // The round's number as a player counts it — the play-off shares the
+    // final's, rather than printing one past the end of the cup.
+    n: stageOf(t, n),
     kind: r.kind,
     matches: r.matches.map((m) => ({
       a: nameOf(t, m.a), b: nameOf(t, m.b),
@@ -393,7 +667,7 @@ function planOf(t, token) {
     if (r.kind === 'thirdPlace') continue;   // played beside the final, not after it
     const inIt = !!token && r.matches.some((m) => m.a === token || m.b === token);
     out.push({
-      n: i + 1,
+      n: stageOf(t, i),
       label: roundLabel(r),
       players: playersIn(r),
       opensAt: r.opensAt || null,
@@ -475,13 +749,13 @@ function whistleFor(t, r, m) {
 
 function nextMatchFor(t, token) {
   if (!token) return null;
-  for (const r of t.rounds) {
+  for (const [i, r] of t.rounds.entries()) {
     for (const m of r.matches) {
       if (m.state === 'done') continue;
       if (m.a !== token && m.b !== token) continue;
       const other = m.a === token ? m.b : m.a;
       return {
-        round: t.rounds.indexOf(r) + 1,
+        round: stageOf(t, i),
         label: roundLabel(r),
         opponent: other ? nameOf(t, other) : null,
         opponentCode: other ? codeOf(t, other) : null,
@@ -1099,15 +1373,26 @@ export function remindersDue(when = now()) {
         r.told.drawn = true;
         for (const m of r.matches) {
           if (m.walkover && !m.b) {
-            say(m.a, `A bye — you go straight through to the ${label.toLowerCase()}.`,
+            // A bye skips THIS round, so it is the next one they go through
+            // to. Named after this one, a bye in the quarter-finals read
+            // "straight through to the quarter-finals" — the round they miss.
+            const onTo = Math.ceil(playersIn(r) / 2);
+            const into = onTo <= 2 ? 'final' : onTo <= 4 ? 'semi-finals'
+              : onTo <= 8 ? 'quarter-finals' : `round of ${onTo}`;
+            say(m.a, `A bye — you go straight through to the ${into}.`,
               `cup:${t.id}:r${i}:draw`);
             continue;
           }
           for (const token of [m.a, m.b]) {
             const other = nameOf(t, m.a === token ? m.b : m.a) || 'your opponent';
+            // The play-off is drawn from the two who just LOST a semi-final,
+            // and "You are through!" is not what somebody wants to read a
+            // minute after going out of the running for the cup.
             say(token, i === 0
               ? `The draw is out — your ${label} is ${awayText(r.opensAt - when)}, against ${other}. Miss the window and you are out.`
-              : `You are through! ${label} ${awayText(r.opensAt - when)}, against ${other}.`,
+              : r.kind === 'thirdPlace'
+                ? `One more game — the play-off for third is ${awayText(r.opensAt - when)}, against ${other}. Win it and you are on the podium.`
+                : `You are through! ${label} ${awayText(r.opensAt - when)}, against ${other}.`,
               `cup:${t.id}:r${i}:draw`);
           }
         }
@@ -1152,7 +1437,12 @@ export function remindersDue(when = now()) {
           ? `You won ${t.name}. The prize is paid by hand — keep your friend code.`
           : `You finished ${e.placed} in ${t.name}. The prize is paid by hand — keep your friend code.`,
           `cup:${t.id}:done`);
-      } else if (e.out && !e.toldOut) {
+      } else if (e.out && !e.toldOut && !stillIn(t, e.token) && !placingDue(t, e.token)) {
+        // Not while there is a game left to play, and not while a place on
+        // the podium is still to be written. `out` is set the moment a match
+        // is lost — so both semi-final losers were told they were out as their
+        // play-off was being drawn, and a finalist beaten while the play-off
+        // was still running heard "you are out" before "you finished second".
         e.toldOut = true;
         say(e.token, `You are out of ${t.name}. Thanks for playing — there will be another.`,
           `cup:${t.id}:done`);
@@ -1163,6 +1453,19 @@ export function remindersDue(when = now()) {
   if (out.length) save();
   return out;
 }
+
+/**
+ * Is a podium place still to be written for this player? True for anybody who
+ * played on the cup's last evening, or took third by default, while the cup
+ * is still running: their placing lands when the last game does. And true for
+ * a semi-final loser while the other semi-final is still going, whose
+ * play-off is drawn the moment it ends — told "you are out" at the first
+ * whistle, they were told "one more game" at the second.
+ */
+const placingDue = (t, token) => t.state === 'running'
+  && (t.thirdByDefault === token
+    || semiPending(t, token)
+    || t.rounds.some((r) => lastStage(r) && r.matches.some((m) => m.a === token || m.b === token)));
 
 /** Every playing match, with the time its table opened. For the sweeper. */
 export function playingMatches() {

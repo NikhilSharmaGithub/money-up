@@ -128,6 +128,30 @@ data class CupFeed(
     val enabled: Boolean = false,
     val cup: CupView? = null,
     val others: List<CupBrief> = emptyList(),
+    /**
+     * Where this reader should be sitting right now, in whichever cup — not
+     * only the one on the card. Null when no table of theirs is open
+     * anywhere, and missing altogether from a server older than it.
+     */
+    val table: CupTable? = null,
+)
+
+/** The reader's open cup table, in any cup: what [CupStore.seat] walks them into. */
+@Serializable
+data class CupTable(
+    val cupId: String = "",
+    /** The cup's name, for a table that is not the card's. */
+    val cup: String = "",
+    val roomId: String? = null,
+    val round: Int = 0,
+    val label: String = "",
+    val opponent: String? = null,
+    val opponentCode: String? = null,
+    val closesAt: Double? = null,
+    /** The whistle, if the cup runs to a clock. */
+    val endsAt: Double? = null,
+    /** Whether they have sat down at it yet, on any device. */
+    val seated: Boolean = false,
 )
 
 /** A cup this card is not showing: enough to tell it apart and choose it. */
@@ -167,10 +191,19 @@ data class CupView(
     val schedule: CupSchedule? = null,
     val plan: List<CupPlanRound> = emptyList(),
     val rounds: Int = 0,
+    /**
+     * "Round X of Y", counted once on the server so every app prints the same
+     * two numbers: X is never nought before the draw, and never past Y for
+     * the play-off beside the final. Missing from older servers.
+     */
+    val progress: CupProgress? = null,
     val round: CupRound? = null,
     val standings: CupStandings? = null,
     val you: CupYou = CupYou(),
 )
+
+@Serializable
+data class CupProgress(val round: Int = 1, val of: Int = 1)
 
 @Serializable
 data class CupPrize(
@@ -198,11 +231,17 @@ data class CupLocalPrize(
 
 @Serializable
 data class CupSchedule(
-    /** Minutes past midnight, in the ORGANISER's clock — see [scheduleLine]. */
+    /** Minutes past midnight, in the ORGANISER's clock — see [slotClocks]. */
     val times: List<Int> = emptyList(),
     val windowMinutes: Int = 10,
     val matchMinutes: Int = 90,
     val offsetMinutes: Int = 0,
+    /**
+     * The same slots as instants — the next time each one strikes, in the
+     * order of [times] — so they can be printed on the reader's clock. Empty
+     * from a server too old to send them.
+     */
+    val at: List<Double> = emptyList(),
 )
 
 @Serializable
@@ -253,6 +292,8 @@ data class CupYou(
     val out: Boolean = false,
     /** "first" | "second" | "third", once it is over. */
     val placed: String? = null,
+    /** A place already won that [placed] has not caught up with yet — see [placeDecided]. */
+    val settled: String? = null,
     val roomId: String? = null,
     val opponent: String? = null,
     val survived: Int = 0,
@@ -261,7 +302,35 @@ data class CupYou(
     /** Still in the cup. Absent before the draw, when everybody still is. */
     val left: Int? = null,
     val next: CupNext? = null,
+    /**
+     * Every round they were drawn in, one rung each, in order. Empty before
+     * the draw, and from a server too old to send one — which also sends no
+     * [CupView.progress], and that is how the room tells the two apart.
+     */
+    val run: List<CupRung> = emptyList(),
 )
+
+/** One round of one player's cup, and how it went for them. */
+@Serializable
+data class CupRung(
+    val round: Int = 0,
+    /** "Round of 16", "Quarter-finals", "Semi-finals", "Final", "Third place". */
+    val label: String = "",
+    /** "round" | "final" | "thirdPlace". */
+    val kind: String? = null,
+    /** "waiting" | "playing" | "won" | "lost" | "bye" | "void". */
+    val result: String = "",
+    /** On a won or lost rung: somebody never came. */
+    val walkover: Boolean = false,
+    val opponent: String? = null,
+    val opponentCode: String? = null,
+    /** Net worth when it was decided — the cup's scoreline — once known. */
+    val worth: CupWorth? = null,
+    val opensAt: Double? = null,
+)
+
+@Serializable
+data class CupWorth(val you: Int? = null, val them: Int? = null)
 
 /**
  * The match in front of this player. The whole reason the detail sheet
@@ -447,12 +516,17 @@ class CupStore private constructor(private val game: GameStore, private val scop
                 continue
             }
             misses = 0
+            // A cup of the reader's own being played counts as live even while
+            // the card shows another one — their door opens there, and a
+            // half-minute gap is a twentieth of the window gone before they
+            // hear about it. iOS's CupWatch, gap for gap.
+            val playing = others.any { it.joined && it.state == "running" }
             rest(
                 when {
                     feed?.enabled != true -> 60_000L
-                    live?.state == "scheduled" -> 30_000L
                     live?.state == "joining" -> 3_000L
-                    live?.state == "running" -> 4_000L
+                    live?.state == "running" || playing -> 4_000L
+                    live?.state == "scheduled" -> 30_000L
                     else -> 20_000L
                 }
             )
@@ -470,13 +544,19 @@ class CupStore private constructor(private val game: GameStore, private val scop
     }
 
     /**
-     * This device has sat down. If it is at the cup table the card was
-     * pointing at, the "your match is open" and last-call reminders have
-     * nothing left to say: the server sends the last call only to somebody
-     * not yet in their seat, and so does this.
+     * This device has sat down. If it is at a cup table — the one the server
+     * named in any cup, or the one the card was pointing at — the "your match
+     * is open" and last-call reminders have nothing left to say: the server
+     * sends the last call only to somebody not yet in their seat, and so does
+     * this.
      */
     private fun seated(room: String) {
-        val cup = live ?: return
+        val answer = feed?.takeIf { it.enabled } ?: return
+        answer.table?.takeIf { it.roomId == room }?.let {
+            CupReminders.seated(app, it.cupId, room)
+            return
+        }
+        val cup = answer.cup ?: return
         if (room == cup.you.roomId || room == cup.you.next?.roomId) {
             CupReminders.seated(app, cup.id, room)
         }
@@ -576,13 +656,33 @@ class CupStore private constructor(private val game: GameStore, private val scop
         // The reminders read the same answer. Android gets no cup push, so
         // they are the only thing that reaches a phone nobody is looking at.
         CupReminders.sync(app, fresh)
-        if (fresh.enabled) seat(fresh.cup?.you?.roomId)
+        // Seat from the table, not from the card. Somebody whose door opens in
+        // one cup while they are reading about another in "also on" belongs at
+        // that table all the same, and the card is only ever one cup. A server
+        // too old to say `table` still names the card's own room.
+        if (fresh.enabled) {
+            val table = fresh.table
+            seat(table?.roomId ?: fresh.cup?.you?.roomId, seated = table?.seated == true)
+        }
         return true
     }
 
-    /** Your table is ready: walk in, once. */
-    private fun seat(room: String?) {
-        if (room == null || room == sentTo || game.roomId != null) return
+    /**
+     * Your table is ready: walk in, once.
+     *
+     * [seated] is the server saying they already sat down at it — on another
+     * device, or on this one before the app was closed. That counts as the
+     * once: walking them in again would put the same player at one table
+     * twice, and throw somebody back into a game they had just stepped out
+     * of, which is what [sentTo] exists to prevent on a single phone.
+     */
+    private fun seat(room: String?, seated: Boolean = false) {
+        if (room == null || room == sentTo) return
+        if (seated) {
+            sentTo = room
+            return
+        }
+        if (game.roomId != null) return
         sentTo = room
         game.showToast("Your cup table is ready")
         Haptics.turn()
@@ -899,7 +999,10 @@ fun CupCard(cup: CupView?, onOpen: () -> Unit) {
                     val matches = cup.round?.matches.orEmpty()
                     if (matches.isNotEmpty()) TableLights(matches.take(60).map { it.state != "done" })
                     PrizeRow(cup.prize, cup.local)
-                    CardNote(standingLine(cup), if (cup.you.roomId != null) p.good else p.ink3)
+                    CardNote(
+                        standingLine(cup),
+                        if (cup.you.roomId != null || placeDecided(cup) != null) p.good else p.ink3,
+                    )
                     cup.you.roomId?.let { room ->
                         LandingButton(
                             "Go to your table",
@@ -1496,8 +1599,12 @@ fun CupDetailSheet(
     // off (the server never shows a cancelled one), or a final a spectator
     // was watching has ended (a finished cup is kept only for the people who
     // played it). A failed poll leaves `feed` as it was, so a dropped
-    // connection is not mistaken for any of these.
-    val gone = fresh == null && cups.feed != null
+    // connection is not mistaken for any of these. Nor is a cup that is only
+    // off the card: while the reader has a table open and empty in another
+    // cup, the server puts that cup on the card whatever was asked for, and
+    // this one is still being played, one row down in "also on".
+    val gone = fresh == null && cups.feed != null &&
+        cups.others.none { it.id == last?.id && it.state != "done" }
     // Only a cup last seen unfinished is in doubt: a finished one may stay as
     // it last stood. The chart still knows a cup that has left the feed, so
     // it is asked once — a final that ended shows its podium; anything else
@@ -1673,7 +1780,7 @@ private fun DetailBody(
             Tile("Prize pool", poolMoney(cup.prize, cup.local), Modifier.weight(1f))
             Tile(
                 if (cup.state == "done") "Finished" else "Round",
-                if (cup.state == "done") "—" else "${cup.you.round ?: cup.rounds} of ${depth(cup.entrants)}",
+                if (cup.state == "done") "—" else roundOf(cup),
                 Modifier.weight(1f),
             )
             Tile("Still in", "${cup.you.left ?: cup.entrants}", Modifier.weight(1f))
@@ -1681,29 +1788,30 @@ private fun DetailBody(
 
         cup.you.next?.let { NextMatch(it, cup, game, onDismiss) }
 
-        if (!cup.you.joined) {
-            if (cup.state == "joining") {
-                Text(
-                    "You have not joined this one. Close this and tap Join on the card.",
-                    color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
-                )
-            } else if (cup.you.out) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(p.sunken)
-                        .padding(11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon("skull", size = 15.dp)
-                    Spacer(Modifier.width(7.dp))
-                    Text(
-                        "You are out of this one. The chart below shows how it finished.",
-                        color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-                    )
-                }
-            }
+        // Where the reader stands, when that is not a match to play: not in a
+        // cup that is still taking entries, holding a place the podium has
+        // yet to catch up with, or out. This used to be drawn only for readers
+        // who had NOT joined — and the server only ever says `out` about
+        // somebody who did, so the out line sat behind a door no knocked-out
+        // player could come through. Nobody was ever told they were out.
+        val decided = placeDecided(cup)
+        if (!cup.you.joined && cup.state == "joining") {
+            Text(
+                "You have not joined this one. Close this and tap Join on the card.",
+                color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
+            )
+        } else if (decided != null) {
+            // Ahead of "out": a beaten finalist is out of the cup and second
+            // in it, and for the minutes the other game runs the second is the
+            // news. See placeDecided.
+            StandingNote("trophy", waitingLine(decided), p.good)
+        } else if (cup.you.out) {
+            StandingNote(
+                "skull",
+                if (cup.state == "done") "You are out of this one. The chart below shows how it finished."
+                else "You are out of this one. The chart below follows the rest of it.",
+                p.ink2,
+            )
         }
 
         val run = yourRun(cup)
@@ -1770,6 +1878,23 @@ private fun DetailBody(
                 }
             }
         }
+    }
+}
+
+/** One line in a sunken well with a drawn glyph before it: out, or a place already won. */
+@Composable
+private fun StandingNote(glyph: String, text: String, tone: Color) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(P.current.sunken)
+            .padding(11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(glyph, size = 15.dp)
+        Spacer(Modifier.width(7.dp))
+        Text(text, color = tone, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1908,11 +2033,43 @@ private fun Contender(name: String, mine: Boolean, modifier: Modifier = Modifier
 private class Rung(val label: String, val line: String, val kind: Int, val players: Int = 0)
 
 /**
- * Where this player has got to, built from the round the card already
- * carries. The whole bracket is a fetch of its own, and this sheet has to
- * open instantly.
+ * One rung per round this player was drawn in, from the run the card's poll
+ * already carries — the whole bracket is a fetch of its own, and this sheet
+ * has to open instantly.
+ *
+ * It used to be built here from the one round the card carries, so a player
+ * three rounds deep saw a single rung, and on the last evening, when that
+ * round was the play-off, the two finalists saw none at all. Composable for
+ * the one clock it prints, on a rung still waiting for its table.
  */
+@Composable
 private fun yourRun(cup: CupView): List<Rung> {
+    // Every server that sends a run sends `progress` beside it, so an empty
+    // run from one of those is a player not drawn yet, not an old server.
+    if (cup.progress == null && cup.you.run.isEmpty()) return legacyRun(cup)
+    val twentyFour = DateFormat.is24HourFormat(LocalContext.current)
+    return cup.you.run.mapIndexed { i, r ->
+        val who = r.opponent ?: "the other side"
+        val label = r.label.ifBlank { "Round ${if (r.round > 0) r.round else i + 1}" }
+        when (r.result) {
+            "waiting" -> {
+                val at = r.opensAt?.let { " · " + clockText(it, SHORT_DATE, twentyFour) }.orEmpty()
+                Rung(label, "plays $who$at", 2)
+            }
+            "playing" -> Rung(label, "playing $who", 2)
+            "won" -> Rung(label, if (r.walkover) "$who never came" else "beat $who", 1)
+            "bye" -> Rung(label, "a bye — straight through", 1)
+            "lost" -> Rung(label, if (r.walkover) "did not turn up" else "lost to $who", 0)
+            "void" -> Rung(label, "nobody came", 0)
+            // A result this build has never heard of: say who, and leave the
+            // dot the colour of a game still being settled.
+            else -> Rung(label, "v $who", 2)
+        }
+    }
+}
+
+/** A server too old to send a run: one rung, from the round on the card. */
+private fun legacyRun(cup: CupView): List<Rung> {
     val me = cup.you.name ?: return emptyList()
     val round = cup.round ?: return emptyList()
     return round.matches.filter { it.a == me || it.b == me }.map { m ->
@@ -2206,11 +2363,14 @@ private fun PosterRungs(cup: CupView) {
     }
 }
 
-/** What this cup commits its players to, in dates and hours. */
+/**
+ * What this cup commits its players to, in dates and hours — the hours on the
+ * reader's own clock, like the dates either side of them.
+ */
 @Composable
 private fun WhenBox(cup: CupView, sched: CupSchedule) {
     val p = P.current
-    val clock = sched.times.joinToString(" and ") { "%02d:%02d".format(it / 60, it % 60) }
+    val clock = slotClocks(sched).joinToString(" and ")
     var n = maxOf(2, if (cup.maxPlayers > 0) cup.maxPlayers else cup.entrants)
     var rounds = 0
     while (n > 1) {
@@ -2619,12 +2779,34 @@ private fun whenText(epochMs: Double?, skeleton: String): String? {
 }
 
 /**
- * "Rounds at 20:00 and 22:00 · 10 minutes to turn up" — the times as the
- * organiser wrote them, word for word as iOS prints them.
+ * Each slot as the reader's own clock reads it, earliest in their day first.
+ *
+ * [CupSchedule.times] printed as they stand told a player in London "Rounds
+ * at 20:00" for a cup run from Delhi, over a plan that said 14:30 on the same
+ * screen — the plan was already on their clock. So the slots are printed from
+ * [CupSchedule.at], the way [whenText] prints the plan, and put in the order
+ * the reader's day meets them. Only a server too old to send `at` gets the
+ * organiser's figures, as they were always shown.
  */
+@Composable
+private fun slotClocks(sched: CupSchedule): List<String> {
+    if (sched.at.isEmpty()) return sched.times.map { "%02d:%02d".format(it / 60, it % 60) }
+    val twentyFour = DateFormat.is24HourFormat(LocalContext.current)
+    val zone = java.util.TimeZone.getDefault()
+    return sched.at
+        .sortedBy { (it.toLong() + zone.getOffset(it.toLong())).mod(86_400_000L) }
+        .map { clockText(it, SHORT_TIME, twentyFour) }
+        .distinct()
+}
+
+/**
+ * "Rounds at 20:00 and 22:00 · 10 minutes to turn up", on the reader's clock
+ * — the same clock the plan further down is printed on.
+ */
+@Composable
 private fun scheduleLine(sched: CupSchedule?): String? {
-    val times = sched?.times?.takeIf { it.isNotEmpty() } ?: return null
-    val clocks = times.map { "%02d:%02d".format(it / 60, it % 60) }
+    if (sched == null) return null
+    val clocks = slotClocks(sched).takeIf { it.isNotEmpty() } ?: return null
     val joined = if (clocks.size == 1) clocks[0]
     else clocks.dropLast(1).joinToString(", ") + " and " + clocks.last()
     return "Rounds at $joined · ${sched.windowMinutes} minutes to turn up"
@@ -2636,15 +2818,48 @@ private fun windowNote(cup: CupView): String {
     return " · open for ${((closes - opens) / 60000).toInt()} min"
 }
 
-/** How many rounds a field this size takes, so "round 3 of 8" means something. */
-private fun depth(entrants: Int): Int {
-    var n = maxOf(2, entrants)
-    var rounds = 0
-    while (n > 1) {
-        n = (n + 1) / 2
-        rounds++
+/**
+ * "2 of 5". The server counts both ends, so every app shows the same
+ * numbers: this used to work the length out here from the entrants and read
+ * "0 of 7" for the whole join window, and "4 of 3" to both players in the
+ * play-off for third. A server too old to count them gets the plan's length,
+ * held to the same two rules.
+ */
+private fun roundOf(cup: CupView): String {
+    cup.progress?.let { return "${it.round} of ${it.of}" }
+    val of = maxOf(1, cup.plan.size)
+    return "${minOf(of, maxOf(1, cup.you.round ?: cup.rounds))} of $of"
+}
+
+/**
+ * A podium place already won while the other game on the last evening is
+ * still being played: first or second once the final is decided, third once
+ * the play-off is — or for the whole final, when a bye left one semi-final
+ * loser and nobody to play off against. The server writes `placed` only when
+ * both are in, and until then every one of them reads `out` — true of the
+ * cup, but not of their evening. The server says which ([CupYou.settled]),
+ * because the last of those cannot be told from a plain semi-final defeat by
+ * anything on this side. iOS's placeDecided, case for case.
+ */
+private fun placeDecided(cup: CupView): CupPlace? {
+    if (cup.state != "running" || cup.you.placed != null) return null
+    return when (cup.you.settled) {
+        "first" -> CupPlace.FIRST
+        "second" -> CupPlace.SECOND
+        "third" -> CupPlace.THIRD
+        else -> null
     }
-    return rounds
+}
+
+/**
+ * A place that is settled while the other game on the last evening is still
+ * going — see [placeDecided]. The podium is written only once both are in, so
+ * this says which game it is waiting on.
+ */
+private fun waitingLine(place: CupPlace): String = when (place) {
+    CupPlace.FIRST -> "You won the final. The podium goes up once the play-off for third is done."
+    CupPlace.SECOND -> "You finished second. The podium goes up once the play-off for third is done."
+    CupPlace.THIRD -> "You finished third. The podium goes up once the final is done."
 }
 
 private fun roundName(round: CupRound?): String {
@@ -2655,13 +2870,18 @@ private fun roundName(round: CupRound?): String {
     return "Round ${round.n} — $live of ${round.matches.size} still playing"
 }
 
-private fun standingLine(cup: CupView): String = when {
-    !cup.you.joined -> "Running now — the doors are shut."
-    cup.you.out -> "You are out of this one."
-    cup.you.roomId != null && cup.you.opponent != null ->
-        "Your table is open — you are playing ${cup.you.opponent}."
-    cup.you.roomId != null -> "Your table is open — good luck."
-    else -> "Waiting for your next table."
+private fun standingLine(cup: CupView): String {
+    if (!cup.you.joined) return "Running now — the doors are shut."
+    // Ahead of "out": a beaten finalist is out of the cup and second in it,
+    // and for the minutes the other game runs the second is the news.
+    placeDecided(cup)?.let { return waitingLine(it) }
+    return when {
+        cup.you.out -> "You are out of this one."
+        cup.you.roomId != null && cup.you.opponent != null ->
+            "Your table is open — you are playing ${cup.you.opponent}."
+        cup.you.roomId != null -> "Your table is open — good luck."
+        else -> "Waiting for your next table."
+    }
 }
 
 /**

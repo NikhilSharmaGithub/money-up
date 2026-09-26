@@ -19,6 +19,26 @@ struct CupFeed: Decodable, Equatable {
     /// The cups this card is not showing — a row each, enough to tell them
     /// apart and to choose one.
     var others: [Other] = []
+    /// Where this reader should be sitting right now, in whichever cup — not
+    /// only the one on the card. Null when no table of theirs is open
+    /// anywhere, and missing altogether from a server older than it.
+    var table: Table?
+
+    struct Table: Decodable, Equatable {
+        var cupId: String?
+        /// The cup's name, for a table that is not the card's.
+        var cup: String?
+        var roomId: String?
+        var round: Int?
+        var label: String?
+        var opponent: String?
+        var opponentCode: String?
+        var closesAt: Double?
+        /// The whistle, if the cup runs to a clock.
+        var endsAt: Double?
+        /// Whether they have sat down at it yet, on any device.
+        var seated: Bool?
+    }
 
     struct Other: Decodable, Equatable, Identifiable {
         var id: String
@@ -54,11 +74,33 @@ struct CupFeed: Decodable, Equatable {
         var plan: [PlanRound] = []
         var rounds: Int
         var round: Round?
+        /// "Round X of Y", counted once on the server so every app prints the
+        /// same two numbers: X is never nought before the draw, and never past
+        /// Y for the play-off beside the final. Missing from older servers.
+        var progress: Progress?
         var standings: Standings?
         var you: You
 
         var closesDate: Date? { closesAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
         var openedDate: Date? { openedAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+
+        /// A podium place already won while the other game on the last evening
+        /// is still being played: first or second once the final is decided,
+        /// third once the play-off is — or for the whole final, when a bye
+        /// left one semi-final loser and nobody to play off against. The
+        /// server writes `placed` only when both are in, and until then every
+        /// one of them reads `out` — true of the cup, but not of their evening.
+        /// The server says which (`settled`), because the last of those cannot
+        /// be told from a plain semi-final defeat by anything on this side.
+        var placeDecided: CupPlace? {
+            guard state == "running", you.placed == nil, let settled = you.settled else { return nil }
+            return CupPlace(rawValue: settled)
+        }
+    }
+
+    struct Progress: Decodable, Equatable {
+        var round: Int
+        var of: Int
     }
 
     struct Prize: Decodable, Equatable {
@@ -110,6 +152,9 @@ struct CupFeed: Decodable, Equatable {
         var name: String?
         var out: Bool?
         var placed: String?
+        /// A place already won that `placed` has not caught up with yet —
+        /// "first" | "second" | "third". See placeDecided.
+        var settled: String?
         /// The table drawn for you, the moment there is one.
         var roomId: String?
         var opponent: String?
@@ -121,6 +166,37 @@ struct CupFeed: Decodable, Equatable {
         /// exists. "You are in round three" is not what somebody wants at
         /// nine in the evening; "you play Ravi at ten" is.
         var next: NextMatch?
+        /// Every round they were drawn in, one rung each, in order. Optional
+        /// rather than defaulting to empty: a reader who never entered gets
+        /// only `{joined: false}`, and a decoder does not fall back on a
+        /// default for a missing key — it throws, and takes the whole card
+        /// with it. Nil also means a server too old to send one.
+        var run: [Rung]?
+    }
+
+    /// One round of one player's cup, and how it went for them.
+    struct Rung: Decodable, Equatable {
+        var round: Int?
+        /// "Round of 16", "Quarter-finals", "Semi-finals", "Final", "Third place"
+        var label: String?
+        /// "round" | "final" | "thirdPlace"
+        var kind: String?
+        /// "waiting" | "playing" | "won" | "lost" | "bye" | "void"
+        var result: String?
+        /// On a won or lost rung: somebody never came.
+        var walkover: Bool?
+        var opponent: String?
+        var opponentCode: String?
+        /// Net worth when it was decided — the cup's scoreline — once known.
+        var worth: Worth?
+        var opensAt: Double?
+
+        struct Worth: Decodable, Equatable {
+            var you: Int?
+            var them: Int?
+        }
+
+        var opensDate: Date? { opensAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
     }
 
     struct NextMatch: Decodable, Equatable {
@@ -153,11 +229,37 @@ struct CupFeed: Decodable, Equatable {
     }
 
     struct Schedule: Decodable, Equatable {
+        /// Minutes past midnight on the ORGANISER's clock.
         var times: [Int]?
         var windowMinutes: Int?
         /// How long a cup game may run before it is decided on net worth.
         var matchMinutes: Int?
         var offsetMinutes: Int?
+        /// The same slots as instants — the next time each one strikes, in
+        /// the order of `times` — so they can be printed on the reader's clock.
+        var at: [Double]?
+
+        /// Each slot as the reader's own clock reads it, earliest in their day
+        /// first. `times` printed as they stand told a player in London
+        /// "Rounds at 20:00" for a cup run from Delhi, over a plan that said
+        /// 14:30 on the same screen — the plan was already on their clock.
+        /// Only a server too old to send `at` gets the organiser's figures.
+        var clocks: [String] {
+            if let at, !at.isEmpty {
+                let cal = Calendar.current
+                let minute = { (d: Date) -> Int in
+                    let c = cal.dateComponents([.hour, .minute], from: d)
+                    return (c.hour ?? 0) * 60 + (c.minute ?? 0)
+                }
+                var seen = Set<String>()
+                return at.map { Date(timeIntervalSince1970: $0 / 1000) }
+                    .sorted { minute($0) < minute($1) }
+                    .map { $0.formatted(.dateTime.hour().minute()) }
+                    .filter { seen.insert($0).inserted }
+            }
+            let pad = { (n: Int) in n < 10 ? "0\(n)" : "\(n)" }
+            return (times ?? []).map { "\(pad($0 / 60)):\(pad($0 % 60))" }
+        }
     }
 }
 
@@ -213,11 +315,16 @@ final class CupWatch: ObservableObject {
             }
             misses = 0
             // A closing door and a live bracket are worth watching closely; a
-            // server with tournaments switched off is worth barely asking.
+            // server with tournaments switched off is worth barely asking. A
+            // cup of the reader's own being played counts as live even while
+            // the card shows another one — their door opens there, and a
+            // half-minute gap is a twentieth of the window gone before they
+            // hear about it.
+            let playing = feed?.others.contains { $0.joined && $0.state == "running" } == true
             let gap: Double = feed?.enabled != true ? 60
-                : live?.state == "scheduled" ? 30
                 : live?.state == "joining" ? 3
-                : live?.state == "running" ? 4 : 20
+                : live?.state == "running" || playing ? 4
+                : live?.state == "scheduled" ? 30 : 20
             try? await Task.sleep(for: .seconds(gap))
         }
     }
@@ -230,7 +337,12 @@ final class CupWatch: ObservableObject {
         // Follow whatever came back, so joining and the chart always act on
         // the cup being looked at.
         if let id = fresh.cup?.id { showing = id }
-        openTable(fresh.enabled == true ? fresh.cup?.you.roomId : nil)
+        // Seat from the table, not from the card. Somebody whose door opens in
+        // one cup while they are reading about another in "also on" belongs at
+        // that table all the same, and the card is only ever one cup. A server
+        // too old to say `table` still names the card's own room.
+        openTable(fresh.enabled == true ? (fresh.table?.roomId ?? fresh.cup?.you.roomId) : nil,
+                  seated: fresh.table?.seated == true)
         return true
     }
 
@@ -270,8 +382,16 @@ final class CupWatch: ObservableObject {
 
     /// Your table is ready: walk in, once. Every later visit is the player's
     /// own tap on the button, which is still sitting there.
-    private func openTable(_ room: String?) {
-        guard let store, let room, room != sentTo, store.roomId == nil else { return }
+    ///
+    /// `seated` is the server saying they already sat down at it — on another
+    /// device, or on this one before the app was closed. That counts as the
+    /// once: walking them in again would put the same player at one table
+    /// twice, and throw somebody back into a game they had just stepped out
+    /// of, which is what `sentTo` exists to prevent on a single phone.
+    private func openTable(_ room: String?, seated: Bool = false) {
+        guard let store, let room, room != sentTo else { return }
+        if seated { sentTo = room; return }
+        guard store.roomId == nil else { return }
         sentTo = room
         store.showToast("Your cup table is ready")
         Haptics.turn()
@@ -287,6 +407,19 @@ final class CupWatch: ObservableObject {
 
 /// Which of the three prizes a caller means.
 enum CupPlace: String { case first, second, third }
+
+extension CupPlace {
+    /// A place that is settled while the other game on the last evening is
+    /// still going — see placeDecided. The podium is written only once both
+    /// are in, so this says which game it is waiting on.
+    var waitingLine: String {
+        switch self {
+        case .first:  return "You won the final. The podium goes up once the play-off for third is done."
+        case .second: return "You finished second. The podium goes up once the play-off for third is done."
+        case .third:  return "You finished third. The podium goes up once the final is done."
+        }
+    }
+}
 
 /// A cup prize written the way the reader reads money.
 ///
@@ -526,7 +659,8 @@ struct CupCard: View {
                     tableLights(matches, P)
                 }
                 prizes(cup, P)
-                note(standingLine(cup), tone: cup.you.roomId != nil ? P.good : P.ink3, P)
+                note(standingLine(cup),
+                     tone: cup.you.roomId != nil || cup.placeDecided != nil ? P.good : P.ink3, P)
 
                 if let room = cup.you.roomId {
                     Button {
@@ -825,6 +959,9 @@ struct CupCard: View {
 
     private func standingLine(_ cup: CupFeed.Cup) -> String {
         guard cup.you.joined == true else { return "Running now — the doors are shut." }
+        // Ahead of "out": a beaten finalist is out of the cup and second in
+        // it, and for the minutes the other game runs the second is the news.
+        if let place = cup.placeDecided { return place.waitingLine }
         if cup.you.out == true { return "You are out of this one." }
         if let opponent = cup.you.opponent, cup.you.roomId != nil {
             return "Your table is open — you are playing \(opponent)."

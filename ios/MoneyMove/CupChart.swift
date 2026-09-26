@@ -403,10 +403,10 @@ struct CupPosterSheet: View {
         .sheetPaper(P.page)
     }
 
-    /// What this cup commits its players to, in dates and hours.
+    /// What this cup commits its players to, in dates and hours — the hours on
+    /// the reader's own clock, like the dates either side of them.
     private func whenBox(_ sched: CupFeed.Schedule, _ P: Palette) -> some View {
-        let pad = { (n: Int) in n < 10 ? "0\(n)" : "\(n)" }
-        let clock = (sched.times ?? []).map { "\(pad($0 / 60)):\(pad($0 % 60))" }.joined(separator: " and ")
+        let clock = sched.clocks.joined(separator: " and ")
         var n = max(2, cup.maxPlayers > 0 ? cup.maxPlayers : cup.entrants), rounds = 0
         while n > 1 { n = Int(ceil(Double(n) / 2)); rounds += 1 }
         let evenings = Int(ceil(Double(rounds) / Double(max(1, (sched.times ?? []).count))))

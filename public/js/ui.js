@@ -2735,6 +2735,52 @@ export function cupMoney(cup, place) {
 }
 
 /**
+ * A podium place already won that the podium has not caught up with, in the
+ * apps' words — or '' when there is none.
+ *
+ * `placed` is written only once the final and the play-off are both in, and
+ * until then a beaten finalist, the play-off's winner and a semi-final loser
+ * left third by default (a bye, and nobody to play off against) all read
+ * `out`. `settled` is the server saying which place is theirs already; the
+ * card and the room both say it ahead of "out".
+ */
+export function cupSettledLine(cup) {
+  if (cup?.state !== 'running' || cup.you?.placed) return '';
+  switch (cup.you?.settled) {
+    case 'first': return 'You won the final. The podium goes up once the play-off for third is done.';
+    case 'second': return 'You finished second. The podium goes up once the play-off for third is done.';
+    case 'third': return 'You finished third. The podium goes up once the final is done.';
+    default: return '';
+  }
+}
+
+/**
+ * When a cup's rounds strike, on the reader's own clock.
+ *
+ * `times` are minutes past midnight where the organiser sits, and printing
+ * them as they stand put "Rounds at 20:00" over a plan that said 14:30 for
+ * anybody a few time zones away — two clocks on one screen. `at` is the same
+ * slots as instants, so they print the way the plan prints: here. Moved onto
+ * this clock, two slots either side of midnight can swap places, so they are
+ * put back in the order the reader's day runs. A server from before `at`
+ * only has the organiser's figures, and they are still better than nothing.
+ */
+function cupClock(schedule) {
+  const at = (schedule?.at || []).filter((ms) => Number.isFinite(ms));
+  if (at.length) {
+    const seen = new Map();   // what is printed → minutes into the reader's day
+    at.forEach((ms) => {
+      const d = new Date(ms);
+      const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (!seen.has(clock)) seen.set(clock, d.getHours() * 60 + d.getMinutes());
+    });
+    return [...seen].sort((a, b) => a[1] - b[1]).map(([clock]) => clock);
+  }
+  const pad = (n) => String(n).padStart(2, '0');
+  return (schedule?.times || []).map((m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`);
+}
+
+/**
  * The tournament, opened.
  *
  * The card is a summary — a countdown, three prizes, one button. This is the
@@ -2748,10 +2794,14 @@ export function openCupDetail(cup, token, onJoin) {
   const next = you.next || null;
   const num = (n) => Number(n || 0).toLocaleString('en-US');
 
-  // What a field this size takes, so "round 3 of 8" means something before
-  // the bracket has been drawn that far.
-  let depth = 0;
-  for (let n = Math.max(2, cup.entrants); n > 1; n = Math.ceil(n / 2)) depth++;
+  // "Round X of Y". The server works it out for every client now, and it
+  // cannot slip at either end: never "0 of 3" before the draw, never "4 of 3"
+  // for the play-off beside the final. A server from before `progress` gets
+  // the same sum done here off the plan, clamped the same way.
+  const progress = cup.progress?.of ? cup.progress : (() => {
+    const of = Math.max(1, (cup.plan || []).length);
+    return { round: Math.min(of, Math.max(1, you.round || cup.rounds || 1)), of };
+  })();
 
   const pool = (() => {
     const l = cup.local;
@@ -2762,11 +2812,10 @@ export function openCupDetail(cup, token, onJoin) {
     return `${cur}${num((cup.prize?.first || 0) + (cup.prize?.second || 0) + (cup.prize?.third || 0))}`;
   })();
 
+  // On the reader's clock, like the plan below it — see cupClock.
   const schedLine = (() => {
-    const times = cup.schedule?.times || [];
-    if (!times.length) return '';
-    const pad = (n) => String(n).padStart(2, '0');
-    const clock = times.map((m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`);
+    const clock = cupClock(cup.schedule);
+    if (!clock.length) return '';
     const joined = clock.length === 1 ? clock[0]
       : `${clock.slice(0, -1).join(', ')} and ${clock[clock.length - 1]}`;
     return `Rounds at ${joined} · ${cup.schedule.windowMinutes} minutes to turn up`;
@@ -2783,12 +2832,54 @@ export function openCupDetail(cup, token, onJoin) {
       ${next.roomId ? `<button class="btn primary wide" id="cdPlay">${icon('dice', 15)} Play your match</button>` : ''}
     </div>` : '';
 
-  // Your own run, off the round the card already carries — the whole bracket
-  // is a separate fetch and this has to open instantly.
+  // Knocked out, said in so many words. The card has always said it; the room
+  // behind it never did, so somebody who opened it after losing found the
+  // plan and the rules and nothing about themselves. It borrows the next
+  // match's box, because it sits where that box stood while there was one.
+  //
+  // A place already won comes ahead of it: a beaten finalist is out of the
+  // cup and second in it, and for the minutes the other game runs the second
+  // is the news. See cupSettledLine.
+  const settledLine = cupSettledLine(cup);
+  const standBlock = settledLine ? `<div class="cd-next cup-in ok">
+      ${icon('trophy', 15)} <span>${settledLine}</span>
+    </div>` : you.joined && you.out ? `<div class="cd-next cup-in">
+      ${icon('skull', 15)} <span>You are out of this one. The chart below ${cup.state === 'done'
+    ? 'shows how it finished' : 'follows the rest of it'}.</span>
+    </div>` : '';
+
+  // Your own run, a rung for every round you were drawn in — the server says
+  // them all, each named the way the chart names it, so the whole bracket (a
+  // separate fetch) is not needed and this still opens instantly.
+  //
+  // A server from before `run` sent only the round on the card, and that is
+  // still read when the list is missing: one rung is less than the story,
+  // but it is not nothing.
   const myName = you.name;
   const rungs = [];
   const r = cup.round;
-  if (myName && r?.matches) {
+  const rungOf = (x) => {
+    const other = x.opponent ? escapeHtml(x.opponent) : '';
+    switch (x.result) {
+      case 'waiting': return { cls: 'live', line: other ? `waiting to play ${other}` : 'waiting for a table' };
+      case 'playing': return { cls: 'live', line: `playing ${other || '…'}` };
+      case 'bye': return { cls: 'won', line: 'a bye — straight through' };
+      case 'won': return {
+        cls: 'won',
+        line: x.walkover ? `through — ${other || 'the other side'} never came` : `beat ${other || 'a walkover'}`,
+      };
+      case 'lost': return {
+        cls: 'lost',
+        line: x.walkover ? `missed the door — ${other || 'the other side'} went through`
+          : `lost to ${other || 'the other side'}`,
+      };
+      case 'void': return { cls: 'lost', line: 'nobody came' };
+      default: return { cls: '', line: other ? `against ${other}` : '' };
+    }
+  };
+  if (Array.isArray(you.run)) {
+    you.run.forEach((x) => rungs.push({ label: x.label || `Round ${x.round || 1}`, ...rungOf(x) }));
+  } else if (myName && r?.matches) {
     r.matches.forEach((m) => {
       if (m.a !== myName && m.b !== myName) return;
       const other = m.a === myName ? m.b : m.a;
@@ -2828,10 +2919,11 @@ export function openCupDetail(cup, token, onJoin) {
     </div>
     <div class="cd-tiles">
       <div><span>Prize pool</span><b>${pool}</b></div>
-      <div><span>${cup.state === 'done' ? 'Finished' : 'Round'}</span><b>${cup.state === 'done' ? '—' : `${you.round || cup.rounds || 1} of ${depth}`}</b></div>
+      <div><span>${cup.state === 'done' ? 'Finished' : 'Round'}</span><b>${cup.state === 'done' ? '—' : `${progress.round} of ${progress.of}`}</b></div>
       <div><span>Still in</span><b>${num(you.left ?? cup.entrants)}</b></div>
     </div>
     ${nextBlock}
+    ${standBlock}
     ${rungs.length ? `<div class="chart-label">Your run</div>
       <ol class="cup-ladder">${rungs.map((x) => `<li class="${x.cls}">
         <span class="lad-dot"></span>
@@ -3050,8 +3142,8 @@ export function openCupPoster(cup) {
   const sched = cup.schedule?.times?.length ? {
     windowMinutes: cup.schedule.windowMinutes || 10,
     matchMinutes: cup.schedule.matchMinutes || 90,
-    clock: cup.schedule.times.map((m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`)
-      .join(' and '),
+    // The reader's clock, as the join deadline and the final below are.
+    clock: cupClock(cup.schedule).join(' and '),
   } : null;
   const plan = cup.plan || [];
   const shape = (() => {

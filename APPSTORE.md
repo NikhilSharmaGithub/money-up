@@ -41,8 +41,8 @@ something you control, e.g. `com.nikhilsharma.moneymove`, and keep it forever.
 - **Keywords:** `board game,dice,property,trading,multiplayer,friends,pass and play,business,tycoon,estate`
   (never put trademarked game names in keywords — Apple rejects listings for it)
 - **Promotional text:** Roll, buy, trade, bankrupt your friends — online or
-  pass & play on one device. 19 boards, 12 of them country editions with
-  their own local card decks.
+  pass & play on one device. 25 boards: six continents and 12 country
+  editions with their own local card decks.
 
 **Description:**
 
@@ -51,10 +51,12 @@ something you control, e.g. `com.nikhilsharma.moneymove`, and keep it forever.
 > ROLL & BUY — walk the board, buy streets, airports and utilities, build
 > houses and hotels, and squeeze rent out of everyone who lands on them.
 >
-> 19 BOARDS — the classic world tour, a giant 48-tile board, quick-fire Blitz,
-> chaos on Lucky Wheel, a fresh random board every game, and 12 country
-> editions (India, USA, UK, Japan and more), each with its own regions,
-> cities and a fully local Treasure & Surprise deck.
+> 25 BOARDS — the classic world tour, a giant 48-tile board, quick-fire Blitz,
+> chaos on Lucky Wheel, a fresh random board every game, a board for each of
+> six continents (Africa, Asia, Europe, North America, South America and
+> Oceania — every country with its own flag), and 12 country editions (India,
+> USA, UK, Japan and more), each with its own regions, cities and a fully
+> local Treasure & Surprise deck.
 >
 > PLAY TOGETHER — private rooms with a share code, public rooms, teams,
 > auctions, trading, and comfortable pass & play: on iPad every player gets

@@ -143,7 +143,9 @@ object CupReminders {
             ctx, cup,
             base.copy(
                 name = cup.name,
-                out = cup.you.out,
+                // Not while the "out" note is being held (see [outForGood]):
+                // written down now, the note it is holding would never be sent.
+                out = outForGood(cup),
                 placed = cup.you.placed,
                 round = maxOf(base.round, cup.you.next?.round ?: 0),
             ),
@@ -209,6 +211,11 @@ object CupReminders {
             ?: return Look.Unknown
         if (!feed.enabled) return Look.Over(null)
         feed.cup?.takeIf { it.id == cupId }?.let { return Look.Live(it) }
+        // Still being played, only not on the card: while this player has a
+        // table open and empty in another cup, the server shows that cup
+        // whatever was asked for. That is no news about this one, and it must
+        // not be mistaken for this one being over and forgotten.
+        if (feed.others.any { it.id == cupId && it.state != "done" }) return Look.Unknown
         // Not in the feed: finished more than ten minutes ago, or called off.
         // The chart still knows a finished cup, and how this player did in it.
         val raw = api.get("/api/cup/bracket", mapOf("cup" to cupId)) ?: return Look.Unknown
@@ -233,7 +240,7 @@ object CupReminders {
             return if (kind == LAST && closes != null) lastCallText(closes - now) else OPEN_TEXT
         }
         you.placed?.takeIf { seen.placed == null }?.let { return placedText(cup.name, it) }
-        if (you.out && !seen.out) return outText(cup.name)
+        if (outForGood(cup) && !seen.out) return outText(cup.name)
         if (next != null && next.round > seen.round) return drawText(next, now)
         if (kind == SOON && next != null && !next.open) {
             val opens = next.opensAt?.toLong() ?: return null
@@ -242,14 +249,55 @@ object CupReminders {
         return null
     }
 
-    /** The cup has left the feed. The chart says how it ended for this player, if it can. */
+    /**
+     * The cup has left the feed. The chart says how it ended for this player,
+     * if it can. A cup leaves the feed only once it is over — finished or
+     * called off, both "done" — so nothing is left to hold "out" for; a chart
+     * that says otherwise is not an ending, and says nothing.
+     */
     private fun overText(chart: CupBracketView?, seen: Seen): String? {
         if (chart == null) return null
         val you = chart.you ?: return null
         val name = chart.name.ifBlank { seen.name }
         you.placed?.takeIf { seen.placed == null }?.let { return placedText(name, it) }
-        if (you.out && !seen.out) return outText(name)
+        if (you.out && !seen.out && chart.state == "done") return outText(name)
         return null
+    }
+
+    /**
+     * Out, and nothing left to wait for.
+     *
+     * The server's `out` is true the moment the last match is lost with no
+     * podium place written yet — and the podium is written only when the
+     * last game of the evening is. So a beaten finalist, and the play-off's
+     * loser, read `out` for as long as the other game runs, and so does a
+     * semi-final loser left third by default, for the whole final. (One who
+     * lost while the other semi-final was still going is not `out` at all
+     * until it ends: they are waiting for a play-off.) The server holds its
+     * own "out" push for all of them (tournament.js placingDue); this holds
+     * the note the same way, so a player who is about to be told they
+     * finished second, or who has one more game to play, is not first told
+     * they are out.
+     */
+    private fun outForGood(cup: CupView): Boolean = cup.you.out && !podiumDue(cup)
+
+    /**
+     * Whether a podium place may still be written for this player: the cup
+     * is still running, and their last game was on its last evening — the
+     * final, or the play-off beside it — or was a semi-final they lost,
+     * whose losers are drawn into the play-off or, when a bye left only one
+     * of them, take third without it. By the kind of round for the last
+     * evening, as the room reads it; a semi-final has no kind of its own, so
+     * it is known by the name the server gives it. A place the server already
+     * calls settled ([CupYou.settled]) is due by definition. A server too old
+     * to send a run never holds anything, as before.
+     */
+    private fun podiumDue(cup: CupView): Boolean {
+        if (cup.state == "done") return false
+        if (cup.you.settled != null) return true
+        val last = cup.you.run.lastOrNull() ?: return false
+        return last.kind == "final" || last.kind == "thirdPlace" ||
+            (last.label == "Semi-finals" && last.result == "lost")
     }
 
     /**
@@ -285,15 +333,22 @@ object CupReminders {
         return "$mins minute${if (mins == 1) "" else "s"} left to take your seat — miss it and you are out of the cup."
     }
 
-    /** tournament.js, the draw: the first round's words, or "through" for every one after. */
+    /**
+     * tournament.js, the draw: the first round's words, the play-off's own,
+     * or "through" for every one after. The play-off is drawn from the two who
+     * just LOST a semi-final, and "You are through!" is not what somebody
+     * wants to read a minute after going out of the running for the cup.
+     */
     private fun drawText(next: CupNext, now: Long): String {
         val label = next.label.ifBlank { "match" }
         val away = awayText((next.opensAt?.toLong() ?: now) - now)
         val other = next.opponent ?: "your opponent"
-        return if (next.round <= 1) {
-            "The draw is out — your $label is $away, against $other. Miss the window and you are out."
-        } else {
-            "You are through! $label $away, against $other."
+        return when {
+            next.round <= 1 ->
+                "The draw is out — your $label is $away, against $other. Miss the window and you are out."
+            next.label == "Third place" ->
+                "One more game — the play-off for third is $away, against $other. Win it and you are on the podium."
+            else -> "You are through! $label $away, against $other."
         }
     }
 
@@ -331,6 +386,11 @@ object CupReminders {
         val at = LongArray(KINDS.size)
         val you = cup.you
         val stillIn = you.joined && !you.out && you.placed == null && cup.state != "done"
+        // Out on paper with a place still to come (see [podiumDue]): nothing is
+        // drawn for them, but a play-off may yet be, and a place will be
+        // written. With no alarm left the phone would never hear of either,
+        // and the "out" note being held would never go.
+        val podium = you.joined && you.out && you.placed == null && podiumDue(cup)
         val next = you.next
         if (stillIn && next != null) {
             val opens = next.opensAt?.toLong()
@@ -364,6 +424,17 @@ object CupReminders {
                     }
                 }
             }
+        } else if (podium) {
+            // The other game shares this one's door, so it is over by the end
+            // of the window and a whole game after it, and the sweep a minute
+            // later. Past that, every five minutes; a cup without a clock
+            // gives no such bound, so every quarter hour.
+            val sched = cup.schedule
+            val over = you.run.lastOrNull()?.opensAt?.toLong()?.let { opens ->
+                sched?.let { opens + (it.windowMinutes + it.matchMinutes + 1) * MINUTE }
+            }
+            at[CHECK] = if (over != null && over > now) over
+            else held(CHECK, now + if (sched != null) 5 * MINUTE else LEAD)
         }
 
         val am = ctx.getSystemService(AlarmManager::class.java) ?: return

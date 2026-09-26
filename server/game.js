@@ -1160,13 +1160,17 @@ export class GameRoom {
   }
 
   /** Walking out on a live game — the deliberate version of a timeout. */
-  quit(id) {
+  quit(id, { whistle = false } = {}) {
     const p = this.player(id);
     if (!p) return { error: 'Unknown player' };
     if (this.status !== 'playing') { this.removePlayer(id); return { ok: true }; }
     if (p.bankrupt) return { ok: true };
-    this.say(`${p.name} left the game`, 'leave');
-    this.removeFromPlay(p, 'quit');
+    // A cup game that runs out of clock is ended by retiring whoever is behind
+    // on net worth. They did not walk out, so they are not told they did and
+    // they keep their karma; the reason stays 'quit' because every client
+    // already shipped reads anything else as a timeout.
+    this.say(whistle ? `The whistle — ${p.name} is behind on net worth` : `${p.name} left the game`, 'leave');
+    this.removeFromPlay(p, 'quit', { karma: !whistle });
     return { ok: true };
   }
 
@@ -1175,7 +1179,7 @@ export class GameRoom {
    * streets go back on the market, their cash leaves with them, and the turn
    * order simply skips the chair from now on.
    */
-  removeFromPlay(p, reason) {
+  removeFromPlay(p, reason, { karma = true } = {}) {
     clearTimeout(this.timers[`grace:${p.id}`]);
     if (this.awaiting) delete this.awaiting[p.id];
     p.bankrupt = true;      // the turn loop already skips these
@@ -1189,7 +1193,7 @@ export class GameRoom {
     // A live auction settles their exit itself: any escrowed bid is void
     // (their cash left with them) and the race carries on without them.
     const settled = this.settleAuctionExit(p);
-    this.hooks.karma?.(p.id, -1, reason);
+    if (karma) this.hooks.karma?.(p.id, -1, reason);
     if (this.checkGameEnd()) return;
     // While an auction still runs, the turn stays parked on the auction
     // phase; finishAuction moves it on the moment the hammer falls.

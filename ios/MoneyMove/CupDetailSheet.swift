@@ -31,7 +31,7 @@ struct CupDetailSheet: View {
                     banner(P)
                     tiles(P)
                     if let next = live.you.next { nextMatch(next, P) }
-                    if live.you.joined != true { joinPrompt(P) }
+                    standingNote(P)
                     if !run.isEmpty {
                         label("Your run", P)
                         runList(P)
@@ -92,11 +92,10 @@ struct CupDetailSheet: View {
         }
     }
 
-    /// "Rounds at 20:00 and 22:00 · 10 minutes to turn up"
+    /// "Rounds at 20:00 and 22:00 · 10 minutes to turn up", on the reader's
+    /// clock — the same clock the plan further down is printed on.
     private var scheduleLine: String? {
-        guard let times = live.schedule?.times, !times.isEmpty else { return nil }
-        let pad = { (n: Int) in n < 10 ? "0\(n)" : "\(n)" }
-        let clock = times.map { "\(pad($0 / 60)):\(pad($0 % 60))" }
+        guard let clock = live.schedule?.clocks, !clock.isEmpty else { return nil }
         let joined = clock.count == 1 ? clock[0]
             : clock.dropLast().joined(separator: ", ") + " and " + (clock.last ?? "")
         let window = live.schedule?.windowMinutes ?? 10
@@ -107,7 +106,7 @@ struct CupDetailSheet: View {
         HStack(spacing: 8) {
             tile("Prize pool", money(.pool), P)
             tile(live.state == "done" ? "Finished" : "Round",
-                 live.state == "done" ? "—" : "\(live.you.round ?? live.rounds) of \(depth)", P)
+                 live.state == "done" ? "—" : roundOf, P)
             tile("Still in", "\(live.you.left ?? live.entrants)", P)
         }
     }
@@ -131,12 +130,15 @@ struct CupDetailSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
-    /// How many rounds a field this size takes, so "round 3 of 8" means
-    /// something before the bracket has been drawn that far.
-    private var depth: Int {
-        var n = max(2, live.entrants), rounds = 0
-        while n > 1 { n = Int(ceil(Double(n) / 2)); rounds += 1 }
-        return rounds
+    /// "2 of 5". The server counts both ends, so every app shows the same
+    /// numbers: this used to work the length out here from the entrants and
+    /// read "0 of 7" for the whole join window, and "4 of 3" to both players
+    /// in the play-off for third. A server too old to count them gets the
+    /// plan's length, held to the same two rules.
+    private var roundOf: String {
+        if let p = live.progress { return "\(p.round) of \(p.of)" }
+        let of = max(1, live.plan.count)
+        return "\(min(of, max(1, live.you.round ?? live.rounds))) of \(of)"
     }
 
     // MARK: - what happens next
@@ -221,16 +223,40 @@ struct CupDetailSheet: View {
                 .stroke(mine ? P.gold : P.rule, lineWidth: 1))
     }
 
-    @ViewBuilder private func joinPrompt(_ P: Palette) -> some View {
-        if live.state == "joining" {
+    /// Where the reader stands, when that is not a match to play: not in a cup
+    /// that is still taking entries, holding a place the podium has yet to
+    /// catch up with, or out.
+    ///
+    /// This used to be drawn only for readers who had NOT joined — and the
+    /// server only ever says `out` about somebody who did, so the out line sat
+    /// behind a door no knocked-out player could come through. Nobody was
+    /// ever told they were out.
+    @ViewBuilder private func standingNote(_ P: Palette) -> some View {
+        if live.you.joined != true && live.state == "joining" {
             Text("You have not joined this one. Close this and tap Join on the card.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(P.ink3)
                 .fixedSize(horizontal: false, vertical: true)
+        } else if let place = live.placeDecided {
+            // Ahead of "out": a beaten finalist is out of the cup and second
+            // in it, and for the minutes the other game runs the second is
+            // the news. See placeDecided.
+            HStack(spacing: 7) {
+                Art.icon(.trophy, size: 15)
+                Text(place.waitingLine)
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.good)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(11)
+            .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else if live.you.out == true {
             HStack(spacing: 7) {
                 Art.icon(.skull, size: 15)
-                Text("You are out of this one. The chart below shows how it finished.")
+                Text(live.state == "done"
+                     ? "You are out of this one. The chart below shows how it finished."
+                     : "You are out of this one. The chart below follows the rest of it.")
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -250,9 +276,44 @@ struct CupDetailSheet: View {
         var kind: Int      // 0 lost, 1 won, 2 still going
     }
 
-    /// Built from the round the card already carries — the whole bracket is a
-    /// separate fetch and this screen must open instantly.
+    /// One rung per round this player was drawn in, from the run the card's
+    /// poll already carries — the whole bracket is a separate fetch and this
+    /// screen must open instantly.
+    ///
+    /// It used to be built here from the one round the card carries, so a
+    /// player three rounds deep saw a single rung, and on the last evening,
+    /// when that round was the play-off, the two finalists saw none at all.
     private var run: [Rung] {
+        guard let rungs = live.you.run else { return legacyRun }
+        return rungs.enumerated().map { i, r -> Rung in
+            let who = r.opponent ?? "the other side"
+            let label = r.label ?? "Round \(r.round ?? i + 1)"
+            switch r.result {
+            case "waiting":
+                let when = r.opensDate.map { " · \($0.formatted(.dateTime.weekday(.abbreviated).hour().minute()))" }
+                return Rung(id: i, label: label, line: "plays \(who)\(when ?? "")", kind: 2)
+            case "playing":
+                return Rung(id: i, label: label, line: "playing \(who)", kind: 2)
+            case "won":
+                return Rung(id: i, label: label,
+                            line: r.walkover == true ? "\(who) never came" : "beat \(who)", kind: 1)
+            case "bye":
+                return Rung(id: i, label: label, line: "a bye — straight through", kind: 1)
+            case "lost":
+                return Rung(id: i, label: label,
+                            line: r.walkover == true ? "did not turn up" : "lost to \(who)", kind: 0)
+            case "void":
+                return Rung(id: i, label: label, line: "nobody came", kind: 0)
+            default:
+                // A result this build has never heard of: say who, and leave
+                // the dot the colour of a game still being settled.
+                return Rung(id: i, label: label, line: "v \(who)", kind: 2)
+            }
+        }
+    }
+
+    /// A server too old to send a run: one rung, from the round on the card.
+    private var legacyRun: [Rung] {
         guard let me = live.you.name, let r = live.round, let matches = r.matches else { return [] }
         var out: [Rung] = []
         for (i, m) in matches.enumerated() where m.a == me || m.b == me {

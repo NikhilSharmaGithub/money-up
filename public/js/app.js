@@ -11,6 +11,7 @@ import {
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
+  cupSettledLine,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -1500,7 +1501,16 @@ function watchCup() {
   clearTimeout(cupTimer);
   fetch(api(`/api/cup?token=${encodeURIComponent(token)}&show=${encodeURIComponent(cupShow)}`))
     .then((r) => r.json())
-    .then(paintCup)
+    .then((data) => {
+      paintCup(data);
+      // A cup of the reader's own being played counts as live even while the
+      // card shows another one — their door opens there, and a half-minute
+      // gap is a twentieth of the window gone before they hear about it. The
+      // apps' poll, gap for gap.
+      if (data?.enabled && data.others?.some((o) => o.joined && o.state === 'running')) {
+        cupPollMs = Math.min(cupPollMs, 4000);
+      }
+    })
     .catch(() => {})
     .finally(() => { cupTimer = setTimeout(watchCup, cupPollMs); });
 }
@@ -1531,10 +1541,20 @@ function paintCup(data) {
   // into a room, so a cup table opening while somebody was mid-game in an
   // ordinary room used to pull them straight out of it. The app has always
   // had this guard; the browser did not.
-  if (!roomId && cup.you?.roomId && cupSeen !== cup.you.roomId) {
-    cupSeen = cup.you.roomId;
-    toast(`Your cup table is ready — playing ${cup.you.opponent || 'your opponent'}`);
-    setTimeout(() => go(cup.you.roomId), 900);
+  //
+  // And from whichever cup the table is in, not the one on the card. The card
+  // is the cup the player last looked at, so somebody reading about another
+  // cup in "also on" when their own door opened was never taken to their
+  // table. `table` is the server's answer across every cup; a server from
+  // before it only knows the card's cup, which is what is read then. Once
+  // they have sat down anywhere — a phone, another tab — this browser leaves
+  // the seat alone rather than taking it a second time.
+  const table = data.table?.roomId ? data.table : null;
+  const seat = table ? table.roomId : cup.you?.roomId;
+  if (!roomId && seat && !table?.seated && cupSeen !== seat) {
+    cupSeen = seat;
+    toast(`Your cup table is ready — playing ${(table ? table.opponent : cup.you?.opponent) || 'your opponent'}`);
+    setTimeout(() => go(seat), 900);
   }
 
   // The reader's own money where the server worked one out — see fx.js.
@@ -1664,10 +1684,12 @@ function paintCup(data) {
   if (cup.state === 'running') {
     cupPollMs = 4000;
     const r = cup.round;
+    // A place already won comes ahead of "out" — see cupSettledLine.
+    const settled = cupSettledLine(cup);
     const you = cup.you.joined
-      ? (cup.you.out ? 'You are out of this one.'
+      ? (settled || (cup.you.out ? 'You are out of this one.'
         : cup.you.roomId ? 'Your table is open — good luck.'
-        : 'Waiting for your next table.')
+        : 'Waiting for your next table.'))
       : 'Running now — the doors are shut.';
     // The bracket as a row of lights: one per table in this round, lit while
     // it is still being played, dimmed once it is decided.
@@ -1684,7 +1706,7 @@ function paintCup(data) {
       </div>
       ${dots}
       ${prizes}
-      <div class="cup-in${cup.you.roomId ? ' ok' : cup.you.out ? ' out' : ''}">${escapeHtml(you)}</div>
+      <div class="cup-in${cup.you.roomId || settled ? ' ok' : cup.you.out ? ' out' : ''}">${escapeHtml(you)}</div>
       ${cup.you.joined && cup.you.survived != null
         ? `<div class="cup-run">${icon('trophy', 12)} ${cup.you.survived} won · <b>${cup.you.left}</b> still in${cup.you.roundLabel ? ` · ${escapeHtml(cup.you.roundLabel)}` : ''}</div>`
         : ''}
