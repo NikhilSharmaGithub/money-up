@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -45,9 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Notes from whoever runs the game.
@@ -284,13 +282,14 @@ private fun NoticeRow(n: Notice, isNew: Boolean) {
 /**
  * When it was written, the way iOS writes it: the short weekday, the day and
  * the short month, and the time — "Thu, 25 Sep, 14:32" in the reader's own
- * locale's order and clock, which is what `.dateTime` with those fields asks
- * of the phone.
+ * locale's order, which is what `.dateTime` with those fields asks of the
+ * phone. The clock is the one the phone's 24-hour switch picks, not the
+ * locale's habit, as on iOS — the same rule the cup's times follow (see
+ * [clockText]).
  */
+@Composable
 private fun whenWritten(at: Double): String {
-    val ms = at.toLong()
-    if (ms <= 0L) return ""
-    val locale = Locale.getDefault()
-    val pattern = DateFormat.getBestDateTimePattern(locale, "EEEdMMMjmm")
-    return SimpleDateFormat(pattern, locale).format(Date(ms))
+    val twentyFour = DateFormat.is24HourFormat(LocalContext.current)
+    if (at.toLong() <= 0L) return ""
+    return clockText(at, "EEEdMMMjmm", twentyFour)
 }

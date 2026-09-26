@@ -1,14 +1,27 @@
 package com.moneymove.game
 
+import android.Manifest
+import android.content.Context
 import androidx.lifecycle.viewModelScope
 import android.text.format.DateFormat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,12 +32,15 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +49,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -44,11 +61,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -56,7 +75,11 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -64,17 +87,18 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * The cup: a knockout tournament with a prize at the end of it.
@@ -323,10 +347,16 @@ data class CupBracketMatch(
  * every four seconds, and a wallet does not. It is also why this must be
  * created ABOVE the tab bar — a poll that only runs while the Social tab is
  * open is a poll that never seats the player who is waiting on the Play tab.
+ * MainActivity holds it by the app's own lifetime for that reason: it starts
+ * the poll when the app comes on screen and stops it when the app goes away,
+ * whichever tab is showing (see [resume] and [pause]).
  */
 class CupStore private constructor(private val game: GameStore, private val scope: CoroutineScope) {
 
     private val api get() = Api(game.prefs.server, game.token)
+
+    /** For the reminders, which have to outlive this store and the screen alike. */
+    private val app: Context get() = game.getApplication<android.app.Application>()
 
     var feed: CupFeed? by mutableStateOf(null)
         private set
@@ -335,16 +365,23 @@ class CupStore private constructor(private val game: GameStore, private val scop
     var busy: Boolean by mutableStateOf(false)
         private set
 
-    /** The last thing that went wrong, for the one line a sheet shows. */
-    var notice: String? by mutableStateOf(null)
-        private set
-
     var bracket: CupBracketView? by mutableStateOf(null)
         private set
 
     /** The chart was asked for and did not come — the sheet says so. */
     var bracketFailed: Boolean by mutableStateOf(false)
         private set
+
+    /**
+     * Which chart request is the current one. iOS keeps the chart on each
+     * sheet, so a slow answer can only land on the sheet that asked for it.
+     * Here one store serves every sheet, so an answer to an earlier request
+     * (another cup's, or one for a sheet already closed) is dropped instead of
+     * wiping or hiding the chart on screen. The scope runs on the main thread,
+     * so a plain counter is enough.
+     */
+    private var bracketAsk = 0
+    private var bracketJob: Job? = null
 
     /**
      * Which cup is being looked at. Blank lets the server pick the one that
@@ -361,6 +398,16 @@ class CupStore private constructor(private val game: GameStore, private val scop
      */
     private var sentTo: String? = null
 
+    /** The walk into a table while it is still a beat away — see [seat]. */
+    private var walking: Job? = null
+
+    /**
+     * The app is out of sight. Nothing may start the poll until it is back:
+     * iOS's watcher is suspended with its app, and a tab being recomposed
+     * behind a closed screen is not somebody looking at the card.
+     */
+    private var asleep = false
+
     /** The cup as it exists for a player: nothing while cups are switched off. */
     val live: CupView? get() = feed?.takeIf { it.enabled }?.cup
 
@@ -371,26 +418,36 @@ class CupStore private constructor(private val game: GameStore, private val scop
      *
      * iOS's CupWatch, miss for miss: a failure backs off five, ten, fifteen,
      * twenty seconds, and after the fourth in a row it stops and the card
-     * stays as it was. Coming back to the home tabs asks afresh (see
-     * [ensureWatching]), as iOS's landing screen restarts its watcher when it
-     * appears again. While this device sits at a table the poll rests, as
-     * iOS's does with the landing screen out of sight.
+     * stays as it was. It runs only while the app is on screen: MainActivity
+     * stops it at ON_STOP and starts a fresh one at ON_START ([pause],
+     * [resume]), and the fresh one asks at once, as iOS's landing screen
+     * reloads on willEnterForeground. A poll that gave up is also started
+     * again when a home tab comes back ([ensureWatching]).
+     *
+     * While this device sits at a table the card's answer is dropped, not
+     * kept: the match it names is being played, and maybe decided, before the
+     * player is back. iOS rebuilds its landing screen on the way out of a
+     * game, watcher and all, so its card stays away until the first fresh
+     * answer; this does the same, and asks the moment the player stands up.
      */
     suspend fun watch() {
         var misses = 0
         while (true) {
-            if (game.roomId != null) {
-                delay(5_000L)
+            val room = game.roomId
+            if (room != null) {
+                seated(room)
+                feed = null
+                snapshotFlow { game.roomId }.first { it == null }
                 continue
             }
             if (!load()) {
                 misses++
                 if (misses > 4) return
-                delay(misses * 5_000L)
+                rest(misses * 5_000L)
                 continue
             }
             misses = 0
-            delay(
+            rest(
                 when {
                     feed?.enabled != true -> 60_000L
                     live?.state == "scheduled" -> 30_000L
@@ -402,24 +459,44 @@ class CupStore private constructor(private val game: GameStore, private val scop
         }
     }
 
+    /**
+     * The gap between two asks, cut short if this device sits down at a
+     * table in the meantime, so the card's answer is dropped (and the
+     * reminders for that table stood down) the moment the player is seated
+     * rather than up to half a minute later.
+     */
+    private suspend fun rest(ms: Long) {
+        withTimeoutOrNull(ms) { snapshotFlow { game.roomId }.first { it != null } }
+    }
+
+    /**
+     * This device has sat down. If it is at the cup table the card was
+     * pointing at, the "your match is open" and last-call reminders have
+     * nothing left to say: the server sends the last call only to somebody
+     * not yet in their seat, and so does this.
+     */
+    private fun seated(room: String) {
+        val cup = live ?: return
+        if (room == cup.you.roomId || room == cup.you.next?.roomId) {
+            CupReminders.seated(app, cup.id, room)
+        }
+    }
+
     /** Look at one of the other cups instead. */
     fun show(cupId: String) {
         showing = cupId
-        // A refusal belongs to the cup it was about. Carried across to the
-        // next cup in the list, "This one is full" is a lie about that one.
-        notice = null
         scope.launch { load() }
     }
 
-    fun refresh() {
-        scope.launch { load() }
-    }
-
-    fun enter(code: String = "") {
+    /**
+     * In, with the join code if the cup wants one. [onJoined] runs only once
+     * the server has said yes, which is when the card asks for permission to
+     * send reminders: a refused join has no use for them.
+     */
+    fun enter(code: String = "", onJoined: () -> Unit = {}) {
         val cupId = showing
         scope.launch {
             busy = true
-            notice = null
             // `code` and `cupId` are the names the route reads out of the
             // body; the token is added by the post. The refusal comes back in
             // the server's own words — "That code does not match", "This one
@@ -433,11 +510,10 @@ class CupStore private constructor(private val game: GameStore, private val scop
                 Haptics.turn()
                 game.showToast("Joined — good luck")
                 load()
+                onJoined()
             } else {
                 // iOS's words when the server gave none, or never answered.
-                val why = reply.error ?: "Could not enter the cup"
-                notice = why
-                game.showToast(why, isError = true)
+                game.showToast(reply.error ?: "Could not enter the cup", isError = true)
             }
             busy = false
         }
@@ -446,34 +522,47 @@ class CupStore private constructor(private val game: GameStore, private val scop
     /**
      * Out again, before the doors shut. Nothing is said either way, as on
      * iOS: the card is re-read straight after, and it shows which it was —
-     * back to Join, or still in.
+     * back to Join, or still in. The re-read also stands down this cup's
+     * reminders if the leave went through (see [CupReminders.sync]).
      */
     fun leave() {
         val cupId = showing
         scope.launch {
             busy = true
-            notice = null
             api.postOrError("/api/cup/leave", mapOf("cupId" to cupId))
             load()
             busy = false
         }
     }
 
-    /** The chart, on demand. */
+    /** The chart, on demand. Only the newest request may write it — see [bracketAsk]. */
     fun openBracket(cupId: String) {
         // The chart from the cup somebody was reading a moment ago is worse
         // than an empty screen: it is another cup's bracket wearing this one's
         // name, and a reader looks for themselves in it.
         if (bracket?.id != cupId) bracket = null
-        scope.launch {
-            bracketFailed = false
-            val body = api.get("/api/cup/bracket", mapOf("cup" to cupId))
-            val answer = body?.let {
-                runCatching { MMJson.decodeFromString(CupBracketFeed.serializer(), it) }.getOrNull()
-            }
-            bracket = answer?.takeIf { it.enabled }?.bracket
-            bracketFailed = bracket == null
+        bracketFailed = false
+        val ask = ++bracketAsk
+        bracketJob?.cancel()
+        bracketJob = scope.launch {
+            val answer = bracketOf(cupId)
+            if (ask != bracketAsk) return@launch
+            bracket = answer
+            bracketFailed = answer == null
         }
+    }
+
+    /**
+     * One cup's chart, fetched without touching the chart on screen. The
+     * server resolves a finished cup's id from its history, which is how the
+     * room can still find the podium of a final that has left the feed.
+     */
+    suspend fun bracketOf(cupId: String): CupBracketView? {
+        val body = api.get("/api/cup/bracket", mapOf("cup" to cupId)) ?: return null
+        val reply = runCatching { MMJson.decodeFromString(CupBracketFeed.serializer(), body) }.getOrNull()
+        // An id the server no longer knows is answered with whichever cup it
+        // has, and another cup's bracket is no answer to this question.
+        return reply?.takeIf { it.enabled }?.bracket?.takeIf { it.id == cupId }
     }
 
     private suspend fun load(): Boolean {
@@ -484,6 +573,9 @@ class CupStore private constructor(private val game: GameStore, private val scop
         // Follow whatever came back: the server picks the cup that matters
         // most to this reader, and everything else acts on the one on screen.
         fresh.cup?.id?.let { showing = it }
+        // The reminders read the same answer. Android gets no cup push, so
+        // they are the only thing that reaches a phone nobody is looking at.
+        CupReminders.sync(app, fresh)
         if (fresh.enabled) seat(fresh.cup?.you?.roomId)
         return true
     }
@@ -494,7 +586,7 @@ class CupStore private constructor(private val game: GameStore, private val scop
         sentTo = room
         game.showToast("Your cup table is ready")
         Haptics.turn()
-        scope.launch {
+        walking = scope.launch {
             delay(900)
             // Still not at a table a beat later. Somebody who opened a game of
             // their own in the meantime would rather not be yanked out of it.
@@ -502,11 +594,46 @@ class CupStore private constructor(private val game: GameStore, private val scop
         }
     }
 
-    private var watching: kotlinx.coroutines.Job? = null
+    private var watching: Job? = null
 
-    /** Starts the poll if it is not running — the first time, or after it gave up. */
+    /**
+     * Starts the poll if it is not running (the first time, or after it gave
+     * up), unless the app is out of sight.
+     */
     fun ensureWatching() {
-        if (watching?.isActive == true) return
+        if (asleep || watching?.isActive == true) return
+        watching = scope.launch { watch() }
+    }
+
+    /**
+     * The app went out of sight. iOS's watcher is suspended with its app;
+     * left running, this one would ask every three seconds through a join
+     * window that can last a month, pile up misses against a network Doze
+     * has cut and give up, or walk somebody who is not looking into their
+     * table. So it stops. A walk still a beat away is called off too, and
+     * forgotten, so the player is walked in when they come back instead of
+     * never.
+     */
+    fun pause() {
+        asleep = true
+        watching?.cancel()
+        watching = null
+        if (walking?.isActive == true) {
+            walking?.cancel()
+            sentTo = null
+        }
+    }
+
+    /**
+     * The app is back on screen, or a cup reminder was tapped. Ask now, as
+     * iOS does on willEnterForeground: a door may have opened or a table been
+     * drawn while the phone was away, and the poll may have given up while
+     * the network was cut. A fresh watch reads the card first thing, and that
+     * read is also what walks the player to their table.
+     */
+    fun resume() {
+        asleep = false
+        watching?.cancel()
         watching = scope.launch { watch() }
     }
 
@@ -541,8 +668,9 @@ class CupStore private constructor(private val game: GameStore, private val scop
 
 /**
  * The app's one cup poll, the same instance whichever tab asks — see
- * [CupStore.shared]. Asking for it is what (re)starts the watch, and it is not
- * torn down when the tab that asked goes away.
+ * [CupStore.shared]. MainActivity starts and stops it with the app; asking for
+ * it here also starts it again if it gave up, and it is not torn down when
+ * the tab that asked goes away.
  */
 @Composable
 fun rememberCupStore(game: GameStore): CupStore {
@@ -581,6 +709,7 @@ fun CupCard(cup: CupView?, onOpen: () -> Unit) {
     val cups = CupStore.front
     val game: GameStore = viewModel()
     val account: AccountStore = viewModel()
+    val context = LocalContext.current
     // Entering needs an account — a prize needs somebody it can be paid to —
     // and the Social tab reads "signed in" the same way when it opens the room.
     val signedIn = account.me?.provider != null
@@ -589,12 +718,50 @@ fun CupCard(cup: CupView?, onOpen: () -> Unit) {
     var code by remember(cup.id) { mutableStateOf("") }
     val p = P.current
 
+    // Android 13 and up asks before an app may notify at all, and with no cup
+    // push on Android the reminders are the only thing that tells somebody
+    // their door has opened. Joining is the moment they are wanted, so that
+    // is when this asks, once per install. It is registered out here rather
+    // than inside the faces below, so a face changing while the system dialog
+    // is up cannot take the request with it.
+    val askToNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     // A tap that has nowhere to go opens the room, which says what to do —
     // only reachable if the tab never started its poll, which it always does.
-    fun join(withCode: String = "") = cups?.enter(withCode) ?: onOpen()
+    fun join(withCode: String = "") {
+        val store = cups ?: return onOpen()
+        store.enter(withCode) {
+            if (PushRegistration.shouldAskForCup(context)) {
+                // Spent only if the dialog actually went up: a card that left
+                // the screen during the join has unregistered its launcher.
+                runCatching { askToNotify.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                    .onSuccess { PushRegistration.markAsked(context) }
+            }
+        }
+    }
 
     LandingCard(padding = 16.dp) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // iOS springs this card whenever the cup changes (CupCard.swift's
+        // .animation(.spring(duration: 0.32), value: live)): a new face fades
+        // in while the card grows or shrinks to it. The key is what makes it
+        // a different face: another cup picked from the list, a new state,
+        // or joining and leaving. Inside the lambda `cup` is the face being
+        // drawn, so an outgoing face keeps reading its own cup while it fades.
+        AnimatedContent(
+            targetState = cup,
+            contentKey = { listOf(it.id, it.state, it.you.joined) },
+            transitionSpec = {
+                fadeIn(tween(220)) togetherWith fadeOut(tween(160)) using
+                    SizeTransform(clip = false) { _, _ -> CARD_SPRING }
+            },
+            label = "cupFace",
+        ) { cup ->
+        // Smaller changes inside one face spring the same way: the table's
+        // room arriving, a placing note, a code box turning up.
+        Column(
+            Modifier.animateContentSize(CARD_SPRING),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             when (cup.state) {
                 // Announced, not open. Everybody can see it and count down to
                 // it, and nobody can enter yet — a cup that opens the second
@@ -756,7 +923,7 @@ fun CupCard(cup: CupView?, onOpen: () -> Unit) {
                 // for a few minutes, because one that vanishes the moment it
                 // is won never tells the winner they won it.
                 else -> {
-                    val s = standings ?: return@Column
+                    val s = cup.standings ?: return@Column
                     CupHead(
                         cup,
                         s.first?.let { "${it.name ?: "Somebody"} takes it" } ?: "Nobody finished this one",
@@ -781,12 +948,20 @@ fun CupCard(cup: CupView?, onOpen: () -> Unit) {
                 }
             }
         }
+        }
     }
 
     if (poster) CupPosterSheet(cup) { poster = false }
 }
 
 private val CARD_STATES = setOf("scheduled", "joining", "running", "done")
+
+// iOS's .spring(duration: 0.32): a 0.32 s response with no bounce, which is a
+// stiffness of (2π/0.32)² ≈ 385 — Compose's StiffnessMediumLow, 400.
+private val CARD_SPRING = spring<IntSize>(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+)
 
 /**
  * The top of every face: the trophy, the name and one line under it, and on
@@ -1180,12 +1355,16 @@ private fun PlaceRow(
         // you just played are one tap from being friends.
         if (onAdd != null) {
             Spacer(Modifier.width(10.dp))
+            // iOS labels this button "Add <name> as a friend", in both of its
+            // states; a drawn glyph says nothing to TalkBack on its own.
+            val label = "Add ${who?.name ?: "them"} as a friend"
             Box(
                 Modifier
                     .size(30.dp)
                     .clip(CircleShape)
                     .background(p.card)
-                    .clickable(enabled = !asked) { onAdd() },
+                    .clickable(enabled = !asked, role = Role.Button) { onAdd() }
+                    .semantics { contentDescription = label },
                 contentAlignment = Alignment.Center,
             ) {
                 // iOS's person.badge.plus and checkmark, both drawn here: the
@@ -1304,13 +1483,59 @@ fun CupDetailSheet(
     onDismiss: () -> Unit,
 ) {
     val p = P.current
-    // The cup this room was opened on, kept: iOS's room shows the watcher's
-    // live copy only while it is the same cup, and its own snapshot
-    // otherwise — so a finished cup ageing off the server does not shut the
-    // room mid-read, and a server that moves on to another cup does not turn
-    // this room into that one under the reader.
-    val opened = remember { cups.live }
-    val cup = cups.live?.takeIf { it.id == opened?.id } ?: opened
+    // The newest copy of this cup the feed has carried, not the copy the room
+    // opened on. Falling back to the opening copy took a room opened during
+    // the final back to the running match once the finished cup aged off the
+    // server. Holding on to one cup also means a server that moves on to
+    // another does not turn this room into that one under the reader.
+    var last by remember { mutableStateOf(cups.live) }
+    val fresh = cups.live?.takeIf { it.id == last?.id }
+    LaunchedEffect(fresh) { if (fresh != null) last = fresh }
+    val kept = fresh ?: last
+    // Missing from a feed that did answer: cups switched off, the cup called
+    // off (the server never shows a cancelled one), or a final a spectator
+    // was watching has ended (a finished cup is kept only for the people who
+    // played it). A failed poll leaves `feed` as it was, so a dropped
+    // connection is not mistaken for any of these.
+    val gone = fresh == null && cups.feed != null
+    // Only a cup last seen unfinished is in doubt: a finished one may stay as
+    // it last stood. The chart still knows a cup that has left the feed, so
+    // it is asked once — a final that ended shows its podium; anything else
+    // (called off, switched off) closes the room, because what it would show
+    // is a match that looks live, with a door countdown and a Play button for
+    // a table that no longer exists.
+    val doubtful = gone && kept != null && kept.state != "done"
+    var ending by remember { mutableStateOf<CupBracketView?>(null) }
+    LaunchedEffect(doubtful, kept?.id) {
+        if (!doubtful || kept == null) return@LaunchedEffect
+        val podium = cups.bracketOf(kept.id)?.takeIf { it.state == "done" && it.standings?.first != null }
+        if (podium != null) {
+            ending = podium
+        } else {
+            game.showToast("That cup is no longer running")
+            onDismiss()
+        }
+    }
+    val cup = when {
+        kept == null || !doubtful -> kept
+        // The podium the chart gave, on the last copy of the room: nothing
+        // left to play, and the reader's own placing if they had one.
+        ending?.id == kept.id -> ending?.let { b ->
+            kept.copy(
+                state = "done",
+                standings = b.standings,
+                you = kept.you.copy(
+                    next = null,
+                    roomId = null,
+                    out = b.you?.out ?: kept.you.out,
+                    placed = b.you?.placed ?: kept.you.placed,
+                ),
+            )
+        }
+        // Waiting on the chart: the room as it last stood, without the match
+        // it can no longer vouch for.
+        else -> kept.copy(you = kept.you.copy(next = null, roomId = null))
+    }
     if (cup == null) {
         LaunchedEffect(Unit) { onDismiss() }
         return
@@ -1363,12 +1588,16 @@ private fun CupChartSheet(cups: CupStore, cupId: String, onDismiss: () -> Unit) 
         containerColor = p.page,
         dragHandle = null,
     ) {
-        Column(Modifier.fillMaxWidth()) {
+        // iOS's chart is a plain sheet at its large detent: full height from
+        // the first frame, spinner or bracket. Sized to its content, this one
+        // opened as a strip round the spinner and then leapt up when the
+        // bracket landed.
+        Column(Modifier.fillMaxWidth().fillMaxHeight()) {
             val b = cups.bracket?.takeIf { it.id == cupId }
             CupNavBar(b?.name ?: "The chart", "Done", onDismiss)
             Column(
                 Modifier
-                    .weight(1f, fill = false)
+                    .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
@@ -1563,11 +1792,17 @@ private fun Tile(label: String, value: String, modifier: Modifier = Modifier) {
             letterSpacing = 0.7.sp, fontWeight = FontWeight.ExtraBold,
             textAlign = TextAlign.Center, maxLines = 1,
         )
-        FitText(
-            value,
-            color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Black,
-            minScale = 0.6f, textAlign = TextAlign.Center,
-        )
+        // Figures of one width, as iOS's .monospacedDigit(), so "Still in"
+        // does not shift about as it counts down. Provided rather than passed:
+        // FitText measures and draws in the provided style, so the fit is
+        // worked out in the same figures that are drawn.
+        ProvideTextStyle(TABULAR) {
+            FitText(
+                value,
+                color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Black,
+                minScale = 0.6f, textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -1712,10 +1947,14 @@ private fun RunRung(rung: Rung) {
         Spacer(Modifier.width(10.dp))
         Text(rung.label, color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.width(10.dp))
+        // The opponent's name can be long. It wraps onto a second line, as it
+        // does on iPhone, so the reader still sees who knocked them out; the
+        // weight is the width left after the dot and the round, as iOS's
+        // Spacer(minLength: 4) after it leaves.
         Text(
             rung.line,
+            modifier = Modifier.weight(1f),
             color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -2156,29 +2395,43 @@ private val COLUMN = 186.dp
 private val GUTTER = 14.dp
 
 /** The bracket: a column per round, scrolled sideways, every table in it. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChartTree(b: CupBracketView) {
     val p = P.current
     val scroll = rememberScrollState()
     val density = LocalDensity.current
+    val finder = remember { BringIntoViewRequester() }
+    // The reader's own card, as iOS picks it: the last match marked mine, in
+    // the last round they appear in.
+    val ri = b.rounds.indexOfLast { r -> r.matches.any { it.mine } }
+    val mi = if (ri < 0) -1 else b.rounds[ri].matches.indexOfLast { it.mine }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val viewport = maxWidth
-        // Open on the reader's own match rather than at the top of somebody
-        // else's: the last round they appear in is where they are, brought
-        // to the middle of the screen a beat after the chart lands.
+        // Open on the reader's own match, not just their round, a beat after
+        // the chart lands — iOS scrolls to the card itself, through the
+        // sheet's own scroll as well as the sideways one. The column is
+        // centred sideways first; then the card is asked into view, and that
+        // request climbs to the sheet's vertical scroll, so the gold YOU card
+        // at table 27 of a Round of 64 is on screen rather than 1,700dp down.
+        // A band either side of the card, rather than the card alone, lands
+        // it near the middle instead of pinned to an edge.
         LaunchedEffect(b.id, b.rounds.size) {
-            val i = b.rounds.indexOfLast { r -> r.matches.any { it.mine } }
-            if (i < 0) return@LaunchedEffect
+            if (ri < 0) return@LaunchedEffect
             delay(350)
-            val x = (COLUMN + GUTTER) * i - (viewport - COLUMN) / 2
+            val x = (COLUMN + GUTTER) * ri - (viewport - COLUMN) / 2
             scroll.animateScrollTo(with(density) { x.roundToPx() }.coerceAtLeast(0))
+            val band = with(density) { 220.dp.toPx() }
+            // 0..1 across: the card's left edge, which the sideways centring
+            // has already put on screen, so only the vertical scroll moves.
+            finder.bringIntoView(Rect(0f, -band, 1f, band))
         }
         Row(
             Modifier.horizontalScroll(scroll).padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(GUTTER),
             verticalAlignment = Alignment.Top,
         ) {
-            for (r in b.rounds) {
+            for ((rIdx, r) in b.rounds.withIndex()) {
                 Column(Modifier.width(COLUMN), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -2191,7 +2444,12 @@ private fun ChartTree(b: CupBracketView) {
                             fontWeight = FontWeight.ExtraBold, style = TABULAR,
                         )
                     }
-                    for (m in r.matches) MatchCard(m)
+                    for ((mIdx, m) in r.matches.withIndex()) {
+                        MatchCard(
+                            m,
+                            if (rIdx == ri && mIdx == mi) Modifier.bringIntoViewRequester(finder) else Modifier,
+                        )
+                    }
                 }
             }
         }
@@ -2199,11 +2457,11 @@ private fun ChartTree(b: CupBracketView) {
 }
 
 @Composable
-private fun MatchCard(m: CupBracketMatch) {
+private fun MatchCard(m: CupBracketMatch, modifier: Modifier = Modifier) {
     val p = P.current
     val done = m.state == "done"
     val shape = RoundedCornerShape(11.dp)
-    Box {
+    Box(modifier) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -2315,11 +2573,17 @@ private fun plain(amount: Int, currency: String): String =
     if (currency.isBlank() || currency == "USD") "$${grouped(amount)}"
     else "$currency ${grouped(amount)}"
 
-/** Thousands split, no currency of its own — [money] in Ui.kt is dollars-only. */
-private fun grouped(n: Int): String {
-    val digits = kotlin.math.abs(n).toString().reversed().chunked(3).joinToString(",").reversed()
-    return if (n < 0) "-$digits" else digits
-}
+/**
+ * A number grouped the way the reader's phone groups it, as iOS's
+ * formatted(.number) writes it: "1,26,000" on an Indian phone, "1.500" on a
+ * German one. No currency of its own — the callers add that, and [money] in
+ * Ui.kt is dollars-only. ICU rather than java.text, because only ICU knows
+ * the lakh's two-digit groups, and ICU is there from API 24, this app's
+ * minSdk. [readerLocale] rather than the phone's whole locale, for the reason
+ * given there: the digits stay the ones the rest of the screen is written in.
+ */
+private fun grouped(n: Int): String =
+    android.icu.text.NumberFormat.getIntegerInstance(readerLocale()).format(n.toLong())
 
 /**
  * "3d 4h", "5h 12m", "4:26" — whichever the wait deserves. Rounded to the
@@ -2333,17 +2597,25 @@ private fun countdown(ms: Long): String {
 }
 
 // The instants, as iOS's Date.formatted writes them: the parts are fixed and
-// the locale decides their order, and whether the clock runs to twelve or to
-// twenty-four — a player who reads "8:00 PM" everywhere else on their phone
-// should not meet "20:00" here.
+// the locale decides their order. The hour cycle is the one thing the locale
+// must not decide on its own: 'j' only knows the locale's habit, while the
+// iPhone and the rest of this phone follow the owner's 24-hour switch. So the
+// switch picks 'H' or 'h' before the locale lays the fields out, and a player
+// who reads "20:00" everywhere else on their phone meets "20:00" here too.
 private const val SHORT_TIME = "jmm"
 private const val SHORT_DATE = "EEEjmm"
 private const val LONG_DATE = "EEEdMMMjmm"
 
-/** An instant, in the reader's own clock — which is the only one they can act on. */
-private fun whenText(epochMs: Double?, skeleton: String): String? = epochMs?.let {
-    val locale = Locale.getDefault()
-    SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(Date(it.toLong()))
+/**
+ * An instant, in the reader's own clock — which is the only one they can act
+ * on. Composable because the 24-hour switch is read through a Context; it is
+ * read on every call rather than remembered, so flipping the switch is seen
+ * on the next redraw.
+ */
+@Composable
+private fun whenText(epochMs: Double?, skeleton: String): String? {
+    val twentyFour = DateFormat.is24HourFormat(LocalContext.current)
+    return epochMs?.let { clockText(it, skeleton, twentyFour) }
 }
 
 /**

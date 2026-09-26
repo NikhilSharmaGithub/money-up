@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 
 /**
@@ -18,11 +18,19 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
  *
  * The id asked for is the **web** client id, not an Android one, because that
  * is the audience the server accepts and the one the browser and the iOS app
- * already use. Android still needs its own OAuth client registered in the
+ * already use. Android still needs its own OAuth client registered in the same
  * Google Cloud project — package name plus the signing SHA-1 — or Credential
- * Manager refuses before a token is ever minted. That is a console step only
- * the account's owner can do; until it is done this returns a plain refusal
- * rather than a crash, and the caller says so out loud.
+ * Manager refuses before a token is ever minted. The debug build's client
+ * ("MoneyMove Android (debug)") was registered on 2026-09-26; a release build
+ * signed with another key, and Play's own app-signing key, each need their
+ * SHA-1 added to it the same way.
+ *
+ * It asks with the button flow, not the one-tap one. GetGoogleIdOption only
+ * ever offers accounts already on the phone, so on a phone with none — or with
+ * none the user wants — it failed straight away with "No credentials
+ * available" and the button looked broken. GetSignInWithGoogleOption is what
+ * Google gives a "Sign in with Google" button: the full sheet, with every
+ * account on the phone and the way to add another.
  */
 object GoogleSignIn {
 
@@ -35,13 +43,7 @@ object GoogleSignIn {
         if (serverClientId.isBlank()) {
             return Result.failure(IllegalStateException("This server has no Google sign-in configured"))
         }
-        val option = GetGoogleIdOption.Builder()
-            // Accounts already on the phone first. A player who has used the
-            // app before should not be asked to choose out of a list of one.
-            .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(serverClientId)
-            .setAutoSelectEnabled(true)
-            .build()
+        val option = GetSignInWithGoogleOption.Builder(serverClientId).build()
 
         return try {
             val response = CredentialManager.create(context).getCredential(

@@ -342,6 +342,38 @@ fun money(v: Int): String {
     return "$sign$$grouped"
 }
 
+/**
+ * The locale the iPhone formats numbers and dates in: English, in the phone's
+ * own region.
+ *
+ * The iOS app is written in English alone, and an English-only app's
+ * Locale.current is English in the phone's region — "en_IN" on a phone set to
+ * Hindi in India — so its numbers group the Indian way and its weekdays are
+ * still English words. Android hands every app the phone's whole locale, so
+ * taking Locale.getDefault() as it is would print Hindi weekday names, or
+ * Arabic-Indic digits, in the middle of an English sentence. The region is
+ * kept, so "1,26,000", "1.500" and "20:00" still come out as each phone
+ * writes them.
+ */
+internal fun readerLocale(): java.util.Locale {
+    val region = java.util.Locale.getDefault().country
+    return if (region.isBlank()) java.util.Locale.ENGLISH else java.util.Locale("en", region)
+}
+
+/**
+ * An instant as iOS's Date.formatted writes it: the fields a date [skeleton]
+ * names, laid out in the order [readerLocale] lays them out. 'j' in the
+ * skeleton is the hour, and [twentyFour] — the phone's own 24-hour switch,
+ * which outranks the locale's habit on both platforms — decides whether it
+ * becomes 'H' or 'h' before the locale sees it.
+ */
+internal fun clockText(epochMs: Double, skeleton: String, twentyFour: Boolean): String {
+    val locale = readerLocale()
+    val fields = skeleton.replace('j', if (twentyFour) 'H' else 'h')
+    val pattern = android.text.format.DateFormat.getBestDateTimePattern(locale, fields)
+    return java.text.SimpleDateFormat(pattern, locale).format(java.util.Date(epochMs.toLong()))
+}
+
 /** A player's colour, as the server writes it ("#e3a93c"). */
 fun cssColor(raw: String?, fallback: Color): Color {
     val hex = raw?.trim()?.removePrefix("#") ?: return fallback

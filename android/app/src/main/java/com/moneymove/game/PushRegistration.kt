@@ -16,7 +16,10 @@ import java.util.concurrent.TimeUnit
  *
  * This is the same groundwork ios/MoneyMove/AskingNicely.swift lays: collect
  * a device token, hand it over, keep it fresh, and wait. Nothing sends to an
- * Android phone yet and nothing here pretends otherwise.
+ * Android phone yet and nothing here pretends otherwise. The one exception is
+ * the cup, whose reminders the phone sets for itself (CupReminders) because a
+ * missed door knocks a player out; the permission they need is asked for when
+ * somebody joins a cup (see [shouldAskForCup]).
  *
  * WHAT THE OWNER MUST ADD before this does anything at all:
  *
@@ -94,6 +97,24 @@ object PushRegistration {
         val prefs = Prefs(context)
         if (prefs.bool(KEY_ASKED)) return false
         if (prefs.int(KEY_GAMES) < 1) return false
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * [shouldAsk], for somebody who has just joined a cup.
+     *
+     * The finished-game rule is dropped here. With no cup push on Android the
+     * reminders CupReminders posts are the only thing that tells an entrant
+     * their door has opened, and joining is the clearest moment there will
+     * ever be for the prompt: they have just said they want to be somewhere
+     * at a set time. Everything else holds — Android 13 and up, declared in
+     * the manifest, not already granted, and the one ask not yet spent.
+     */
+    fun shouldAskForCup(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (!permissionIsDeclared(context)) return false
+        if (Prefs(context).bool(KEY_ASKED)) return false
         return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
     }

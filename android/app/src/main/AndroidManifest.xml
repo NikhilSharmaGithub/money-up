@@ -79,5 +79,13 @@
                 <data android:pathPattern="/.*" />
             </intent-filter>
         </activity>
+
+        <!-- The cup's reminders: the fifteen-minute warning, the door
+             opening and the last call, set by the app itself because the
+             server's cup pushes reach iPhones only. Nothing outside the app
+             has any business sending it one. See CupReminders. -->
+        <receiver
+            android:name=".CupReminderReceiver"
+            android:exported="false" />
     </application>
 </manifest>

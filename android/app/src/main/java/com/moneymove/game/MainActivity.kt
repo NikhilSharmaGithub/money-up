@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
@@ -58,6 +59,14 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         roomFrom(intent)?.let { store.connect(it) }
+        // A cup reminder tapped while the app was still on screen. From the
+        // background, ON_START does the asking (see watchCupInFront); here
+        // nothing else would, and the player tapped because a door is open.
+        if (intent.getBooleanExtra(CupReminders.EXTRA_OPEN, false) &&
+            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        ) {
+            CupStore.shared(store).resume()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,6 +98,7 @@ class MainActivity : ComponentActivity() {
         // Google for nothing; see AdMobNetwork.
         AdMobNetwork.attach(this)
         watchPreGameBreak()
+        watchCupInFront()
 
         setContent {
             val prefs = store.prefs
@@ -127,6 +137,37 @@ class MainActivity : ComponentActivity() {
      * through one does not throw an ad at somebody who never tapped anything
      * since; and never over a rewarded break already on screen.
      */
+    /**
+     * The cup poll runs only while the app is on screen, and asks again the
+     * moment it comes back — iOS's landing screen reloads its cup watcher on
+     * willEnterForeground, and its watcher is suspended in between. Android
+     * has no cup push (push.js sends to iOS only), so this poll, and the
+     * reminders it sets, are how the phone learns its table is ready.
+     *
+     * It lives here rather than in a tab so that coming back to any tab
+     * counts, and so the Store, History and Settings tabs keep it too. The
+     * CupStore is the same instance the tabs get from rememberCupStore,
+     * because the GameStore handed to them is this activity's own; what the
+     * player picked, and where they were already walked, survive a trip to
+     * the background.
+     */
+    private fun watchCupInFront() {
+        val cups = CupStore.shared(store)
+        lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    CupReminders.inFront = true
+                    cups.resume()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    CupReminders.inFront = false
+                    cups.pause()
+                }
+                else -> Unit
+            }
+        })
+    }
+
     private fun watchPreGameBreak() {
         var wasSearching = false
         lifecycleScope.launch {
