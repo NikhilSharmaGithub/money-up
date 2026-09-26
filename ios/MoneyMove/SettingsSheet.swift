@@ -43,9 +43,13 @@ struct SettingsSheet: View {
                     Button("Done") { dismiss() }
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                         .tint(P.red)
+                        .sheetBarItem(on: .sheet)
                 }
             }
         }
+        // Every row here is on a card, and every card declares its own paper;
+        // this is for anything that ever lands on the sheet between them.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)

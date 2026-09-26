@@ -1,6 +1,9 @@
 // Chat + game-log sheet, the in-board auction box, and the game-over sheet.
 // All three read the live GameState from the injected GameStore and only
 // ever send intents back — the server stays authoritative.
+//
+// The chrome every sheet wears — the glass that goes around a sheet's
+// content, never on it — is with the material, in Glass.swift.
 
 import SwiftUI
 import Charts
@@ -12,9 +15,13 @@ struct ChatLogSheet: View {
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tab: Int
     @State private var draft = ""
     @State private var channel = "all"      // "all" | "team"
+    /// Where the channel switch's lit segment travels between its two places.
+    @Namespace private var channelSpace
     /// Whoever picked up the composer by hand. Ignored the moment that seat
     /// leaves the game, so a message can never go out wearing a ghost's name.
     @State private var chosenSeat: String?
@@ -122,10 +129,12 @@ struct ChatLogSheet: View {
                                 .labelStyle(.titleAndIcon)
                         }
                         .accessibilityLabel("Report or block a player")
+                        .sheetBarItem(on: .sheet)
                     }
                 }
             }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -168,6 +177,11 @@ struct ChatLogSheet: View {
                     }
                     .padding(12)
                 }
+                // A line on its way up out of view fades under the switch
+                // rather than being sliced off against its glass. Not at the
+                // bottom: the newest line is scrolled flush to that edge, and
+                // a band there would dim exactly the message just sent.
+                .sheetScrollEdge(top: 12)
                 .onAppear {
                     if let last = visibleChat.last?.id {
                         proxy.scrollTo(last, anchor: .bottom)
@@ -186,13 +200,22 @@ struct ChatLogSheet: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 6)
             }
-            emoteRow(P)
-            seatSwitcher(P)
-            // Free text waits until the rules have been read and agreed to.
-            // The reactions don't: they are a fixed set nobody can abuse.
-            inputBar(P)
-                .disabled(!rulesAgreed)
-                .opacity(rulesAgreed ? 1 : 0.45)
+            // The composer is two pieces of glass, the reactions and the text
+            // field, held in one container: glass cannot sample glass, and on
+            // 26 the container is what lets the two read as one family rather
+            // than two strangers stacked up.
+            MMGlassContainer(spacing: 6) {
+                VStack(spacing: 0) {
+                    emoteRow(P)
+                    seatSwitcher(P)
+                    // Free text waits until the rules have been read and agreed
+                    // to. The reactions don't: they are a fixed set nobody can
+                    // abuse.
+                    inputBar(P)
+                        .disabled(!rulesAgreed)
+                        .opacity(rulesAgreed ? 1 : 0.45)
+                }
+            }
             if rulesAgreed {
                 Text("Long-press a message, or tap Report, to report or block someone.")
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
@@ -225,14 +248,30 @@ struct ChatLogSheet: View {
         }
     }
 
-    /// Everyone ↔ Team, coloured by the player's own team.
+    /// Everyone ↔ Team, coloured by the player's own team — and one switch,
+    /// not two loose chips: a single capsule of glass with the choice drawn on
+    /// it, the way a segmented control is built on 26. The lit segment is a
+    /// tint on that glass rather than a second pane, and it travels to where
+    /// it is tapped instead of blinking out of one place and into the other.
     private func channelSwitch(_ P: Palette) -> some View {
+        let glass = BackdropKind.sheet.settledGlass(P)
         let teamColor = myTeam.map { Color(css: $0.color) } ?? P.gold
         return HStack(spacing: 6) {
-            channelChip(.globe, "Everyone", value: "all", tint: P.ink2, P: P)
-            // The team's own colour carries which side you're on; the server's
-            // coloured-circle emoji did the same job in someone else's artwork.
-            channelChip(.shield, "Team only", value: "team", tint: teamColor, P: P)
+            HStack(spacing: 2) {
+                // Lit, Everyone is the glass's first ink — one rank above the
+                // second ink it wears unlit, as ink2 once stood above ink3.
+                channelChip(.globe, "Everyone", value: "all", tint: glass.ink, glass: glass)
+                // The team's own colour carries which side you're on; the
+                // server's coloured-circle emoji did the same job in someone
+                // else's artwork.
+                channelChip(.shield, "Team only", value: "team", tint: teamColor, glass: glass)
+            }
+            // 3 in from a capsule, so the lit segment's own capsule sits
+            // concentric with the switch around it. Set into the sheet like
+            // the composer below it, not lifted off it: the chat's chrome is
+            // one family, and on the web none of it casts a shadow either.
+            .padding(3)
+            .sheetGlass(on: .sheet, in: Capsule(), floats: false)
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -240,22 +279,39 @@ struct ChatLogSheet: View {
     }
 
     private func channelChip(_ glyph: Glyph, _ label: String, value: String,
-                             tint: Color, P: Palette) -> some View {
+                             tint: Color, glass: GlassTokens) -> some View {
         let on = channel == value
+        // Unlit, the second glass ink. The third rank measures 1.53:1 on glass
+        // and does not exist on it.
+        let off = glass.label(secondary: true, increaseContrast: contrast == .increased)
         return Button {
-            withAnimation(.snappy(duration: 0.2)) { channel = value }
+            // 320 ms, the travel every segmented indicator in the app makes.
+            // Under Reduce Motion it goes straight there, with no travel at
+            // all — as the hub's tab bar and the appearance switch do.
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.32)) {
+                channel = value
+            }
             Haptics.tap()
         } label: {
+            // Lit, the words are the glass's own ink and the colour stays on
+            // the glyph and the segment: the four team colours are pastels,
+            // and printed as words on the daylight film every one of them
+            // falls under 2.5:1. The web prints the lit side in ink too.
             HStack(spacing: 5) {
-                Art.icon(glyph, size: 13, tint: on ? tint : P.ink3)
+                Art.icon(glyph, size: 13, tint: on ? tint : off)
                 Text(label)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(on ? tint : P.ink3)
+                    .foregroundStyle(on ? glass.ink : off)
             }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 11)
-                .background(on ? tint.opacity(0.16) : P.sunken, in: Capsule())
-                .overlay(Capsule().stroke(on ? tint.opacity(0.55) : .clear, lineWidth: 1))
+                .background {
+                    if on {
+                        Capsule().fill(tint.opacity(0.16))
+                            .overlay(Capsule().stroke(tint.opacity(0.55), lineWidth: 1))
+                            .matchedGeometryEffect(id: "lit", in: channelSpace)
+                    }
+                }
         }
     }
 
@@ -313,26 +369,42 @@ struct ChatLogSheet: View {
     /// Quick reactions first — one tap sends the emoji as a normal message, so
     /// you can answer the table without ever leaving the board for long. The
     /// rest of the palette follows in the same scroll.
+    ///
+    /// The strip is one capsule of Regular glass, and never Clear: emoji carry
+    /// their own colour, and Clear lets whatever is behind fight with it. The
+    /// reactions are wells in that glass rather than paper discs sitting on
+    /// it — brass for the five quick ones, the glass's own ink for the rest —
+    /// so they flip with the material instead of standing on it as blobs.
     private func emoteRow(_ P: Palette) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let glass = BackdropKind.sheet.settledGlass(P)
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(MMStatic.reactions, id: \.self) { reaction in
-                    emoteButton(reaction, size: 20, tint: P.goldSoft)
+                    emoteButton(reaction, size: 20, well: glass.rimWarm.opacity(0.18))
                 }
                 Rectangle()
-                    .fill(P.rule)
+                    .fill(glass.ink.opacity(0.14))
                     .frame(width: 1, height: 20)
                     .padding(.horizontal, 2)
                 ForEach(Array(MMStatic.emotes.dropFirst(MMStatic.reactions.count)), id: \.self) { emote in
-                    emoteButton(emote, size: 18, tint: P.sunken)
+                    emoteButton(emote, size: 18, well: glass.ink.opacity(0.08))
                 }
             }
-            .padding(.horizontal, 12)
+            // 36-point discs 4 in from a 44-point capsule: radius 18 inside
+            // radius 22, concentric at both ends of the strip.
+            .padding(4)
         }
-        .padding(.vertical, 4)
+        // A reaction scrolled to the rounded end goes under it, not past it.
+        // It shares a container with the composer, which is a field and casts
+        // nothing, so it casts nothing either — two capsules held as one
+        // family, and not one of them dropping a shadow on the other.
+        .clipShape(Capsule())
+        .sheetGlass(on: .sheet, in: Capsule(), floats: false)
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
     }
 
-    private func emoteButton(_ emote: String, size: CGFloat, tint: Color) -> some View {
+    private func emoteButton(_ emote: String, size: CGFloat, well: Color) -> some View {
         Button {
             store.sendChat(emote, channel: channel, as: speakingSeat)
             Haptics.tap()
@@ -340,31 +412,50 @@ struct ChatLogSheet: View {
             Text(emote)
                 .font(.system(size: size))
                 .frame(width: 36, height: 36)
-                .background(tint, in: Circle())
+                .background(well, in: Circle())
         }
     }
 
+    /// The field and its send button as one capsule of glass, the way 26 draws
+    /// a message field: the capsule is the field, so there is no second well
+    /// sunk inside it, and the send disc sits in its trailing end.
     private func inputBar(_ P: Palette) -> some View {
-        HStack(spacing: 8) {
-            TextField("Say something…", text: $draft)
+        let glass = BackdropKind.sheet.settledGlass(P)
+        return HStack(spacing: 8) {
+            // The placeholder is spelled out so it can wear the glass's second
+            // ink: the system's own placeholder grey is a third rank, and a
+            // third rank on glass is 1.53:1.
+            TextField("Say something…", text: $draft,
+                      prompt: Text("Say something…").foregroundStyle(
+                        glass.label(secondary: true, increaseContrast: contrast == .increased)))
                 .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(P.ink)
-                .padding(.vertical, 9)
-                .padding(.horizontal, 14)
-                .background(P.sunken, in: Capsule())
+                .foregroundStyle(glass.ink)
+                .padding(.leading, 12)
                 .submitLabel(.send)
                 .onSubmit(send)
 
+            // The one primary on the composer, so it is a plate in the accent
+            // with the accent's own ink — and, standing on the capsule's glass,
+            // it casts no shadow of its own.
             Button(action: send) {
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(P.accentInk)
                     .frame(width: 36, height: 36)
-                    .background(P.red, in: Circle())
             }
+            .buttonStyle(MMButtonStyle(kind: .primary, form: .disc))
+            .accessibilityLabel("Send")
         }
+        // A 36-point disc 4 in from a 44-point capsule: concentric. The
+        // capsule is a field, and a field is set into the sheet rather than
+        // floating over it, so it casts nothing.
+        .padding(4)
+        .mmControls(on: .chrome)
+        .sheetGlass(on: .sheet, in: Capsule(), floats: false)
         .padding(.horizontal, 12)
-        .padding(.top, 4)
+        // Eight clear of the reactions: inside the container's six, the two
+        // capsules would run together into one.
+        .padding(.top, 8)
         .padding(.bottom, 10)
     }
 
@@ -387,6 +478,9 @@ struct ChatLogSheet: View {
                 }
                 .padding(12)
             }
+            // Under the section switch, the log fades out rather than being
+            // cut against it. The bottom runs to the sheet's own edge.
+            .sheetScrollEdge(top: 12)
             .onAppear {
                 if let last = store.state?.log.last?.id {
                     proxy.scrollTo(last, anchor: .bottom)
@@ -596,12 +690,12 @@ struct AuctionBox: View {
                                 store.bid(amount, as: seat)
                                 Haptics.tap()
                             }
-                            .buttonStyle(CompactAuctionButtonStyle(bg: P.gold))
+                            .buttonStyle(CompactAuctionButtonStyle(kind: .gold))
                         }
                     }
                 }
                 Button("Pass") { store.passBid(as: seat) }
-                    .buttonStyle(CompactAuctionButtonStyle(bg: P.bad))
+                    .buttonStyle(CompactAuctionButtonStyle(kind: .bad))
             }
         } else {
             Text("you're out")
@@ -663,16 +757,26 @@ private struct SeatChipRow: View {
 }
 
 /// Tighter sibling of MMButtonStyle so three bid buttons + pass fit the well.
+///
+/// It takes the same kinds, and each kind's plate and ink from the same place
+/// MMButtonStyle does: a bid is the gold plate with the palette's on-accent
+/// ink, as every gold button in the app is, and Pass the bad plate in white.
+/// A bid printed in white was the one gold button that did not match — and on
+/// the brass tables, whose on-accent ink is dark, white on their gold was the
+/// faintest pairing in the well.
 private struct CompactAuctionButtonStyle: ButtonStyle {
-    let bg: Color
+    let kind: MMButtonStyle.Kind
+
+    @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let P = Palette.current(scheme)
+        return configuration.label
             .font(.system(size: 12, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(kind.ink(P))
             .padding(.vertical, 6)
             .padding(.horizontal, 11)
-            .background(bg, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(kind.plate(P) ?? P.sunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(.white.opacity(0.18), lineWidth: 1)
@@ -723,6 +827,9 @@ struct GameOverSheet: View {
             .navigationTitle("Game over")
             .navigationBarTitleDisplayMode(.inline)
         }
+        // Share and Leave stand straight on the sheet, not on a card, so the
+        // sheet says what that is. The result cards declare their own paper.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

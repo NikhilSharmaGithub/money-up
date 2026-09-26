@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -406,11 +405,9 @@ fun HowToPlaySheet(onDismiss: () -> Unit) {
             "Ninety seconds a turn, so nobody waits on an empty chair. Miss one and the house plays that turn for you; miss two in a row and your seat goes.",
     )
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         Column(
             Modifier

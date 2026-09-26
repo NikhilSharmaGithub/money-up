@@ -19,12 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -117,9 +117,11 @@ fun NoticeBell(count: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
 }
 
 /**
- * The list — iOS's NoticesSheet: the full height of the screen on the page
- * colour, "Notes" in the middle of the bar and Done on the right, a card per
- * note, and a bell with a line through it when there are none.
+ * The list — iOS's NoticesSheet: the full height of the screen on the
+ * sheet's glass ([MMSheet]; iOS painted this one the page colour, and on
+ * iOS 26 it is the system's glass too), "Notes" in the middle of the bar and
+ * Done on the right, a card per note, and a bell with a line through it when
+ * there are none.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -149,11 +151,9 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
         read = true
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         Column(Modifier.fillMaxWidth().fillMaxHeight()) {
             NotesBar { close() }
@@ -168,7 +168,9 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
-                    SfMark("bell.slash", 32.dp, p.ink3)
+                    // The empty state stands straight on the sheet's glass,
+                    // so it takes the glass's quiet ink rather than ink3.
+                    SfMark("bell.slash", 32.dp, quietInk())
                     Text(
                         "Nothing yet",
                         color = p.ink2, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
@@ -176,13 +178,16 @@ fun NoticesSheet(messaging: MessagingStore, onDismiss: () -> Unit) {
                     Text(
                         "Announcements about tournaments — when a round opens, when a prize " +
                             "is on its way — turn up here.",
-                        color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp,
+                        color = quietInk(), fontSize = 12.5.sp, lineHeight = 17.sp,
                         fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
                     )
                 }
             } else {
+                val list = rememberLazyListState()
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    state = list,
+                    // The notes fade out under the bar rather than slicing off.
+                    modifier = Modifier.fillMaxWidth().weight(1f).scrollEdge(list),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {

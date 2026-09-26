@@ -15,6 +15,37 @@ export const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
 const isOwnable = (t) => ['property', 'airport', 'utility'].includes(t.type);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ════════════════════════════════════════════════════════════ the governor ══
+// While the board is moving — a piece walking or being carried, a card read
+// between two legs of one move, a set flooding with its owner's colour, the
+// deal flying the tiles out of the deck — every pane of glass over it stops
+// refracting: `body.board-busy` (see "The material" in style.css) takes the
+// blur and the lens away and deepens the shadow instead. A blur is priced per
+// pixel of whatever changes beneath it, and the board changing under the glass
+// every frame is the one case that price was set for. The material itself
+// stays put — the film, the rim, the shape — so what freezes is only what the
+// glass refracts, and the people at the table are watching the piece.
+//
+// Holds rather than a counter: two things can move at once (a flash under a
+// walk, a second piece), and a board torn down mid-move must not strand a
+// count that never gets back to zero. Each hold is its own token, released
+// once; a released or cleared hold released again does nothing.
+const holds = new Set();
+
+function paintBusy() {
+  document.body?.classList.toggle('board-busy', holds.size > 0);
+}
+
+/** Marks the board as moving. Returns the release; `ms` releases it on a clock. */
+function holdBoard(ms = 0) {
+  const hold = {};
+  holds.add(hold);
+  paintBusy();
+  const release = () => { if (holds.delete(hold)) paintBusy(); };
+  if (ms) setTimeout(release, ms);
+  return release;
+}
+
 // ═══════════════════════════════════════════════════════════ build the grid ══
 export function renderBoard(state, root) {
   const { map, groups } = state;
@@ -171,7 +202,9 @@ export function patchBoard(state) {
   if (setsSeeded && state.status === 'playing') {
     for (const [g, owner] of nowComplete) {
       if (completedSets.get(g) === owner) continue;
-      // a set just came together — pulse the whole section, deep then back
+      // a set just came together — pulse the whole section, deep then back,
+      // and hold the glass still for as long as the section is breathing
+      holdBoard(3500);
       (state.map.groups[g] || []).forEach((k) => {
         const el = tileEls[k];
         if (!el) return;
@@ -261,6 +294,9 @@ export function resetBoard() {
   // nor leave its clean-up timer to go off over the next room's board.
   dealtRoom = null;
   clearTimeout(dealTimer); dealTimer = null;
+  // Nor may a move cut short leave the next table's glass frozen. The
+  // journeys still unwinding will release holds that are no longer there.
+  holds.clear(); paintBusy();
   const wrap = boardWrap();
   wrap?.classList.remove('undealt', 'dealing');
   wrap?.querySelector('.deal-deck.deal-out')?.remove();
@@ -434,6 +470,10 @@ async function playChain(state, player, legs, gen, { onStep, onArrive, onJailed,
   const rec = tokens.get(player.id);
   if (!rec) return;
   animating.add(player.id);
+  // The whole journey holds the glass still, the pauses between legs
+  // included: that pause is where a card is on screen being read, and a card
+  // on the table is not the moment for the panes around it to start moving.
+  const release = holdBoard();
   try {
     for (let k = 0; k < legs.length; k++) {
       if (walkGen.get(player.id) !== gen) return;
@@ -463,6 +503,7 @@ async function playChain(state, player, legs, gen, { onStep, onArrive, onJailed,
     }
   } finally {
     if (walkGen.get(player.id) === gen) animating.delete(player.id);
+    release();
   }
 }
 
@@ -528,6 +569,11 @@ async function fly(state, player, to, gen, onArrive, onLand) {
   const alive = () => walkGen.get(player.id) === gen;
   flying.set(player.id, to);
   const land = () => { if (flying.get(player.id) === to) flying.delete(player.id); };
+  // A flight can start on its own, outside any journey — a reconnect carrying
+  // a piece to where the server says it is — so it holds the glass for its
+  // own three beats. Inside a journey this is a second hold on the same
+  // stillness, and costs nothing.
+  holdBoard(190 + 560 + 260);
 
   rec.el.classList.add('in-flight');
   place(state, player.id, from, 190, 'cubic-bezier(.2,.8,.3,1)', 26);   // lifted
@@ -636,6 +682,10 @@ export function dealBoardIn(state) {
     el.style.opacity = '';
   });
 
+  // Forty tiles in the air at once is the busiest the board ever gets, so the
+  // glass holds still until the last one is down. On the clock rather than
+  // released by the clean-up below, which a table left mid-deal cancels.
+  holdBoard(RIFFLE + last * STAGGER + FLIGHT + 80);
   clearTimeout(dealTimer);
   dealTimer = setTimeout(() => {
     dealTimer = null;

@@ -100,6 +100,11 @@ struct DeedSheet: View {
             .scrollBounceBehavior(.basedOnSize)
             .toolbar(.hidden, for: .navigationBar)
         }
+        // The quick build bar stands straight on the sheet, under the title,
+        // not on a card — so the sheet says what it is standing on. Below 26
+        // that is this sheet's paper; on 26 it is the system's glass, and the
+        // buttons become the system's glass with it.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -454,14 +459,19 @@ struct PropertiesSheet: View {
                             Label("Trade", systemImage: "arrow.left.arrow.right")
                                 .font(.system(size: 13.5, weight: .bold, design: .rounded))
                         }
+                        .sheetBarItem(on: .sheet)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .sheetBarItem(on: .sheet)
                 }
             }
         }
+        // Declare bankruptcy stands straight on the sheet. The raise-cash
+        // card declares its own paper, and so does every street row.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDragIndicator(.visible)
     }
@@ -851,6 +861,9 @@ struct PropertiesSheet: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(fullSet ? P.gold.opacity(0.55) : P.rule, lineWidth: 1)
         )
+        // A row of card paper, so its buttons are on paper — not on the sheet
+        // the rest of this declares.
+        .mmControls(on: .paper)
     }
 
     private struct RowButton {

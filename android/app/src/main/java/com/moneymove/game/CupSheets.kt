@@ -48,7 +48,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -1551,12 +1550,16 @@ private fun CupNavBar(title: String, action: String, onAction: () -> Unit) {
     }
 }
 
-/** iOS's section label in the room and the chart: small, heavy, spaced capitals. */
+/**
+ * iOS's section label in the room and the chart: small, heavy, spaced
+ * capitals. Both stand straight on the sheet's glass, so the label is in the
+ * glass's quiet ink — ink3 is all but lost on the platter at night.
+ */
 @Composable
 private fun CupLabel(text: String) {
     Text(
         text.uppercase(),
-        color = P.current.ink3, fontSize = 10.5.sp, letterSpacing = 1.sp, fontWeight = FontWeight.ExtraBold,
+        color = quietInk(), fontSize = 10.5.sp, letterSpacing = 1.sp, fontWeight = FontWeight.ExtraBold,
     )
 }
 
@@ -1585,7 +1588,6 @@ fun CupDetailSheet(
     signedIn: Boolean,
     onDismiss: () -> Unit,
 ) {
-    val p = P.current
     // The newest copy of this cup the feed has carried, not the copy the room
     // opened on. Falling back to the opening copy took a room opened during
     // the final back to the running match once the finished cup aged off the
@@ -1650,20 +1652,20 @@ fun CupDetailSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var chart by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         Box(Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth()) {
                 CupNavBar(cup.name, "Done", onDismiss)
+                val sheetScroll = rememberScrollState()
                 Column(
                     Modifier
                         .weight(1f, fill = false)
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .scrollEdge(sheetScroll)
+                        .verticalScroll(sheetScroll)
                         .padding(16.dp)
                         .padding(bottom = 12.dp),
                 ) {
@@ -1687,13 +1689,12 @@ fun CupDetailSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CupChartSheet(cups: CupStore, cupId: String, onDismiss: () -> Unit) {
-    val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    // The app's one sheet ([MMSheet]), on the same glass as the cup room it
+    // rises over.
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         // iOS's chart is a plain sheet at its large detent: full height from
         // the first frame, spinner or bracket. Sized to its content, this one
@@ -1702,11 +1703,13 @@ private fun CupChartSheet(cups: CupStore, cupId: String, onDismiss: () -> Unit) 
         Column(Modifier.fillMaxWidth().fillMaxHeight()) {
             val b = cups.bracket?.takeIf { it.id == cupId }
             CupNavBar(b?.name ?: "The chart", "Done", onDismiss)
+            val sheetScroll = rememberScrollState()
             Column(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .scrollEdge(sheetScroll)
+                    .verticalScroll(sheetScroll)
                     .padding(16.dp)
                     .padding(bottom = 12.dp),
             ) {
@@ -1759,7 +1762,7 @@ private fun DetailBody(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
                     if (cup.needsCode) "Invite only" else "Open to everyone",
-                    color = p.ink3, fontSize = 10.sp,
+                    color = quietInk(), fontSize = 10.sp,
                     letterSpacing = 0.8.sp, fontWeight = FontWeight.ExtraBold,
                 )
                 Text(
@@ -1770,7 +1773,7 @@ private fun DetailBody(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon("snooze", size = 12.dp)
                         Spacer(Modifier.width(5.dp))
-                        Text(it, color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                        Text(it, color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -1798,7 +1801,7 @@ private fun DetailBody(
         if (!cup.you.joined && cup.state == "joining") {
             Text(
                 "You have not joined this one. Close this and tap Join on the card.",
-                color = p.ink3, fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
+                color = quietInk(), fontSize = 12.5.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
             )
         } else if (decided != null) {
             // Ahead of "out": a beaten finalist is out of the cup and second
@@ -1861,6 +1864,7 @@ private fun DetailBody(
 
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             CupLabel("How it works")
+            val quiet = quietInk()
             for (line in ruleLines(cup)) {
                 Row(Modifier.fillMaxWidth()) {
                     Box(
@@ -1868,12 +1872,12 @@ private fun DetailBody(
                             .padding(top = 6.dp)
                             .size(4.dp)
                             .clip(CircleShape)
-                            .background(p.ink3),
+                            .background(quiet),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
                         line,
-                        color = p.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                        color = quiet, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
                     )
                 }
             }
@@ -2230,19 +2234,20 @@ private fun ruleLines(cup: CupView): List<String> {
 private fun CupPosterSheet(cup: CupView, onDismiss: () -> Unit) {
     val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    // The app's one sheet ([MMSheet]), as every other sheet here is.
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         Column(Modifier.fillMaxWidth()) {
             CupNavBar("The cup", "Done", onDismiss)
+            val sheetScroll = rememberScrollState()
             Column(
                 Modifier
                     .weight(1f, fill = false)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .scrollEdge(sheetScroll)
+                    .verticalScroll(sheetScroll)
                     .padding(18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -2317,7 +2322,7 @@ private fun CupPosterSheet(cup: CupView, onDismiss: () -> Unit) {
                             "in any way."
                     },
                     modifier = Modifier.padding(top = 2.dp),
-                    color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp,
+                    color = quietInk(), fontSize = 11.5.sp, lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
                 )
             }
@@ -2351,7 +2356,7 @@ private fun PosterRungs(cup: CupView) {
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, style = TABULAR,
             )
-            Text("→", color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("→", color = quietInk(), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
         Box(
             Modifier
@@ -2451,7 +2456,7 @@ fun CupBracket(cups: CupStore, cupId: String, modifier: Modifier = Modifier) {
                 Text(
                     "Could not load the chart.",
                     modifier = Modifier.padding(40.dp),
-                    color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    color = quietInk(), fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 )
             } else {
                 Box(Modifier.padding(60.dp)) { LandingSpinner(p.gold) }
@@ -2600,7 +2605,7 @@ private fun ChartTree(b: CupBracketView) {
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "${r.players}", color = p.ink3, fontSize = 10.sp,
+                            "${r.players}", color = quietInk(), fontSize = 10.sp,
                             fontWeight = FontWeight.ExtraBold, style = TABULAR,
                         )
                     }

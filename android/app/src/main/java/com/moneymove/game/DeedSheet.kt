@@ -26,7 +26,6 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -92,11 +91,9 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val half = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         Box(Modifier.fillMaxWidth().heightIn(min = half)) {
             Column(
@@ -111,7 +108,7 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
                     Text(
                         "Unknown tile",
                         modifier = Modifier.fillMaxWidth().padding(top = 26.dp),
-                        color = p.ink3,
+                        color = quietInk(),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
@@ -843,7 +840,9 @@ private fun BlockerLine(b: DeedBlocker) {
     Text(
         text,
         modifier = Modifier.fillMaxWidth(),
-        color = p.ink3,
+        // Under the bar, on the sheet's glass rather than a card: the glass's
+        // quiet ink, since ink3 all but vanishes on the platter at night.
+        color = quietInk(),
         fontSize = 11.5.sp,
         lineHeight = 15.sp,
         fontWeight = FontWeight.SemiBold,

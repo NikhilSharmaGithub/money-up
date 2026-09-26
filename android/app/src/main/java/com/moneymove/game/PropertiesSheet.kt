@@ -24,10 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,7 +74,6 @@ import androidx.compose.ui.unit.sp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PropertiesSheet(store: GameStore, onDismiss: () -> Unit, onOpenTile: (Int) -> Unit) {
-    val p = P.current
     val state = store.state ?: return onDismiss()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -84,11 +83,9 @@ fun PropertiesSheet(store: GameStore, onDismiss: () -> Unit, onOpenTile: (Int) -
     // first means the composer the store opens next is the one left standing.
     val handOff: (() -> Unit) -> Unit = { next -> onDismiss(); next() }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
@@ -103,11 +100,13 @@ fun PropertiesSheet(store: GameStore, onDismiss: () -> Unit, onOpenTile: (Int) -
                     } else null,
                     onDone = onDismiss,
                 )
+                val sheetScroll = rememberScrollState()
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .verticalScroll(rememberScrollState())
+                        .scrollEdge(sheetScroll)
+                        .verticalScroll(sheetScroll)
                         .padding(14.dp)
                         .padding(bottom = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -291,7 +290,7 @@ private fun PropertyList(
             Icon("island", size = 36.dp)
             Text(
                 "Nothing owned yet — land on a street and buy it.",
-                color = p.ink3,
+                color = quietInk(),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
@@ -323,13 +322,13 @@ private fun PropertyList(
         }
         if (airports.isNotEmpty()) {
             Section(
-                store, state, "Airports", { Icon("plane", size = 14.dp, tint = p.ink3, modifier = Modifier.graphicsLayer { rotationZ = 90f }) },
+                store, state, "Airports", { Icon("plane", size = 14.dp, tint = quietInk(), modifier = Modifier.graphicsLayer { rotationZ = 90f }) },
                 airports, null, onOpenTile, handOff,
             )
         }
         if (utilities.isNotEmpty()) {
             Section(
-                store, state, "Utilities", { Icon("bolt", size = 14.dp, tint = p.ink3) },
+                store, state, "Utilities", { Icon("bolt", size = 14.dp, tint = quietInk()) },
                 utilities, null, onOpenTile, handOff,
             )
         }
@@ -659,14 +658,16 @@ private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
 /**
  * iOS's PanelTitle: the section name in capitals, small, bold and tracked a
  * point wide, in the quietest ink. Ui.kt's SectionLabel tracks wider than
- * iOS does, so the headings on this sheet set their own.
+ * iOS does, so the headings on this sheet set their own. The quietest ink is
+ * the place's: ink3 in a [DeedsCard], the glass's own over a country's rows,
+ * which stand straight on the sheet.
  */
 @Composable
 private fun DeedsPanelTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text.uppercase(),
         modifier = modifier,
-        color = P.current.ink3,
+        color = quietInk(),
         fontSize = 11.sp,
         letterSpacing = 1.sp,
         fontWeight = FontWeight.Bold,
@@ -727,16 +728,20 @@ internal fun DeedsGrabber(modifier: Modifier = Modifier) {
 private fun DeedsCard(content: @Composable ColumnScope.() -> Unit) {
     val p = P.current
     val shape = RoundedCornerShape(16.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .shadow(6.dp, shape, clip = false)
-            .clip(shape)
-            .background(p.card)
-            .border(1.dp, p.rule, shape)
-            .padding(14.dp),
-        content = content,
-    )
+    // Paper on the sheet's glass, and says so as a Panel does: what is set on
+    // it keeps the paper's inks, and a button on it knows a card is behind it.
+    CompositionLocalProvider(LocalControlBackdrop provides BackdropKind.Paper) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .shadow(6.dp, shape, clip = false)
+                .clip(shape)
+                .background(p.card)
+                .border(1.dp, p.rule, shape)
+                .padding(14.dp),
+            content = content,
+        )
+    }
 }
 
 /**

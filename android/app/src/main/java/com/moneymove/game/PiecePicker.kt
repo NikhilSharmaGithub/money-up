@@ -22,7 +22,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -113,19 +112,19 @@ fun PiecePicker(store: GameStore, account: AccountStore, onDismiss: () -> Unit) 
         onDismiss()
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = { close() },
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         Column(Modifier.fillMaxWidth()) {
             LookBar("Your look", "Done") { close() }
+            val sheetScroll = rememberScrollState()
             Column(
                 Modifier
                     .weight(1f, fill = false)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .scrollEdge(sheetScroll)
+                    .verticalScroll(sheetScroll)
                     .padding(horizontal = 16.dp)
                     .padding(top = 4.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -180,12 +179,15 @@ private fun LookBar(title: String, action: String, onAction: () -> Unit) {
     }
 }
 
-/** iOS's PanelTitle: small capitals, one point apart, in the quietest ink. */
+/**
+ * iOS's PanelTitle: small capitals, one point apart, in the quietest ink —
+ * which here, straight on the sheet's glass, is the glass's, not ink3.
+ */
 @Composable
 private fun PanelTitle(text: String) {
     Text(
         text.uppercase(),
-        color = P.current.ink3, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+        color = quietInk(), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
         maxLines = 1,
     )
 }
@@ -471,7 +473,7 @@ private fun PieceChip(
         ) {
             if (price != null) {
                 Icon("coin", size = 10.dp)
-                Text("$price", color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                Text("$price", color = quietInk(), fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
             } else {
                 Text(
                     label,
@@ -567,10 +569,9 @@ fun PieceShopSheet(
     // the tapped card leaves the grid, so carry the eye up to where it went.
     LaunchedEffect(focus.id) { scroll.animateScrollTo(0) }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
-        containerColor = p.sheet,
         dragHandle = {
             // iOS's grabber: a short capsule just under the top edge, in the
             // system's fixed grey rather than the table's ink.
@@ -590,6 +591,7 @@ fun PieceShopSheet(
                     Modifier
                         .weight(1f, fill = false)
                         .fillMaxWidth()
+                        .scrollEdge(scroll)
                         .verticalScroll(scroll)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -633,7 +635,7 @@ fun PieceShopSheet(
                     Text(
                         "Coins come from your daily pick-up on the Play tab, and from winning. " +
                             "Every piece here is pure style — never pay-to-win.",
-                        color = p.ink3, fontSize = 11.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+                        color = quietInk(), fontSize = 11.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
                     )
                 }
             }

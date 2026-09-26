@@ -66,14 +66,19 @@ struct TradeSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .sheetBarItem(on: .sheet)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(counterOf == nil ? "Send" : "Counter") { send() }
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .disabled(store.state?.player(targetId) == nil)
+                        .sheetBarItem(on: .sheet, enabled: store.state?.player(targetId) != nil)
                 }
             }
         }
+        // Balance it and Close stand straight on the sheet; the two sides of
+        // the deal are cards and declare their own paper.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -542,9 +547,11 @@ struct TradePickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .sheetBarItem(on: .sheet)
                 }
             }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

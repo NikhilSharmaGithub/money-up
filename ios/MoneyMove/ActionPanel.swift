@@ -1,12 +1,31 @@
 // The action dock under the live feed: whatever the current phase needs —
 // roll, buy/auction, debt rescue, end turn — plus the topmost trade offer.
 // It hugs the bottom of the screen, where thumbs actually are.
+//
+// It is also the table's main piece of glass, and the one of its lensing
+// surfaces a thumb is always on. A phone hangs it under the board, on the page
+// ramp; an iPad plays the table flat and puts it inside the board's own centre
+// well, on the felt. The same dock over two different backdrops is exactly the
+// thing the material is judged on — if those two look alike it is a frost and
+// not a lens — so the backdrop is declared rather than assumed, and
+// everything inside takes its ink from the glass.
+//
+// Nothing inside it is glass of its own. Glass does not stack: a pane on a pane
+// is refracting the bar it sits on, and on 26 the system cannot draw one glass
+// sampling another at all. So the buttons are told they stand on `.chrome` —
+// a ghost becomes a well pressed into the dock, a coloured button a plate that
+// casts nothing — and every block the phases bring in is a well or a wash of
+// its colour in the material, never a sheet of paper laid on top of it.
 
 import SwiftUI
 
 struct ActionPanel: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Which layout `GameScreen` is in, and therefore what is behind the dock.
+    @Environment(\.horizontalSizeClass) private var hSize
     let openProperties: () -> Void
     var openTrade: (() -> Void)? = nil
     var openCounter: ((TradeOffer) -> Void)? = nil
@@ -14,64 +33,214 @@ struct ActionPanel: View {
     var openResults: (() -> Void)? = nil
     @State private var confirmBankrupt = false
 
+    /// What we put behind the dock. `GameScreen` only ever renders it inside
+    /// the board's centre well at a regular width — every compact layout hangs
+    /// it below the board on the page gradient — so the size class is the
+    /// honest answer to what is underneath, and no pixel gets read to find out.
+    private var backdrop: BackdropKind { hSize == .regular ? .felt : .page }
+
+    /// The dock's glass colours, off the one resolver the material and every
+    /// control standing on it use, so a label and the pane under it cannot
+    /// disagree about which way the glass has leaned.
+    private var glass: GlassTokens { backdrop.settledGlass(Palette.current(scheme)) }
+
+    private var increaseContrast: Bool { contrast == .increased }
+
+    /// The ink for a label on the dock. Two levels and no third: `ink3` on this
+    /// material measures 1.53:1, so every quiet line up here promotes to the
+    /// secondary glass ink — `ink2` carried 62% of the way to `ink`, which
+    /// floors at 5.82:1 — and under Increase Contrast that promotes again.
+    private func ink(_ secondary: Bool = false) -> Color {
+        glass.label(secondary: secondary, increaseContrast: increaseContrast)
+    }
+
+    /// A block pressed into the dock rather than laid on it: the glass's own
+    /// ink at a tenth, the well a ghost button on the dock already is. It
+    /// flips with the glass, where a paper colour would sit on the material as
+    /// a small opaque card.
+    private var well: Color { glass.ink.opacity(increaseContrast ? 0.18 : 0.10) }
+
+    /// A block that carries a meaning — a debt, an offer, the deadlock rule —
+    /// as a wash of its colour through the material, at the strength the
+    /// material gives its own one semantic tint.
+    private func wash(_ hue: Color) -> Color { hue.opacity(increaseContrast ? 0.26 : 0.14) }
+
+    /// The dock's padding, and the corner every child drawn on it wears: r22
+    /// less the padding.
+    private static let inset: CGFloat = 12
+    private static let corner = MMRadius.inner(MMRadius.xl, inset: inset)
+
+    /// The outline of a block drawn on the dock.
+    private var block: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
-        VStack(spacing: 8) {
-            firstIncomingTrade
-
-            if store.isMyTurn, let turn = store.state?.turn {
-                turnHeader(P)
-                deadlockLine(P)
-                // The server answers a roll before the piece has taken a
-                // step, so the buy prompt (and whatever else the landing
-                // decides) arrives while the token is mid-walk. While the
-                // theatre for THIS seat's move is still on stage, the dock
-                // stays neutral; the controls take over when it lands. Other
-                // seats' turns, trades and chat never wait.
-                if store.theatreHolding(for: turn.playerId) {
-                    walkingRow(P)
-                } else {
-                    myTurnControls(turn: turn, P: P)
-                }
-            } else if store.state?.isPlaying == true {
-                waitingRow(P)
-            } else if store.state?.isEnded == true {
-                VStack(spacing: 8) {
-                    // Anyone can call the next game — the chair goes to
-                    // whoever asks for it first. Except a cup match, which is
-                    // played once and is already recorded in the bracket.
-                    if store.state?.cup != true {
-                        MMIconButton(.replay, "Play again",
-                                     kind: .primary, big: true) { store.rematch() }
-                    }
-                    if !store.isHost, store.state?.cup != true {
-                        Text("Whoever presses first hosts the next one.")
-                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(P.ink3)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                    }
-                    if let openResults {
-                        MMIconButton(.trophy, "Final standings", kind: .ghost, big: true) {
-                            openResults()
-                            Haptics.tap()
-                        }
-                    }
-                }
-            }
+        // One container, because the dock is one surface: glass cannot sample
+        // glass, and the phase blocks inside it are chips drawn ON the material
+        // rather than little panes of their own.
+        //
+        // No tint. The old dock ringed itself in the accent on your turn, and
+        // the obvious translation was to hand that colour to the material —
+        // but a tint is a property of the whole pane, so the dock came out as
+        // a solid slab of brand gold with the buttons lost inside it. Your
+        // turn is already said twice in here, by the header and by the primary
+        // button; a bar that shouts it a third time is the surface that stops
+        // being glass.
+        return MMGlassContainer(spacing: 12) {
+            phases(P)
+                .padding(Self.inset)
+                // Every control in here stands on the dock's glass, not on a
+                // glass of its own, and is cut concentric with the shell —
+                // the big ones included, which elsewhere wear 14. Declared
+                // inside the pane and so reaching nothing outside it.
+                .mmControls(on: .chrome, corner: Self.corner)
+                // r22 with 12 pt of padding puts every child at 10, so the gap
+                // does not pinch at the corners. Regular and never Clear: the
+                // dock carries live numbers and Clear does not adapt.
+                .mmGlass(.regular,
+                         backdrop: backdrop,
+                         in: RoundedRectangle(cornerRadius: MMRadius.xl, style: .continuous))
         }
-        .padding(12)
-        .background(P.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(store.isMyTurn ? P.red.opacity(0.55) : P.rule, lineWidth: store.isMyTurn ? 1.5 : 1)
-        )
-        .shadow(color: .black.opacity(scheme == .light ? 0.14 : 0.4), radius: 12, y: 5)
+        // The phase changing is the dock changing shape, so the shell
+        // stretches to its new size on the morph curve instead of cutting to
+        // it. Keyed on the stage alone: a balance ticking or a clock counting
+        // down inside an unchanged dock keeps its own animation.
+        .animation(.mmMorph(reduceMotion: reduceMotion), value: Self.stage(of: store))
         .padding(.horizontal, 12)
         .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
             Button("Go bankrupt", role: .destructive) { store.declareBankrupt() }
         } message: {
             Text("Everything you own goes to whoever you owe, and you are out of the game.")
+        }
+    }
+
+    // MARK: - the morph
+
+    /// The shape the dock is in, as a word. Two docks at the same stage hold
+    /// the same rows, so a change of stage is exactly a change of shape — the
+    /// thing the shell stretches for. `GameScreen` keys the player strip above
+    /// on the same word, so the strip rides up and down with the dock as one
+    /// cluster instead of jumping while the shell below it glides.
+    static func stage(of store: GameStore) -> String {
+        guard let state = store.state else { return "" }
+        let incoming = state.trades.filter { store.isLocal($0.to) }
+        var parts: [String] = []
+        if let offer = incoming.first(where: { $0.ignored != true }) { parts.append("offer \(offer.id)") }
+        if incoming.contains(where: { $0.ignored == true }) { parts.append("parked") }
+        if let sent = state.trades.first(where: { store.isLocal($0.from) }) { parts.append("sent \(sent.id)") }
+        parts.append(controls(of: store))
+        return parts.joined(separator: " · ")
+    }
+
+    /// The same, for the controls alone: the rows that swap when it changes.
+    private static func controls(of store: GameStore) -> String {
+        guard let state = store.state else { return "" }
+        if store.isMyTurn, let turn = state.turn {
+            if store.theatreHolding(for: turn.playerId) { return "walking \(turn.playerId)" }
+            var key = "\(turn.phase) \(turn.playerId)"
+            if turn.phase == "roll", store.me?.inJail == true { key += " prison" }
+            if let pending = turn.pending { key += " \(pending.type) \(pending.tile)" }
+            if (store.me?.lapsBlocked ?? 0) > 0 { key += " deadlock" }
+            return key
+        }
+        if state.isPlaying { return "waiting \(state.turn?.playerId ?? "")" }
+        return state.isEnded ? "ended" : ""
+    }
+
+    /// How rows change places while the shell stretches: the old ones go
+    /// quickly and the new ones arrive 100 ms behind them, so the eye reads
+    /// the shape changing first and the words second. Under Reduce Motion a
+    /// plain cross-fade, on the shell's own 160 ms.
+    private var rowSwap: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.24).delay(0.1)),
+            removal: .opacity.animation(.easeOut(duration: 0.12)))
+    }
+
+    /// Whatever this moment of the game needs. The dock's own size follows it,
+    /// which is why the shell is measured from the outside and not fixed.
+    @ViewBuilder
+    private func phases(_ P: Palette) -> some View {
+        VStack(spacing: 8) {
+            firstIncomingTrade
+
+            // The header stays put across a change of phase — it is the same
+            // seat's turn — so it sits outside the block that swaps, and only
+            // comes and goes with the turn itself.
+            if store.isMyTurn {
+                turnHeader(P)
+                    .transition(rowSwap)
+                deadlockLine(P)
+            }
+
+            // One view, so it can carry one identity: a new stage is a new
+            // block, which is what lets the old rows fade out while the new
+            // ones fade in behind them instead of the same view being rewritten
+            // in place.
+            if hasControls {
+                VStack(spacing: 8) {
+                    controlRows(P)
+                }
+                .id(Self.controls(of: store))
+                .transition(rowSwap)
+            }
+        }
+    }
+
+    /// Whether this moment has any rows at all. On your own turn during an
+    /// auction the dock has nothing to offer — the paddle is in the well —
+    /// and an empty block would still be handed the stack's spacing, a gap
+    /// the dock never used to have.
+    private var hasControls: Bool {
+        guard store.isMyTurn, let turn = store.state?.turn,
+              !store.theatreHolding(for: turn.playerId) else { return true }
+        switch turn.phase {
+        case "debt", "roll", "end": return true
+        case "action": return turn.pending?.type == "buy"
+        default: return false
+        }
+    }
+
+    @ViewBuilder
+    private func controlRows(_ P: Palette) -> some View {
+        if store.isMyTurn, let turn = store.state?.turn {
+            // The server answers a roll before the piece has taken a
+            // step, so the buy prompt (and whatever else the landing
+            // decides) arrives while the token is mid-walk. While the
+            // theatre for THIS seat's move is still on stage, the dock
+            // stays neutral; the controls take over when it lands. Other
+            // seats' turns, trades and chat never wait.
+            if store.theatreHolding(for: turn.playerId) {
+                walkingRow(P)
+            } else {
+                myTurnControls(turn: turn, P: P)
+            }
+        } else if store.state?.isPlaying == true {
+            waitingRow(P)
+        } else if store.state?.isEnded == true {
+            // Anyone can call the next game — the chair goes to whoever asks
+            // for it first. Except a cup match, which is played once and is
+            // already recorded in the bracket.
+            if store.state?.cup != true {
+                MMIconButton(.replay, "Play again",
+                             kind: .primary, big: true) { store.rematch() }
+            }
+            if !store.isHost, store.state?.cup != true {
+                Text("Whoever presses first hosts the next one.")
+                    .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(ink(true))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            if let openResults {
+                MMIconButton(.trophy, "Final standings", kind: .ghost, big: true) {
+                    openResults()
+                    Haptics.tap()
+                }
+            }
         }
     }
 
@@ -88,15 +257,16 @@ struct ActionPanel: View {
         HStack(spacing: 7) {
             if let p = store.state?.player(seat), !mine {
                 AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 20, emoji: p.avatar ?? "")
+                // The glass's brass: raw gold on the daylight film is 3.2:1.
                 Text("\(p.name)'s turn — pass the phone")
                     .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.gold)
+                    .foregroundStyle(glass.goldInk)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             } else {
                 Text("Your turn")
                     .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(ink(true))
             }
             Spacer(minLength: 6)
             TurnClock(endsAt: store.state?.turn?.endsAt, compact: true)
@@ -114,13 +284,19 @@ struct ActionPanel: View {
                 Art.icon(.scales, size: 13, tint: P.gold)
                 Text("\(me.lapsToRelief) lap\(me.lapsToRelief == 1 ? "" : "s") until the street you're missing changes hands — or trade for it first.")
                     .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(ink(true))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
             .padding(.horizontal, 9)
-            .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // Concentric with the r22 shell at 12 pt of padding. The strip is
+            // a notice drawn on the dock, not a second pane — glass on glass
+            // would have it sampling the bar it is sitting on — and the brass
+            // goes through the material as a wash rather than sitting on it
+            // as a slip of gold paper.
+            .background(wash(P.gold), in: block)
+            .transition(rowSwap)
         }
     }
 
@@ -129,10 +305,10 @@ struct ActionPanel: View {
     /// controls take the stage.
     private func walkingRow(_ P: Palette) -> some View {
         HStack(spacing: 10) {
-            Art.icon(.dice, size: 17, tint: P.ink3)
+            Art.icon(.dice, size: 17, tint: ink(true))
             Text("Moving…")
                 .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(P.ink2)
+                .foregroundStyle(ink(true))
             Spacer()
             ProgressView().tint(P.red).scaleEffect(0.85)
         }
@@ -164,7 +340,7 @@ struct ActionPanel: View {
                             .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
                     }
                     if !canAfford {
-                        hint("Not enough cash for this one.", P)
+                        hint("Not enough cash for this one.")
                     }
                 }
             }
@@ -185,13 +361,13 @@ struct ActionPanel: View {
                     // to say so before it is pressed — a player who expects to
                     // roll afterwards has spent $50 on a turn they were losing
                     // anyway.
-                    hint("In prison · attempt \((store.me?.jailTurns ?? 0) + 1) of 3", P)
-                    hint("Paying the fine ends your turn — the card lets you roll.", P)
+                    hint("In prison · attempt \((store.me?.jailTurns ?? 0) + 1) of 3")
+                    hint("Paying the fine ends your turn — the card lets you roll.")
                 }
             } else {
                 MMIconButton(.dice, "Roll dice", kind: .primary, big: true) { store.roll() }
                 if (turn.doubles ?? 0) > 0 {
-                    hint("Double! Free roll (\(turn.doubles ?? 0) of 2)", P)
+                    hint("Double! Free roll (\(turn.doubles ?? 0) of 2)")
                 }
             }
 
@@ -244,10 +420,11 @@ struct ActionPanel: View {
         return VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
+                    // The glyph keeps the raw red; the words take the glass's.
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(P.bad)
                     Text("\(money(remaining)) in the red")
                         .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(P.bad)
+                        .foregroundStyle(glass.bad(increaseContrast: increaseContrast))
                         .contentTransition(.numericText())
                         .animation(.snappy(duration: 0.4), value: remaining)
                         .debtPulse(remaining > 0)
@@ -258,12 +435,12 @@ struct ActionPanel: View {
                      ? "Everything you raise goes to \(payee) until you're square."
                      : "\(debtor?.name ?? "This player") is in the red — everything they raise goes to \(payee) until they're square.")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink2)
+                    .foregroundStyle(ink(true))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
-            .background(P.redSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(wash(P.bad), in: block)
 
             // The gate, not a payment: it only opens once the balance has
             // climbed back to zero (the server usually closes the debt itself
@@ -295,12 +472,12 @@ struct ActionPanel: View {
                 // Walked out, dozed off past the clock, or spent everything —
                 // three different endings, so three different marks.
                 Art.icon(me.wasRemoved ? (me.removedFor == "quit" ? .door : .snooze) : .payment,
-                         size: 17, tint: P.ink3)
+                         size: 17, tint: ink(true))
                 Text(me.wasRemoved
                      ? "You're out of this game — watching how it ends."
                      : "You went bankrupt — watching how it ends.")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(ink(true))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
@@ -317,7 +494,7 @@ struct ActionPanel: View {
                 AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26, emoji: current.avatar ?? "")
                 Text("\(current.name) is playing…")
                     .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink2)
+                    .foregroundStyle(ink(true))
             }
             Spacer()
             // The clock runs on every turn, not just yours — watching someone
@@ -345,20 +522,28 @@ struct ActionPanel: View {
             let forGuest = trade.to != store.meId ? store.state?.player(trade.to) : nil
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Art.icon(.trade, size: 13, tint: P.ink3)
-                    PanelTitle("Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")")
+                    Art.icon(.trade, size: 13, tint: ink(true))
+                    // PanelTitle's small caps, in the glass's second ink:
+                    // PanelTitle prints in ink3, which this material cannot
+                    // carry.
+                    Text("Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")".uppercased())
+                        .font(.system(size: 11, weight: .bold))
+                        .kerning(1)
+                        .foregroundStyle(ink(true))
                     Spacer()
                     if active.count > 1 {
                         Text("+\(active.count - 1) more")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(P.ink3)
+                            .foregroundStyle(ink(true))
                     }
                 }
-                tradeLine(label: "You get", side: trade.give, color: P.good)
-                tradeLine(label: "You give", side: trade.get, color: P.bad)
+                tradeLine(label: "You get", side: trade.give,
+                          color: glass.good(increaseContrast: increaseContrast))
+                tradeLine(label: "You give", side: trade.get,
+                          color: glass.bad(increaseContrast: increaseContrast))
                 if let watching = viewerNames(trade) {
                     ViewingLine(text: "\(watching) is reading this",
-                                color: P.gold, faces: viewerColours(trade))
+                                color: glass.goldInk, faces: viewerColours(trade))
                 }
                 // Accepting a deal you can't fund just bounces off the server
                 // with a toast; say so before the tap instead.
@@ -366,7 +551,7 @@ struct ActionPanel: View {
                 if short > 0 {
                     Text("Short \(money(short)) — sell or mortgage first.")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.bad)
+                        .foregroundStyle(glass.bad(increaseContrast: increaseContrast))
                 }
                 HStack(spacing: 8) {
                     Button("Accept") { store.respondTrade(trade.id, accept: true) }
@@ -384,7 +569,7 @@ struct ActionPanel: View {
                         Haptics.tap()
                     } label: {
                         HStack(spacing: 5) {
-                            Art.icon(.snooze, size: 13, tint: P.ink)
+                            Art.icon(.snooze, size: 13, tint: ink())
                             Text("Later")
                                 .font(.system(size: 11.5, weight: .bold, design: .rounded))
                         }
@@ -395,9 +580,12 @@ struct ActionPanel: View {
                 }
             }
             .padding(10)
-            .background(P.goldSoft.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.gold.opacity(0.6), lineWidth: 1))
+            // The offer is the one block on the dock with an edge of its own:
+            // it is something to answer, not a line of status.
+            .background(wash(P.gold), in: block)
+            .overlay(block.stroke(P.gold.opacity(0.6), lineWidth: 1))
             .id(trade.id)
+            .transition(rowSwap)
             .onAppear { store.setTradeViewing(trade.id, true, as: trade.to) }
             .onDisappear { store.setTradeViewing(trade.id, false, as: trade.to) }
         }
@@ -408,20 +596,21 @@ struct ActionPanel: View {
                 Haptics.tap()
             } label: {
                 HStack(spacing: 6) {
-                    Art.icon(.snooze, size: 14, tint: P.ink3)
+                    Art.icon(.snooze, size: 14, tint: ink(true))
                     Text("\(parked.count == 1 ? "1 offer" : "\(parked.count) offers") set aside")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
+                        .foregroundStyle(ink(true))
                     Spacer()
                     Text("Review")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(P.gold)
+                        .foregroundStyle(glass.goldInk)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(well, in: block)
             }
             .buttonStyle(.plain)
+            .transition(rowSwap)
         }
 
         if let trade = sent.first {
@@ -431,17 +620,17 @@ struct ActionPanel: View {
                     // back what you offered if you can't remember it.
                     Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?"): \(summary(trade.give)) ⇄ \(summary(trade.get))")
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(P.ink3)
+                        .foregroundStyle(ink(true))
                         .lineLimit(2)
                     if let watching = viewerNames(trade) {
                         ViewingLine(text: "\(watching) is reading this",
-                                    color: P.gold, faces: viewerColours(trade))
+                                    color: glass.goldInk, faces: viewerColours(trade))
                     } else if trade.ignored == true {
                         HStack(spacing: 5) {
-                            Art.icon(.snooze, size: 13, tint: P.ink3)
+                            Art.icon(.snooze, size: 13, tint: ink(true))
                             Text("Set aside for later")
                                 .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(P.ink3)
+                                .foregroundStyle(ink(true))
                         }
                     }
                 }
@@ -449,6 +638,7 @@ struct ActionPanel: View {
                 Button("Cancel") { store.cancelTrade(trade.id) }
                     .buttonStyle(MMButtonStyle(kind: .ghost))
             }
+            .transition(rowSwap)
         }
     }
 
@@ -479,9 +669,8 @@ struct ActionPanel: View {
     }
 
     private func tradeLine(label: String, side: TradeSide, color: Color) -> some View {
-        let P = Palette.current(scheme)
-        return HStack(alignment: .top) {
-            Text(label).font(.system(size: 12)).foregroundStyle(P.ink3)
+        HStack(alignment: .top) {
+            Text(label).font(.system(size: 12)).foregroundStyle(ink(true))
             Spacer()
             Text(summary(side))
                 .font(.system(size: 12.5, weight: .bold, design: .rounded))
@@ -490,10 +679,10 @@ struct ActionPanel: View {
         }
     }
 
-    private func hint(_ text: String, _ P: Palette) -> some View {
+    private func hint(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 12.5, weight: .medium, design: .rounded))
-            .foregroundStyle(P.ink3)
+            .foregroundStyle(ink(true))
     }
 }
 
@@ -512,10 +701,10 @@ struct ViewingLine: View {
     /// The colours of whoever is looking, in seat order.
     var faces: [Color] = []
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.mmControlBackdrop) private var backdrop
     @State private var lid: CGFloat = 1
 
     var body: some View {
-        let P = Palette.current(scheme)
         HStack(spacing: 7) {
             Art.icon(.eye, size: 14, tint: color)
                 .scaleEffect(y: lid, anchor: .center)
@@ -525,7 +714,7 @@ struct ViewingLine: View {
                         Circle()
                             .fill(c)
                             .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(P.card, lineWidth: 1.5))
+                            .overlay(Circle().stroke(separator, lineWidth: 1.5))
                     }
                 }
             }
@@ -539,6 +728,16 @@ struct ViewingLine: View {
         .background(color.opacity(0.12), in: Capsule())
         .overlay(Capsule().stroke(color.opacity(0.34), lineWidth: 1))
         .task { await blink() }
+    }
+
+    /// The faces overlap, so each one needs a ring in the colour of whatever is
+    /// behind them or they read as one smear. This line only ever appears on
+    /// the dock, and what is behind it there is the material — a ring in the
+    /// old card colour would be a small opaque blob sitting on the glass. So
+    /// it is the colour the glass under it composites to, for whichever way
+    /// that glass has leaned, rather than the film taken from the scheme.
+    private var separator: Color {
+        backdrop.settledGlass(Palette.current(scheme)).solid
     }
 
     /// Two blinks, then a pause long enough that it never reads as a flicker.

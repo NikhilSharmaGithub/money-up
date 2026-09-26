@@ -313,6 +313,9 @@ struct BlockedPlayersSheet: View {
                         }
                         .padding(12)
                         .background(P.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        // A row of card paper, so Unblock is on paper — not on
+                        // the sheet the rest of this declares.
+                        .mmControls(on: .paper)
                     }
                 }
                 .padding(16)
@@ -320,9 +323,13 @@ struct BlockedPlayersSheet: View {
             .navigationTitle("Blocked players")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .sheet)
+                }
             }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
     }

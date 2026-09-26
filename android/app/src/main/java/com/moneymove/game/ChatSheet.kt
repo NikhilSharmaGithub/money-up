@@ -40,7 +40,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -114,7 +113,6 @@ fun ChatSheet(
     initialTab: Int = TableSheet.ChatLog.CHAT,
     onDismiss: () -> Unit,
 ) {
-    val p = P.current
     val state = store.state
     if (state == null) {
         // Nothing to read without a table. Closing from an effect rather than
@@ -191,11 +189,9 @@ fun ChatSheet(
         }
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         // iOS opens this at its medium detent, half the screen, and it stays
         // that height: it does not grow as lines arrive or change height
@@ -298,7 +294,9 @@ private fun ColumnScope.ChatTab(
     FollowNewest(listState, lines.size, lines.lastOrNull()?.id)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxWidth().weight(1f),
+        // The thread keeps to its newest line, so lines are forever leaving
+        // under the bar; they fade out there rather than slicing off.
+        modifier = Modifier.fillMaxWidth().weight(1f).scrollEdge(listState),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -325,7 +323,9 @@ private fun ColumnScope.ChatTab(
                 Text(
                     if (channel == "team") "Only your team can read this channel. Plan away."
                     else "Nothing said yet — tap a reaction below or type to start.",
-                    color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    // Straight on the sheet's glass, where ink3 is too faint
+                    // to read at night; see quietInk.
+                    color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(top = 26.dp),
                 )
@@ -383,7 +383,7 @@ private fun ColumnScope.ChatTab(
     if (agreed) {
         Text(
             "Long-press a message, or tap Report, to report or block someone.",
-            color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+            color = quietInk(), fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
         )
@@ -766,7 +766,7 @@ private fun SpeakerChip(player: PlayerState, selected: Boolean, onClick: () -> U
         Spacer(Modifier.width(3.dp))
         Text(
             player.name,
-            color = if (selected) p.ink else p.ink3,
+            color = if (selected) p.ink else quietInk(),
             fontSize = 9.5.sp, fontWeight = FontWeight.Bold,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
@@ -874,7 +874,9 @@ private fun ColumnScope.LogTab(state: GameState) {
     FollowNewest(listState, log.size, keys.lastOrNull())
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxWidth().weight(1f),
+        // The thread keeps to its newest line, so lines are forever leaving
+        // under the bar; they fade out there rather than slicing off.
+        modifier = Modifier.fillMaxWidth().weight(1f).scrollEdge(listState),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -941,9 +943,11 @@ private fun logLook(kind: String): LogLook {
         "treasure" -> LogLook(orange, symbol = "gift")
         "surprise" -> LogLook(pink, symbol = "questionmark.circle")
         "build" -> LogLook(blue, symbol = "hammer.circle")
-        "mortgage" -> LogLook(p.ink3, symbol = "building.columns")
-        "join", "leave" -> LogLook(p.ink3, symbol = "person")
-        else -> LogLook(p.ink3)
+        // The log is printed straight on the sheet's glass, so its quiet
+        // marks take the glass's quiet ink rather than ink3.
+        "mortgage" -> LogLook(quietInk(), symbol = "building.columns")
+        "join", "leave" -> LogLook(quietInk(), symbol = "person")
+        else -> LogLook(quietInk())
     }
 }
 
@@ -1103,10 +1107,19 @@ private fun SectionPicker(tab: Int, modifier: Modifier = Modifier, onPick: (Int)
  * that asked for it; a bottom sheet here is a window of its own over the
  * app's, and the app's toast would land underneath it.
  *
- * White words on a pill that is the ink in light mode, a veil of the ink over
- * the card in the dark, and red for an error; led by the toast's own glyph,
- * or iOS's info circle, or its warning triangle for an error. Two lines at
- * most, 24 above the bottom edge, rising in from below.
+ * It is the same pill as every other toast in the app (TableOverlays.kt's
+ * ToastPill, the shell's own): glass, with its words in the glass's ink, and
+ * an error a solid plate of the palette's bad with white words — not the
+ * accent's deep shade, which is brass on half the tables and does not read
+ * as an error. It used to be an ink pill of its own, so the one toast in the
+ * chat looked like a different app's. In a sheet there is no blurred copy to
+ * sample, and a film over nothing would show the chat's own lines through
+ * the words, so the pill lays the sheet's paper down under the film first
+ * and declares exactly that, as the sheet's platter does.
+ *
+ * Led by the toast's own glyph, or iOS's info circle, or its warning triangle
+ * for an error. Two lines at most, 24 above the bottom edge, rising in from
+ * below.
  */
 @Composable
 internal fun ChatToastPill(
@@ -1118,47 +1131,53 @@ internal fun ChatToastPill(
     bottom: Dp = 24.dp,
 ) {
     val p = P.current
-    val dark = p.page.luminance() < 0.5f
     // Held for the way out, so the pill leaves with its words still on it.
     var last by remember { mutableStateOf<Triple<String, Boolean, String?>?>(null) }
     SideEffect { if (text != null) last = Triple(text, isError, glyph) }
     val shown = if (text != null) Triple(text, isError, glyph) else last
     AnimatedVisibility(
         visible = text != null,
-        modifier = modifier.padding(bottom = bottom),
+        // Less the room the pill keeps inside itself for its shadow, so its
+        // edge lands where it always did.
+        modifier = modifier.padding(bottom = (bottom - CHAT_TOAST_SHADOW_ROOM).coerceAtLeast(0.dp)),
         enter = slideInVertically { it } + fadeIn(),
         exit = slideOutVertically { it } + fadeOut(),
     ) {
         val (words, error, mark) = shown ?: return@AnimatedVisibility
-        val shape = CircleShape
-        val fill = when {
-            error -> Modifier.background(p.redDeep, shape)
-            dark -> Modifier.background(p.card, shape).background(p.ink.copy(alpha = 0.25f), shape)
-            else -> Modifier.background(p.ink, shape)
-        }
+        val surface = rememberGlassSurface(BackdropKind.Sheet)
+        val ink = if (error) Color.White else surface.labelInk()
+        val pane = Modifier
+            .background(p.sheet, MMShapes.pill)
+            .mmGlass(backdrop = BackdropKind.Sheet, shape = MMShapes.pill, lens = false)
         Row(
             Modifier
-                .then(fill)
+                // The fade draws through a layer the size of this node, so
+                // the shadow gets its room inside it.
+                .padding(horizontal = CHAT_TOAST_SHADOW_ROOM, vertical = CHAT_TOAST_SHADOW_ROOM)
+                .then(if (error) pane.background(p.bad, MMShapes.pill) else pane)
                 .padding(horizontal = 17.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (mark != null) {
-                Icon(mark, size = 17.dp, tint = Color.White)
+                Icon(mark, size = 17.dp, tint = ink)
             } else {
                 ChatSymbol(
                     if (error) "exclamationmark.triangle.fill" else "info.circle.fill",
-                    size = 17.dp, tint = Color.White,
+                    size = 17.dp, tint = ink,
                 )
             }
             Text(
                 words,
-                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
     }
 }
+
+/** Room for the pill's shadow inside its own fade, as the other toasts keep. */
+private val CHAT_TOAST_SHADOW_ROOM = 24.dp
 
 /**
  * Keeps a list on its newest line: a jump there when it first appears, and a

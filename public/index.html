@@ -131,6 +131,20 @@
     if (pal && pal !== 'felt') document.documentElement.dataset.palette = pal;
   })();
 
+  // The glass's lens — the bend at the rim — is an SVG filter run as a
+  // backdrop-filter, and only Chromium will run one. The obvious gate,
+  // @supports (backdrop-filter: url(#x)), is worthless: Safari and Firefox
+  // parse the url() as valid and answer yes, then fail to draw it and drop
+  // the whole declaration, taking the blur and the saturate down with it. So
+  // the gate is a probe for something only Chromium has, Houdini's paint(),
+  // and it runs before paint so the first frame is already the right glass.
+  // The filters themselves are built at the bottom of the page.
+  try {
+    if (window.CSS && CSS.supports('background', 'paint(x)')) {
+      document.documentElement.dataset.glassLens = '1';
+    }
+  } catch (e) {}
+
   // Safari on iPhone and iPad draws its own strip at the top of this page with
   // GET on it (the apple-itunes-app tag above). Where that strip can appear,
   // the page's own Download button is the same offer twice, so it is taken
@@ -165,11 +179,16 @@
   <div class="landing-inner">
     <button id="profileChip" class="profile-chip hidden" title="Your profile" aria-label="Your profile"></button>
     <div id="profileMenu" class="profile-menu hidden"></div>
-    <button id="themeBtnLanding" class="icon-btn theme-float" title="Switch between light and dark"></button>
-    <button id="paletteBtnLanding" class="icon-btn palette-float" title="Table style" aria-label="Table style" data-ico="palette"></button>
-    <!-- The rules were only ever a tap away once you were already at a table.
-         Someone deciding whether to sit down needs them more than a player does. -->
-    <button id="helpBtnLanding" class="icon-btn help-float" title="How to play" aria-label="How to play" data-ico="question"></button>
+    <!-- One capsule of glass for the corner's three buttons, not three discs.
+         Right to left: light or dark, the table style, and the rules — which
+         were only ever a tap away once you were already at a table, and
+         someone deciding whether to sit down needs them more than a player
+         does. -->
+    <div class="landing-floats">
+      <button id="helpBtnLanding" class="icon-btn" title="How to play" aria-label="How to play" data-ico="question"></button>
+      <button id="paletteBtnLanding" class="icon-btn" title="Table style" aria-label="Table style" data-ico="palette"></button>
+      <button id="themeBtnLanding" class="icon-btn" title="Switch between light and dark"></button>
+    </div>
     <h1 class="logo xl">MONEY<span>MOVE</span></h1>
     <p class="tagline">Buy streets. Build hotels. Bankrupt your friends.</p>
 
@@ -424,6 +443,268 @@
 <div id="toastRoot" class="toast-root"></div>
 <div id="tooltip" class="tile-tip hidden"></div>
 <canvas id="confetti" class="confetti hidden"></canvas>
+
+<!-- ───────────────────────────── the lens ───────────────────────────── -->
+<!-- Edge refraction for the glass: a straight line passing under the rim of a
+     sheet or a rail panel bows near the edge and snaps straight a band in.
+     Chromium only (see the probe in the head, and "The lens" in style.css),
+     and at most two panes at once — the open sheet, or failing that the first
+     two rail panels in view. Every other pane on screen is a frost: film,
+     blur and rim, no bend.
+
+     The map is not noise. feTurbulence offsets everywhere and makes rippled
+     bathroom glass; this map is neutral grey through the body and ramps only
+     in the last band of pixels at the rim, drawn from the same rounded-rect
+     distance field and the same smoothstep-squared falloff as the shaders on
+     iOS and Android, so all three clients bend a line the same way. It is
+     built per pane at that pane's own size, because the band is a width in
+     pixels and a map stretched to another size would stretch the band with
+     it — and only the rim band is ever computed, which is what keeps it a
+     perimeter's worth of work rather than an area's.
+
+     Each filter does three things in order: draws every pixel of the rim
+     band from a point up to `peak` pixels further in along the edge's
+     normal, which is what makes a line bow as it nears the edge; pulls red
+     and blue a further 0.6px apart along the same normal — under the width at
+     which anyone can name it as fringing, over the width at which it does
+     nothing; and puts the three channels back together. The bend only ever
+     reads inward, so the edge never reaches for backdrop that is not there;
+     the split's 0.6px outward on blue lands under the rim, which covers it. -->
+<svg class="lens-defs" width="0" height="0" aria-hidden="true" focusable="false"><defs id="lensDefs"></defs></svg>
+<script>
+  (function () {
+    var root = document.documentElement;
+    if (root.dataset.glassLens !== '1' || !window.requestAnimationFrame) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var defs = document.getElementById('lensDefs');
+    var solid = window.matchMedia ? matchMedia('(prefers-reduced-transparency: reduce)') : null;
+    var still = window.matchMedia ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+
+    // The panes that are glass. The seven paper panels opt out of the material
+    // in style.css, and the bracket's sheet stays paper whole — but it is
+    // still a sheet, and the rail under its scrim still stands down for it.
+    var SHEET = '#modalRoot:not(.hidden) > .modal';
+    var PANEL = '.panel:not(.log-panel):not(.chat-panel):not(.raise-panel)' +
+      ':not(.deadlock):not(.trade-offer):not(.pot):not(.waiting)';
+
+    function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+    // Signed distance to a rounded rectangle centred on the origin: negative
+    // inside, zero on the edge. The same function as sdRoundRect in
+    // GlassShaders.metal.
+    function sdRound(px, py, hw, hh, r) {
+      var qx = Math.abs(px) - hw + r, qy = Math.abs(py) - hh + r;
+      var ox = Math.max(qx, 0), oy = Math.max(qy, 0);
+      return Math.min(Math.max(qx, qy), 0) + Math.sqrt(ox * ox + oy * oy) - r;
+    }
+
+    // The band the bend lives in, and how far it bends at the very edge: half
+    // the corner radius, held between 8 and 20; and 55% of that, held
+    // between 4 and 14, stronger on thicker glass. The spec's numbers, and
+    // the phones'.
+    function optics(w, h, r) {
+      var band = clamp(0.5 * r, 8, 20);
+      var peak = clamp(0.55 * band, 4, 14) * clamp(Math.min(w, h) / 88, 0.7, 1.35);
+      return { band: band, peak: peak };
+    }
+
+    // Two maps per size, cached, because the rail is re-rendered on every push
+    // from the server and hands back a fresh panel the same size as the last.
+    var cache = {}, cached = [];
+    function mapsFor(w, h, r) {
+      var key = w + 'x' + h + 'r' + r;
+      if (cache[key]) return cache[key];
+      var o = optics(w, h, r);
+      // feDisplacementMap moves a pixel by scale × (value/255 − ½), so a scale
+      // of twice the peak lets the full 0–255 of a channel span ±peak.
+      var scale = 2 * o.peak;
+      var canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      var ctx = canvas.getContext('2d');
+      var bend = ctx.createImageData(w, h), normal = ctx.createImageData(w, h);
+      var a = bend.data, b = normal.data;
+      for (var i = 0; i < a.length; i += 4) {
+        a[i] = a[i + 1] = a[i + 2] = b[i] = b[i + 1] = b[i + 2] = 128;
+        a[i + 3] = b[i + 3] = 255;
+      }
+      // How far in from a side the band can reach. Along a straight edge that
+      // is the band; round a corner wider than the band the arc itself sits
+      // in from both sides, so the band reaches deeper along the diagonal,
+      // and a square cut at the band would leave a notch of flat glass there.
+      var hw = w / 2, hh = h / 2;
+      var edge = Math.ceil(Math.max(o.band, r * (1 - Math.SQRT1_2) + o.band * Math.SQRT1_2)) + 1;
+      for (var y = 0; y < h; y++) {
+        var rim = y < edge || y >= h - edge;
+        for (var x = 0; x < w; x++) {
+          // The interior of a row is out of the band by construction: jump it
+          // — where there is an interior, which a narrow pane may not have.
+          if (!rim && x === edge && w - edge - 1 > edge) { x = w - edge - 1; continue; }
+          var px = x + 0.5 - hw, py = y + 0.5 - hh;
+          var d = sdRound(px, py, hw, hh, r);
+          if (d < -o.band) continue;
+          // The outward normal, from central differences of the field itself.
+          var gx = sdRound(px + 1, py, hw, hh, r) - sdRound(px - 1, py, hw, hh, r);
+          var gy = sdRound(px, py + 1, hw, hh, r) - sdRound(px, py - 1, hw, hh, r);
+          var len = Math.sqrt(gx * gx + gy * gy) || 1;
+          var nx = gx / len, ny = gy / len;
+          // Flat through the body, steep only in the last few pixels: that is
+          // how real glass behaves, and why this does not read as fisheye.
+          var t = clamp((d + o.band) / o.band, 0, 1);
+          t = t * t * (3 - 2 * t);
+          var off = o.peak * t * t;
+          var k = (y * w + x) * 4;
+          a[k]     = Math.round(clamp((-nx * off / scale + 0.5) * 255, 0, 255));
+          a[k + 1] = Math.round(clamp((-ny * off / scale + 0.5) * 255, 0, 255));
+          b[k]     = Math.round(clamp((-nx * 0.5 + 0.5) * 255, 0, 255));
+          b[k + 1] = Math.round(clamp((-ny * 0.5 + 0.5) * 255, 0, 255));
+        }
+      }
+      ctx.putImageData(bend, 0, 0);
+      var bendUrl = canvas.toDataURL('image/png');
+      ctx.putImageData(normal, 0, 0);
+      var maps = { bend: bendUrl, normal: canvas.toDataURL('image/png'), scale: scale };
+      cache[key] = maps; cached.push(key);
+      if (cached.length > 24) delete cache[cached.shift()];
+      return maps;
+    }
+
+    // One filter per slot, rebuilt in place when its pane changes size.
+    function makeSlot(n) {
+      var f = document.createElementNS(NS, 'filter');
+      f.id = 'mm-lens-' + n;
+      f.setAttribute('color-interpolation-filters', 'sRGB');   // a map is data, not colour
+      f.setAttribute('filterUnits', 'userSpaceOnUse');
+      f.setAttribute('primitiveUnits', 'userSpaceOnUse');
+      defs.appendChild(f);
+      return { filter: f, el: null, key: '' };
+    }
+    var slots = [makeSlot(0), makeSlot(1)];
+
+    function build(slot, w, h, r) {
+      var key = w + 'x' + h + 'r' + r;
+      if (slot.key === key) return;
+      var m = mapsFor(w, h, r);
+      var box = 'x="0" y="0" width="' + w + '" height="' + h + '"';
+      slot.filter.setAttribute('x', 0); slot.filter.setAttribute('y', 0);
+      slot.filter.setAttribute('width', w); slot.filter.setAttribute('height', h);
+      slot.filter.innerHTML =
+        '<feImage ' + box + ' preserveAspectRatio="none" href="' + m.bend + '" result="bend"/>' +
+        '<feDisplacementMap in="SourceGraphic" in2="bend" scale="' + m.scale.toFixed(2) + '"' +
+          ' xChannelSelector="R" yChannelSelector="G" result="bent"/>' +
+        '<feImage ' + box + ' preserveAspectRatio="none" href="' + m.normal + '" result="normal"/>' +
+        '<feDisplacementMap in="bent" in2="normal" scale="1.2" xChannelSelector="R" yChannelSelector="G" result="r"/>' +
+        '<feDisplacementMap in="bent" in2="normal" scale="-1.2" xChannelSelector="R" yChannelSelector="G" result="b"/>' +
+        '<feColorMatrix in="r" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="rr"/>' +
+        '<feColorMatrix in="bent" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="gg"/>' +
+        '<feColorMatrix in="b" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="bb"/>' +
+        '<feComposite in="rr" in2="gg" operator="arithmetic" k2="1" k3="1" result="rg"/>' +
+        '<feComposite in="rg" in2="bb" operator="arithmetic" k2="1" k3="1"/>';
+      slot.key = key;
+    }
+
+    function release(slot) {
+      if (slot.el) {
+        slot.el.removeAttribute('data-lens');
+        slot.el.style.removeProperty('--glass-lens');
+        sizes.unobserve(slot.el);
+      }
+      slot.el = null;
+    }
+
+    // A pane too small to show the bend costs the same per pixel as one that
+    // does, so anything under 44 by 20 is skipped outright.
+    function fit(slot, el) {
+      var w = Math.round(el.offsetWidth), h = Math.round(el.offsetHeight);
+      if (Math.max(w, h) < 44 || Math.min(w, h) < 20) return false;
+      var r = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+      build(slot, w, h, Math.min(r, w / 2, h / 2));
+      if (slot.el !== el) {
+        release(slot);
+        slot.el = el;
+        el.style.setProperty('--glass-lens', 'url(#' + slot.filter.id + ')');
+        el.setAttribute('data-lens', '');
+        sizes.observe(el);
+      }
+      return true;
+    }
+
+    function inView(el) {
+      var b = el.getBoundingClientRect();
+      return b.width > 0 && b.height > 0 && b.bottom > 0 && b.top < innerHeight;
+    }
+
+    // While the board moves, the governor takes the lens away with the blur
+    // (see "The lens" in style.css), and the blur comes back as a crossfade.
+    // The lens must wait for that fade to finish: put back at once, it would
+    // spend the fade's first frames bending a backdrop that is not yet
+    // blurred, the one moment in a turn a bend at the rim could be seen. So
+    // the slots stay empty until the fade has had its time — none at all when
+    // motion is turned down, because then there is no fade.
+    var calmFrom = -Infinity, wake = 0;
+    function fadeMs() {
+      if (still && still.matches) return 0;
+      return parseFloat(getComputedStyle(root).getPropertyValue('--glass-quality-ms')) || 0;
+    }
+
+    // Who gets the two slots. An open sheet takes one and the rail stands
+    // down: the panels are under the scrim then, and nobody is looking at
+    // them. Otherwise the first two rail panels in view. A pane that already
+    // holds a slot keeps it, so its filter is not rebuilt for nothing.
+    var queued = false;
+    function pick() {
+      queued = false;
+      var want = [];
+      var busy = document.body.classList.contains('board-busy');
+      if (busy) calmFrom = Infinity;
+      else if (calmFrom === Infinity) calmFrom = performance.now();
+      var wait = busy ? Infinity : calmFrom + fadeMs() - performance.now();
+      if (!busy && wait > 0) {
+        clearTimeout(wake);
+        wake = setTimeout(queue, wait);
+      }
+      if (wait <= 0 && !(solid && solid.matches)) {
+        var sheet = document.querySelector(SHEET);
+        if (sheet) {
+          if (!sheet.classList.contains('chart-modal')) want.push(sheet);
+        } else {
+          var panels = document.querySelectorAll(PANEL);
+          for (var i = 0; i < panels.length && want.length < 2; i++) {
+            if (inView(panels[i])) want.push(panels[i]);
+          }
+        }
+      }
+      slots.forEach(function (s) { if (s.el && want.indexOf(s.el) < 0) release(s); });
+      want.forEach(function (el) {
+        var held = slots.filter(function (s) { return s.el === el; })[0];
+        var slot = held || slots.filter(function (s) { return !s.el; })[0];
+        if (slot && !fit(slot, el)) release(slot);
+      });
+    }
+    function queue() {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(pick);
+    }
+
+    // Panes come and go with the markup; they are shown and hidden by a class
+    // on the sheet's root, on the game shell and on the body (the chat dock,
+    // focus mode). Two observers, because one observer watching the same node
+    // twice keeps only the second set of options — and class changes across
+    // the whole page (a tile lighting, a token taking its turn) are none of
+    // the lens's business.
+    var sizes = window.ResizeObserver ? new ResizeObserver(queue) : { observe: function () {}, unobserve: function () {} };
+    new MutationObserver(queue).observe(document.body, { childList: true, subtree: true });
+    var shown = new MutationObserver(queue);
+    [document.body, document.getElementById('modalRoot'), document.getElementById('app')].forEach(function (el) {
+      if (el) shown.observe(el, { attributes: true, attributeFilter: ['class'] });
+    });
+    addEventListener('resize', queue);
+    document.addEventListener('scroll', queue, true);
+    if (solid && solid.addEventListener) solid.addEventListener('change', queue);
+    queue();
+  })();
+</script>
 
 <!-- config.js must run first: it decides which server the client talks to.
      socket.io is vendored so the front end can be hosted on its own. -->

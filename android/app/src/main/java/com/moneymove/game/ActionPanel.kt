@@ -1,5 +1,13 @@
 package com.moneymove.game
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,9 +19,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -28,10 +36,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -57,6 +65,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -66,8 +75,11 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -103,6 +115,11 @@ import kotlinx.coroutines.launch
  *
  * The three callbacks default to the table's own sheets, so a screen that
  * does not care how they open need not pass them.
+ *
+ * [backdrop] is what the dock hangs over, declared rather than read, because
+ * the adaptive face is chosen from it: the board's own felt by default, which
+ * is where a tablet puts it — inside the centre well — and the page for the
+ * phone, which hangs it under the board and says so.
  */
 @Composable
 fun ActionPanel(
@@ -112,11 +129,12 @@ fun ActionPanel(
     onTrade: () -> Unit = { store.openTrade() },
     onProperties: () -> Unit = { store.openProperties() },
     onSettings: () -> Unit = { store.openRules() },
+    backdrop: BackdropKind = BackdropKind.Felt,
 ) {
     when {
         state.isQuickWaiting -> QuickMatchPanel(store, state, modifier)
         state.isLobby -> LobbyPanel(store, state, onSettings, modifier.padding(horizontal = 12.dp))
-        else -> Dock(store, state, onTrade, onProperties, modifier.padding(horizontal = 12.dp))
+        else -> Dock(store, state, onTrade, onProperties, backdrop, modifier.padding(horizontal = 12.dp))
     }
 }
 
@@ -124,6 +142,13 @@ fun ActionPanel(
  * The dock proper. One surface, because it is one thing: the trade and the
  * phase blocks inside it are drawn on it rather than being little panels of
  * their own. Its height follows the moment, so nothing in it is fixed.
+ *
+ * And when the moment changes, the dock does not swap one card for another:
+ * the shell stretches to its new height on the material's own spring while
+ * the rows inside cross over, the new ones arriving a beat after the old ones
+ * start to leave. Roll → walking → buy → end turn is one piece of glass
+ * changing shape four times, which is the thing the material does that paper
+ * cannot, and the reason the whole dock is a single surface and not a stack.
  */
 @Composable
 private fun Dock(
@@ -131,6 +156,7 @@ private fun Dock(
     state: GameState,
     onTrade: () -> Unit,
     onProperties: () -> Unit,
+    backdrop: BackdropKind,
     modifier: Modifier,
 ) {
     // The one irreversible button in the dock should not go off on a single
@@ -142,66 +168,265 @@ private fun Dock(
         if (!inDebt && store.confirm == TableConfirm.DEBT_BANKRUPT) store.dismissConfirm()
     }
 
-    DockSurface(mine = store.isMyTurn, modifier = modifier) {
+    val turn = state.turn
+    val moment = when {
+        store.isMyTurn && turn != null -> DockMoment(DockStage.MINE, turn.playerId)
+        state.isPlaying -> DockMoment(DockStage.WAITING)
+        state.isEnded -> DockMoment(DockStage.ENDED)
+        else -> DockMoment(DockStage.IDLE)
+    }
+
+    DockSurface(backdrop, modifier) {
         // Incoming offers, the ones set aside, and the one this phone sent.
         TradeDock(store)
 
-        val turn = state.turn
-        when {
-            store.isMyTurn && turn != null -> {
-                TurnHeader(store, state, turn)
-                DeadlockLine(store)
-                // The server answers a roll before the piece has taken a
-                // step, so the buy prompt — and whatever else the landing
-                // decides — arrives while the token is still walking.
-                // While THIS seat's move is on stage the dock stays
-                // neutral, and the controls take over when it lands.
-                // Other seats' turns, trades and chat never wait.
-                if (store.theatreHolding(turn.playerId)) {
-                    WalkingRow()
-                } else {
-                    TurnControls(store, state, turn, onTrade, onProperties) { store.ask(TableConfirm.DEBT_BANKRUPT) }
+        DockMorph(moment) { shown ->
+            when (shown.stage) {
+                DockStage.MINE -> {
+                    // The seat is the one this moment was keyed on, not the
+                    // one the turn has moved to: on its way out, the row says
+                    // what it said, not the next player's name.
+                    TurnHeader(store, state, shown.seat, turn?.endsAt)
+                    DeadlockLine(store)
+                    // The server answers a roll before the piece has taken
+                    // a step, so the buy prompt — and whatever else the
+                    // landing decides — arrives while the token is still
+                    // walking. While THIS seat's move is on stage the dock
+                    // stays neutral, and the controls take over when it
+                    // lands. Other seats' turns, trades and chat never wait.
+                    val phase = when {
+                        turn == null || turn.playerId != shown.seat -> null
+                        store.theatreHolding(turn.playerId) -> WALKING
+                        turn.phase == "roll" && store.me?.inJail == true -> IN_PRISON
+                        else -> turn.phase
+                    }
+                    DockMorph(phase) { controls ->
+                        when {
+                            controls == WALKING -> WalkingRow()
+                            controls != null && turn != null -> TurnControls(
+                                store, state, turn, controls, onTrade, onProperties,
+                            ) { store.ask(TableConfirm.DEBT_BANKRUPT) }
+                        }
+                    }
                 }
+
+                DockStage.WAITING -> WaitingRow(store, state)
+
+                DockStage.ENDED -> EndedControls(store, state)
+
+                DockStage.IDLE -> Unit
             }
-
-            state.isPlaying -> WaitingRow(store, state)
-
-            state.isEnded -> EndedControls(store, state)
         }
     }
 }
 
+/** Which of the dock's faces is up. The seat is kept so a pass & play hand-over is a change too. */
+private data class DockMoment(val stage: DockStage, val seat: String? = null)
+
+private enum class DockStage { MINE, WAITING, ENDED, IDLE }
+
+/** The dock's controls while this seat's own piece is still walking. */
+private const val WALKING = "walking"
+
+/** A roll from a prison cell: a different set of answers from a free roll. */
+private const val IN_PRISON = "roll-prison"
+
 /**
- * The dock's own surface: the card, on an 18-point corner, lifted off the page
- * by a soft shadow. On this seat's turn the hairline round it becomes a ring
- * in the accent — the whole dock saying it is waiting on you before a word in
- * it has been read — at iOS's weight: the accent at 55%, a point and a half
- * wide. Everyone else's turn gets the plain hairline.
+ * The dock's own surface: one pane of glass, r22 — the ladder's dock rung —
+ * with twelve of padding, so everything drawn on it at r10 sits concentric
+ * and the gap round a block never pinches in the corner.
  *
- * Its own surface rather than Panel (Ui.kt), which has neither the ring nor
- * the lift: iOS draws the dock's card for the dock alone.
+ * No tint and no ring. The card this replaced ringed itself in the accent on
+ * this seat's turn, and the obvious move was to hand that colour to the
+ * material — but a tint is a property of the whole pane, so the dock came out
+ * a slab of brand colour with its buttons lost in it, which is iOS's reason
+ * for leaving it off too. The turn is already said twice in here, by the
+ * header and by the one coloured button; a surface that shouts it a third
+ * time has stopped being glass. The rim replaces the hairline, and the
+ * shadow is the material's own, deepening while the board is mid-move.
+ *
+ * Regular and never Clear: the dock carries live numbers, and Clear does not
+ * adapt. Everything inside takes its ink from the glass ([OnGlass]) and its
+ * controls stand on it as marks, not panes ([GlassHost]) — glass on glass
+ * samples a copy of the table with no dock in it, and comes out as a hole.
+ *
+ * Its size follows its content on the material's morph spring — the stretch
+ * [Dock] describes — and under Reduce Motion it simply is its new size.
+ *
+ * It keeps a layer of its own, so the glass is drawn when the dock changes
+ * and not whenever the table round it does. On a tablet it sits inside the
+ * board's own well, and the pieces there breathe every frame of the game;
+ * with nothing between the two, the dock's shadow was re-blurred sixty times
+ * a second along with them, to come out exactly the same.
  */
 @Composable
-private fun DockSurface(mine: Boolean, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val p = P.current
-    val shape = RoundedCornerShape(18.dp)
-    // Heavier on a dark table, where a light shadow vanishes into the felt.
-    val lift = Color.Black.copy(alpha = if (p.page.luminance() < 0.5f) 0.4f else 0.14f)
+private fun DockSurface(backdrop: BackdropKind, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val surface = rememberGlassSurface(backdrop)
+    val reduceMotion = rememberReduceMotion()
     Column(
         modifier
             .fillMaxWidth()
-            .shadow(12.dp, shape, clip = false, ambientColor = lift, spotColor = lift)
-            .clip(shape)
-            .background(p.card)
-            .border(if (mine) 1.5.dp else 1.dp, if (mine) p.red.copy(alpha = 0.55f) else p.rule, shape)
-            .padding(12.dp),
+            .graphicsLayer {}
+            .mmGlass(backdrop = backdrop, shape = MMShapes.r22)
+            .padding(DOCK_INSET)
+            .then(if (reduceMotion) Modifier else Modifier.animateContentSize(GlassMotion.morphSize)),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         // iOS's VStack centres what does not fill it: the short hint lines
         // ("Not enough cash for this one.", the prison attempts, the double)
         // sit in the middle of the card. Everything else fills the width.
         horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        val column = this
+        OnGlass(surface) { column.content() }
+    }
+}
+
+/** The dock's padding: r22 less this is the r10 every block on it is drawn at. */
+private val DOCK_INSET = 12.dp
+
+/** A block drawn on the dock — the deadlock strip, the debt — concentric with the shell. */
+private val DOCK_BLOCK: Shape = MMShapes.innerShape(22.dp, DOCK_INSET)
+
+/**
+ * One of the dock's faces, crossing to the next as [key] changes.
+ *
+ * The old rows fade out quickly and the new ones fade in a hundred
+ * milliseconds behind them, so for a moment the shell is visibly between two
+ * things rather than blinking from one to the other. The size snaps here and
+ * is left to [DockSurface]'s spring, which is the stretch: this only
+ * crossfades. Nothing is clipped here while it moves either: the shell's
+ * stretch is the clip, so old rows taller than the new face are closed over
+ * by the shell as it shrinks, not cut off by a box round themselves. Under
+ * Reduce Motion there is no stretch to do that, so it is a plain 160 ms
+ * cross-fade inside a box that is simply its new size and clips its own.
+ *
+ * The rows the content draws stack as the dock's own do, eight apart and
+ * centred.
+ *
+ * A face on its way out is a picture of what the dock said, and no longer a
+ * control ([inert]). The card this replaced took its buttons away as soon as
+ * the turn moved on; a fading End turn that still answered a second tap
+ * would send it for whoever the phone now speaks for, and a fading Bankrupt
+ * would open its question after the debt was paid.
+ */
+@Composable
+private fun <T> DockMorph(key: T, content: @Composable ColumnScope.(T) -> Unit) {
+    val reduceMotion = rememberReduceMotion()
+    AnimatedContent(
+        targetState = key,
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.TopCenter,
+        transitionSpec = {
+            if (reduceMotion) {
+                (fadeIn(tween(GlassMotion.REDUCED_MS)) togetherWith fadeOut(tween(GlassMotion.REDUCED_MS)))
+                    .using(SizeTransform(clip = true) { _, _ -> snap() })
+            } else {
+                (fadeIn(tween(ROWS_IN_MS, delayMillis = ROWS_STAGGER_MS)) togetherWith fadeOut(tween(ROWS_OUT_MS)))
+                    .using(SizeTransform(clip = false) { _, _ -> snap() })
+            }
+        },
+        label = "mm.dock",
+    ) { shown ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(if (shown != key) Modifier.inert() else Modifier),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            content(shown)
+        }
+    }
+}
+
+/** The spec's dock timings: rows cross 100 ms apart inside the 380 ms stretch. */
+private const val ROWS_STAGGER_MS = 100
+private const val ROWS_IN_MS = 240
+private const val ROWS_OUT_MS = 140
+
+/**
+ * Drawn, and nothing more: every touch is taken before the buttons inside
+ * see it — one already under a finger is cancelled rather than clicked —
+ * and a screen reader is not led to a row that is leaving.
+ */
+private fun Modifier.inert(): Modifier = this
+    .pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+            }
+        }
+    }
+    .clearAndSetSemantics {}
+
+// ── ink on glass ───────────────────────────────────────────────────────────
+
+/**
+ * Everything in [content] is printed on [surface].
+ *
+ * The palette's second and third inks are paper's. On the material the third
+ * measures 1.53:1 and has no lifted form that is still a third rank, so it
+ * does not exist there: anything below that reaches for `ink3` is handed the
+ * glass's lifted second ink instead, and anything reaching for `ink2` gets
+ * the same lift — 4.95:1 raw against 5.82:1. It is said once, here, by the
+ * surface, which is how the web's `.glass` says it (it redefines `--ink-2`
+ * and `--ink-3` for everything inside), so the lines on a pane do not each
+ * have to know they are on one. And the controls stand on the pane as marks
+ * rather than panes of their own ([GlassHost]).
+ *
+ * Paper laid on the glass takes paper's ink back ([OnPaper]).
+ */
+@Composable
+internal fun OnGlass(surface: GlassSurface, content: @Composable () -> Unit) {
+    val p = P.current
+    val ink = surface.labelInk()
+    val quiet = surface.labelInk(quiet = true)
+    val lifted = remember(p, ink, quiet) { p.copy(ink = ink, ink2 = quiet, ink3 = quiet) }
+    CompositionLocalProvider(LocalPalette provides lifted) {
+        GlassHost(surface, content)
+    }
+}
+
+/**
+ * Paper, wherever it is laid — on a glass pane or straight on the page. Its
+ * inks are the table's own again, third rank and all, because a card was
+ * never short of contrast and its quiet line is how a hint reads as a hint;
+ * and a control on it is a pane over a card, as it is in a [Panel]. On the
+ * page this changes nothing but what the controls are told is behind them,
+ * which is the truth.
+ */
+@Composable
+internal fun OnPaper(content: @Composable () -> Unit) {
+    val theme = LocalTheme.current
+    val dark = LocalAppearanceDark.current
+    val own = remember(theme, dark) { theme.palette(dark) }
+    CompositionLocalProvider(
+        LocalPalette provides own,
+        LocalGlassHost provides null,
+        LocalControlBackdrop provides BackdropKind.Paper,
         content = content,
     )
+}
+
+/**
+ * A figure printed on glass: the balance in [content] takes the glass's own
+ * green and red ([goodInk], [badInk]) in place of the palette's, which on
+ * the material fall to about 4.5:1 by day and 3.5:1 by night. [OnGlass]
+ * cannot say this for the whole pane, because the palette's green and red
+ * are also the Good and Bankrupt plates, and a plate keeps its colour — so
+ * it goes round the number itself and nothing else. Off glass it changes
+ * nothing.
+ */
+@Composable
+internal fun GlassMoney(content: @Composable () -> Unit) {
+    val host = LocalGlassHost.current
+    val p = P.current
+    val good = host?.goodInk()
+    val bad = host?.badInk()
+    val money = remember(p, good, bad) {
+        if (good == null || bad == null) p else p.copy(good = good, bad = bad)
+    }
+    CompositionLocalProvider(LocalPalette provides money, content = content)
 }
 
 // ── my turn ────────────────────────────────────────────────────────────────
@@ -213,9 +438,9 @@ private fun DockSurface(mine: Boolean, modifier: Modifier, content: @Composable 
  * one where the countdown actually costs you something.
  */
 @Composable
-private fun TurnHeader(store: GameStore, state: GameState, turn: TurnState) {
+private fun TurnHeader(store: GameStore, state: GameState, seat: String?, endsAt: Double?) {
     val p = P.current
-    val guest = state.player(turn.playerId)?.takeIf { it.id != store.meId }
+    val guest = state.player(seat)?.takeIf { it.id != store.meId }
     Row(
         Modifier
             .fillMaxWidth()
@@ -228,17 +453,21 @@ private fun TurnHeader(store: GameStore, state: GameState, turn: TurnState) {
             // A long name gives up a fifth of its size before it gives up any
             // letters, as iOS's minimumScaleFactor(0.8) has it. The line takes
             // all the width the clock leaves — iOS's Spacer yields to the
-            // text — rather than sharing it half and half with a spacer.
+            // text — rather than sharing it half and half with a spacer. In
+            // the glass's brass: the raw gold on a daylight film is 3.2:1.
             FitText(
                 "${guest.name}'s turn — pass the phone",
                 modifier = Modifier.weight(1f),
-                color = p.gold, fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
+                color = LocalGlassHost.current?.goldInk() ?: p.gold,
+                fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
             )
         } else {
-            Text("Your turn", color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            // The glass's quiet ink: on the dock the palette's second rank is
+            // the lifted one ([OnGlass]), and there is no third.
+            Text("Your turn", color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
         }
-        TurnClock(turn.endsAt, compact = true)
+        TurnClock(endsAt, compact = true)
     }
 }
 
@@ -254,11 +483,15 @@ private fun DeadlockLine(store: GameStore) {
     val me = store.me ?: return
     if (me.lapsBlocked <= 0 || me.isBankrupt) return
     val laps = me.lapsToRelief
+    // A notice drawn on the dock, not a second pane — glass on glass would
+    // have it sampling the very bar it sits on — at the dock's concentric
+    // r10, in the glass's quiet ink as iOS prints it. The brass goes through
+    // the material as a wash, at the strength the material gives its own one
+    // tint, rather than lying on it as a slip of gold paper.
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(p.goldSoft)
+            .background(p.gold.copy(alpha = tintAlpha()), DOCK_BLOCK)
             .padding(horizontal = 9.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -266,7 +499,7 @@ private fun DeadlockLine(store: GameStore) {
         Icon("scales", size = 13.dp, tint = p.gold)
         Text(
             "$laps lap${if (laps == 1) "" else "s"} until the street you're missing changes hands — or trade for it first.",
-            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+            color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
         )
     }
 }
@@ -286,24 +519,30 @@ private fun WalkingRow() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon("dice", size = 17.dp, tint = p.ink3)
+        Icon("dice", size = 17.dp, tint = p.ink2)
         Text("Moving…", color = p.ink2, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.weight(1f))
         Spinner()
     }
 }
 
+/**
+ * What this seat can do in [phase]. The phase is the one the dock's face was
+ * keyed on rather than the turn's own, so a face on its way out keeps saying
+ * what it said while the next one arrives over it.
+ */
 @Composable
 private fun TurnControls(
     store: GameStore,
     state: GameState,
     turn: TurnState,
+    phase: String,
     onTrade: () -> Unit,
     onProperties: () -> Unit,
     onBankrupt: () -> Unit,
 ) {
     val me = store.me
-    when (turn.phase) {
+    when (phase) {
         "debt" -> DebtControls(store, state, turn, onProperties, onBankrupt)
 
         "action" -> {
@@ -328,7 +567,7 @@ private fun TurnControls(
             if (!canAfford) Hint("Not enough cash for this one.")
         }
 
-        "roll" -> if (me?.inJail == true) {
+        IN_PRISON -> {
             MMButton(
                 "Roll for a double", kind = BtnKind.PRIMARY, big = true, icon = "dice",
                 modifier = Modifier.fillMaxWidth(),
@@ -336,9 +575,9 @@ private fun TurnControls(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MMButton(
                     "Pay $50 & wait", kind = BtnKind.GHOST, big = true,
-                    modifier = Modifier.weight(1f), enabled = me.money >= 50,
+                    modifier = Modifier.weight(1f), enabled = (me?.money ?: 0) >= 50,
                 ) { store.jailPay() }
-                if ((me.getOutCards ?: 0) > 0) {
+                if ((me?.getOutCards ?: 0) > 0) {
                     MMButton(
                         "Use card", kind = BtnKind.GOLD, big = true, icon = "ticket",
                         modifier = Modifier.weight(1f),
@@ -348,9 +587,11 @@ private fun TurnControls(
             // The fine buys the door and nothing else, so the panel says so
             // before it is pressed — a player who expects to roll afterwards
             // has spent $50 on a turn they were losing anyway.
-            Hint("In prison · attempt ${(me.jailTurns ?: 0) + 1} of 3")
+            Hint("In prison · attempt ${(me?.jailTurns ?: 0) + 1} of 3")
             Hint("Paying the fine ends your turn — the card lets you roll.")
-        } else {
+        }
+
+        "roll" -> {
             MMButton(
                 "Roll dice", kind = BtnKind.PRIMARY, big = true, icon = "dice",
                 modifier = Modifier.fillMaxWidth(),
@@ -416,26 +657,32 @@ private fun DebtControls(
     // still owes, by name; taxes, repairs and fines to the bank.
     val payee = state.debtPayee(debt)
 
+    // Drawn on the dock at its concentric r10, as the deadlock strip is, and
+    // washed through the material in the bad colour the way that one is in
+    // the brass.
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(p.redSoft)
+            .background(p.bad.copy(alpha = tintAlpha()), DOCK_BLOCK)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // iOS's warning here is the filled triangle in the red of the
             // number beside it, the "!" cut clean through — not the amber
-            // road sign the drawn set keeps for itself.
+            // road sign the drawn set keeps for itself. The glyph keeps the
+            // raw red, as iOS's does — it is a mark beside words that say the
+            // same thing — and the words take the glass's.
             CutoutGlyph("warning", 18.dp, p.bad)
-            MoneyText(
-                -remaining,
-                text = "${money(remaining)} in the red",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.ExtraBold,
-                positive = p.bad,
-            )
+            GlassMoney {
+                MoneyText(
+                    -remaining,
+                    text = "${money(remaining)} in the red",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    positive = P.current.bad,
+                )
+            }
         }
         // Pass & play: name whose hole this is when the phone is speaking for
         // a seat that is not the main player's.
@@ -482,13 +729,13 @@ private fun WaitingRow(store: GameStore, state: GameState) {
             // three different endings, so three different marks.
             Icon(
                 if (me.wasRemoved) (if (me.removedFor == "quit") "door" else "snooze") else "payment",
-                size = 17.dp, tint = p.ink3,
+                size = 17.dp, tint = p.ink2,
             )
             Text(
                 if (me.wasRemoved) "You're out of this game — watching how it ends."
                 else "You went bankrupt — watching how it ends.",
                 modifier = Modifier.weight(1f),
-                color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                color = p.ink2, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
             )
         }
         return
@@ -550,7 +797,7 @@ private fun EndedControls(store: GameStore, state: GameState) {
             Text(
                 caption,
                 modifier = Modifier.fillMaxWidth(),
-                color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
             )
         }
@@ -595,6 +842,9 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
     val cup = state.cup == true
     val teams = state.settings.teams ?: 0
 
+    // The panel itself stands on the page, and its controls are panes of glass
+    // over it. The cards in it are paper, and say so ([OnPaper]), so a
+    // control on a seat is told there is a card behind it, not the page.
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (store.isHost) {
             MarkButton("Start Game", BtnKind.PRIMARY, onClick = { store.start() }) { PlayTriangle(13.dp, it) }
@@ -609,7 +859,7 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
             }
         }
 
-        if (cup) CupBanner(state)
+        if (cup) OnPaper { CupBanner(state) }
 
         // A cup fixes its own board, so a cup table has no boxes to show.
         if (!cup) LobbyBoards(store, account)
@@ -632,15 +882,17 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (player in state.players) key(player.id) { LobbySeat(store, state, player, teams) }
-            repeat(state.openSeats) { EmptySeat(store) }
+            OnPaper {
+                for (player in state.players) key(player.id) { LobbySeat(store, state, player, teams) }
+                repeat(state.openSeats) { EmptySeat(store) }
+            }
         }
 
         if (store.isHost && teams > 0) {
             MarkButton("Balance teams", BtnKind.GHOST, onClick = { store.balanceTeams() }) { SwapArrows(20.dp, it) }
         }
 
-        YourLook(store, account, state)
+        OnPaper { YourLook(store, account, state) }
     }
 }
 
@@ -703,11 +955,13 @@ private fun LobbyBoards(store: GameStore, account: AccountStore) {
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon("map", size = 13.dp, tint = p.ink2)
-            PanelTitle("Board")
+        OnPaper {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon("map", size = 13.dp, tint = p.ink2)
+                PanelTitle("Board")
+            }
+            BoardBoxes(account, store, editable, onOpenAll = { listing = true }, onShop = { shopping = it })
         }
-        BoardBoxes(account, store, editable, onOpenAll = { listing = true }, onShop = { shopping = it })
     }
 
     val board = shopping?.let { account.board(it) }
@@ -742,21 +996,19 @@ private fun BoardsSheet(
     onShop: (String?) -> Unit,
     onClose: () -> Unit,
 ) {
-    val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // A scroll position per face: the list keeps its place, and each board's
     // shop starts at its own top.
     val listScroll = rememberScrollState()
     val shopScroll = key(board?.id) { rememberScrollState() }
 
-    // iOS paints both pages — BoardPickerSheet and BoardBuySheet — in the
-    // page colour, the same as the lobby settings' own copy of them
-    // (LobbySheet.kt), with a 16-point gutter for the list and 18 for a shop.
-    ModalBottomSheet(
+    // The app's one sheet ([MMSheet]) — the glass the lobby settings lay their
+    // own copy of these two pages on (LobbySheet.kt's BoardPageSheet), so a
+    // board's list and its shop look the same whichever door they came
+    // through. A 16-point gutter for the list and 18 for a shop, as iOS's.
+    MMSheet(
         onDismissRequest = onClose,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         val gutter = if (board != null) 18.dp else 16.dp
         // Always the full height, as iOS's large detent is, with the page's
@@ -1336,12 +1588,11 @@ private fun PanelTitle(text: String, modifier: Modifier = Modifier) {
 /**
  * MMButton, big, led by a mark the drawn set has no glyph for — iOS types "▶"
  * in front of Start Game and "⇄" in front of Balance teams. MMButton's icon
- * slot takes a glyph by name and draws it upright, so these two are laid out
- * here in MMButton's own measurements (Ui.kt), which are iOS's MMButtonStyle —
- * seventeen bold, fourteen-point corners, 14/22 padding, the faint white rim
- * on the coloured kind and a sunken well for the ghost — so that they sit in
- * a column of MMButtons without a seam. Primary and ghost are the only kinds
- * asked for.
+ * slot takes a glyph by name and draws it upright, so these two hand theirs
+ * in through its lead instead, which gives the mark the ink the words are in.
+ * This was a copy of the old paper button, drawn out by hand; it is now the
+ * button itself, so it wears the glass the rest of the column does and a
+ * primary here is the same plate as a primary anywhere.
  */
 @Composable
 private fun MarkButton(
@@ -1351,31 +1602,15 @@ private fun MarkButton(
     onClick: () -> Unit,
     mark: @Composable (Color) -> Unit,
 ) {
-    val p = P.current
-    val primary = kind == BtnKind.PRIMARY
-    val fg = if (primary) p.accentInk else p.ink
-    val shape = RoundedCornerShape(14.dp)
-    Row(
-        modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(if (primary) p.red else p.sunken)
-            .then(if (primary) Modifier.border(1.dp, Color.White.copy(alpha = 0.18f), shape) else Modifier)
-            .clickable(role = Role.Button) { onClick() }
-            .padding(horizontal = 22.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        mark(fg)
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = fg, fontSize = 17.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-    }
+    MMButton(label, modifier.fillMaxWidth(), kind = kind, big = true, lead = mark, onClick = onClick)
 }
 
 /**
  * A ghost button that is only a drawing — the properties and trade doors
- * beside End turn, a seat's team swap and its kick. MMButton always leaves
- * room for a label, which pushes a lone glyph off-centre.
+ * beside End turn, a seat's team swap and its kick. It is MMButton with no
+ * words, so on the dock it is a well in the dock's own ink and on a seat card
+ * a pane of glass, whichever the place says, rather than a sunken paper
+ * square wherever it is put.
  *
  * The two big doors frame their drawings in 30 by 26, as iOS does, so the
  * pair are one width whatever the shape inside — and at iOS's 22 points of
@@ -1388,22 +1623,18 @@ private fun GlyphButton(
     onClick: () -> Unit,
     glyph: @Composable (Color) -> Unit,
 ) {
-    val p = P.current
-    // iOS's ghost MMButtonStyle: a sunken well, no outline, and its padding.
-    val shape = RoundedCornerShape(if (big) 14.dp else 10.dp)
-    Box(
-        Modifier
-            .clip(shape)
-            .background(p.sunken)
-            .semantics { contentDescription = description }
-            .clickable(role = Role.Button) { onClick() }
-            .padding(horizontal = if (big) 22.dp else 14.dp, vertical = if (big) 14.dp else 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(if (big) Modifier.size(30.dp, 26.dp) else Modifier, contentAlignment = Alignment.Center) {
-            glyph(p.ink)
-        }
-    }
+    MMButton(
+        "",
+        Modifier.semantics { contentDescription = description },
+        kind = BtnKind.GHOST,
+        big = big,
+        lead = { ink ->
+            Box(if (big) Modifier.size(30.dp, 26.dp) else Modifier, contentAlignment = Alignment.Center) {
+                glyph(ink)
+            }
+        },
+        onClick = onClick,
+    )
 }
 
 /** Something is happening that is not this phone's to hurry. */

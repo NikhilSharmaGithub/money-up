@@ -402,10 +402,12 @@ struct PieceShopSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
+                            .sheetBarItem(on: .sheet)
                     }
                 }
             }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

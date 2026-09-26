@@ -66,6 +66,11 @@ final class ToastWindow {
 private struct ToastLayer: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// This window is its own hosting controller, so nothing the app's tree
+    /// sets reaches it — the quality the governor has settled on included.
+    /// It listens for itself.
+    @ObservedObject private var governor = MMGlassGovernor.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -78,37 +83,87 @@ private struct ToastLayer: View {
             toast
         }
         .animation(.spring(duration: 0.35), value: store.toast)
+        .environment(\.mmGlassQuality, governor.level)
     }
 
     @ViewBuilder private var toast: some View {
         let P = Palette.current(scheme)
         if let toast = store.toast {
+            let ink = toast.isError ? Color.white : glass(P).label(increaseContrast: contrast == .increased)
             HStack(spacing: 8) {
                 // A toast with a subject of its own draws it; the rest keep
                 // the plain info/warning mark.
                 if let glyph = toast.glyph {
-                    Art.icon(glyph, size: 17, tint: .white)
+                    Art.icon(glyph, size: 17, tint: ink)
                 } else {
                     Image(systemName: toast.isError ? "exclamationmark.triangle.fill" : "info.circle.fill")
                 }
                 Text(toast.text).lineLimit(2)
             }
             .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(ink)
             .padding(.vertical, 11)
             .padding(.horizontal, 17)
-            // The fill is load-bearing, not decoration: the label is white, so
-            // in light mode the pill has to be the dark one and an error has to
-            // stay red. Drop it to let the material show and a light-mode toast
-            // is white on near-white — which is why it is opaque there and only
-            // a veil in the dark, where the material can be seen through it.
-            .background(toast.isError ? P.redDeep : P.ink.opacity(scheme == .light ? 1 : 0.25), in: Capsule())
-            .background(.ultraThinMaterial, in: Capsule())
+            .modifier(ToastSurface(error: toast.isError, plate: P.bad))
             // The hub's floating tab bar sits about 45pt above the safe area,
             // and a toast landing behind it is a message nobody reads.
             .padding(.bottom, store.roomId == nil ? 78 : 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .id(toast.id)
+        }
+    }
+
+    /// The glass a toast is made of, and so the ink its words are printed in.
+    ///
+    /// This window floats over anything at all, so what is behind a toast
+    /// cannot be named the way a bar's backdrop can. It can be bounded,
+    /// though: everything the app draws — page, card, sheet, board — sits on
+    /// the same side of the crossover as the scheme, so a toast lands on
+    /// paper-dark glass in a dark app and paper-light glass in a light one,
+    /// and that is what it declares. Paper also keeps the live blur on, for
+    /// the real pixels underneath. `.media` would have been the other name for
+    /// "anything", and it is the wrong one: it pins the glass light and lays
+    /// the ad dim under it, so every toast in a dark app would come up as a
+    /// pale grey slab.
+    private func glass(_ P: Palette) -> GlassTokens {
+        BackdropKind.paper.settledGlass(P)
+    }
+}
+
+/// What a toast stands on.
+///
+/// A note is glass: it is chrome, floating over everything, and the material
+/// used to be here already — under an opaque fill that hid it completely in
+/// daylight. The fill was there because the words were white; the words now
+/// take the glass's own ink, so the fill can go.
+///
+/// An error keeps its plate. A colour that means something is a solid plate in
+/// that colour on this app's glass, never a tint: tinted glass is a wash on
+/// the film, and an error washed onto a note is a note — and on iOS 26 the
+/// system's tint runs strong enough that ink printed on it stops being
+/// readable. So it is a plate of the palette's bad with white on it — the
+/// pairing every coloured control in the app uses for bad, and the plate
+/// Android's error toast stands on. It was the accent's deep shade, which is
+/// red on crimson but brass on the night felt and amber in the sands — an
+/// error that did not look like one, with white on it at about 3:1. It takes
+/// from the material what a plate takes: the same shadow, off the same token,
+/// as the glass beside it.
+private struct ToastSurface: ViewModifier {
+    let error: Bool
+    let plate: Color
+
+    @Environment(\.colorScheme) private var scheme
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if error {
+            // A one-line toast's height. A second line would add a couple of
+            // points of drop and nothing else — the blur is at its ceiling.
+            let sh = GlassShadow.relaxed(height: 42, scheme == .dark ? .dark : .light)
+            content
+                .background(plate, in: Capsule())
+                .shadow(color: sh.color, radius: sh.radius, y: sh.y)
+        } else {
+            content.mmGlass(.regular, backdrop: .paper, in: Capsule())
         }
     }
 }
@@ -130,6 +185,11 @@ struct RootView: View {
     /// Which version of the intro this phone has been through. Zero is a phone
     /// that has never opened the app, which is the whole point of it.
     @AppStorage("mm.intro.seen") private var introSeen = 0
+    /// Low Power Mode, a small phone and a hot one step the material down.
+    /// Held here at the root, so the table's glass hears it as well as the
+    /// hub's, and so does every sheet either of them opens. The toast window
+    /// is a hosting controller of its own and listens for itself.
+    @ObservedObject private var governor = MMGlassGovernor.shared
 
     var body: some View {
         // Feed the static before anything below reads a palette, then key the
@@ -204,6 +264,9 @@ struct RootView: View {
             applyAppearance()
         }
         .onChange(of: appearanceID) { applyAppearance() }
+        // Last in the chain, outside every overlay and every sheet hung on
+        // anything below, so there is nothing glass this does not reach.
+        .environment(\.mmGlassQuality, governor.level)
     }
 
     private var appearance: MMAppearance { MMAppearance(rawValue: appearanceID) ?? .system }
@@ -379,8 +442,13 @@ extension View {
 private struct SheetPaper: ViewModifier {
     let paper: Color
 
+    /// Asked the material's way and not with a bare `#available`: an app built
+    /// on an SDK older than 26 runs even a 26 phone in the old design, with no
+    /// glass for the sheet to stand back for. And every control that declares
+    /// `.platter` on this sheet asks the same question, so the paper and what
+    /// the controls on it think they are standing on cannot disagree.
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
+        if MMSystemGlass.isOn {
             content
         } else {
             content.presentationBackground(paper)

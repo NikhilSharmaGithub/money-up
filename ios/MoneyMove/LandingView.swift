@@ -8,6 +8,20 @@ import AuthenticationServices
 struct LandingView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// Increase Contrast promotes the secondary ink on every piece of glass
+    /// here to the primary one, so the labels drawn on it have to hear it too.
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Which tab is up, and which one was up before it. The second is only
+    /// for the hand-built bar below iOS 26: its selection travels from the
+    /// tab you left to the tab you picked, and a page that has just come on
+    /// screen has no other way of knowing where the player came from.
+    @State private var tab: HubTab = .play
+    @State private var lastTab: HubTab = .play
+    /// Where the appearance control's lozenge started its latest trip. The
+    /// stretch peaks halfway along the whole trip, so System to Dark bulges
+    /// once rather than once per segment it crosses.
+    @State private var appearanceOrigin: MMAppearance = .system
     /// Read for one number: how many boards the hero says there are. It was a
     /// "19" typed into the view, and the day six continents joined the shelf
     /// the hero went on saying nineteen to everybody who opened the app.
@@ -71,24 +85,36 @@ struct LandingView: View {
 
     var body: some View {
         let P = Palette.current(scheme)
+        // Before the bar exists, so UIKit builds it already dressed.
+        let _: Void = HubTabBar.styled
 
-        // The home is a proper tabbed hub — on modern iOS the system renders
-        // this bar as floating liquid glass over the felt.
-        TabView {
-            tabPage { playTab(P) }
+        // The home is a proper tabbed hub, and it stays the system's own
+        // TabView on every version. On iOS 26 the system floats this bar as
+        // Liquid Glass by itself, and anything laid on it would kill that
+        // glass. Below 26 the bar is made see-through and each page draws the
+        // hand-built twin underneath it (HubPage) — the items, the
+        // accessibility and the state are still UIKit's, only the material
+        // under them is ours.
+        TabView(selection: Binding(get: { tab }, set: { lastTab = tab; tab = $0 })) {
+            tabPage(.play) { playTab(P) }
                 .tabItem { Label("Play", systemImage: "dice.fill") }
+                .tag(HubTab.play)
 
-            tabPage { storeTab(P) }
+            tabPage(.store) { storeTab(P) }
                 .tabItem { Label("Store", systemImage: "bag.fill") }
+                .tag(HubTab.store)
 
-            tabPage { socialTab(P) }
+            tabPage(.social) { socialTab(P) }
                 .tabItem { Label("Social", systemImage: "person.2.fill") }
+                .tag(HubTab.social)
 
-            tabPage { historyTab(P) }
+            tabPage(.history) { historyTab(P) }
                 .tabItem { Label("History", systemImage: "clock.fill") }
+                .tag(HubTab.history)
 
-            tabPage { settingsTab(P) }
+            tabPage(.settings) { settingsTab(P) }
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(HubTab.settings)
         }
         .tint(P.red)
         .sheet(item: $dmFriend) { friend in
@@ -136,21 +162,20 @@ struct LandingView: View {
     }
 
     /// Shared page chrome: scrolling column of cards over the felt.
-    private func tabPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                content()
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 20)
-            // The tab bar floats over the page rather than sitting under it,
-            // so the last card needs room to clear it — at 32 the bottom row
-            // of the store grid was half behind the bar.
-            .padding(.bottom, 96)
-            .frame(maxWidth: 560)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollDismissesKeyboard(.interactively)
+    private func tabPage<Content: View>(_ which: HubTab,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        HubPage(tab: which, from: lastTab, content: content)
+    }
+
+    // MARK: - glass on the landing
+
+    /// Ink for a label sitting on glass. Two ranks and no third: `ink3` on the
+    /// material measures 1.53:1, so every quiet word that used it moves up to
+    /// the lifted second rank, and Increase Contrast moves that up again.
+    private func glassInk(on backdrop: BackdropKind, secondary: Bool = false,
+                          _ P: Palette) -> Color {
+        backdrop.settledGlass(P).label(secondary: secondary,
+                                       increaseContrast: contrast == .increased)
     }
 
     // MARK: - tabs
@@ -184,16 +209,23 @@ struct LandingView: View {
         HStack(alignment: .top) {
             pageTitle("Store", "Win games, earn coins, dress your piece.", P)
             Spacer()
+            // The wallet is a readout that floats on the page rather than a
+            // line printed on a card, so it is glass. The page runs straight
+            // behind it — a ramp we drew and know to the pixel — and the gold
+            // ring it used to wear is the rim's job now: a rim that stays
+            // brass on all fourteen tables. The count is in the glass's own
+            // ink, as the purse on Android and on the web prints it: the coin
+            // beside it is brass by its own drawing, and the brass moved into
+            // the light.
             HStack(spacing: 5) {
                 Art.icon(.coin, size: 17)
                 Text("\(store.wallet?.coins ?? 0)")
                     .font(.system(size: 17, weight: .heavy, design: .rounded))
-                    .foregroundStyle(P.gold)
+                    .foregroundStyle(glassInk(on: .page, P))
             }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 13)
-                .background(P.goldSoft, in: Capsule())
-                .overlay(Capsule().stroke(P.gold.opacity(0.6), lineWidth: 1))
+                .mmGlass(.regular, backdrop: .page, in: Capsule())
                 .padding(.top, 10)
         }
         .task { await loadStore() }
@@ -266,6 +298,10 @@ struct LandingView: View {
                     Spacer(minLength: 6)
                     Button("Try again") { Task { await shop.load(store) } }
                         .buttonStyle(MMButtonStyle(kind: .ghost))
+                        // The one control on this tab printed straight on the
+                        // page rather than on a card, so the page is what it
+                        // floats over — and the page stays put while it scrolls.
+                        .mmControls(on: .page)
                 }
             } else {
                 Text(shop.onSale ? "Top up when the wins aren't coming fast enough."
@@ -645,14 +681,14 @@ struct LandingView: View {
                 }
 
                 TextField("", text: $store.nickname,
-                          prompt: Text("Your name").foregroundStyle(P.ink3))
+                          prompt: Text("Your name").foregroundStyle(glassInk(on: .paper, secondary: true, P)))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
                     .submitLabel(.done)
                     .onSubmit { Task { await loadProfile() } }
                     .padding(11)
-                    .background(P.sunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .cardGlass(in: RoundedRectangle(cornerRadius: MMRadius.sm, style: .continuous), floats: false)
 
                 flagPicker(P)
             }
@@ -730,12 +766,21 @@ struct LandingView: View {
                 .foregroundStyle(P.ink2)
                 .multilineTextAlignment(.center)
 
-            // the numbers that sell the table
+            // The numbers that sell the table, on one bar of glass. The mark,
+            // the wordmark and the line under them stay printed on the page —
+            // they are the brand, and the page is where a brand is printed —
+            // but the three numbers are a readout, and a readout floats. It is
+            // over the page and nothing else: it scrolls with the column, and
+            // the replica under it slides to match, so the ramp it bends is the
+            // one that is really there.
             HStack(spacing: 26) {
                 stat(shelf.boards.isEmpty ? "25" : "\(shelf.boards.count)", "BOARDS", P)
                 stat("8", "PLAYERS", P)
                 stat("∞", "BANKRUPTCIES", P)
             }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 24)
+            .mmGlass(.regular, backdrop: .page, in: Capsule())
             .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
@@ -746,11 +791,11 @@ struct LandingView: View {
         VStack(spacing: 1) {
             Text(value)
                 .font(.system(size: 20, weight: .heavy, design: .rounded))
-                .foregroundStyle(P.gold)
+                .foregroundStyle(BackdropKind.page.settledGlass(P).goldInk)
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .kerning(1)
-                .foregroundStyle(P.ink3)
+                .foregroundStyle(glassInk(on: .page, secondary: true, P))
         }
     }
 
@@ -811,13 +856,14 @@ struct LandingView: View {
                         // we picked for them reads as their name, and they carry
                         // it to the table without ever choosing it.
                         TextField("", text: $store.nickname,
-                                  prompt: Text("Your nickname").foregroundStyle(P.ink3))
+                                  prompt: Text("Your nickname").foregroundStyle(glassInk(on: .paper, secondary: true, P)))
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
                             .padding(12)
-                            .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
+                            // 10, the radius of the dice button beside it, so
+                            // the two read as one row of controls.
+                            .cardGlass(in: RoundedRectangle(cornerRadius: MMRadius.sm, style: .continuous), floats: false)
 
                         Button {
                             Task { await rollNickname() }
@@ -844,18 +890,20 @@ struct LandingView: View {
                     // onChange matters: writing the field back a frame later
                     // swallows whatever was typed in between, so a pasted or
                     // quickly typed code used to arrive with letters missing.
+                    // The placeholder is spelled out as a prompt so it can wear
+                    // the glass's second ink: the system's own placeholder grey
+                    // is a third rank, and a third rank on glass is 1.53:1.
                     TextField("room code", text: Binding(
                         get: { joinCode },
                         set: { joinCode = $0.lowercased().filter { !$0.isWhitespace } }
-                    ))
+                    ), prompt: Text("room code").foregroundStyle(glassInk(on: .paper, secondary: true, P)))
                         .font(.system(size: 16, weight: .bold, design: .monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.asciiCapable)
                         .onSubmit { joinTapped() }
                         .padding(12)
-                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.rule, lineWidth: 1))
+                        .cardGlass(in: RoundedRectangle(cornerRadius: MMRadius.sm, style: .continuous), floats: false)
 
                     Button("Join") { joinTapped() }
                         .buttonStyle(MMButtonStyle(kind: .primary))
@@ -898,25 +946,38 @@ struct LandingView: View {
                 }
             }
         } label: {
+            // A picker is a control, so the row is glass; the card under it
+            // is paper and scrolls with it. With nothing flag-shaped chosen
+            // yet it shows the same crossed-out flag as the menu's own "No
+            // flag" row — a drawn mark, where a white-flag emoji sat in the
+            // chrome before.
             HStack(spacing: 10) {
-                Text(selectedFlag.isEmpty ? "🏳️" : selectedFlag)
-                    .font(.system(size: 19))
+                if selectedFlag.isEmpty {
+                    Image(systemName: "flag.slash")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(glassInk(on: .paper, secondary: true, P))
+                        .frame(width: 24)
+                } else {
+                    Text(selectedFlag)
+                        .font(.system(size: 19))
+                }
                 Text("Country flag")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink2)
+                    .foregroundStyle(glassInk(on: .paper, secondary: true, P))
                 Spacer(minLength: 6)
                 Text(current?.name ?? "None")
                     .font(.system(size: 14, weight: .heavy, design: .rounded))
-                    .foregroundStyle(P.ink)
+                    .foregroundStyle(glassInk(on: .paper, P))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(glassInk(on: .paper, secondary: true, P))
             }
             .padding(.horizontal, 13)
             .frame(maxWidth: .infinity, minHeight: 46)
-            .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
+            // 14 off the ladder: the radius a big button of the same height
+            // wears, so the row and the buttons in the card are one family.
+            .cardGlass(in: RoundedRectangle(cornerRadius: MMRadius.md, style: .continuous))
         }
     }
 
@@ -1012,17 +1073,13 @@ struct LandingView: View {
     // MARK: - appearance
 
     /// Light, dark, or follow the phone — which of the table style's two
-    /// palettes the whole app wears. Three chips; the current one rings gold.
+    /// palettes the whole app wears. One segmented control of three.
     private func appearanceCard(_ P: Palette) -> some View {
         let current = MMAppearance(rawValue: appearanceID) ?? .system
         return MMCard(padding: 16) {
             VStack(alignment: .leading, spacing: 10) {
                 PanelTitle("Appearance")
-                HStack(spacing: 8) {
-                    ForEach(MMAppearance.allCases, id: \.rawValue) { mode in
-                        appearanceChip(mode, on: mode == current, P)
-                    }
-                }
+                appearanceSegments(current, P)
                 Text(current.caption)
                     .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink3)
@@ -1031,29 +1088,67 @@ struct LandingView: View {
         }
     }
 
-    private func appearanceChip(_ mode: MMAppearance, on: Bool, _ P: Palette) -> some View {
+    /// Three chips were three controls that happened to sit in a row, each
+    /// with its own ring; this is one control, the way the system draws a
+    /// choice of three. One track of glass, and on it a lozenge that travels
+    /// to the choice and stretches on the way — longest at the halfway mark
+    /// of the whole trip, the way a drop drawn across a surface lengthens —
+    /// instead of one ring fading out while another fades in.
+    ///
+    /// The lozenge is a well in the track, not a second pane: glass never
+    /// stacks on glass. It is the track's own ink at a tenth, which is how the
+    /// system fills a grouped control on a bar, and it flips when the glass
+    /// under it does. Every size is concentric by arithmetic: an 18 pt track
+    /// with 4 pt of padding holds a 14 pt lozenge.
+    private func appearanceSegments(_ current: MMAppearance, _ P: Palette) -> some View {
+        let modes = MMAppearance.allCases
+        let at = CGFloat(modes.firstIndex(of: current) ?? 0)
+        let origin = CGFloat(modes.firstIndex(of: appearanceOrigin) ?? 0)
+        let well = BackdropKind.paper.settledGlass(P).ink.opacity(contrast == .increased ? 0.18 : 0.10)
+        return HStack(spacing: 0) {
+            ForEach(modes, id: \.rawValue) { mode in
+                appearanceSegment(mode, on: mode == current, P)
+            }
+        }
+        .background(alignment: .leading) {
+            GeometryReader { g in
+                let slot = g.size.width / CGFloat(modes.count)
+                RoundedRectangle(cornerRadius: MMRadius.inner(MMRadius.lg, inset: 4), style: .continuous)
+                    .fill(well)
+                    .frame(width: slot, height: g.size.height)
+                    .modifier(GlassLozenge(at: at, origin: origin, target: at, slot: slot))
+                    // 320 ms and on the landing's ease. Under Reduce Motion
+                    // the lozenge moves straight there: no travel, no stretch.
+                    .animation(reduceMotion ? nil : HubTabBar.travel, value: at)
+            }
+        }
+        .padding(4)
+        .cardGlass(in: RoundedRectangle(cornerRadius: MMRadius.lg, style: .continuous))
+    }
+
+    private func appearanceSegment(_ mode: MMAppearance, on: Bool, _ P: Palette) -> some View {
         Button {
+            // Where the lozenge is leaving from, set in the same breath as
+            // where it is going, so the trip it draws is the one just asked for.
+            appearanceOrigin = MMAppearance(rawValue: appearanceID) ?? .system
             appearanceID = mode.rawValue
             Haptics.tap()
             SoundKit.shared.click()
         } label: {
+            // 6 inside the track's 4 is the 10 the chips had, so the control
+            // stands exactly as tall as the row it replaces.
             VStack(spacing: 6) {
                 appearanceGlyph(mode, on: on, P)
                 Text(mode.title)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(on ? P.ink : P.ink2)
+                    .foregroundStyle(glassInk(on: .paper, secondary: !on, P))
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(on ? AnyShapeStyle(P.goldSoft) : AnyShapeStyle(P.sunken),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(on ? P.gold : P.rule, lineWidth: on ? 1.8 : 1)
-            )
-            .scaleEffect(on ? 1.03 : 1)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     /// Sun and moon keep their own colours (they are the app's drawn set);
@@ -1066,7 +1161,7 @@ struct LandingView: View {
         case .system:
             Image(systemName: "circle.lefthalf.filled")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(on ? P.gold : P.ink3)
+                .foregroundStyle(on ? P.gold : glassInk(on: .paper, secondary: true, P))
                 .frame(width: 18, height: 18)
         }
     }
@@ -1405,5 +1500,378 @@ struct LandingView: View {
             ($0.roomId != nil ? 0 : 1, $0.name.lowercased()) < ($1.roomId != nil ? 0 : 1, $1.name.lowercased())
         }
         friendRequests = feed.requests
+    }
+}
+
+// MARK: - The hub's glass
+
+/// The hub's five tabs, in the order the bar shows them. The raw value is the
+/// slot, which is all the hand-built bar needs to know about a tab.
+private enum HubTab: Int, CaseIterable, Hashable {
+    case play, store, social, history, settings
+}
+
+private extension View {
+    /// Glass for a control printed on a card: a field, a picker, a segmented
+    /// choice. What is under it is the card, and the card scrolls with it, so
+    /// nothing ever slides beneath — and a blur of a flat colour is that same
+    /// flat colour. So it runs at `flat`, film and rim and shadow with no
+    /// blur, exactly as the buttons on the same card do. That is also what
+    /// lets glass sit inside a scrolling column without a backdrop pass per
+    /// row, and it holds on iOS 26 too, so the two versions match side by side.
+    ///
+    /// A text field passes `floats: false`: it is somewhere to write, set into
+    /// the card rather than lifted off it, and the web's fields cast nothing
+    /// for the same reason.
+    func cardGlass(in shape: some InsettableShape, floats: Bool = true) -> some View {
+        mmGlass(.regular, backdrop: .paper, in: shape, floats: floats)
+            .transformEnvironment(\.mmGlassQuality) { $0 = min($0, .flat) }
+    }
+}
+
+/// Everything about the tab bar that is not SwiftUI's to decide.
+///
+/// On iOS 26 that is nothing. The system floats the TabView's bar as real
+/// Liquid Glass by itself, and an appearance proxy, a background or anything
+/// laid over it would be a custom surface sitting on top of the OS's own
+/// glass and killing it. So none of this runs there.
+///
+/// Below 26 the bar stays UIKit's — its items, its accessibility, its state —
+/// and only its background goes: a transparent appearance, and the hand-built
+/// twin of the 26 bar drawn by each page underneath it. The items are pulled
+/// into a centred group of known width so the twin can sit exactly behind
+/// them; left to fill the width, the outermost labels land on the curve of
+/// the capsule's ends and poke out of it.
+@MainActor
+private enum HubTabBar {
+    /// Whether the system is drawing this bar as glass — the material's own
+    /// test, so the bar and every pane on it agree: an SDK older than 26 runs
+    /// even a 26 phone in the old design, and there the twin is wanted after
+    /// all.
+    static var isSystemGlass: Bool { MMSystemGlass.isOn }
+
+    /// The shell's padding round its items, and the gap between items. One
+    /// number all the way round, because the selection is a capsule inside a
+    /// capsule and only a uniform inset keeps the two concentric. Nonisolated
+    /// because they are plain constants the bar's geometry is worked out from
+    /// outside any view.
+    nonisolated static let pad: CGFloat = 4
+    nonisolated static let spacing: CGFloat = 4
+
+    /// How much of the column's foot is kept clear for the floating bar —
+    /// at 32 the bottom row of the store grid sat half behind it.
+    static let footRoom: CGFloat = 96
+
+    /// The width UIKit gives each item. On a phone the five share what is
+    /// left of the screen once the shell floats 16 pt in from either edge —
+    /// the margin the Android bar floats at — and a phone is portrait-only, so
+    /// the answer never changes. An iPad only gets this bar in a compact
+    /// window, whose width it cannot know in advance, so it takes the
+    /// narrowest a label fits in and centres.
+    static let itemWidth: CGFloat = {
+        if UIDevice.current.userInterfaceIdiom == .pad { return 56 }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let screen = scenes.first?.screen.bounds.size ?? CGSize(width: 390, height: 844)
+        let count = CGFloat(HubTab.allCases.count)
+        let room = min(screen.width, screen.height) - 2 * 16
+            - 2 * HubTabBar.pad - (count - 1) * HubTabBar.spacing
+        return min(max((room / count).rounded(.down), 56), 76)
+    }()
+
+    static var shellWidth: CGFloat {
+        let count = CGFloat(HubTab.allCases.count)
+        return itemWidth * count + spacing * (count - 1) + pad * 2
+    }
+
+    /// 320 ms, on the same ease the web's selection travels on.
+    static let travel = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.32)
+
+    /// Dresses UIKit's bar, once, before the first one is built. Only a
+    /// compact-width bar: that is the bottom bar, the one the twin is drawn
+    /// for. A regular-width iPad keeps its system bar untouched.
+    static let styled: Void = {
+        guard !HubTabBar.isSystemGlass else { return }
+        let look = UITabBarAppearance()
+        look.configureWithTransparentBackground()
+        look.stackedItemPositioning = .centered
+        look.stackedItemWidth = HubTabBar.itemWidth
+        look.stackedItemSpacing = HubTabBar.spacing
+        // The selected item keeps the tint SwiftUI hands the bar. The rest
+        // wear the glass's second ink — the system's unselected grey is a
+        // third rank, and a third rank on glass is 1.53:1.
+        let quiet = UIColor { traits in HubTabBar.quietInk(traits) }
+        for item in [look.stackedLayoutAppearance, look.inlineLayoutAppearance,
+                     look.compactInlineLayoutAppearance] {
+            item.normal.iconColor = quiet
+            item.normal.titleTextAttributes = [.foregroundColor: quiet]
+        }
+        let bar = UITabBar.appearance(for: UITraitCollection(horizontalSizeClass: .compact))
+        bar.standardAppearance = look
+        bar.scrollEdgeAppearance = look
+    }()
+
+    /// The bar's second ink, resolved the way the twin under it resolves its
+    /// glass: off the page it floats over, for whichever scheme UIKit asks
+    /// about. Increase Contrast promotes it to the first.
+    nonisolated static func quietInk(_ traits: UITraitCollection) -> UIColor {
+        let P = Palette.current(traits.userInterfaceStyle == .dark ? .dark : .light)
+        return UIColor(BackdropKind.page.settledGlass(P)
+            .label(secondary: true, increaseContrast: traits.accessibilityContrast == .high))
+    }
+
+    /// Where UIKit has put the bar, in the window. There is no SwiftUI safe
+    /// area that says it without also moving when the keyboard comes up, so
+    /// it is read off the window: the status bar above, the home indicator
+    /// below, and the item band UIKit has used since iOS 12 between them.
+    struct Metrics {
+        let window: CGSize
+        let safeTop: CGFloat
+        let homeStrip: CGFloat
+        let row: CGFloat
+
+        var shellHeight: CGFloat { row + 2 * HubTabBar.pad }
+
+        /// The shell's middle, in a space that runs to the window's bottom
+        /// edge. Centred on the items — except on a phone with a home button,
+        /// where the bar sits on the bottom edge and a centred shell would
+        /// run off the screen; there it lifts until it just clears it.
+        func shellMidY(in height: CGFloat) -> CGFloat {
+            min(height - homeStrip - row / 2, height - 2 - shellHeight / 2)
+        }
+
+        func shellTop(in height: CGFloat) -> CGFloat {
+            shellMidY(in: height) - shellHeight / 2
+        }
+    }
+
+    static var metrics: Metrics {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        // The app's own window is the scene's first; the toast window comes
+        // later and is never made key.
+        let window = scene?.keyWindow ?? scene?.windows.first
+        let insets = window?.safeAreaInsets ?? .zero
+        return Metrics(window: window?.bounds.size ?? .zero,
+                       safeTop: insets.top,
+                       homeStrip: insets.bottom,
+                       row: UIDevice.current.userInterfaceIdiom == .pad ? 50 : 49)
+    }
+}
+
+/// How one page's column sits under the bar, kept outside the page's own
+/// state on purpose: it changes on every frame of a scroll, and only the twin
+/// needs to hear it. Held in the page's state it would ask every card on the
+/// page to redraw sixty times a second.
+@MainActor
+private final class HubScroll: ObservableObject {
+    /// How far the column has travelled up from rest. It swings the light on
+    /// the bar's rim and deepens its shadow, and past 132 pt the light has
+    /// swung its whole 22°, so it stops counting there and the bar stops
+    /// redrawing.
+    @Published private(set) var offset: CGFloat = 0
+    /// Whether any card is under the bar right now. At the very foot of a page
+    /// the last card has cleared it, and the page the replica draws is then
+    /// exactly what is there.
+    @Published private(set) var contentUnder = false
+
+    func track(_ column: CGRect) {
+        guard !HubTabBar.isSystemGlass else { return }
+        let m = HubTabBar.metrics
+        let travelled = min(max(m.safeTop - column.minY, 0), 132)
+        if abs(travelled - offset) >= 0.5 { offset = travelled }
+        let under = column.maxY - HubTabBar.footRoom > m.shellTop(in: m.window.height)
+        if under != contentUnder {
+            withAnimation(.easeInOut(duration: 0.16)) { contentUnder = under }
+        }
+    }
+}
+
+/// One tab's scrolling column of cards over the felt — and, below iOS 26, the
+/// glass that floats over its foot.
+private struct HubPage<Content: View>: View {
+    let tab: HubTab
+    let from: HubTab
+    let content: Content
+
+    @Environment(\.horizontalSizeClass) private var hSize
+    @State private var scroll = HubScroll()
+
+    init(tab: HubTab, from: HubTab, @ViewBuilder content: () -> Content) {
+        self.tab = tab
+        self.from = from
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                content
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+            // The tab bar floats over the page rather than sitting under it,
+            // so the last card needs room to clear it.
+            .padding(.bottom, HubTabBar.footRoom)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { column in
+                scroll.track(column)
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        // Over the column and under UIKit's bar, which is the only layer the
+        // twin can live in: the page's own view is below the bar and above
+        // everything that scrolls.
+        .overlay {
+            if !HubTabBar.isSystemGlass && hSize == .compact {
+                // Touches and VoiceOver both belong to UIKit's items above it;
+                // this is only what they are standing on.
+                HubTabBarTwin(tab: tab, from: from, scroll: scroll)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// Below iOS 26: the twin of the system's floating bar, drawn under UIKit's
+/// now-transparent one, and the two soft edges iOS 26 gives a scroll view for
+/// nothing.
+///
+/// The edges are the page's own gradient laid back over the column, faded in
+/// over 28 pt — the same trick as the material's replica, and exact for the
+/// same reason: we drew the page, so painting it again over a card is the
+/// card fading into what is really behind it. A mask would have had to reach
+/// under the status bar and the bar to do the same, and a mask that falls one
+/// point short of that cuts the column off in exactly the hard line it is
+/// there to prevent. Each edge shows only while something is under it.
+private struct HubTabBarTwin: View {
+    /// This page's own tab — where the selection comes to rest.
+    let tab: HubTab
+    /// The tab the player just left — where the selection sets out from.
+    let from: HubTab
+    @ObservedObject var scroll: HubScroll
+
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Whether the selection has finished its trip onto this tab. Each page
+    /// draws its own bar, so the trip has to be made by the page arriving:
+    /// it comes on screen with the selection still over the tab the player
+    /// left, and slides it home.
+    @State private var arrived = false
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let m = HubTabBar.metrics
+        GeometryReader { g in
+            ZStack(alignment: .topLeading) {
+                edge(P, g.size, stops: topStops(m, g.size.height))
+                    .opacity(scroll.offset > 0 ? 1 : 0)
+                edge(P, g.size, stops: footStops(m, g.size.height))
+                    .opacity(scroll.contentUnder ? 1 : 0)
+                shell(P, m)
+                    .position(x: g.size.width / 2, y: m.shellMidY(in: g.size.height))
+            }
+            .animation(.easeInOut(duration: 0.16), value: scroll.offset > 0)
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            guard from != tab, !reduceMotion else {
+                arrived = true
+                return
+            }
+            // One turn of the run loop, so the selection is drawn where it
+            // set out from before it is asked to leave.
+            DispatchQueue.main.async {
+                withAnimation(HubTabBar.travel) { arrived = true }
+            }
+        }
+        .onDisappear { arrived = false }
+    }
+
+    /// The bar itself. A capsule, because that is the shape the 26 bar it is
+    /// standing in for floats as; Regular, because live labels sit on it and
+    /// Clear does not adapt; over the page, with the cards that pass under it
+    /// declared as they come and go. The selection is a well in the glass —
+    /// never a second pane on it — in the glass's own ink, so it flips when
+    /// the glass does.
+    private func shell(_ P: Palette, _ m: HubTabBar.Metrics) -> some View {
+        let well = BackdropKind.page.settledGlass(P).ink
+            .opacity(contrast == .increased ? 0.18 : 0.10)
+        return ZStack(alignment: .leading) {
+            Color.clear
+            Capsule()
+                .fill(well)
+                .frame(width: HubTabBar.itemWidth, height: m.row)
+                .modifier(GlassLozenge(at: CGFloat((arrived ? tab : from).rawValue),
+                                       origin: CGFloat(from.rawValue),
+                                       target: CGFloat(tab.rawValue),
+                                       slot: HubTabBar.itemWidth + HubTabBar.spacing))
+                .padding(.leading, HubTabBar.pad)
+        }
+        .frame(width: HubTabBar.shellWidth, height: m.shellHeight)
+        .mmGlass(.regular, backdrop: .page, in: Capsule())
+        .environment(\.mmScrollOffset, scroll.offset)
+        .environment(\.mmContentUnderneath, scroll.contentUnder)
+    }
+
+    /// The page, again, window-sized and window-aligned, so its ramp lands on
+    /// the real one to the pixel, seen through a vertical fade.
+    private func edge(_ P: Palette, _ size: CGSize, stops: [Gradient.Stop]) -> some View {
+        LinearGradient(colors: [P.page, P.page2], startPoint: .topLeading, endPoint: .bottomTrailing)
+            .frame(width: size.width, height: size.height)
+            .mask(LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom))
+    }
+
+    /// Under the status bar: the column fades out over the 28 pt above it.
+    private func topStops(_ m: HubTabBar.Metrics, _ height: CGFloat) -> [Gradient.Stop] {
+        let h = max(height, 1)
+        return [.init(color: .black, location: 0),
+                .init(color: .black, location: max(m.safeTop - 28, 0) / h),
+                .init(color: .clear, location: min(m.safeTop / h, 1))]
+    }
+
+    /// Into the bar: 28 pt of fade down to its top edge, and softer from there
+    /// to the foot of the screen. Not all the way to the page — the cards
+    /// under the glass are what it has to refract.
+    private func footStops(_ m: HubTabBar.Metrics, _ height: CGFloat) -> [Gradient.Stop] {
+        let h = max(height, 1)
+        let top = m.shellTop(in: height)
+        return [.init(color: .clear, location: min(max(top - 28, 0) / h, 1)),
+                .init(color: .black.opacity(0.55), location: min(max(top, 0) / h, 1)),
+                .init(color: .black.opacity(0.85), location: 1)]
+    }
+}
+
+/// A selection that travels instead of cutting, and stretches on the way.
+///
+/// Only the position animates; the stretch is worked out from how far along
+/// its trip the selection is, peaking at 1.12 halfway — so a trip across
+/// three slots bulges once, not three times, and one that goes nowhere does
+/// not bulge at all. Where the trip started is handed in rather than
+/// remembered, because it changes in the same breath as where it ends.
+private struct GlassLozenge: ViewModifier, Animatable {
+    /// Where the selection is now, in slots. The one number that animates.
+    var at: CGFloat
+    let origin: CGFloat
+    let target: CGFloat
+    /// One slot's width, gap included.
+    let slot: CGFloat
+
+    /// Nonisolated, because the animation system reads it from outside the
+    /// main actor, and it is only ever one plain number.
+    nonisolated var animatableData: CGFloat {
+        get { at }
+        set { at = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let span = target - origin
+        let progress = abs(span) < 0.001 ? 1 : min(max((at - origin) / span, 0), 1)
+        content
+            .scaleEffect(x: 1 + 0.48 * progress * (1 - progress), y: 1)
+            .offset(x: at * slot)
     }
 }

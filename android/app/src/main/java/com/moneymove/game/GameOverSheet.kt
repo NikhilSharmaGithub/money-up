@@ -35,7 +35,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -120,7 +119,6 @@ fun GameOverSheet(
     flight: CoinFlight? = null,
     onDismiss: () -> Unit,
 ) {
-    val p = P.current
     val state = store.state ?: return onDismiss()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val results = PlayerResult.snapshot(state)
@@ -130,11 +128,9 @@ fun GameOverSheet(
     // off the bottom of the screen, and a toast pinned to it would be too.
     var toastShift by remember { mutableIntStateOf(0) }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         Box(
             Modifier
@@ -146,10 +142,12 @@ fun GameOverSheet(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 SheetBar("Game over")
+                val sheetScroll = rememberScrollState()
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .scrollEdge(sheetScroll)
+                        .verticalScroll(sheetScroll)
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -310,11 +308,12 @@ private fun RematchAction(store: GameStore, account: AccountStore, state: GameSt
     }
 }
 
+/** A line under an answer, set straight on the sheet's glass, in its quiet ink. */
 @Composable
 private fun Caption(text: String) {
     Text(
         text,
-        color = P.current.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+        color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
         textAlign = TextAlign.Center,
     )
 }
@@ -476,7 +475,7 @@ private fun DoubleWinOffer(store: GameStore, account: AccountStore, state: GameS
                 Text(
                     "Five seconds, and the win pays ${if (factor == 2) "twice" else "$factor times"}." +
                         if (spec.remaining > 0) " ${spec.remaining} left today." else "",
-                    color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                    color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                 )
             }

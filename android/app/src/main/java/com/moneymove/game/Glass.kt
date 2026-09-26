@@ -1,15 +1,31 @@
 package com.moneymove.game
 
+import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
+import android.view.FrameMetrics
+import android.view.Window
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
@@ -18,21 +34,30 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.addOutline
@@ -40,6 +65,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -51,8 +77,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalGraphicsContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
+import androidx.core.content.ContextCompat
 import kotlin.math.ceil
 import kotlin.math.min
+import kotlinx.coroutines.delay
 
 /**
  * The material.
@@ -138,7 +167,34 @@ class MMBackdrop internal constructor(internal val blurred: GraphicsLayer) {
     /** Where the recorded region's top-left sits in the root, in pixels. */
     internal var originInRoot: Offset = Offset.Zero
 
-    internal val recorded: Boolean get() = blurred.size.width > 0
+    /**
+     * How many surfaces are sampling this copy right now. [Modifier.mmGlass]
+     * signs in and out as it starts and stops, and the host records only
+     * while somebody is signed in: a copy nobody reads is the whole screen
+     * drawn a second time for nothing.
+     */
+    internal val samplers = mutableIntStateOf(0)
+
+    /**
+     * How many of those would bend the copy at their rim if they could. The
+     * lens is priced as a perimeter, but it is still a layer and a shader per
+     * surface, and the frame budget holds two of them; a third on screen —
+     * four corner pods on a tablet and a turn banner — steps every one of
+     * them to frost rather than letting the last to arrive decide. They sign
+     * in for wanting the lens, not for having it, so the count cannot flicker
+     * as they turn it off.
+     */
+    internal val lensers = mutableIntStateOf(0)
+
+    /**
+     * Whether [blurred] is a picture of the screen as it is now, rather than
+     * whatever it last held before the host stopped — a screen that may be
+     * gone. Snapshot state, because a surface that drew without the copy has
+     * to draw again once there is one.
+     */
+    internal val live = mutableStateOf(false)
+
+    internal val recorded: Boolean get() = live.value && blurred.size.width > 0
 }
 
 val LocalBackdrop: ProvidableCompositionLocal<MMBackdrop?> = compositionLocalOf { null }
@@ -202,6 +258,9 @@ object GlassMotion {
     /** Shadow, relaxed ↔ busy. Information; reduced only to a slower linear ramp. */
     const val SHADOW_MS = 200
 
+    /** That slower ramp: the shadow still changes state under Reduce Motion, only unhurried. */
+    const val SHADOW_REDUCED_MS = 300
+
     /** A control becoming a sheet, or a dock changing phase. */
     const val MORPH_MS = 380
 
@@ -228,7 +287,21 @@ object GlassMotion {
      * inside [Choreography.CARD_HOLD] and clears [Choreography.SETTLE] — so a
      * glass morph can never race a board settle.
      */
-    val morph: FiniteAnimationSpec<Float> = spring(dampingRatio = 0.38f, stiffness = 64.9f)
+    val morph: FiniteAnimationSpec<Float> = spring(dampingRatio = MORPH_DAMPING, stiffness = MORPH_STIFFNESS)
+
+    /**
+     * The same spring, for a surface's own size: the dock changing phase is
+     * the shell stretching to its new height, and it has to stretch on the
+     * curve every other morph lands on or it reads as a different material.
+     */
+    val morphSize: FiniteAnimationSpec<IntSize> = spring(
+        dampingRatio = MORPH_DAMPING,
+        stiffness = MORPH_STIFFNESS,
+        visibilityThreshold = IntSize.VisibilityThreshold,
+    )
+
+    private const val MORPH_DAMPING = 0.38f
+    private const val MORPH_STIFFNESS = 64.9f
 
     /** The press gel: down hard, up past 1.0 and back. */
     const val PRESS_SCALE = 0.965f
@@ -275,6 +348,190 @@ fun rememberBaseGlassLevel(reduceTransparency: Boolean = false): GlassLevel {
 }
 
 // ---------------------------------------------------------------------------
+// The governor
+// ---------------------------------------------------------------------------
+
+/**
+ * The level a screen that is watching its own frames should run at, given
+ * the one the device started with.
+ *
+ * Three things step it down while the screen is up, and none of them is a
+ * timer. Battery Saver switched on mid-game goes flat, as it would have at
+ * launch. A phone at a moderate thermal status or worse gives up the lens and
+ * keeps the blur. And a run of long frames — twenty of them averaging over
+ * fourteen milliseconds, measured from the frames the window really drew —
+ * takes one step off whatever else is in force for five seconds, and a second
+ * run inside those five takes a second step. Then it climbs back and looks
+ * again. It never steps down into [GlassLevel.Opaque] and never out of it:
+ * that one is Reduce Transparency, which belongs to the player.
+ *
+ * The fourth trigger in the plan is not here because it is not a level. A
+ * board mid-theatre freezes what the glass refracts ([LocalBoardBusy], which
+ * [MMBackdropHost] reads), and the material itself does not change at all.
+ *
+ * Only the table asks for this. It is the one screen with glass over a board
+ * that animates for forty minutes, and so the one whose frame budget the
+ * optics can actually break; the landing screens' only bar is flat already.
+ * Every step the governor takes crossfades inside the material, so a trip is
+ * something the frame counter sees and the player does not.
+ */
+@Composable
+fun rememberGlassGovernor(base: GlassLevel): GlassLevel {
+    val context = LocalContext.current
+    val saving = rememberPowerSaving(context)
+    val hot = rememberRunningHot(context)
+    // Nothing to step down from on a phone that starts flat — no blur, no
+    // lens — so a flat or opaque table does not pay to watch its frames.
+    val strain = rememberFrameStrain(context, watching = base == GlassLevel.Full || base == GlassLevel.Frost)
+    if (base == GlassLevel.Opaque) return base
+    var level = base
+    if (saving) level = GlassLevel.Flat
+    if (hot && level == GlassLevel.Full) level = GlassLevel.Frost
+    repeat(strain) { level = level.stepDown() }
+    return level
+}
+
+/** One rung less optics, and never past flat: opaque is the player's to choose. */
+private fun GlassLevel.stepDown(): GlassLevel = when (this) {
+    GlassLevel.Full -> GlassLevel.Frost
+    GlassLevel.Frost -> GlassLevel.Flat
+    GlassLevel.Flat, GlassLevel.Opaque -> this
+}
+
+/** How many frames the governor averages over, and the mean that trips it. */
+private const val STRAIN_FRAMES = 20
+private const val STRAIN_MS = 14f
+
+/** How long a trip holds before the governor climbs back and looks again. */
+private const val STRAIN_HOLD_MS = 5_000L
+
+/** Two trips is flat from full; a third would have nowhere left to go. */
+private const val STRAIN_MAX_STEPS = 2
+
+/**
+ * Battery Saver, followed as it changes. [rememberBaseGlassLevel] reads it
+ * once, at launch; a player who turns it on forty minutes into a game has
+ * asked for less and should get it at the next frame, not at the next launch.
+ */
+@Composable
+private fun rememberPowerSaving(context: Context): Boolean {
+    val app = context.applicationContext
+    val power = remember(app) { app.getSystemService(PowerManager::class.java) }
+    var saving by remember(power) { mutableStateOf(power?.isPowerSaveMode == true) }
+    DisposableEffect(app, power) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                saving = power?.isPowerSaveMode == true
+            }
+        }
+        // Not exported: the only sender this listens for is the system, which
+        // reaches an unexported receiver regardless.
+        val listening = runCatching {
+            ContextCompat.registerReceiver(
+                app,
+                receiver,
+                IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.isSuccess
+        onDispose { if (listening) runCatching { app.unregisterReceiver(receiver) } }
+    }
+    return saving
+}
+
+/**
+ * The phone is warm enough that the platform has started asking apps to back
+ * off. Android has only said so since API 29; before that there is nothing to
+ * ask, and nothing here changes.
+ */
+@Composable
+private fun rememberRunningHot(context: Context): Boolean {
+    val power = remember(context) { context.applicationContext.getSystemService(PowerManager::class.java) }
+    var hot by remember(power) {
+        mutableStateOf(
+            if (power != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Thermals.hot(power) else false,
+        )
+    }
+    DisposableEffect(power) {
+        val stop = if (power != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Thermals.watch(power) { hot = it }
+        } else {
+            null
+        }
+        onDispose { stop?.invoke() }
+    }
+    return hot
+}
+
+/**
+ * How many steps the frame times are asking for right now: 0, 1 or 2.
+ *
+ * Read from `FrameMetrics`, which every phone this app runs on reports — the
+ * whole of a frame from the vsync it was meant for to the buffer it swapped,
+ * UI thread and render thread both, and only for frames that were drawn, so
+ * a table sitting still costs nothing to watch. The numbers arrive on a
+ * thread of the governor's own and only a trip crosses back to the main one.
+ */
+@Composable
+private fun rememberFrameStrain(context: Context, watching: Boolean): Int {
+    var steps by remember { mutableIntStateOf(0) }
+    var until by remember { mutableLongStateOf(0L) }
+    val window = remember(context) { context.hostActivity()?.window }
+    DisposableEffect(window, watching) {
+        if (window == null || !watching) {
+            steps = 0
+            return@DisposableEffect onDispose {}
+        }
+        val worker = HandlerThread("mm.glass.governor").apply { start() }
+        val main = Handler(Looper.getMainLooper())
+        val times = FloatArray(STRAIN_FRAMES)
+        var next = 0
+        var seen = 0
+        var total = 0f
+        val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
+            val ms = metrics.getMetric(FrameMetrics.TOTAL_DURATION) / 1_000_000f
+            total += ms - times[next]
+            times[next] = ms
+            next = (next + 1) % STRAIN_FRAMES
+            if (seen < STRAIN_FRAMES) seen++
+            if (seen == STRAIN_FRAMES && total / STRAIN_FRAMES > STRAIN_MS) {
+                // A fresh twenty before the next verdict, so one bad run is
+                // one step and not a step for every frame that follows it.
+                times.fill(0f)
+                total = 0f
+                seen = 0
+                main.post {
+                    steps = (steps + 1).coerceAtMost(STRAIN_MAX_STEPS)
+                    until = SystemClock.uptimeMillis() + STRAIN_HOLD_MS
+                }
+            }
+        }
+        // A window that is not hardware accelerated has no frame metrics to
+        // give, and says so by throwing; the table then simply runs at the
+        // level it was handed.
+        val listening = runCatching {
+            window.addOnFrameMetricsAvailableListener(listener, Handler(worker.looper))
+        }.isSuccess
+        onDispose {
+            if (listening) runCatching { window.removeOnFrameMetricsAvailableListener(listener) }
+            worker.quitSafely()
+        }
+    }
+    LaunchedEffect(until) {
+        if (until == 0L) return@LaunchedEffect
+        delay((until - SystemClock.uptimeMillis()).coerceAtLeast(0L))
+        steps = 0
+    }
+    return steps
+}
+
+private tailrec fun Context.hostActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.hostActivity()
+    else -> null
+}
+
+// ---------------------------------------------------------------------------
 // The shared backdrop
 // ---------------------------------------------------------------------------
 
@@ -284,6 +541,10 @@ private const val BACKDROP_UPSCALE = 1f / BACKDROP_SCALE
 
 /** The same trick for the drop shadow, which tolerates it even better. */
 private const val SHADOW_SCALE = 0.25f
+
+/** The platform elevation that stands in for the two shadows below API 31. */
+private val LEGACY_ELEVATION_RELAXED = 8.dp
+private val LEGACY_ELEVATION_BUSY = 14.dp
 
 /**
  * Hosts the one blurred copy of the page that every glass surface samples.
@@ -296,17 +557,28 @@ private const val SHADOW_SCALE = 0.25f
  * this material is about, and the entire app draws twice per recorded frame
  * into the bargain.
  *
+ * It records only while some surface is actually sampling it. A bar over
+ * nothing but the page ramp has nothing to gain from the copy — a Gaussian of
+ * a ramp is the ramp — and a screen whose only sampler is a toast needs the
+ * copy for the two and a half seconds the toast is up, not for the forty
+ * minutes of the game underneath it. With nobody sampling, the host is a
+ * plain box at every tier.
+ *
+ * [overLiveBoard] drops the blur to the 12dp the spec gives a live board: the
+ * board is busy enough already, and 20dp of it is mush that costs more.
+ *
  * Below API 31 this is a plain [Box] and costs nothing: there is no
  * `RenderEffect` to blur with, so there is no point recording anything.
  */
 @Composable
 fun MMBackdropHost(
     modifier: Modifier = Modifier,
+    overLiveBoard: Boolean = false,
     backdrop: @Composable BoxScope.() -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        RecordingBackdropHost(modifier, backdrop, content)
+        RecordingBackdropHost(modifier, overLiveBoard, backdrop, content)
     } else {
         Box(modifier) {
             backdrop()
@@ -319,15 +591,18 @@ fun MMBackdropHost(
 @Composable
 private fun RecordingBackdropHost(
     modifier: Modifier,
+    overLiveBoard: Boolean,
     backdrop: @Composable BoxScope.() -> Unit,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val graphics = LocalGraphicsContext.current
+    val page = remember(graphics) { graphics.createGraphicsLayer() }
     val source = remember(graphics) { graphics.createGraphicsLayer() }
     val blurred = remember(graphics) { graphics.createGraphicsLayer() }
     val handle = remember(blurred) { MMBackdrop(blurred) }
     DisposableEffect(graphics) {
         onDispose {
+            graphics.releaseGraphicsLayer(page)
             graphics.releaseGraphicsLayer(source)
             graphics.releaseGraphicsLayer(blurred)
         }
@@ -342,7 +617,9 @@ private fun RecordingBackdropHost(
     // The 20dp blur, taken at quarter scale: on a 2.6x screen that is a radius
     // of 13 against the 52 it would have cost at full size. A 20dp Gaussian
     // has already destroyed everything finer than that, so nothing is lost.
-    val radius = with(density) { GlassSpec.blur(GlassVariant.Regular).toPx() } * BACKDROP_SCALE
+    val radius = with(density) {
+        GlassSpec.blur(GlassVariant.Regular, overLiveBoard).toPx()
+    } * BACKDROP_SCALE
     val effect = remember(radius, appearance) {
         BackdropOptics.effect(
             blurRadiusPx = radius.coerceAtLeast(0.5f),
@@ -351,7 +628,23 @@ private fun RecordingBackdropHost(
         )
     }
 
-    val recording = level == GlassLevel.Full || level == GlassLevel.Frost
+    // The samplers decide, not the level. A surface signs in only while its
+    // level lets it sample — or for the 240 ms it spends crossfading out of
+    // one that did, when the governor has just stepped the screen down, and
+    // for those it still needs a picture of now rather than of a second ago.
+    val recording = level != GlassLevel.Opaque && handle.samplers.intValue > 0
+
+    // Whether the copy holds a picture taken since recording last started.
+    // Board-busy keeps the last picture, which is the point of it; but the
+    // picture left over from before the host last stopped is of a screen that
+    // may not exist any more, so the first frame of a fresh run is taken
+    // whether the board is busy or not. Plain, not state: nothing but the
+    // draw below reads it, so nothing has to be told when it changes.
+    val fresh = remember(handle) { BooleanArray(1) }
+    SideEffect {
+        if (!recording) fresh[0] = false
+        handle.live.value = recording
+    }
 
     Box(modifier) {
         val outer = this
@@ -363,21 +656,34 @@ private fun RecordingBackdropHost(
                     onDrawWithContent {
                         val w = size.width
                         val h = size.height
-                        if (recording && !boardBusy && w >= 4f && h >= 4f) {
+                        if (recording && (!boardBusy || !fresh[0]) && w >= 4f && h >= 4f) {
+                            // The page is drawn once, into a layer of its
+                            // own, and that one picture is both what the
+                            // screen shows and what the copy is shrunk from.
+                            // Drawing the content a second time for the copy
+                            // would run every draw beneath here twice a frame
+                            // — the table's own host among them, which sits
+                            // under the shell's and would record its copy
+                            // twice for as long as a toast is up.
+                            page.record { this@onDrawWithContent.drawContent() }
                             val target = IntSize(
                                 ceil(w * BACKDROP_SCALE).toInt().coerceAtLeast(1),
                                 ceil(h * BACKDROP_SCALE).toInt().coerceAtLeast(1),
                             )
                             source.record(target) {
-                                scale(BACKDROP_SCALE, BACKDROP_SCALE, Offset.Zero) {
-                                    this@onDrawWithContent.drawContent()
-                                }
+                                scale(BACKDROP_SCALE, BACKDROP_SCALE, Offset.Zero) { drawLayer(page) }
                             }
                             blurred.renderEffect = effect
                             blurred.record(target) { drawLayer(source) }
+                            fresh[0] = true
+                            // The live, unblurred page. The glass samples the copy.
+                            drawLayer(page)
+                        } else {
+                            // Not recording, or holding the copy still while
+                            // the board moves: the page goes straight to the
+                            // screen, with no layer in the way.
+                            drawContent()
                         }
-                        // The live, unblurred page. The glass samples the copy.
-                        drawContent()
                     }
                 },
             content = backdrop,
@@ -528,31 +834,75 @@ fun Modifier.mmGlass(
         level != GlassLevel.Flat &&
         level != GlassLevel.Opaque &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val sampled = if (canSample) handle else null
 
-    val lensing = lens &&
+    // The level can change under a surface that is already on screen — the
+    // governor stepping the table down when its frames run long, and back up
+    // five seconds later — and the optics cross over the change rather than
+    // cut: 240 ms, so a tier change is not a visible event, and at once under
+    // Reduce Motion. A surface that arrives at a level simply starts there.
+    val reduceMotion = rememberReduceMotion()
+    val levelChange: AnimationSpec<Float> =
+        if (reduceMotion) snap() else tween(GlassMotion.LEVEL_CHANGE_MS)
+    val copyShown = animateFloatAsState(if (canSample) 1f else 0f, levelChange, label = "mm.level")
+    val showingCopy by remember { derivedStateOf { copyShown.value > 0f } }
+    val sampled = if (handle != null && (canSample || showingCopy)) handle else null
+
+    // Signed in with the host for exactly as long as this surface samples
+    // it — the crossfade out included — which is what lets the host stop
+    // recording when nothing does.
+    if (sampled != null) {
+        DisposableEffect(sampled) {
+            sampled.samplers.intValue += 1
+            onDispose { sampled.samplers.intValue -= 1 }
+        }
+    }
+
+    val wantsLens = lens &&
         canSample &&
         level == GlassLevel.Full &&
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    if (wantsLens && handle != null) {
+        DisposableEffect(handle) {
+            handle.lensers.intValue += 1
+            onDispose { handle.lensers.intValue -= 1 }
+        }
+    }
+    // More than two on screen and none of them lenses: frost, for all of them.
+    val lensing = wantsLens && handle != null && handle.lensers.intValue <= MAX_LENSES
+    val lensShown = animateFloatAsState(if (lensing) 1f else 0f, levelChange, label = "mm.lens")
+    val showingLens by remember { derivedStateOf { lensShown.value > 0f } }
 
-    val shader = remember(lensing) {
-        if (lensing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    val shader = remember(lensing || showingLens) {
+        if ((lensing || showingLens) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching { GlassLens.shader() }.getOrNull()
         } else {
             null
         }
     }
 
+    // Relaxed and busy are the two ends of one ramp, and the shadow crosses
+    // it rather than cutting between them — a shadow that jumps is one
+    // sticker swapped for another, which is the very tell the dynamic shadow
+    // is there to avoid. Linear, because it is following something (the
+    // scroll, the board) rather than performing; slower under Reduce Motion
+    // but never stopped, because it is information. The draw reads it, not
+    // the composition, so the ramp costs redraws and not recompositions —
+    // everywhere but the platform shadow below API 31, which only takes its
+    // elevation from a recomposition.
+    val busyness = animateFloatAsState(
+        targetValue = if (busy) 1f else 0f,
+        animationSpec = tween(
+            if (reduceMotion) GlassMotion.SHADOW_REDUCED_MS else GlassMotion.SHADOW_MS,
+            easing = LinearEasing,
+        ),
+        label = "mm.shadow",
+    )
+
     // Below API 31 there is no RenderEffect to build a shadow out of, so the
     // platform's own elevation shadow stands in. It couples its offset and its
     // blur together where the spec separates them, which on a tier-0 phone is
     // the smaller of the two compromises already being made.
     val legacyShadow = casting && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
-    val elevation = animateDpAsState(
-        targetValue = if (busy) 14.dp else 8.dp,
-        animationSpec = tween(GlassMotion.SHADOW_MS),
-        label = "mm.shadow",
-    ).value
 
     // Snapshot state rather than a plain field, so that a bar which moves
     // without otherwise changing still redraws and samples the backdrop at its
@@ -566,12 +916,16 @@ fun Modifier.mmGlass(
                 // Doubled because the platform multiplies its own ambient and
                 // spot factors on top of whatever colour it is handed — and
                 // below API 28 it ignores the colour entirely and only the
-                // elevation above says anything at all.
-                val shadowColour = Color.Black.copy(
-                    alpha = (GlassSpec.shadowAlpha(surface.target, busy) * 2f).coerceAtMost(1f)
+                // elevation says anything at all.
+                val t = busyness.value
+                val darkness = lerpF(
+                    GlassSpec.shadowAlpha(surface.target, busy = false),
+                    GlassSpec.shadowAlpha(surface.target, busy = true),
+                    t,
                 )
+                val shadowColour = Color.Black.copy(alpha = (darkness * 2f).coerceAtMost(1f))
                 Modifier.shadow(
-                    elevation = elevation,
+                    elevation = lerp(LEGACY_ELEVATION_RELAXED, LEGACY_ELEVATION_BUSY, t),
                     shape = shape,
                     clip = false,
                     ambientColor = shadowColour,
@@ -597,7 +951,7 @@ fun Modifier.mmGlass(
                 val opaque = level == GlassLevel.Opaque
 
                 if (shadowLayer != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    drawGlassShadow(shadowLayer, path, heightDp, busy, flip)
+                    drawGlassShadow(shadowLayer, path, heightDp, busyness.value, flip)
                 }
 
                 if (opaque) {
@@ -615,21 +969,29 @@ fun Modifier.mmGlass(
 
                 if (sampled != null && sampled.recorded) {
                     clipPath(path) {
-                        if (lensLayer != null && shader != null && radiusPx != null && bigEnough &&
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                        ) {
-                            drawLensedBackdrop(
-                                layer = lensLayer,
-                                shader = shader,
-                                handle = sampled,
-                                origin = positionInRoot.value,
-                                radiusPx = radiusPx,
-                                bandDp = GlassSpec.lensBand(radiusPx / density.density),
-                                minDimDp = minDimDp,
-                                density = density.density,
-                            )
-                        } else {
-                            drawSharedBackdrop(sampled, positionInRoot.value)
+                        faded(copyShown.value) {
+                            val bend = lensShown.value
+                            if (lensLayer != null && shader != null && radiusPx != null && bigEnough &&
+                                bend > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                            ) {
+                                // A lens on its way in or out lies over the
+                                // plain copy, so the bend fades and the blur
+                                // under it never does.
+                                if (bend < 1f) drawSharedBackdrop(sampled, positionInRoot.value)
+                                drawLensedBackdrop(
+                                    layer = lensLayer,
+                                    shader = shader,
+                                    handle = sampled,
+                                    origin = positionInRoot.value,
+                                    radiusPx = radiusPx,
+                                    bandDp = GlassSpec.lensBand(radiusPx / density.density),
+                                    minDimDp = minDimDp,
+                                    density = density.density,
+                                    alpha = bend,
+                                )
+                            } else {
+                                drawSharedBackdrop(sampled, positionInRoot.value)
+                            }
                         }
                     }
                 }
@@ -680,6 +1042,7 @@ private fun DrawScope.drawLensedBackdrop(
     bandDp: Float,
     minDimDp: Float,
     density: Float,
+    alpha: Float = 1f,
 ) {
     val target = IntSize(size.width.toInt().coerceAtLeast(1), size.height.toInt().coerceAtLeast(1))
     layer.record(target) { drawSharedBackdrop(handle, origin) }
@@ -691,8 +1054,27 @@ private fun DrawScope.drawLensedBackdrop(
         bandPx = bandDp * density,
         peakPx = GlassSpec.lensPeak(bandDp, minDimDp) * density,
     )
+    layer.alpha = alpha
     drawLayer(layer)
 }
+
+/**
+ * [block] at [alpha], for the 240 ms a level change takes. Only then does it
+ * cost an offscreen pass; at rest the copy is either all there or not drawn.
+ */
+private fun DrawScope.faded(alpha: Float, block: DrawScope.() -> Unit) {
+    when {
+        alpha >= 1f -> block()
+        alpha > 0f -> drawIntoCanvas { canvas ->
+            canvas.saveLayer(Rect(Offset.Zero, size), Paint().apply { this.alpha = alpha })
+            block()
+            canvas.restore()
+        }
+    }
+}
+
+/** The lenses the frame budget holds at once; see [MMBackdrop.lensers]. */
+private const val MAX_LENSES = 2
 
 /**
  * The specular rim: two additive strokes and a hairline.
@@ -800,6 +1182,10 @@ private fun DrawScope.drawGlassGlow(path: Path, surface: GlassSurface, flip: Flo
  * content scrolls beneath the bar is the giveaway that the bar is a pasted
  * card rather than a floating one.
  *
+ * [busyness] is where it is between the two, 0 relaxed and 1 busy, and every
+ * one of the three numbers — the drop, the blur and the darkness — travels
+ * with it, so the change is one shadow deepening rather than two crossfading.
+ *
  * Taken at quarter scale, for the same reason the backdrop is: the busy end of
  * the scale is a 44dp blur, which on a 3x screen is a 113px kernel over a
  * full-width bar, and that is several times the entire glass frame budget on
@@ -812,19 +1198,36 @@ private fun DrawScope.drawGlassShadow(
     layer: GraphicsLayer,
     path: Path,
     heightDp: Float,
-    busy: Boolean,
+    busyness: Float,
     flip: Float,
 ) {
-    val offsetY = GlassSpec.shadowY(heightDp, busy).toPx()
+    val offsetY = lerpF(
+        GlassSpec.shadowY(heightDp, busy = false).toPx(),
+        GlassSpec.shadowY(heightDp, busy = true).toPx(),
+        busyness,
+    )
     val alpha = lerpF(
-        GlassSpec.shadowAlpha(GlassAppearance.Light, busy),
-        GlassSpec.shadowAlpha(GlassAppearance.Dark, busy),
-        flip,
+        lerpF(
+            GlassSpec.shadowAlpha(GlassAppearance.Light, busy = false),
+            GlassSpec.shadowAlpha(GlassAppearance.Dark, busy = false),
+            flip,
+        ),
+        lerpF(
+            GlassSpec.shadowAlpha(GlassAppearance.Light, busy = true),
+            GlassSpec.shadowAlpha(GlassAppearance.Dark, busy = true),
+            flip,
+        ),
+        busyness,
     )
     // The spec's blur numbers are CSS box-shadow radii, i.e. twice the
     // Gaussian's sigma; Android's RenderEffect wants a radius that converts to
     // sigma as 0.577r, so the two conventions meet at 0.86x.
-    val radius = (GlassSpec.shadowBlur(heightDp, busy).toPx() * 0.86f).coerceIn(0.5f, 140f)
+    val blur = lerpF(
+        GlassSpec.shadowBlur(heightDp, busy = false).toPx(),
+        GlassSpec.shadowBlur(heightDp, busy = true).toPx(),
+        busyness,
+    )
+    val radius = (blur * 0.86f).coerceIn(0.5f, 140f)
     val pad = ceil(radius * 2f)
     val target = IntSize(
         ceil((size.width + pad * 2f) * SHADOW_SCALE).toInt().coerceAtLeast(1),
@@ -924,6 +1327,27 @@ private fun mixColor(a: Color, b: Color, t: Float): Color = Color(
 // API 24 device — the same shape `RenderEffectVerificationHelper` uses inside
 // Compose itself.
 // ---------------------------------------------------------------------------
+
+/**
+ * The platform's thermal status, which only exists from API 29. Moderate is
+ * the first rung at which the platform asks apps to shed work, and the lens —
+ * a shader pass per surface — is the optic that costs most and says least.
+ */
+@RequiresApi(Build.VERSION_CODES.Q)
+private object Thermals {
+
+    fun hot(power: PowerManager): Boolean =
+        power.currentThermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
+
+    /** Delivered on the main thread; the returned function stops listening. */
+    fun watch(power: PowerManager, onChange: (Boolean) -> Unit): () -> Unit {
+        val listener = PowerManager.OnThermalStatusChangedListener { status ->
+            onChange(status >= PowerManager.THERMAL_STATUS_MODERATE)
+        }
+        power.addThermalStatusListener(listener)
+        return { power.removeThermalStatusListener(listener) }
+    }
+}
 
 @RequiresApi(Build.VERSION_CODES.S)
 private object BackdropOptics {

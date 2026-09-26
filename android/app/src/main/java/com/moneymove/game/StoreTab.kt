@@ -19,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -148,21 +147,51 @@ private const val PLAY_MISSING = "Google Play isn't available on this device."
 /** Billing's own words for a purchase parked on somebody's approval. */
 private const val PLAY_PENDING = "Waiting on approval for that purchase."
 
-/** iOS's store purse: a gold capsule, the coin, and the count beside it. */
+/**
+ * iOS's store purse: the coin and the count beside it, in a capsule of glass.
+ *
+ * It is the one piece of glass on this page. Everything else here is what
+ * people came to look at — the packs, the shelves, the boards — and stays
+ * paper; the purse is the page's own chrome, so it floats over the page
+ * rather than being printed on it.
+ *
+ * The brass moves out of the capsule and into the light. The gold capsule it
+ * was becomes the film, which already carries the table's brass, and the rim,
+ * which is brass on every table. The count goes into the glass's own ink
+ * ([labelInk]), as iOS's purse and the web's print theirs: the raw gold on
+ * the material measures as little as 3.2:1 on a daylight table, and the coin
+ * beside the number is brass by its own drawing, so the purse still reads as
+ * gold without the number having to be. Being one of the fixed-colour
+ * glyphs, the coin is also why this is Regular glass and never Clear.
+ *
+ * Flat, as a button in the page is ([Embedded]): the purse scrolls with the
+ * page, so nothing ever slides beneath it, and the page's blurred copy is
+ * recorded from the very content it sits in, which would be sampling last
+ * frame's picture of itself. What is behind it is the page's own ramp, and a
+ * blur hands a linear ramp straight back, so dropping it costs nothing
+ * anybody can see. No tint, either: a tint marks the one thing on screen that
+ * is primary, and a gold wash on the purse reads as a button that is not
+ * there.
+ */
 @Composable
 private fun CoinChip(coins: Int, modifier: Modifier = Modifier) {
-    val p = P.current
-    Row(
-        modifier
-            .clip(RoundedCornerShape(99.dp))
-            .background(p.goldSoft)
-            .border(1.dp, p.gold.copy(alpha = 0.6f), RoundedCornerShape(99.dp))
-            .padding(horizontal = 13.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon("coin", size = 17.dp)
-        Spacer(Modifier.width(5.dp))
-        Text("$coins", color = p.gold, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+    val glass = rememberGlassSurface(BackdropKind.Page)
+    Embedded(LocalGlassLightAngle.current) {
+        Row(
+            modifier
+                .mmGlass(
+                    backdrop = BackdropKind.Page,
+                    shape = MMShapes.pill,
+                    lens = false,
+                    shadow = GlassShadow.Relaxed,
+                )
+                .padding(horizontal = 13.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon("coin", size = 17.dp)
+            Spacer(Modifier.width(5.dp))
+            Text("$coins", color = glass.labelInk(), fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+        }
     }
 }
 
@@ -570,9 +599,13 @@ private fun ItemCard(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        // A bought skin is the player's own chosen emoji — the one place in
-        // the chrome where an emoji is the thing on sale rather than a
-        // drawing standing in for one.
+        // A bought skin is the player's own chosen emoji — the one place on
+        // this page where an emoji is the thing on sale rather than a
+        // drawing standing in for one. That is why it stays: the drawn-icons
+        // rule is for chrome, this card is content, and the emoji is the very
+        // piece the board, or the player chip, will draw. A glyph here would
+        // sell a picture of something else. iOS's storeCard shows the same
+        // emoji at the same 34.
         Text(item.emoji, fontSize = 34.sp)
         Text(
             item.name,
@@ -814,13 +847,13 @@ private fun BoardShopSheet(
     onClose: () -> Unit,
     onBought: () -> Unit,
 ) {
-    val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    // The app's one sheet ([MMSheet]) — the same glass the lobby lays this
+    // very page on (LobbySheet.kt's BoardPageSheet), so a board's shop looks
+    // the same wherever it was opened from.
+    MMSheet(
         onDismissRequest = onClose,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         Column(
             Modifier

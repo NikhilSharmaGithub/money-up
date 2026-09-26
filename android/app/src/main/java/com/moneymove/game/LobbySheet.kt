@@ -29,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -45,12 +44,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -87,11 +89,12 @@ import kotlinx.coroutines.launch
  *
  * Every board there is, and the shop for one of them, come up as sheets of
  * their own on top of this one, the way iOS stacks BoardPickerSheet and
- * BoardBuySheet over its settings — on the page's colour rather than the
- * sheet's, as iOS paints them, and each gone again with its own Done or Close
- * to leave the settings exactly where they were. They used to be drawn in
- * place of the settings, which on a phone beside an iPhone was a different
- * sheet changing its face where iOS slides a new one up.
+ * BoardBuySheet over its settings — on the same glass as this one ([MMSheet];
+ * iOS paints them the page's colour below 26 and gives them the system's
+ * glass on it), and each gone again with its own Done or Close to leave the
+ * settings exactly where they were. They used to be drawn in place of the
+ * settings, which on a phone beside an iPhone was a different sheet changing
+ * its face where iOS slides a new one up.
  *
  * `onTheme` is the app's own table-style setter. The style is the player's,
  * not the room's, and it lives with the activity rather than with the game —
@@ -106,17 +109,15 @@ fun LobbySheet(
     onTheme: ((MMTheme) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
-    val p = P.current
     if (game.state == null) return onDismiss()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
 
-    ModalBottomSheet(
+    // No grabber from the sheet: the settings draw their own into their bar,
+    // where iOS puts it.
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        // The grabber is drawn into the settings' own bar, where iOS puts it.
-        dragHandle = null,
     ) {
         Box(Modifier.fillMaxWidth()) {
             // Done lowers the sheet first and only then lets it go, as iOS's
@@ -177,6 +178,7 @@ fun LobbySetup(
         Column(
             Modifier
                 .fillMaxWidth()
+                .fadeUnderBar(SETTINGS_BAR)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 14.dp)
                 .padding(top = SETTINGS_BAR + 12.dp, bottom = 12.dp),
@@ -188,15 +190,8 @@ fun LobbySetup(
             )
         }
         // iOS's navigation bar stays where it is while the settings scroll
-        // beneath it, over a soft fade of the sheet into what passes under.
-        val sheet = P.current.sheet
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .background(Brush.verticalGradient(0f to sheet, 0.72f to sheet, 1f to sheet.copy(alpha = 0f))),
-        ) {
-            SettingsBar(onDone)
-        }
+        // beneath it, fading out of the picture as they go under.
+        SettingsBar(onDone)
     }
 
     // iOS's BoardPickerSheet pads its shelves 16 all round.
@@ -254,12 +249,13 @@ fun LobbySetup(
 
 /**
  * A sheet on top of the settings for one of BoardPicker.kt's two big pages,
- * as iOS presents them: its own sheet on the page's colour, no grabber (iOS
- * asks for none on either), always the full height (the large detent), the
- * page's own bar pinned at the top where iOS's navigation bar sits, and the
- * page's own scroll under it. Its way out lowers it first and only then lets
- * go of it, so it slides down the way it came up rather than blinking out.
- * The table's toast is drawn over it, as iOS floats its toasts over sheets.
+ * as iOS presents them: its own sheet, on the same glass as the settings
+ * under it, no grabber (iOS asks for none on either), always the full height
+ * (the large detent), the page's own bar pinned at the top where iOS's
+ * navigation bar sits, and the page's own scroll under it. Its way out
+ * lowers it first and only then lets go of it, so it slides down the way it
+ * came up rather than blinking out. The table's toast is drawn over it, as
+ * iOS floats its toasts over sheets.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -270,17 +266,14 @@ private fun BoardPageSheet(
     bar: @Composable (close: () -> Unit) -> Unit,
     content: @Composable (close: () -> Unit) -> Unit,
 ) {
-    val p = P.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     val close: () -> Unit = {
         scope.launch { sheetState.hide() }.invokeOnCompletion { onClose() }
     }
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onClose,
         sheetState = sheetState,
-        containerColor = p.page,
-        dragHandle = null,
     ) {
         Box(Modifier.fillMaxWidth().fillMaxHeight()) {
             Column(Modifier.fillMaxSize()) {
@@ -289,12 +282,15 @@ private fun BoardPageSheet(
                 // settings' own bar does. It stays there while the page scrolls.
                 Box(Modifier.padding(horizontal = gutter).padding(top = 16.dp)) { bar(close) }
                 // iOS's scroll starts where its bar ends, nine points below
-                // it on these sheets, and then the page's own gutter.
+                // it on these sheets, and then the page's own gutter. What
+                // goes up under the bar fades out there.
+                val pageScroll = rememberScrollState()
                 Column(
                     Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .scrollEdge(pageScroll)
+                        .verticalScroll(pageScroll)
                         .padding(horizontal = gutter)
                         .padding(top = 9.dp + gutter, bottom = gutter),
                 ) {
@@ -448,6 +444,43 @@ private fun SettingsFace(
 
 /** The settings bar's height: 16 over the 44-point bar and 9 under it. */
 private val SETTINGS_BAR = 69.dp
+
+/**
+ * How far down the bar the settings stay wholly out of sight before they
+ * start to fade back in — the same stop the bar's old wash of sheet colour
+ * held solid to.
+ */
+private const val BAR_HIDES = 0.72f
+
+/**
+ * The settings going out of the picture as they scroll up under the bar,
+ * rather than being painted over.
+ *
+ * The bar used to lay a wash of the sheet's colour down over whatever passed
+ * beneath it. On the glass that wash would be a band of the old paper across
+ * the top of the sheet, sitting over the material's own rim and the glow
+ * under it and cutting both off — so the cards are faded out instead, and
+ * what shows under the bar is the sheet itself. Measured against the same
+ * stops, at rest it is the picture it always was.
+ *
+ * The fade needs a layer of its own: without one, cutting the cards' alpha
+ * would cut straight through to the glass under them and take the film with
+ * it. Only the alpha of the two colours below is read.
+ */
+private fun Modifier.fadeUnderBar(bar: Dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(
+            Brush.verticalGradient(
+                0f to Color.Transparent,
+                BAR_HIDES to Color.Transparent,
+                1f to Color.Black,
+                endY = bar.toPx(),
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
 
 /**
  * The strip across the top, laid out the way iOS's inline navigation bar

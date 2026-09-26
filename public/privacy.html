@@ -20,19 +20,92 @@
 <meta property="og:image" content="https://www.moneymove.live/og.png" />
 <meta name="twitter:card" content="summary_large_image" />
 
+<!-- What shows before the script below has read the table; it then takes
+     whatever --page is, the way the game's own tag does. -->
+<meta name="theme-color" content="#0c1310" />
+<!-- The game's own type and tables. This page used to carry a handful of
+     hard-coded hexes and the system font, so it was the green night table
+     whatever the player had picked, in a face the game never uses. It reads
+     the game's stylesheet now: the fourteen table blocks and Outfit. The icon
+     is the drawn die the rest of the site wears; this page had none, so the
+     browser showed a blank one. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230c1310'/><rect x='7' y='7' width='18' height='18' rx='4' fill='%23f4f1e4'/><g fill='%231c6b45'><circle cx='12' cy='12' r='2'/><circle cx='20' cy='12' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='20' r='2'/><circle cx='20' cy='20' r='2'/></g></svg>" />
+<link rel="stylesheet" href="/css/style.css" />
+<script>
+  // Before paint, and read exactly the way the game reads it, so walking from
+  // a table to this page keeps the table the player is sitting at — Crimson
+  // at night stays Crimson at night — and never flashes the wrong one first.
+  (function () {
+    var root = document.documentElement;
+    function wear() {
+      var saved = null, pal = null;
+      try {
+        saved = localStorage.getItem('moneymove:theme');
+        pal = localStorage.getItem('moneymove:palette');
+      } catch (e) {}
+      // Dark is the house style; the system setting only lightens it.
+      var dark = saved ? saved === 'dark'
+        : !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      root.dataset.theme = dark ? 'dark' : 'light';
+      if (pal && pal !== 'felt') root.dataset.palette = pal;
+      else delete root.dataset.palette;
+      // The browser's own chrome wears the page too, read back off the
+      // stylesheet the way app.js does it rather than kept in a list here.
+      var tag = document.querySelector('meta[name="theme-color"]');
+      var page = getComputedStyle(root).getPropertyValue('--page').trim();
+      if (tag && page) tag.setAttribute('content', page);
+    }
+    wear();
+    // The switch lives in the game, not on this page. Flip it in the tab the
+    // game is in and this one follows; a player who has never touched it
+    // follows the system, the way their first visit to the game did.
+    window.addEventListener('storage', function (e) {
+      if (!e.key || e.key === 'moneymove:theme' || e.key === 'moneymove:palette') wear();
+    });
+    var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+    if (mq && mq.addEventListener) mq.addEventListener('change', wear);
+  })();
+</script>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0c1310; color: #efede2;
-         margin: 0; padding: 40px 20px; line-height: 1.65; }
+  /* Every word here is printed straight onto the table's page, not onto a
+     card, so it takes the --page-ink family the landing's wordmark and prose
+     take — which is what keeps it readable on crimson by day, the one light
+     table whose page is a deep red — through the --doc-* inks the stylesheet
+     derives from that family for pages like this one. The browser's own
+     widgets and scrollbars follow the table's light or dark. */
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  /* The game is one screen that never scrolls and pins html and body to say
+     so; a page of words has to be allowed to. At least a screen tall, because
+     the stylesheet's table wash sits under body and shows as a band wherever
+     a short page stops short of the bottom of a tall window. */
+  html, body { height: auto; overflow: visible; }
+  body { color: var(--page-ink); min-height: 100vh; padding: 40px 20px; line-height: 1.65; }
   main { max-width: 680px; margin: 0 auto; }
-  h1 { font-size: 26px; } h2 { font-size: 17px; margin-top: 30px; color: #d9a13a; }
-  p, li { font-size: 15px; color: #cfd6cd; }
-  a { color: #e3a93c; }
-  .updated { color: #78827a; font-size: 13px; }
+  /* The stylesheet zeroes every margin and padding for the game's sake;
+     prose gets back the spacing a browser gives it, which is what this page
+     was laid out in. */
+  p { margin: 1em 0; }
+  ul { margin: 1em 0; padding-left: 40px; }
+  h1 { font-size: 26px; margin: .67em 0; }
+  /* The game's own dice, from js/icons.js, inlined: the page loads no script
+     to paint a data-ico, and one glyph does not justify fetching the set. */
+  h1 .ico { color: var(--page-accent); }
+  h2 { font-size: 17px; margin: 30px 0 .83em; color: var(--doc-accent); }
+  p, li { font-size: 15px; color: var(--doc-body); }
+  a { color: var(--doc-accent); }
+  .foot { margin-top: 34px; font-size: 13px; color: var(--doc-quiet); }
+  .foot a { color: var(--doc-quiet); }
+  .foot a.home { color: var(--doc-accent); }
+  .updated { color: var(--doc-quiet); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>🎲 MoneyMove — Privacy Policy</h1>
+  <h1><svg class="ico" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" opacity=".3" d="M16.4 3.2h9a3.4 3.4 0 0 1 3.4 3.4v9a3.4 3.4 0 0 1 -3.4 3.4h-9a3.4 3.4 0 0 1 -3.4 -3.4v-9a3.4 3.4 0 0 1 3.4 -3.4ZM16.1 7.8a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM22.7 14.4a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0Z"/><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M6.6 13h9a3.4 3.4 0 0 1 3.4 3.4v9a3.4 3.4 0 0 1 -3.4 3.4h-9a3.4 3.4 0 0 1 -3.4 -3.4v-9a3.4 3.4 0 0 1 3.4 -3.4ZM6.2 17.6a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM12.8 17.6a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM6.2 24.2a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM12.8 24.2a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0Z"/></svg> MoneyMove — Privacy Policy</h1>
   <p class="updated">Last updated: 16 September 2026</p>
 
   <p>MoneyMove is a multiplayer property-trading board game. We built it to be played,
@@ -70,7 +143,7 @@
   off entirely from our side. We request <b>non-personalised ads only</b>: your activity is not used to target ads
   and we do not track you across other companies' apps or websites. Google may still process your
   device's identifiers and how you interact with an ad, to deliver it, measure it and prevent
-  fraud — see <a href="https://policies.google.com/technologies/partner-sites" style="color:#e3a93c">how Google uses information from apps that use its services</a>.</p>
+  fraud — see <a href="https://policies.google.com/technologies/partner-sites">how Google uses information from apps that use its services</a>.</p>
 
   <h2>What stays on your device only</h2>
   <ul>
@@ -110,12 +183,12 @@
 
   <p class="updated">MoneyMove is an original implementation of the classic property-trading
   board game and is not affiliated with any trademark holder.</p>
-  <p style="margin-top:34px;font-size:13px;color:#7d8a7f">
-    <a href="/" style="color:#e3a93c">Play MoneyMove</a> ·
-    <a href="/how-to-play" style="color:#93a396">How to play</a> ·
-    <a href="/boards" style="color:#93a396">Boards</a> ·
-    <a href="/support" style="color:#93a396">Support</a> ·
-    <a href="/privacy" style="color:#93a396">Privacy</a>
+  <p class="foot">
+    <a class="home" href="/">Play MoneyMove</a> ·
+    <a href="/how-to-play">How to play</a> ·
+    <a href="/boards">Boards</a> ·
+    <a href="/support">Support</a> ·
+    <a href="/privacy">Privacy</a>
   </p>
 </main>
 </body>

@@ -1,9 +1,9 @@
 package com.moneymove.game
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.SizeTransform
+import android.os.Build
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +23,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -47,18 +49,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -104,8 +105,11 @@ fun AwaitingSeats(store: GameStore, modifier: Modifier = Modifier) {
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut(),
     ) {
+        // Paper, wherever the dock stacks it: a card the table is holding up,
+        // not a piece of the navigation, so its controls are told there is a
+        // card behind them.
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (seat in shown) HeldSeat(store, seat)
+            OnPaper { for (seat in shown) HeldSeat(store, seat) }
         }
     }
 }
@@ -232,19 +236,29 @@ private fun SeatCountdown(until: Double) {
  * timing out is a point of karma, and a number that drops with no reason
  * given reads as the app taking it. Staying puts the store's flag down; the
  * dock then says, for as long as the game lasts, that this seat is watching.
+ *
+ * It is a question over the table, and it is glass the way the app's other
+ * questions are (ConfirmDialog, Ui.kt): the sheet's own paper laid down under
+ * the film and declared as its backdrop, so the tiles never read through the
+ * words, with the answers standing on it as marks rather than panes. Behind
+ * it the table goes out of focus (GameScreen's depth), which is what lets the
+ * scrim drop to half of the black it was.
  */
 @Composable
 fun TimedOutOverlay(store: GameStore, modifier: Modifier = Modifier) {
     val p = P.current
-    val shape = RoundedCornerShape(22.dp)
+    val shape = MMShapes.r22
+    val surface = rememberGlassSurface(BackdropKind.Sheet)
     // The card arrives the way iOS's does, from 86% on a 0.35-second spring,
-    // while the scrim behind it only fades in.
-    val grow = remember { Animatable(0.86f) }
+    // while the scrim behind it only fades in. Under Reduce Motion it does
+    // not grow at all: it is simply there, and the fade alone brings it.
+    val reduceMotion = rememberReduceMotion()
+    val grow = remember { Animatable(if (reduceMotion) 1f else 0.86f) }
     LaunchedEffect(Unit) { grow.animateTo(1f, spring(dampingRatio = 1f, stiffness = 320f)) }
     Box(
         modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.6f))
+            .background(Color.Black.copy(alpha = scrim(TIMED_OUT_SCRIM)))
             // The scrim keeps the table behind it out of reach, not just out of sight.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
         contentAlignment = Alignment.Center,
@@ -257,48 +271,57 @@ fun TimedOutOverlay(store: GameStore, modifier: Modifier = Modifier) {
                     scaleX = grow.value
                     scaleY = grow.value
                 }
-                .shadow(30.dp, shape)
-                .clip(shape)
-                .background(p.card)
-                .border(1.dp, p.rule, shape)
+                .background(p.sheet, shape)
+                .mmGlass(backdrop = BackdropKind.Sheet, shape = shape, lens = false)
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // iOS puts an hourglass here. The drawn set has none, and chrome
-            // is never an emoji, so this file draws one in the set's own hand
-            // ([HOURGLASS]) — wood, glass and sand, in the toolbox's colours.
-            DrawnMark(HOURGLASS, size = 46.dp, tint = p.ink2)
-            Text(
-                "Your time ran out",
-                color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                "You were removed to keep the game moving. You can head back or stay and watch how it ends.",
-                color = p.ink2, fontSize = 14.sp,
-                fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
-            )
-            Column(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                MMButton("Back to home", Modifier.fillMaxWidth(), kind = BtnKind.PRIMARY, big = true) {
-                    store.leave()
-                    Haptics.tap()
-                }
-                MMButton("Stay and watch", Modifier.fillMaxWidth(), kind = BtnKind.GHOST, big = true) {
-                    store.timedOut = false
-                    Haptics.tap()
-                }
+            val column = this
+            OnGlass(surface) {
+                with(column) { TimedOutFace(store) }
             }
-            Text(
-                "Leaving or timing out costs 1 karma.",
-                color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-            )
         }
     }
+}
+
+@Composable
+private fun ColumnScope.TimedOutFace(store: GameStore) {
+    val p = P.current
+    // iOS puts an hourglass here. The drawn set has none, and chrome
+    // is never an emoji, so this file draws one in the set's own hand
+    // ([HOURGLASS]) — wood, glass and sand, in the toolbox's colours.
+    DrawnMark(HOURGLASS, size = 46.dp, tint = p.ink2)
+    Text(
+        "Your time ran out",
+        color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+        textAlign = TextAlign.Center,
+    )
+    Text(
+        "You were removed to keep the game moving. You can head back or stay and watch how it ends.",
+        color = p.ink2, fontSize = 14.sp,
+        fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+    )
+    Column(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MMButton("Back to home", Modifier.fillMaxWidth(), kind = BtnKind.PRIMARY, big = true) {
+            store.leave()
+            Haptics.tap()
+        }
+        MMButton("Stay and watch", Modifier.fillMaxWidth(), kind = BtnKind.GHOST, big = true) {
+            store.timedOut = false
+            Haptics.tap()
+        }
+    }
+    // The small print is the glass's quiet ink: on the material there is no
+    // third one to print it in.
+    Text(
+        "Leaving or timing out costs 1 karma.",
+        color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+    )
 }
 
 /**
@@ -321,14 +344,21 @@ fun ReliefCardOverlay(store: GameStore, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The rule is content and the frame it is handed over in is not. So the card
+ * the player reads stays paper — the table's own card, its hairline in the
+ * brass the rule is drawn in — laid on a tray of glass that carries the one
+ * answer, the way a sheet's platter carries what it holds. The tray is
+ * twenty-two at twelve in, so the paper's ten sits concentric in it.
+ */
 @Composable
 private fun ReliefPanel(store: GameStore, card: ReliefCard) {
     val p = P.current
-    val shape = RoundedCornerShape(20.dp)
+    val surface = rememberGlassSurface(BackdropKind.Sheet)
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.45f))
+            .background(Color.Black.copy(alpha = scrim(RELIEF_SCRIM)))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 store.reliefPopup = null
             },
@@ -338,75 +368,115 @@ private fun ReliefPanel(store: GameStore, card: ReliefCard) {
             Modifier
                 .padding(horizontal = 24.dp)
                 .widthIn(max = 340.dp)
-                .shadow(26.dp, shape)
-                .clip(shape)
-                .background(p.card)
-                .border(2.dp, p.gold, shape)
+                .background(p.sheet, RELIEF_TRAY)
+                .mmGlass(backdrop = BackdropKind.Sheet, shape = RELIEF_TRAY, lens = false)
                 // A tap on the card itself is not a tap on the scrim.
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
-                .padding(24.dp),
+                .padding(RELIEF_INSET),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(RELIEF_INSET),
         ) {
-            Icon("scales", size = 44.dp, tint = p.gold)
-            Text(
-                card.title.uppercase(),
-                color = p.ink3, fontSize = 11.sp, letterSpacing = 2.sp,
-                fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-            )
-            Text(
-                card.text,
-                color = p.ink, fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
-            )
-            Text(
-                "Trading the street yourselves settles it first — the board only steps in if nobody does.",
-                color = p.ink3, fontSize = 12.5.sp,
-                fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
-            )
-            MMButton(
-                "Got it",
-                Modifier.fillMaxWidth().padding(top = 2.dp),
-                kind = BtnKind.GOLD,
-                big = true,
-            ) {
-                store.reliefPopup = null
+            OnPaper {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(p.card, RELIEF_CARD)
+                        .border(1.dp, p.gold.copy(alpha = 0.6f), RELIEF_CARD)
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon("scales", size = 44.dp, tint = p.gold)
+                    Text(
+                        card.title.uppercase(),
+                        color = p.ink3, fontSize = 11.sp, letterSpacing = 2.sp,
+                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        card.text,
+                        color = p.ink, fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        "Trading the street yourselves settles it first — the board only steps in if nobody does.",
+                        color = p.ink3, fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            OnGlass(surface) {
+                MMButton("Got it", Modifier.fillMaxWidth(), kind = BtnKind.GOLD, big = true) {
+                    store.reliefPopup = null
+                }
             }
         }
     }
 }
 
+/** The relief card's tray, its padding, and the paper card concentric inside it. */
+private val RELIEF_TRAY: Shape = MMShapes.r22
+private val RELIEF_INSET = 12.dp
+private val RELIEF_CARD: Shape = MMShapes.innerShape(22.dp, RELIEF_INSET)
+
+/** How dark the two full-screen questions lay their scrims, with nothing else to lean on. */
+private const val TIMED_OUT_SCRIM = 0.6f
+private const val RELIEF_SCRIM = 0.45f
+
 /**
- * The store's toast, drawn the way iOS's ToastLayer draws it.
+ * A full-screen question's scrim. From API 31 the table behind it is also
+ * out of focus (GameScreen's depth), and a blur says "behind" the way a lens
+ * does, so the black drops to half — enough to say the table is out of
+ * reach, not so much that it is a wall. Below 31 there is no blur, and under
+ * Reduce Transparency the table is not blurred either, so there the black
+ * does the whole job at its full strength. GameScreen's depth asks the same
+ * two questions, so the two can never disagree.
+ */
+@Composable
+private fun scrim(flat: Float): Float {
+    val blurred = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        LocalGlassLevel.current != GlassLevel.Opaque
+    return if (blurred) flat * 0.5f else flat
+}
+
+/**
+ * The store's toast, for the places the shell's own cannot reach.
  *
- * White words on a pill that is the ink in light mode — opaque, or the label
- * would be white on near-white — and a veil of the ink over the card in the
- * dark, where iOS lets its material show through; an error stays red either
- * way. It leads with a mark: the toast's own glyph when it has a subject,
- * otherwise iOS's info circle, or its warning triangle for an error, both
- * redrawn in white since the drawn set's warning keeps its own amber. At most
- * two lines, fourteen semibold, 24 above the bottom edge at a table and 78 on
- * the tabs, where the floating tab bar would otherwise sit on top of it. It
- * rises in from the bottom rather than fading in place.
+ * A bottom sheet is a window of its own over the app's, so a toast raised
+ * while one is open would land underneath it; every sheet that can raise one
+ * draws this inside itself, as iOS floats its toasts above sheets. So it is
+ * the shell's toast (AppScaffold.kt) — glass, its words in the glass's ink,
+ * an error a solid plate of the palette's bad with white words, never the
+ * accent's deep shade, which is brass on half the tables and does not look
+ * like an error at all.
  *
- * Not placed by anything in this file: the toast layer that sits over every
- * screen is AppScaffold's, and the one inside the result sheet is
- * GameOverSheet's. Either draws iOS's toast by calling this where it now
- * draws its own.
+ * One difference, and it is the window's: in a sheet there is no blurred
+ * copy of anything to sample, and a film with nothing blurred behind it would
+ * show the sheet's own rows through the toast. So the pill lays the sheet's
+ * paper down under the film first and declares exactly that, as the sheet's
+ * own platter does. It leads with a mark: the toast's own glyph when it has a
+ * subject, otherwise iOS's info circle, or its warning triangle for an
+ * error. At most two lines, fourteen semibold, 24 above the bottom edge at a
+ * table and 78 on the tabs, where the floating tab bar would otherwise sit on
+ * top of it. It rises in from the bottom rather than fading in place.
+ *
+ * Not placed by anything in this file: every sheet that can raise a toast
+ * calls this where it draws its own.
  */
 @Composable
 fun ToastPill(store: GameStore, modifier: Modifier = Modifier) {
     val p = P.current
-    val dark = p.page.luminance() < 0.5f
     val shown = store.toast
     // Held for the way out, so the pill leaves with its words still on it.
     var last by remember { mutableStateOf<GameStore.Toast?>(null) }
     SideEffect { if (shown != null) last = shown }
     val toast = shown ?: last
     val inset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val lift = if (store.roomId == null) 78.dp else 24.dp
     AnimatedVisibility(
         visible = shown != null,
-        modifier = modifier.padding(bottom = inset + if (store.roomId == null) 78.dp else 24.dp),
+        // Less the room the pill keeps inside itself for its shadow, so its
+        // edge lands where it always did.
+        modifier = modifier.padding(bottom = (inset + lift - TOAST_SHADOW_ROOM).coerceAtLeast(0.dp)),
         enter = slideInVertically { it } + fadeIn(),
         exit = slideOutVertically { it } + fadeOut(),
     ) {
@@ -423,36 +493,39 @@ fun ToastPill(store: GameStore, modifier: Modifier = Modifier) {
             label = "toast",
         ) { t ->
             t ?: return@AnimatedContent
-            val shape = RoundedCornerShape(99.dp)
-            val fill = when {
-                t.isError -> Modifier.background(p.redDeep, shape)
-                dark -> Modifier.background(p.card, shape).background(p.ink.copy(alpha = 0.25f), shape)
-                else -> Modifier.background(p.ink, shape)
-            }
-            // No margin of its own at the sides: the screen's edge is the
-            // only limit iOS's pill has.
+            val surface = rememberGlassSurface(BackdropKind.Sheet)
+            val ink = if (t.isError) Color.White else surface.labelInk()
+            val pane = Modifier
+                .background(p.sheet, MMShapes.pill)
+                .mmGlass(backdrop = BackdropKind.Sheet, shape = MMShapes.pill, lens = false)
             Row(
                 Modifier
-                    .then(fill)
+                    // The fade draws through a layer the size of this node,
+                    // so the shadow gets its room inside it.
+                    .padding(horizontal = TOAST_SHADOW_ROOM, vertical = TOAST_SHADOW_ROOM)
+                    .then(if (t.isError) pane.background(p.bad, MMShapes.pill) else pane)
                     .padding(horizontal = 17.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val glyph = t.glyph
                 if (glyph != null) {
-                    Icon(glyph, size = 17.dp, tint = Color.White)
+                    Icon(glyph, size = 17.dp, tint = ink)
                 } else {
-                    DrawnMark(if (t.isError) ALERT_MARK else INFO_MARK, size = 17.dp, tint = Color.White)
+                    DrawnMark(if (t.isError) ALERT_MARK else INFO_MARK, size = 17.dp, tint = ink)
                 }
                 Text(
                     t.text,
-                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
             }
         }
     }
 }
+
+/** Room for the pill's shadow inside its own fade — the shell's toast keeps the same. */
+private val TOAST_SHADOW_ROOM = 24.dp
 
 // ── the few marks this file draws itself ────────────────────────────────────
 //

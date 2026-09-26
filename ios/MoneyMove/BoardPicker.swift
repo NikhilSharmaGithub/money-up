@@ -449,16 +449,25 @@ struct BoardPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    // On glass on both versions — ours below 26, the bar's own
+                    // on 26 — so the count is in the glass's ink, as the
+                    // store's purse prints it. Raw gold on the daylight film
+                    // is a rim colour, not a text one.
                     HStack(spacing: 4) {
                         Art.icon(.coin, size: 12)
                         Text("\(store.wallet?.coins ?? shelf.feed?.coins ?? 0)")
                             .font(.system(size: 13, weight: .heavy, design: .rounded))
-                            .foregroundStyle(P.gold)
+                            .foregroundStyle(BackdropKind.page.settledGlass(P).ink)
                     }
+                    .sheetBarChip(on: .page)
                 }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
         }
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
         .task { await shelf.load(store, force: true) }
         .sheet(item: $shopping) { pick in
@@ -785,9 +794,14 @@ struct BoardBuySheet: View {
                 await shelf.rolloverIfDue(store)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
         }
+        // Unlock and the one-game door stand straight on the sheet.
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
     }
 

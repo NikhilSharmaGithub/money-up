@@ -28,12 +28,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -112,7 +112,6 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TradeSheet(store: GameStore, draft: TradeDraft = TradeDraft(), onDismiss: () -> Unit) {
-    val p = P.current
     val state = store.state
     val seat = store.tradeSeat(draft)
     val fromPlayer = state?.player(seat)
@@ -166,11 +165,9 @@ fun TradeSheet(store: GameStore, draft: TradeDraft = TradeDraft(), onDismiss: ()
             scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
         }
     }
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         if (target == null) {
             PartnerPicker(
@@ -188,7 +185,7 @@ fun TradeSheet(store: GameStore, draft: TradeDraft = TradeDraft(), onDismiss: ()
                     }
                 },
             )
-            return@ModalBottomSheet
+            return@MMSheet
         }
 
         // Gone means gone from the table, as iOS reads it: a partner who has
@@ -217,7 +214,7 @@ fun TradeSheet(store: GameStore, draft: TradeDraft = TradeDraft(), onDismiss: ()
         val them = state.player(target)
         if (gone || them == null) {
             MissingTarget(Modifier.weight(1f), close)
-            return@ModalBottomSheet
+            return@MMSheet
         }
 
         val mine = store.tilesOf(seat)
@@ -241,11 +238,13 @@ fun TradeSheet(store: GameStore, draft: TradeDraft = TradeDraft(), onDismiss: ()
 
         // The deal takes the whole height, as iOS's large detent does, even
         // when there is little on it yet.
+        val sheetScroll = rememberScrollState()
         Column(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .verticalScroll(rememberScrollState())
+                .scrollEdge(sheetScroll)
+                .verticalScroll(sheetScroll)
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -399,16 +398,20 @@ private fun sheetIsDark(): Boolean = P.current.sheet.luminance() < 0.5f
 private fun DealCard(content: @Composable ColumnScope.() -> Unit) {
     val p = P.current
     val shape = RoundedCornerShape(16.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .shadow(if (sheetIsDark()) 8.dp else 6.dp, shape, clip = false)
-            .clip(shape)
-            .background(p.card)
-            .border(1.dp, p.rule, shape)
-            .padding(14.dp),
-        content = content,
-    )
+    // Paper on the sheet's glass, and says so as a Panel does: the Hint in
+    // here keeps ink3, and the buttons know a card is behind them.
+    CompositionLocalProvider(LocalControlBackdrop provides BackdropKind.Paper) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .shadow(if (sheetIsDark()) 8.dp else 6.dp, shape, clip = false)
+                .clip(shape)
+                .background(p.card)
+                .border(1.dp, p.rule, shape)
+                .padding(14.dp),
+            content = content,
+        )
+    }
 }
 
 /**
@@ -457,10 +460,12 @@ private fun PartnerPicker(
     val half = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
     Column(Modifier.fillMaxWidth().heightIn(min = half)) {
         TradeBar(title = "Trade with…", onCancel = onCancel)
+        val sheetScroll = rememberScrollState()
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .scrollEdge(sheetScroll)
+                .verticalScroll(sheetScroll)
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -468,10 +473,12 @@ private fun PartnerPicker(
             // Opened from one street: say which, so the list reads as "who gets it".
             if (give.size == 1) {
                 store.tile(give.first())?.let { tile ->
+                    // The picker's words stand straight on the sheet's glass,
+                    // so they take its quiet ink; ink3 is lost on it at night.
                     Text(
                         "Offering ${tile.name}",
                         modifier = Modifier.padding(top = 2.dp),
-                        color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                        color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
@@ -485,7 +492,7 @@ private fun PartnerPicker(
                 Text(
                     "Nobody left to trade with.",
                     modifier = Modifier.padding(top = 40.dp),
-                    color = p.ink3, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    color = quietInk(), fontSize = 14.sp, fontWeight = FontWeight.Medium,
                 )
             }
         }
@@ -575,7 +582,7 @@ private fun MissingTarget(modifier: Modifier = Modifier, onDismiss: () -> Unit) 
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon("door", size = 42.dp, tint = p.ink3)
+        Icon("door", size = 42.dp, tint = quietInk())
         Text(
             "This player is no longer in the game.",
             color = p.ink2, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
@@ -682,7 +689,7 @@ private fun BalanceRow(balance: TradeBalance, onBalance: () -> Unit) {
         Text(
             balance.line,
             modifier = Modifier.weight(1f),
-            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+            color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
         )
         if (balance.canBalance) {
             // iOS's Spacer(minLength: 6) plus the row's ten either side of it:
@@ -1051,11 +1058,9 @@ fun TradeOfferSheet(store: GameStore, offer: TradeOffer, seat: String = offer.to
     }
     // iOS hides this sheet's grabber: it is an answer to give, not a panel
     // to pull about.
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         // iOS pins this sheet at 540 points, the answers at its foot with the
         // space above them; a bigger deal still grows it rather than clipping.
@@ -1065,10 +1070,12 @@ fun TradeOfferSheet(store: GameStore, offer: TradeOffer, seat: String = offer.to
                 close()
             }
             Hairline()
+            val sheetScroll = rememberScrollState()
             Column(
                 Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                    .scrollEdge(sheetScroll)
+                    .verticalScroll(sheetScroll)
                     .padding(horizontal = 16.dp)
                     .padding(top = 16.dp),
             ) {
@@ -1120,7 +1127,7 @@ private fun OfferHeader(from: PlayerState?, onClose: () -> Unit) {
             Spacer(Modifier.height(2.dp))
             Text(
                 "Their offer is on the table.",
-                color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
             )
         }
         // iOS's twelve either side of a Spacer that keeps four.
@@ -1345,7 +1352,9 @@ private fun OfferLean(theirs: Int, ours: Int) {
     val span = maxOf(theirs, ours, 1)
     val lean = (diff.toFloat() / span).coerceIn(-1f, 1f)
     val even = abs(diff) < 25
-    val tone = if (even) p.ink3 else if (diff > 0) p.good else p.bad
+    // Printed straight on the sheet's glass: an even deal says so in the
+    // glass's quiet ink, which holds up there where ink3 does not.
+    val tone = if (even) quietInk() else if (diff > 0) p.good else p.bad
     val track = p.sunken
     val notch = p.rule2
     Column(
@@ -1384,7 +1393,7 @@ private fun OfferLean(theirs: Int, ours: Int) {
             Text(
                 "by the price on the deeds",
                 modifier = Modifier.alignByBaseline(),
-                color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
             )
         }
     }
@@ -1415,7 +1424,11 @@ private fun OfferAnswers(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(p.sheet)
+            // No paper of its own. The deal above scrolls inside a column
+            // that clips it, so nothing ever passes under the answers, and
+            // the strip only repainted the sheet's own colour over the sheet
+            // — which on the glass is a band of the old paper across its
+            // foot, cutting the platter in two.
             .padding(horizontal = 16.dp)
             .padding(top = 12.dp, bottom = 18.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1450,7 +1463,7 @@ private fun OfferAnswers(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 2.dp),
-            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+            color = quietInk(), fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
         )
     }

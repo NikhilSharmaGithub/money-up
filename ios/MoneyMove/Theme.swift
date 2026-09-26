@@ -76,9 +76,9 @@ struct Palette {
             rule: Color(hex: rule), rule2: Color(hex: rule2),
             red: Color(hex: red), redDeep: Color(hex: redDeep), redSoft: Color(hex: redSoft),
             accentInk: Color(hex: accentInk),
-            good: dark ? Color(hex: 0x4FD98B) : Color(hex: 0x177C4D),
+            good: Color(hex: Palette.goodHex(dark: dark)),
             goodSoft: dark ? Color(hex: 0x14291E) : Color(hex: 0xE4F3EA),
-            bad: dark ? Color(hex: 0xE25A6D) : Color(hex: 0xBF3A4E),
+            bad: Color(hex: Palette.badHex(dark: dark)),
             badSoft: dark ? Color(hex: 0x2D161B) : Color(hex: 0xFBE9EC),
             gold: Color(hex: gold), goldSoft: Color(hex: goldSoft),
             tileTreasure: dark ? Color(hex: 0x2C2413) : Color(hex: 0xF7EDD8),
@@ -98,6 +98,13 @@ struct Palette {
                 gold: gold, goldSoft: goldSoft)
         )
     }
+
+    /// The semantic green and red. All seven tables share them, one pair to a
+    /// mode, so they are not among the slots a table swaps — but the glass
+    /// mixes them as well as the palette paints them, and a `Color` cannot be
+    /// taken apart again, so they are kept here as the numbers they are.
+    static func goodHex(dark: Bool) -> UInt32 { dark ? 0x4FD98B : 0x177C4D }
+    static func badHex(dark: Bool) -> UInt32 { dark ? 0xE25A6D : 0xBF3A4E }
 
     /// Which of the seven table styles is active. Set from the picker; the
     /// root view rebuilds the tree when it changes.
@@ -327,6 +334,26 @@ struct GlassTokens {
     /// brass does not, because it is the light in the room and not a property
     /// of the surface.
     let rimWarm: Color
+    /// Brass for words printed on the glass: the gold taken halfway to the
+    /// ink. The raw gold on the daylight film measures 3.22–4.36:1 — a rim
+    /// colour, not a text one — and halfway keeps it plainly the coin's
+    /// colour while it clears 7:1 over the page and the card on all fourteen
+    /// tables. The web's `--glass-gold-ink`, on the same two slots, so all
+    /// three clients print the same brass.
+    let goldInk: Color
+    /// Green and red for words printed on the glass — a balance, what a deal
+    /// hands over, a debt, the last seconds of a turn. Raw, the night red
+    /// falls to 3.6:1 on the film and the day green to 4.5; taken 40% of the
+    /// way to the ink the red clears 5.4:1 and the green 7.4:1, over the page
+    /// and over the board on all fourteen tables, and they stay plainly green
+    /// and red. The web's
+    /// `--glass-good-ink` and `--glass-bad-ink`, on the same slots.
+    let goodInk: Color
+    let badInk: Color
+    /// The same two pulled 55% of the way, for Increase Contrast, where the
+    /// film thickens and eats into every coloured word printed on it.
+    let goodInkIC: Color
+    let badInkIC: Color
 
     /// The ink a label sitting ON this glass should be drawn in. There are two
     /// levels and there is no third: Increase Contrast promotes the secondary
@@ -334,6 +361,12 @@ struct GlassTokens {
     func label(secondary: Bool = false, increaseContrast: Bool = false) -> Color {
         secondary && !increaseContrast ? ink2 : ink
     }
+
+    /// Money coming in, printed on glass.
+    func good(increaseContrast: Bool = false) -> Color { increaseContrast ? goodInkIC : goodInk }
+
+    /// Money going out, a debt, a clock about to run out — printed on glass.
+    func bad(increaseContrast: Bool = false) -> Color { increaseContrast ? badInkIC : badInk }
 }
 
 extension MMTheme {
@@ -359,12 +392,20 @@ extension MMTheme {
         // literally what the eye sees through the glass with nothing else
         // underneath, which is why it is the right colour to fall back to.
         let solid = MMHex.mix(MMHex.rgb(p.page), film, a == .light ? 0.62 : 0.60)
+        let ink = MMHex.rgb(p.ink)
+        let good = MMHex.rgb(Palette.goodHex(dark: a == .dark))
+        let bad = MMHex.rgb(Palette.badHex(dark: a == .dark))
         return GlassTokens(
             film: MMHex.color(film),
             solid: MMHex.color(solid),
             ink: Color(hex: p.ink),
-            ink2: MMHex.color(MMHex.mix(MMHex.rgb(p.ink2), MMHex.rgb(p.ink), 0.62)),
-            rimWarm: Color(hex: p.gold)
+            ink2: MMHex.color(MMHex.mix(MMHex.rgb(p.ink2), ink, 0.62)),
+            rimWarm: Color(hex: p.gold),
+            goldInk: MMHex.color(MMHex.mix(gold, ink, 0.5)),
+            goodInk: MMHex.color(MMHex.mix(good, ink, 0.40)),
+            badInk: MMHex.color(MMHex.mix(bad, ink, 0.40)),
+            goodInkIC: MMHex.color(MMHex.mix(good, ink, 0.55)),
+            badInkIC: MMHex.color(MMHex.mix(bad, ink, 0.55))
         )
     }
 }
@@ -624,6 +665,10 @@ private struct ControlBackdropKey: EnvironmentKey {
     static let defaultValue: BackdropKind = .paper
 }
 
+private struct ControlCornerKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
 extension EnvironmentValues {
     /// What the controls in this subtree are sitting on. A button can no more
     /// see its own backdrop than a bar can, so it is declared — once, by the
@@ -637,12 +682,26 @@ extension EnvironmentValues {
     var mmControlBackdrop: BackdropKind {
         get { self[ControlBackdropKey.self] } set { self[ControlBackdropKey.self] = newValue }
     }
+
+    /// The corner a rounded control takes when it stands in a shell of glass:
+    /// the shell's radius less its padding, so a button in the shell's corner
+    /// sits concentric with it — the web's `--glass-nest-r`. A button cannot
+    /// see the shell it is in any more than it can see its backdrop, so the
+    /// shell hands it down. Nil everywhere else, where a button keeps the 10
+    /// or 14 it was cut to.
+    var mmControlCorner: CGFloat? {
+        get { self[ControlCornerKey.self] } set { self[ControlCornerKey.self] = newValue }
+    }
 }
 
 extension View {
-    /// Declares what every control inside this view is sitting on.
-    func mmControls(on backdrop: BackdropKind) -> some View {
+    /// Declares what every control inside this view is sitting on, and — for
+    /// a shell of glass — the corner it hands them. Every declaration sets
+    /// both, so a card inside a shell takes its buttons back to their own
+    /// corners along with their own backdrop.
+    func mmControls(on backdrop: BackdropKind, corner: CGFloat? = nil) -> some View {
         environment(\.mmControlBackdrop, backdrop)
+            .environment(\.mmControlCorner, corner)
     }
 }
 
@@ -660,12 +719,57 @@ extension View {
 /// press, the light that blooms under the thumb.
 struct MMButtonStyle: ButtonStyle {
     enum Kind { case primary, good, bad, gold, ghost }
+    /// The outline. Rounded is nearly every button in the app, off the radius
+    /// ladder. A pill is a bar item, cut to the capsule 26 gives one. A disc
+    /// is a round control — a close, a send, the bell — and brings its own
+    /// square frame, since a disc has no padding to grow by.
+    ///
+    /// A key is a glyph standing in a toolbar that is itself one piece of
+    /// glass — the game's top bar. It brings its own frame like a disc, but
+    /// its corner is 14, what a 22 bar hands a child at 8 of padding, so the
+    /// row sits concentric in the bar instead of as a string of beads. And a
+    /// ghost key is bare: ink on the bar until a thumb lands on it, when the
+    /// well comes up under it. Six wells standing in one bar at all times
+    /// would be six panes where the bar means to be one — the web's toolbar
+    /// makes the same call — so the well only stays up at rest when the phone
+    /// has been asked to show button shapes.
+    enum Form { case rounded, pill, disc, key }
     var kind: Kind = .primary
     var big = false
+    var form: Form = .rounded
 
     func makeBody(configuration: Configuration) -> some View {
         MMButtonFace(label: configuration.label, pressed: configuration.isPressed,
-                     kind: kind, big: big)
+                     kind: kind, big: big, form: form)
+    }
+}
+
+/// A button's outline: the ladder's rounded rectangle, or a capsule, whose
+/// ends are half its height and so has no number. One type for both, so the
+/// face hands the same shape to the glass, the plate and the bloom whichever
+/// it is — and a capsule is a real capsule, not a rounded rectangle given a
+/// radius too big to draw.
+struct MMButtonShape: InsettableShape {
+    /// Nil is the capsule.
+    let radius: CGFloat?
+    var inset: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: inset, dy: inset)
+        guard let radius else { return Capsule().path(in: r) }
+        return RoundedRectangle(cornerRadius: max(radius - inset, 0), style: .continuous).path(in: r)
+    }
+
+    func inset(by amount: CGFloat) -> MMButtonShape {
+        var s = self
+        s.inset += amount
+        return s
+    }
+}
+
+extension MMButtonShape: MMGlassRadius {
+    func mmCornerRadius(in size: CGSize) -> CGFloat {
+        min(radius ?? .greatestFiniteMagnitude, min(size.width, size.height) / 2)
     }
 }
 
@@ -690,7 +794,9 @@ extension MMButtonStyle.Kind {
     }
 
     /// The plate a coloured kind stands on. A ghost has none — it is glass.
-    fileprivate func plate(_ P: Palette) -> Color? {
+    /// Not private to this file: the auction's compact buttons stand on the
+    /// same plates, and a second copy of the table would drift from this one.
+    func plate(_ P: Palette) -> Color? {
         switch self {
         case .primary: P.red
         case .good: P.good
@@ -709,12 +815,15 @@ private struct MMButtonFace: View {
     let pressed: Bool
     let kind: MMButtonStyle.Kind
     let big: Bool
+    let form: MMButtonStyle.Form
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityShowButtonShapes) private var buttonShapes
     @Environment(\.mmControlBackdrop) private var backdrop
+    @Environment(\.mmControlCorner) private var shellCorner
     @Environment(\.mmGlassQuality) private var quality
     @Environment(\.mmBoardBusy) private var boardBusy
     @Environment(\.mmScrollOffset) private var scrollOffset
@@ -727,24 +836,30 @@ private struct MMButtonFace: View {
     var body: some View {
         let P = Palette.current(scheme)
         // 14 and 10 off the ladder: what a 22 pt shell holds at 8 and at 12 pt
-        // of padding, so a button hugging the corner of a dock sits concentric
-        // with it instead of pinching the gap.
-        let shape = RoundedRectangle(cornerRadius: big ? MMRadius.md : MMRadius.sm,
-                                     style: .continuous)
+        // of padding. A shell of glass says which it is (`mmControlCorner`),
+        // so a button hugging the corner of the dock sits concentric with it
+        // instead of opening or pinching the gap.
+        let shape = MMButtonShape(radius: radius)
+        // A disc and a key bring their own square frame.
+        let framed = form == .disc || form == .key
         let face = label
             .font(.system(size: big ? 17 : 14, weight: .bold, design: .rounded))
             .foregroundStyle(kind.ink(P, on: backdrop))
-            .padding(.vertical, big ? 14 : 9)
-            .padding(.horizontal, big ? 22 : 14)
+            .padding(.vertical, framed ? 0 : (big ? 14 : 9))
+            .padding(.horizontal, framed ? 0 : (big ? 22 : 14))
             .frame(maxWidth: big ? .infinity : nil)
             .background { bloom(P, shape) }
+        // The whole outline takes the tap, not only what is painted in it: a
+        // ghost key at rest draws its well at alpha 0, and without this only
+        // the glyph's own 15-point box would answer a thumb.
         surface(face, P, shape)
+            .contentShape(shape)
             .scaleEffect(x: squash.width, y: squash.height)
             .animation(pressCurve, value: pressed)
     }
 
     @ViewBuilder
-    private func surface(_ face: some View, _ P: Palette, _ shape: RoundedRectangle) -> some View {
+    private func surface(_ face: some View, _ P: Palette, _ shape: MMButtonShape) -> some View {
         if kind == .ghost && backdrop != .chrome {
             face
                 .mmGlass(.regular, backdrop: backdrop, in: shape, interactive: true)
@@ -771,21 +886,35 @@ private struct MMButtonFace: View {
         }
     }
 
+    /// The corner. A rounded button in a shell of glass takes the one the
+    /// shell hands down, big or not — what makes it concentric is where it
+    /// stands, not how tall it is. A key takes the bigger of the two a button
+    /// can have, being the child of a 22 bar at 8; a pill and a disc are
+    /// capsules, which have no number.
+    private var radius: CGFloat? {
+        switch form {
+        case .rounded: shellCorner ?? (big ? MMRadius.md : MMRadius.sm)
+        case .key: MMRadius.md
+        case .pill, .disc: nil
+        }
+    }
+
     // MARK: what it is sitting on
 
-    /// The glass colours for a control on this backdrop, resolved the way the
-    /// material resolves its own. A control cannot change backdrops while it
-    /// is on screen, so the cold-start answer is the one the glass settles on.
+    /// The glass colours for a control on this backdrop, off the one resolver
+    /// the material's labels all use. A control cannot change backdrops while
+    /// it is on screen, so the cold-start answer is the one the glass settles
+    /// on.
     ///
     /// Nonisolated, because `Kind.ink` asks for it from outside any view, and
     /// a view's statics belong to the main actor: it is palette arithmetic and
     /// touches nothing a view owns.
     nonisolated static func glass(_ P: Palette, on backdrop: BackdropKind) -> GlassTokens {
-        Palette.currentTheme.glass(appearance(P, on: backdrop))
+        backdrop.settledGlass(P)
     }
 
     private nonisolated static func appearance(_ P: Palette, on backdrop: BackdropKind) -> GlassAppearance {
-        GlassAppearance.resolve(luminance: backdrop.luminance(P), previous: nil)
+        backdrop.settledAppearance(P)
     }
 
     /// Whether what is under this control moves with it. Paper and a sheet
@@ -800,13 +929,14 @@ private struct MMButtonFace: View {
     /// glass, on exactly the terms `MMGlass` routes by. That glass is
     /// interactive and does its own press — a scale, a bounce, a shimmer —
     /// and a gel on top of it would be two presses fighting over one button.
+    ///
+    /// The board being busy is not one of those terms: on 26 the material
+    /// leaves the system's glass in place while a token walks (see
+    /// `mmBoardBusy`), so the button keeps the system's press as well.
     private var systemGlass: Bool {
-        guard kind == .ghost, backdrop != .chrome, !reduceTransparency, !boardBusy,
+        guard kind == .ghost, backdrop != .chrome, !reduceTransparency,
               level >= .frost else { return false }
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) { return true }
-        #endif
-        return false
+        return MMSystemGlass.isOn
     }
 
     // MARK: the plate
@@ -817,7 +947,10 @@ private struct MMButtonFace: View {
         // well in the material instead: the glass's own ink at a tenth, which
         // is how iOS fills a grouped control on a bar. The ink and not a paper
         // colour, because it has to flip when the glass under it does.
-        return Self.glass(P, on: backdrop).ink.opacity(contrast == .increased ? 0.18 : 0.10)
+        let well = Self.glass(P, on: backdrop).ink.opacity(contrast == .increased ? 0.18 : 0.10)
+        // A key is bare until it is touched — see `Form.key`.
+        let bare = form == .key && !pressed && !buttonShapes
+        return bare ? well.opacity(0) : well
     }
 
     /// The shadow a plate casts: the same two states, off the same tokens, as
@@ -826,7 +959,7 @@ private struct MMButtonFace: View {
     /// glass casts one — a chip on the dock is part of the dock.
     private func shadow(_ P: Palette) -> GlassShadow? {
         guard backdrop != .chrome else { return nil }
-        let h = height ?? (big ? 48 : 35)
+        let h = height ?? (form == .disc ? 36 : (big ? 48 : 35))
         let a = Self.appearance(P, on: backdrop)
         return busy ? .busy(height: h, a) : .relaxed(height: h, a)
     }
@@ -863,13 +996,16 @@ private struct MMButtonFace: View {
     /// middle. Additive like the rim, and in the rim's hot colour: white by
     /// day, brass at night. Off under Reduce Motion.
     @ViewBuilder
-    private func bloom(_ P: Palette, _ shape: RoundedRectangle) -> some View {
+    private func bloom(_ P: Palette, _ shape: MMButtonShape) -> some View {
         if !reduceMotion && !systemGlass {
             let hot: Color = Self.appearance(P, on: backdrop) == .dark
                 ? Self.glass(P, on: backdrop).rimWarm
                 : .white
+            // A thumb covers more of a disc or a key than of a button, so the
+            // light it lets in reaches less far.
             RadialGradient(colors: [hot.opacity(0.10), hot.opacity(0)],
-                           center: .center, startRadius: 0, endRadius: 40)
+                           center: .center, startRadius: 0,
+                           endRadius: form == .disc || form == .key ? 24 : 40)
                 .clipShape(shape)
                 .blendMode(.plusLighter)
                 .opacity(pressed ? 1 : 0)

@@ -52,9 +52,15 @@ struct CupDetailSheet: View {
             .navigationTitle(live.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
         }
+        // "See the whole chart" stands straight on the sheet, and so does
+        // "Play your match", on a box of paper that is not a card.
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
         .sheet(isPresented: $showChart) { CupChartSheet(cupId: cup.id).environmentObject(store) }
     }

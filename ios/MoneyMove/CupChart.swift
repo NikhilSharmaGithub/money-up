@@ -101,9 +101,11 @@ struct CupChartSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
                 }
             }
         }
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
         .task { await load() }
     }
@@ -397,9 +399,13 @@ struct CupPosterSheet: View {
             .navigationTitle("The cup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
         }
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
     }
 

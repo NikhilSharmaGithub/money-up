@@ -45,10 +45,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -480,8 +480,11 @@ private fun DailyLocked(signingIn: Boolean, canSignIn: Boolean, onSignIn: () -> 
         Spacer(Modifier.height(11.dp))
         // The button wears the table's own colour, like Play now and every
         // other call to action on the tab, so changing the style changes it
-        // too. iOS draws the key in plain ink — it is not handed the button's
-        // colour — so it keeps its own dark shape on whatever colour that is.
+        // too. The key takes the plate's ink with the words, as the spinner
+        // that stands in for it already does: a glyph on a coloured plate is
+        // part of the label. The page's ink is dark by day and pale by night
+        // and the plate does not flip with it, so a dark key on royale's
+        // violet, or a pale one on a night table's brass, is a key nobody sees.
         LandingButton(
             if (signingIn) "Signing in…" else "Sign in to collect",
             LandingKind.PRIMARY, big = true,
@@ -492,7 +495,7 @@ private fun DailyLocked(signingIn: Boolean, canSignIn: Boolean, onSignIn: () -> 
                 if (signingIn) {
                     LandingSpinner(ink)
                 } else {
-                    Icon("key", size = 18.dp, tint = p.ink, modifier = Modifier.graphicsLayer { rotationZ = 45f })
+                    Icon("key", size = 18.dp, tint = ink, modifier = Modifier.graphicsLayer { rotationZ = 45f })
                 }
             },
         ) { onSignIn() }
@@ -962,17 +965,22 @@ private fun LeaderboardSheet(entries: List<LeaderRow>, myCode: String?, onDismis
         finder.bringIntoView(Rect(0f, -band, 1f, band))
     }
 
-    ModalBottomSheet(
+    // The app's one sheet ([MMSheet]), so the fifty sit on the same glass as
+    // every other sheet rather than on a paper of their own. The grabber is a
+    // mark on that glass, so it is inked in the glass's quiet ink at the half
+    // strength it always had: the palette's ink3 is the one ink the material
+    // cannot carry.
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheet,
-        containerColor = p.sheet,
         dragHandle = {
+            val glass = rememberGlassSurface(BackdropKind.Sheet)
             Box(
                 Modifier
                     .padding(top = 5.dp)
                     .size(36.dp, 5.dp)
                     .clip(RoundedCornerShape(99.dp))
-                    .background(p.ink3.copy(alpha = 0.5f)),
+                    .background(glass.labelInk(quiet = true).copy(alpha = 0.5f)),
             )
         },
     ) {
@@ -992,16 +1000,20 @@ private fun LeaderboardSheet(entries: List<LeaderRow>, myCode: String?, onDismis
                     .padding(horizontal = 4.dp, vertical = 6.dp),
             )
         }
+        val sheetScroll = rememberScrollState()
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .scrollEdge(sheetScroll)
+                .verticalScroll(sheetScroll)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // Straight on the sheet's glass, above the card: the glass's quiet
+            // ink, since ink3 all but vanishes on the platter at night.
             Text(
                 "Every game these players have ever won. Only wins get you on the board.",
-                color = p.ink3, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
             )
             LandingCard(padding = 14.dp) {
                 Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -1269,9 +1281,9 @@ private fun DieFive(ink: Color, hole: Color) {
 //
 // The landing screens are the ones held up beside the iPhone, and they were
 // given iOS's MMCard and MMButtonStyle here before Ui.kt's Panel and MMButton
-// were brought to the same measurements. The two now agree; these stay for
-// the lead slot (a spinner or a coin handed the label's ink) and the press
-// feel the landing cards were built around.
+// were brought to the same measurements. The two now agree, and the button
+// is MMButton outright; these stay as the names the landing screens and the
+// cup room already call them by.
 
 /** iOS's MMCard shadow: a soft drop under every card on the landing screen. */
 private fun Modifier.cardShadow(shape: RoundedCornerShape): Modifier =
@@ -1281,6 +1293,11 @@ private fun Modifier.cardShadow(shape: RoundedCornerShape): Modifier =
  * iOS's MMCard: sixteen-point corners, the card fill, a hairline, and the
  * shadow. [stroke] swaps the hairline for a rim of its own, as the daily
  * reward's celebration does.
+ *
+ * It is paper, and says so the way [Panel] does. The buttons on it are
+ * MMButton's glass now, and a pane has to be told what is behind it; and a
+ * card of these in a sheet keeps its small print in ink3, rather than
+ * lifting it with the platter's glass around it.
  */
 @Composable
 internal fun LandingCard(
@@ -1292,30 +1309,43 @@ internal fun LandingCard(
 ) {
     val p = P.current
     val shape = RoundedCornerShape(16.dp)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .cardShadow(shape)
-            .clip(shape)
-            .background(p.card)
-            .border(strokeWidth, stroke ?: p.rule, shape)
-            .padding(padding),
-        content = content,
-    )
+    CompositionLocalProvider(
+        LocalGlassHost provides null,
+        LocalControlBackdrop provides BackdropKind.Paper,
+    ) {
+        Column(
+            modifier
+                .fillMaxWidth()
+                .cardShadow(shape)
+                .clip(shape)
+                .background(p.card)
+                .border(strokeWidth, stroke ?: p.rule, shape)
+                .padding(padding),
+            content = content,
+        )
+    }
 }
 
 /** iOS's MMButtonStyle kinds, as far as the landing screens use them. */
 internal enum class LandingKind { PRIMARY, GOLD, GHOST }
 
 /**
- * iOS's MMButtonStyle, point for point: seventeen bold on a big button and
- * fourteen on a small one, fourteen- and ten-point corners, a faint white
- * rim on the coloured kinds, and a ghost that is a filled well rather than
- * an outline. Pressing dims and shrinks it a touch, as on the iPhone.
+ * iOS's MMButtonStyle, as the landing screens have always called it — and
+ * now it is [MMButton] itself, so a landing screen's buttons wear what every
+ * other button in the app wears. It used to be a copy of its own: the
+ * coloured kinds a plate with a fixed white line round it that dimmed when
+ * pressed, the ghost a well of paper. Beside the iPhone's glass that was a
+ * second design. So the ghost is the glass button now, its words in the
+ * glass's ink, and Play now and the brass buttons keep their solid plate and
+ * the ink each palette designed for it, taking from the glass only the rim's
+ * light, the shadow and the gel of the press — the rule every coloured button
+ * in the app follows, so a row of them still has one that is primary.
  *
- * Disabled changes nothing about how it looks — iOS's style never reads the
- * disabled state, so its buttons stay solid and simply stop answering. What
- * leads the label is the caller's, handed the ink the label is drawn in.
+ * Seventeen bold on a big button and fourteen on a small one, fourteen- and
+ * ten-point corners, as before; a big one still spans its column. Disabled
+ * changes nothing about how it looks — iOS's style never reads the disabled
+ * state, so its buttons stay solid and simply stop answering. What leads the
+ * label is the caller's, handed the ink the label is drawn in.
  */
 @Composable
 internal fun LandingButton(
@@ -1328,59 +1358,20 @@ internal fun LandingButton(
     lead: (@Composable (ink: Color) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val p = P.current
-    val bg = when (kind) {
-        LandingKind.PRIMARY -> p.red
-        LandingKind.GOLD -> p.gold
-        LandingKind.GHOST -> p.sunken
-    }
-    val ink = if (kind == LandingKind.GHOST) p.ink else p.accentInk
-    val shape = RoundedCornerShape(if (big) 14.dp else 10.dp)
-    val touches = remember { MutableInteractionSource() }
-    val pressed by touches.collectIsPressedAsState()
-    val press by animateFloatAsState(
-        if (pressed) 1f else 0f,
-        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
-        label = "press",
+    MMButton(
+        text,
+        modifier.then(if (big) Modifier.fillMaxWidth() else Modifier),
+        kind = when (kind) {
+            LandingKind.PRIMARY -> BtnKind.PRIMARY
+            LandingKind.GOLD -> BtnKind.GOLD
+            LandingKind.GHOST -> BtnKind.GHOST
+        },
+        big = big,
+        enabled = enabled,
+        lead = lead,
+        gap = gap,
+        onClick = onClick,
     )
-    Row(
-        modifier
-            .then(if (big) Modifier.fillMaxWidth() else Modifier)
-            .graphicsLayer {
-                val s = 1f - 0.02f * press
-                scaleX = s
-                scaleY = s
-                alpha = 1f - 0.18f * press
-            }
-            .clip(shape)
-            .background(bg)
-            .then(
-                if (kind == LandingKind.GHOST) Modifier
-                else Modifier.border(1.dp, Color.White.copy(alpha = 0.18f), shape),
-            )
-            .clickable(
-                interactionSource = touches,
-                indication = null,
-                enabled = enabled,
-                role = Role.Button,
-                onClick = onClick,
-            )
-            .padding(horizontal = if (big) 22.dp else 14.dp, vertical = if (big) 14.dp else 9.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (lead != null) {
-            lead(ink)
-            if (text.isNotEmpty()) Spacer(Modifier.width(gap))
-        }
-        if (text.isNotEmpty()) {
-            Text(
-                text,
-                color = ink, fontSize = if (big) 17.sp else 14.sp, fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
 }
 
 /**

@@ -102,20 +102,30 @@ enum GlassLevel: Int, Comparable {
     static func < (a: GlassLevel, b: GlassLevel) -> Bool { a.rawValue < b.rawValue }
 }
 
-/// Resolves the levels the *device* asks for. Low Power Mode and a hot phone
-/// are deterministic and cheap to observe, so they live here and can be tested
-/// today. The remaining trigger in the plan — a rolling mean of frame times
-/// that steps the app down when a scene misses its budget — deliberately is
-/// not here: it cannot be tuned against a screen with no glass on it yet, and
-/// it belongs with the first chunk that puts a lens over the board.
+/// The one global quality switch. Three of its four triggers are the device's:
+/// Low Power Mode and a small phone take the material to `flat`, a hot phone
+/// to `frost`. The fourth is the frame budget — a table that has started
+/// dropping frames steps down one level for five seconds — and it is only
+/// watched while a game is on screen, which is where the only glass over a
+/// live board is. (The board being busy is not a level at all: it travels
+/// down the tree as `mmBoardBusy`, because it is a property of one screen.)
 ///
-/// Nothing starts this. The chunk that places the first glass surface holds it
-/// at the root and feeds `level` into `\.mmGlassQuality`.
+/// `RootView` holds this and feeds `level` into `\.mmGlassQuality`.
 @MainActor
 final class MMGlassGovernor: ObservableObject {
     static let shared = MMGlassGovernor()
 
     @Published private(set) var level: GlassLevel = .full
+
+    /// What the phone itself asks for, before the frame budget has a say.
+    private var device: GlassLevel = .full
+    /// Set for five seconds each time the table misses its budget.
+    private var strained = false
+    private var relief: Task<Void, Never>?
+    private var frames: FrameWatch?
+    /// Whether a game has asked for the watch; whether it runs also depends on
+    /// there being a level left to step down to (see `syncWatch`).
+    private var wantsWatch = false
 
     private init() {
         let centre = NotificationCenter.default
@@ -131,11 +141,70 @@ final class MMGlassGovernor: ObservableObject {
     func recompute() {
         let info = ProcessInfo.processInfo
         if info.isLowPowerModeEnabled || MMGlassGovernor.isSmallMemory {
-            level = .flat
+            device = .flat
         } else if info.thermalState == .serious || info.thermalState == .critical {
-            level = .frost
+            device = .frost
         } else {
-            level = .full
+            device = .full
+        }
+        syncWatch()
+        settle()
+    }
+
+    /// One level under the device's while the table is strained, never under
+    /// `flat`: opaque is an accessibility state, not a saving. Published only
+    /// when it actually moves, because every glass surface in the app hears it.
+    private func settle() {
+        var now = device
+        if strained, now > .flat, let down = GlassLevel(rawValue: now.rawValue - 1) {
+            now = down
+        }
+        if now != level { level = now }
+    }
+
+    /// Starts or stops watching the frame budget. `GameScreen` turns it on
+    /// while a game is being played and off when it goes.
+    ///
+    /// Never on 26. There the glass over the board is the system's, drawn by
+    /// the compositor and paid for there, and `full` and `frost` are the same
+    /// native glass — the one step this trigger takes would change nothing on
+    /// screen, and the next would swap the system's glass for our twin mid-
+    /// game. So the watch would cost a display link and buy nothing.
+    func watchFrames(_ on: Bool) {
+        wantsWatch = on && !MMSystemGlass.isOn
+        syncWatch()
+    }
+
+    /// The watch runs only while it can buy something. At `flat` — Low Power
+    /// Mode, an old phone — strain has no lower level to reach, and a display
+    /// link held at 60 Hz for a whole game would only stop the screen from
+    /// dropping its refresh rate while nothing moves.
+    private func syncWatch() {
+        if wantsWatch && device > .flat {
+            guard frames == nil else { return }
+            let watch = FrameWatch { MMGlassGovernor.shared.strain() }
+            watch.start()
+            frames = watch
+        } else {
+            frames?.stop()
+            frames = nil
+            relief?.cancel()
+            if strained { strained = false; settle() }
+        }
+    }
+
+    /// The table missed its budget: step down, and come back up five seconds
+    /// after the last miss rather than the first, so a scene that stays heavy
+    /// stays down instead of bouncing between levels.
+    private func strain() {
+        strained = true
+        settle()
+        relief?.cancel()
+        relief = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            MMGlassGovernor.shared.strained = false
+            MMGlassGovernor.shared.settle()
         }
     }
 
@@ -144,6 +213,66 @@ final class MMGlassGovernor: ObservableObject {
     /// thing those phones should stop paying for.
     private static let isSmallMemory =
         ProcessInfo.processInfo.physicalMemory < 3 * 1024 * 1024 * 1024
+}
+
+/// The governor's eye on the frame budget: a rolling mean over the last
+/// twenty frames.
+///
+/// The plan states the line as 14 ms of work inside a 16.7 ms frame, and that
+/// is not something the app can time — the glass is drawn by the render
+/// server, and nothing on the main thread sees how long it took. What the main
+/// thread does see is the consequence: a frame whose moment came and went, so
+/// that the next callback arrives two frames after the last instead of one.
+/// So the mean is of the gaps between callbacks, measured in the display's
+/// own frames, and the line is 1.2 — four frames missed in every twenty,
+/// which is where a table spending 14 ms of every 16.7 has started spilling
+/// over. Capped at 60 Hz: the lens is priced against a 60 Hz phone, and a
+/// watch left at a ProMotion display's 120 would hold it there for the length
+/// of the game.
+@MainActor
+private final class FrameWatch: NSObject {
+    private let strained: () -> Void
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var gaps: [Double] = []
+
+    init(strained: @escaping () -> Void) {
+        self.strained = strained
+    }
+
+    func start() {
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    /// The link holds its target, so it has to be let go of by hand.
+    func stop() {
+        link?.invalidate()
+        link = nil
+        gaps.removeAll()
+        last = 0
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let frame = link.targetTimestamp - link.timestamp
+        defer { last = now }
+        guard last > 0, frame > 0 else { return }
+        // A quarter of a second with no frame at all is not a slow scene. It
+        // is the app coming back from the background, or a sheet being put up
+        // — so the window starts again rather than counting it.
+        guard now - last < 0.25 else {
+            gaps.removeAll()
+            return
+        }
+        gaps.append((now - last) / frame)
+        if gaps.count > 20 { gaps.removeFirst() }
+        guard gaps.count == 20, gaps.reduce(0, +) / 20 > 1.2 else { return }
+        gaps.removeAll()
+        strained()
+    }
 }
 
 // MARK: - Environment
@@ -172,9 +301,21 @@ extension EnvironmentValues {
     }
 
     /// Set while the board is mid-performance — a token walking, the dice
-    /// tumbling, a card being read. Every glass surface drops to `flat` for the
-    /// duration, which is the correct hierarchy and a free frame, and nobody
-    /// sees it happen because they are watching the dice.
+    /// tumbling, a card being read, the board dealing itself in. The glass
+    /// stops refracting for the duration and leans on its shadow, which
+    /// deepens: the correct hierarchy, and a free frame on the one screen that
+    /// needs it. It freezes what the material refracts and never the material
+    /// itself — the film, the rim and the geometry do not move by a pixel, and
+    /// nobody sees it happen because they are watching the dice.
+    ///
+    /// By hand that is a drop to `flat`: the lens, the blur and the live
+    /// backdrop layer are everything that re-renders as the board moves, and
+    /// over our own backdrops they are the part nobody can see go. On 26 the
+    /// refraction is the system's, and the only lever this side of it would
+    /// be to swap its glass for our twin for the length of every walk — a
+    /// material that changes several times a turn, which is the flicker a
+    /// governor exists to prevent. So there the flag deepens the shadow and
+    /// leaves the glass alone. `GameScreen` sets it.
     var mmBoardBusy: Bool {
         get { self[GlassBoardBusyKey.self] } set { self[GlassBoardBusyKey.self] = newValue }
     }
@@ -214,6 +355,53 @@ extension GlassAppearance {
     }
 }
 
+extension BackdropKind {
+    /// The way glass on this backdrop leans, resolved the way the material
+    /// resolves its own: off the luminance we declared. Most glass cannot
+    /// change backdrops while it is on screen, so the cold-start answer is the
+    /// one it keeps — and a label printed on the glass can ask for it without
+    /// being inside the modifier that draws it.
+    func settledAppearance(_ P: Palette) -> GlassAppearance {
+        GlassAppearance.resolve(luminance: luminance(P), previous: nil)
+    }
+
+    /// The glass colours a surface on this backdrop settles on. The one
+    /// resolver every label, well and placeholder printed on glass goes
+    /// through, so the ink on a pane and the pane itself cannot disagree.
+    func settledGlass(_ P: Palette) -> GlassTokens {
+        Palette.currentTheme.glass(settledAppearance(P))
+    }
+
+    /// What a control standing straight on a sheet — not on a card inside it —
+    /// is sitting on.
+    ///
+    /// Below 26 that is the sheet's own paper, and the control travels with
+    /// it: `.sheet` for a sheet laid in `P.sheet`, `.page` for one laid in the
+    /// page colour. On 26 the platter is the system's glass and not our paper
+    /// at all, and a pane that drew our paper inside itself there would be an
+    /// opaque sticker on a translucent sheet. So on 26 it declares the page —
+    /// what the sheet's glass is itself looking at, and a backdrop a control
+    /// does not travel with — which is what hands the control to the system's
+    /// own glass, the way 26 draws a button on a sheet.
+    static func platter(_ paper: BackdropKind) -> BackdropKind {
+        MMSystemGlass.isOn ? .page : paper
+    }
+}
+
+/// Whether the system is drawing Liquid Glass on this phone. That takes an
+/// iOS 26 phone AND an app built against the 26 SDK — an older toolchain runs
+/// even a 26 phone in the old design — so it is the same two-part test the
+/// material routes by, asked in one place so that nothing that leaves itself
+/// to the system can disagree with the material about whether there is one.
+enum MMSystemGlass {
+    static var isOn: Bool {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+}
+
 // MARK: - Shapes the lens can measure
 
 /// The lens shader needs a corner radius for its distance field, and an
@@ -237,7 +425,12 @@ extension Rectangle: MMGlassRadius {
 }
 
 extension RoundedRectangle: MMGlassRadius {
-    func mmCornerRadius(in size: CGSize) -> CGFloat { min(cornerSize.width, cornerSize.height) }
+    /// Clamped the way SwiftUI clamps the corner it draws, to half the short
+    /// side — a radius past that describes a curve that is not on screen, and
+    /// the lens would bend a rim that is not there.
+    func mmCornerRadius(in size: CGSize) -> CGFloat {
+        min(cornerSize.width, cornerSize.height, min(size.width, size.height) / 2)
+    }
 }
 
 // MARK: - The entry point
@@ -260,14 +453,21 @@ extension View {
     ///   - cornerRadius: only for a shape the lens cannot measure itself.
     ///   - interactive: the rim answers a press — for a surface that is a
     ///     control rather than a container.
+    ///   - floats: whether it casts a shadow. Everything glass floats except
+    ///     a field: a field is a place to write, set into what it sits on,
+    ///     and the web draws its fields with the contour and no drop for the
+    ///     same reason. A parameter and not an environment value, so a field
+    ///     that holds a control does not hand its stillness down to it.
     func mmGlass(_ variant: GlassVariant = .regular,
                  backdrop: BackdropKind = .page,
                  in shape: some InsettableShape = Capsule(),
                  tint: Color? = nil,
                  cornerRadius: CGFloat? = nil,
-                 interactive: Bool = false) -> some View {
+                 interactive: Bool = false,
+                 floats: Bool = true) -> some View {
         modifier(MMGlass(variant: variant, backdrop: backdrop, shape: shape,
-                         tint: tint, cornerRadius: cornerRadius, interactive: interactive))
+                         tint: tint, cornerRadius: cornerRadius, interactive: interactive,
+                         floats: floats))
     }
 }
 
@@ -278,6 +478,7 @@ struct MMGlass<S: InsettableShape>: ViewModifier {
     let tint: Color?
     let cornerRadius: CGFloat?
     let interactive: Bool
+    let floats: Bool
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -426,7 +627,9 @@ struct MMGlass<S: InsettableShape>: ViewModifier {
 
     private var resolvedLevel: GlassLevel {
         if variant == .opaque || reduceTransparency { return .opaque }
-        if boardBusy { return min(quality, .flat) }
+        // Busy freezes the hand-built optics and never trades the system's
+        // glass for ours — see `mmBoardBusy`.
+        if boardBusy && !MMSystemGlass.isOn { return min(quality, .flat) }
         return quality
     }
 
@@ -436,6 +639,9 @@ struct MMGlass<S: InsettableShape>: ViewModifier {
     private var busy: Bool { boardBusy || abs(scrollOffset) > 8 }
 
     private func shadow(_ a: GlassAppearance) -> GlassShadow {
+        // A field sits in its card rather than over it. Zero in every path,
+        // opaque included, so turning Reduce Transparency on lifts nothing.
+        if !floats { return GlassShadow(y: 0, blur: 0, alpha: 0) }
         let h = max(frame.height, 1)
         return busy ? .busy(height: h, a) : .relaxed(height: h, a)
     }
@@ -679,6 +885,26 @@ private struct BackdropReplica: View {
 
 // MARK: - Morph
 
+extension Animation {
+    /// `mm.morph` — a piece of glass changing shape: the dock growing a row, a
+    /// control stretching into what it opens. A spring, because glass that
+    /// changes shape should look held together by surface tension rather than
+    /// slid; about 380 ms, which lands inside a card's hold and outlasts the
+    /// board's settle, so a morph never races the board.
+    ///
+    /// The plan writes it as "damping .38 / response .78" beside "~380 ms".
+    /// Only one reading of those numbers is 380 ms long: a response of 0.38
+    /// at a damping of 0.78, which overshoots by about 2%. Taken the other way
+    /// round it is a 780 ms spring that overshoots by more than a quarter — a
+    /// dock that wobbles every time a phase changes.
+    ///
+    /// Reduce Motion gets 160 ms, eased, with no spring in it; the rows that
+    /// swap inside the shape cross-fade over the same time.
+    static func mmMorph(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeInOut(duration: 0.16) : .spring(response: 0.38, dampingFraction: 0.78)
+    }
+}
+
 /// Glass cannot sample glass, and on iOS 26 the container is also what lets two
 /// surfaces morph into one another rather than cross-fade. More than one glass
 /// element on a screen belongs inside one of these.
@@ -709,4 +935,138 @@ struct MMGlassContainer<Content: View>: View {
         }
     }
     #endif
+}
+
+// MARK: - Sheet chrome
+//
+// What every sheet in the app wears around its content. The body of a sheet
+// is paper — a deed, a chat log, a bracket — and it stays paper. What turns to
+// glass is the chrome: the items in its bar, a footer that floats over the
+// page, the composer, a segmented switch, a close button of our own drawing.
+//
+// iOS 26 builds most of that for nothing. A sheet that no longer paints over
+// itself (see `sheetPaper`) is the system's own glass, and so is every item in
+// its navigation bar — so on 26 the bar is left entirely alone. That is the
+// call the tab bar got, for the same reason: a custom background there does
+// not join the system's material, it kills it. Below 26 the bar stays the
+// system's bar, with its own scroll edge, and its items become the hand-built
+// twin of what 26 draws in it: glass controls, in the capsule 26 cuts them to.
+//
+// Glass never stacks on glass, so a piece of chrome that is itself glass — the
+// pager, the composer — declares `.chrome` for the controls standing on it,
+// and they are drawn on that material instead of as panes of their own.
+
+extension View {
+    /// Glass for a piece of chrome standing on a sheet — a footer, the
+    /// composer, a switch. Regular and never Clear: every one of them carries
+    /// words or a glyph somebody has to read.
+    ///
+    /// Below 26 what is behind it is our own paper, and the pane draws a copy
+    /// of that paper inside itself, so a blur or a lens has nothing to work on
+    /// — a flat colour blurred, or bent, is the same flat colour. It runs at
+    /// `flat` there: film, rim, glow and shadow. That is not a saving passed
+    /// off as a look; it is the exact picture. On 26 it is the system's glass.
+    /// `floats` is false for a composer, which is a field.
+    func sheetGlass(on paper: BackdropKind, in shape: some InsettableShape,
+                    floats: Bool = true) -> some View {
+        modifier(SheetGlass(paper: paper, shape: shape, floats: floats))
+    }
+
+    /// An item in a sheet's navigation bar — Done, Close, a menu. On 26 the
+    /// system already draws it in glass and this does nothing at all. Below
+    /// 26 it becomes the glass ghost every other secondary button in the app
+    /// is, on the sheet's own paper, so the bar reads as the same material on
+    /// both. `enabled` is for a disabled item: a custom style has no greyed
+    /// state of its own, and a bar item that looks live and does nothing is
+    /// worse than the plain one it replaced.
+    func sheetBarItem(on paper: BackdropKind, enabled: Bool = true) -> some View {
+        modifier(SheetBarItem(paper: paper, enabled: enabled))
+    }
+
+    /// Something the bar tells you rather than something you press — the coin
+    /// count over the board shelf. The same glass as the items beside it, and
+    /// the same hands-off on 26.
+    func sheetBarChip(on paper: BackdropKind) -> some View {
+        modifier(SheetBarChip(paper: paper))
+    }
+
+    /// Lines leaving the top of a scroll view fade out instead of slicing off
+    /// at a hard edge — the scroll edge, drawn by hand where there is no bar
+    /// to draw it. The band is exactly as deep as the content's own top
+    /// padding, so at rest it lies over empty space and touches nothing; only
+    /// a line on its way out ever passes through it. A mask reads alpha alone,
+    /// so the two colours below are opacities, not paint.
+    func sheetScrollEdge(top: CGFloat) -> some View {
+        mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: top)
+                Rectangle()
+            }
+            // A scroll view that meets a safe-area edge draws its content on
+            // past it — under the home indicator, under a bar — and a mask cut
+            // to its layout frame would clip that off. So the mask reaches as
+            // far as the content does, and only the band is ever see-through.
+            .ignoresSafeArea()
+        }
+    }
+}
+
+private struct SheetGlass<S: InsettableShape>: ViewModifier {
+    let paper: BackdropKind
+    let shape: S
+    let floats: Bool
+
+    @Environment(\.mmGlassQuality) private var quality
+
+    func body(content: Content) -> some View {
+        // No tint: a tint belongs to the whole pane, and on 26 it turns a bar
+        // into a slab of the colour with everything on it lost inside.
+        content
+            .mmGlass(.regular, backdrop: paper, in: shape, floats: floats)
+            // Environment flows inward, so this reaches the `mmGlass` above
+            // and nothing outside it.
+            .environment(\.mmGlassQuality, level)
+    }
+
+    private var level: GlassLevel {
+        MMSystemGlass.isOn ? quality : min(quality, .flat)
+    }
+}
+
+private struct SheetBarItem: ViewModifier {
+    let paper: BackdropKind
+    let enabled: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if MMSystemGlass.isOn {
+            content
+        } else {
+            content
+                // A capsule, the shape 26 cuts a bar item to, so the two bars
+                // hold up side by side.
+                .buttonStyle(MMButtonStyle(kind: .ghost, form: .pill))
+                // A menu in the bar is pressed like a button, so it wears the
+                // button: the button menu style hands its label to the style
+                // above instead of drawing a bare glyph.
+                .menuStyle(.button)
+                .mmControls(on: paper)
+                .opacity(enabled ? 1 : 0.45)
+        }
+    }
+}
+
+private struct SheetBarChip: ViewModifier {
+    let paper: BackdropKind
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if MMSystemGlass.isOn {
+            content
+        } else {
+            content
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .sheetGlass(on: paper, in: Capsule())
+        }
+    }
 }

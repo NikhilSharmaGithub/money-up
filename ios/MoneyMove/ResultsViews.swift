@@ -218,7 +218,15 @@ struct MatchDetailSheet: View {
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var index: Int = 0
+
+    /// Where the result sat before anybody scrolled it, and how far it has
+    /// come since. The pager floats over these cards, and a bar that nothing
+    /// visibly moves under reads as pasted on: this is what swings the light
+    /// on its rim and deepens its shadow once the cards start to pass beneath.
+    @State private var restY: CGFloat?
+    @State private var scrolled: CGFloat = 0
 
     private var record: GameStore.MatchRecord? {
         store.matchHistory.indices.contains(index) ? store.matchHistory[index] : nil
@@ -244,12 +252,24 @@ struct MatchDetailSheet: View {
                         }
                     }
                     .padding(16)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
+                        let rest = restY ?? y
+                        restY = rest
+                        // Whole points, and no further than the light can
+                        // swing (it stops at 22°, 132 points in), so a long
+                        // scroll is not a redraw of the sheet on every frame.
+                        scrolled = max(-144, min(144, (rest - y).rounded()))
+                    }
                 }
             }
             .navigationTitle("Result")
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) { pager(P) }
+            .safeAreaInset(edge: .bottom) {
+                pager(P)
+                    .environment(\.mmScrollOffset, scrolled)
+            }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.large, .medium])
         .presentationDragIndicator(.visible)
@@ -293,8 +313,14 @@ struct MatchDetailSheet: View {
     }
 
     /// Newest first, so "older" walks down the list and "newer" back up.
+    ///
+    /// The one bar in the app's sheets that really floats: the result scrolls
+    /// on underneath it. So it is a platter of glass lifted off the sheet's
+    /// edges, not a band of system frost laid across the bottom, and the two
+    /// buttons on it are drawn on that glass rather than as panes of their own.
     private func pager(_ P: Palette) -> some View {
-        HStack {
+        let glass = BackdropKind.sheet.settledGlass(P)
+        return HStack {
             Button {
                 withAnimation(.snappy(duration: 0.2)) { index += 1 }
                 Haptics.tap()
@@ -306,9 +332,10 @@ struct MatchDetailSheet: View {
             .disabled(index >= store.matchHistory.count - 1)
 
             Spacer()
+            // The glass's second ink: the third rank measures 1.53:1 on glass.
             Text("\(index + 1) of \(store.matchHistory.count)")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(P.ink3)
+                .foregroundStyle(glass.label(secondary: true, increaseContrast: contrast == .increased))
             Spacer()
 
             Button {
@@ -324,8 +351,12 @@ struct MatchDetailSheet: View {
             .buttonStyle(MMButtonStyle(kind: .ghost))
             .disabled(index <= 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.thinMaterial)
+        // r18 with 8 of padding holds the r10 buttons concentric, so the gap
+        // does not pinch at the corners.
+        .padding(8)
+        .mmControls(on: .chrome)
+        .sheetGlass(on: .sheet, in: RoundedRectangle(cornerRadius: MMRadius.lg, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 }

@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -175,11 +174,9 @@ fun DMSheet(
         }
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
-        dragHandle = null,
     ) {
         // iOS's medium detent: half the screen, whatever the thread holds,
         // with the thread taking what the bar and the box leave.
@@ -209,14 +206,18 @@ fun DMSheet(
                         Modifier.fillMaxWidth().weight(1f).padding(top = 42.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Icon("chat", size = 26.dp, tint = p.ink3)
+                        // Straight on the sheet's glass: its quiet ink, not
+                        // ink3, which the platter's night face all but loses.
+                        Icon("chat", size = 26.dp, tint = quietInk())
                         Spacer(Modifier.height(6.dp))
-                        Text("Say hi", color = p.ink3, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Say hi", color = quietInk(), fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        // Fading under the bar as the thread climbs, as the
+                        // table chat's does.
+                        modifier = Modifier.fillMaxWidth().weight(1f).scrollEdge(listState),
                         contentPadding = PaddingValues(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {

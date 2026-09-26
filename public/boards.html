@@ -24,31 +24,96 @@
 <meta name="twitter:title" content="All 25 boards — MoneyMove" />
 <meta name="twitter:description" content="Every board in MoneyMove: the classic 40 tiles, a 48-tile world tour, a fast Blitz, six continents from Africa to Oceania, and twelve country boards from India to Brazil. Free in your browser." />
 <meta name="twitter:image" content="https://www.moneymove.live/og.png" />
+<!-- The game's own type, tables and controls. This page used to carry a
+     handful of hard-coded hexes and the system font, so it was the green night
+     table whatever the player had picked, in a face the game never uses. It
+     reads the game's stylesheet now: the fourteen table blocks, Outfit, and
+     the button at the bottom, which is the game's own primary. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230c1310'/><rect x='7' y='7' width='18' height='18' rx='4' fill='%23f4f1e4'/><g fill='%231c6b45'><circle cx='12' cy='12' r='2'/><circle cx='20' cy='12' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='20' r='2'/><circle cx='20' cy='20' r='2'/></g></svg>" />
+<link rel="stylesheet" href="/css/style.css" />
+<script>
+  // Before paint, and read exactly the way the game reads it, so walking from
+  // a table to this page keeps the table the player is sitting at — Crimson
+  // at night stays Crimson at night — and never flashes the wrong one first.
+  (function () {
+    var root = document.documentElement;
+    function wear() {
+      var saved = null, pal = null;
+      try {
+        saved = localStorage.getItem('moneymove:theme');
+        pal = localStorage.getItem('moneymove:palette');
+      } catch (e) {}
+      // Dark is the house style; the system setting only lightens it.
+      var dark = saved ? saved === 'dark'
+        : !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      root.dataset.theme = dark ? 'dark' : 'light';
+      if (pal && pal !== 'felt') root.dataset.palette = pal;
+      else delete root.dataset.palette;
+      // The browser's own chrome wears the page too, read back off the
+      // stylesheet the way app.js does it rather than kept in a list here.
+      var tag = document.querySelector('meta[name="theme-color"]');
+      var page = getComputedStyle(root).getPropertyValue('--page').trim();
+      if (tag && page) tag.setAttribute('content', page);
+    }
+    wear();
+    // The switch lives in the game, not on this page. Flip it in the tab the
+    // game is in and this one follows; a player who has never touched it
+    // follows the system, the way their first visit to the game did.
+    window.addEventListener('storage', function (e) {
+      if (!e.key || e.key === 'moneymove:theme' || e.key === 'moneymove:palette') wear();
+    });
+    var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+    if (mq && mq.addEventListener) mq.addEventListener('change', wear);
+  })();
+</script>
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0c1310; color: #efede2;
-         margin: 0; padding: 40px 20px 70px; line-height: 1.7; }
+  /* Every word here is printed straight onto the table's page, not onto a
+     card, so it takes the --page-ink family the landing's wordmark and prose
+     take — which is what keeps it readable on crimson by day, the one light
+     table whose page is a deep red — through the --doc-* inks the stylesheet
+     derives from that family for pages like this one. The browser's own
+     widgets and scrollbars follow the table's light or dark. */
+  :root { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  /* The game is one screen that never scrolls and pins html and body to say
+     so; a page of words has to be allowed to. */
+  html, body { height: auto; overflow: visible; }
+  /* At least a screen tall, because the stylesheet's table wash sits under
+     body and shows as a band wherever a short page stops short of the
+     bottom of a tall window. */
+  body { color: var(--page-ink); min-height: 100vh; padding: 40px 20px 70px; line-height: 1.7; }
   main { max-width: 720px; margin: 0 auto; }
-  .crumbs { font-size: 13px; color: #7d8a7f; margin-bottom: 22px; }
-  .crumbs a { color: #93a396; }
+  /* The stylesheet zeroes every margin and padding for the game's sake;
+     prose gets back the spacing a browser gives it, which is what this page
+     was laid out in. */
+  p { margin: 1em 0; }
+  ul { margin: 1em 0; padding-left: 20px; }
+  .crumbs { font-size: 13px; color: var(--doc-quiet); margin-bottom: 22px; }
+  .crumbs a { color: var(--doc-quiet); }
   h1 { font-size: 30px; line-height: 1.25; margin: 0 0 10px; }
-  .lede { font-size: 17px; color: #cfd6cd; margin: 0 0 30px; }
-  h2 { font-size: 20px; margin-top: 38px; color: #d9a13a; }
-  h3 { font-size: 16px; margin-top: 24px; color: #efede2; }
-  p, li { font-size: 15.5px; color: #cfd6cd; }
-  a { color: #e3a93c; }
-  ul { padding-left: 20px; }
+  .lede { font-size: 17px; color: var(--doc-body); margin: 0 0 30px; }
+  h2 { font-size: 20px; margin: 38px 0 .83em; color: var(--doc-accent); }
+  h3 { font-size: 16px; margin: 24px 0 1em; color: var(--page-ink); }
+  p, li { font-size: 15.5px; color: var(--doc-body); }
+  a { color: var(--doc-accent); }
   li { margin-bottom: 7px; }
   table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14.5px; }
-  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #22302a; }
-  th { color: #93a396; font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
-  td b { color: #efede2; }
-  .cta { display: inline-block; margin-top: 34px; padding: 13px 24px; border-radius: 12px;
-         background: #d9a13a; color: #16210e; font-weight: 700; text-decoration: none; }
-  footer { margin-top: 46px; padding-top: 20px; border-top: 1px solid #22302a;
-           font-size: 13px; color: #7d8a7f; }
-  footer a { color: #93a396; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--doc-rule); }
+  th { color: var(--doc-quiet); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
+  td b { color: var(--page-ink); }
+  .desc { color: var(--doc-quiet); font-size: 13.5px; }
+  /* The game's primary — a plate in the table's accent with the palette's ink
+     on it, wearing the glass's rim, shadow and press; printed on the page, it
+     takes the page's plate, which turns over on crimson by day (see
+     --page-plate). The stylesheet paints it; this is only its size and place. */
+  .cta { display: inline-block; margin-top: 34px; padding: 13px 24px; border-radius: var(--r-14);
+         font-weight: 700; text-decoration: none; }
+  footer { margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--doc-rule);
+           font-size: 13px; color: var(--doc-quiet); }
+  footer a { color: var(--doc-quiet); }
 </style>
 <script type="application/ld+json">
 {
@@ -242,37 +307,37 @@
     <thead><tr><th>Board</th><th>Tiles</th><th>Streets</th><th>Sets</th></tr></thead>
     <tbody>
     <tr>
-      <td><b>Classic</b><br /><span style="color:#93a396;font-size:13.5px">The original 40-tile world tour.</span></td>
+      <td><b>Classic</b><br /><span class="desc">The original 40-tile world tour.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Mr. Worldwide</b><br /><span style="color:#93a396;font-size:13.5px">A bigger 48-tile board with two extra countries.</span></td>
+      <td><b>Mr. Worldwide</b><br /><span class="desc">A bigger 48-tile board with two extra countries.</span></td>
       <td>48</td>
       <td>28</td>
       <td>10</td>
     </tr>
     <tr>
-      <td><b>Death Valley</b><br /><span style="color:#93a396;font-size:13.5px">Canada, Germany, UK and USA go head to head.</span></td>
+      <td><b>Death Valley</b><br /><span class="desc">Canada, Germany, UK and USA go head to head.</span></td>
       <td>40</td>
       <td>22</td>
       <td>4</td>
     </tr>
     <tr>
-      <td><b>Bharat</b><br /><span style="color:#93a396;font-size:13.5px">A tour of India, from Jaipur to New Delhi.</span></td>
+      <td><b>Bharat</b><br /><span class="desc">A tour of India, from Jaipur to New Delhi.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Blitz</b><br /><span style="color:#93a396;font-size:13.5px">A short 28-tile board — games end fast.</span></td>
+      <td><b>Blitz</b><br /><span class="desc">A short 28-tile board — games end fast.</span></td>
       <td>28</td>
       <td>16</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Lucky Wheel</b><br /><span style="color:#93a396;font-size:13.5px">Half the board is chance. Pure chaos.</span></td>
+      <td><b>Lucky Wheel</b><br /><span class="desc">Half the board is chance. Pure chaos.</span></td>
       <td>40</td>
       <td>16</td>
       <td>8</td>
@@ -292,37 +357,37 @@
     <thead><tr><th>Board</th><th>Tiles</th><th>Streets</th><th>Sets</th></tr></thead>
     <tbody>
     <tr>
-      <td><b>Africa</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of Africa, from Addis Ababa to Cape Town.</span></td>
+      <td><b>Africa</b><br /><span class="desc">Eight countries of Africa, from Addis Ababa to Cape Town.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Asia</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of Asia, from Hanoi to Tokyo.</span></td>
+      <td><b>Asia</b><br /><span class="desc">Eight countries of Asia, from Hanoi to Tokyo.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Europe</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of Europe, from Lisbon to London.</span></td>
+      <td><b>Europe</b><br /><span class="desc">Eight countries of Europe, from Lisbon to London.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>North America</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of North America, from Kingston to New York.</span></td>
+      <td><b>North America</b><br /><span class="desc">Eight countries of North America, from Kingston to New York.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>South America</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of South America, from La Paz to Rio de Janeiro.</span></td>
+      <td><b>South America</b><br /><span class="desc">Eight countries of South America, from La Paz to Rio de Janeiro.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Oceania</b><br /><span style="color:#93a396;font-size:13.5px">Eight countries of Oceania, from Apia to Sydney.</span></td>
+      <td><b>Oceania</b><br /><span class="desc">Eight countries of Oceania, from Apia to Sydney.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
@@ -340,73 +405,73 @@
     <thead><tr><th>Board</th><th>Tiles</th><th>Streets</th><th>Sets</th></tr></thead>
     <tbody>
     <tr>
-      <td><b>Bharat Bazaar</b><br /><span style="color:#93a396;font-size:13.5px">From Shillong pines to Marine Drive penthouses - buy up the subcontinent, yaar!</span></td>
+      <td><b>Bharat Bazaar</b><br /><span class="desc">From Shillong pines to Marine Drive penthouses - buy up the subcontinent, yaar!</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>The American Dream</b><br /><span style="color:#93a396;font-size:13.5px">From Memphis blues to Manhattan lights — buy up the land of the free, one deed at a time.</span></td>
+      <td><b>The American Dream</b><br /><span class="desc">From Memphis blues to Manhattan lights — buy up the land of the free, one deed at a time.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Blighty</b><br /><span style="color:#93a396;font-size:13.5px">Queue politely, buy boldly: from Belfast to Big Ben, all of Blighty is up for grabs.</span></td>
+      <td><b>Blighty</b><br /><span class="desc">Queue politely, buy boldly: from Belfast to Big Ben, all of Blighty is up for grabs.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Deutschland</b><br /><span style="color:#93a396;font-size:13.5px">A tour of Germany, from Schwerin to Berlin — no speed limit on the rent.</span></td>
+      <td><b>Deutschland</b><br /><span class="desc">A tour of Germany, from Schwerin to Berlin — no speed limit on the rent.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>L'Hexagone</b><br /><span style="color:#93a396;font-size:13.5px">From Breton crêpes to Parisian rooftops — buy the Hexagon one baguette at a time.</span></td>
+      <td><b>L'Hexagone</b><br /><span class="desc">From Breton crêpes to Parisian rooftops — buy the Hexagon one baguette at a time.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Il Bel Paese</b><br /><span style="color:#93a396;font-size:13.5px">Buy the boot from Sicilian piazzas to Roman palazzi — espresso rights included.</span></td>
+      <td><b>Il Bel Paese</b><br /><span class="desc">Buy the boot from Sicilian piazzas to Roman palazzi — espresso rights included.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>España</b><br /><span style="color:#93a396;font-size:13.5px">Twelve grapes, one peninsula: buy Spain city by city, from the dehesa to the Gran Vía.</span></td>
+      <td><b>España</b><br /><span class="desc">Twelve grapes, one peninsula: buy Spain city by city, from the dehesa to the Gran Vía.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Nippon</b><br /><span style="color:#93a396;font-size:13.5px">From Shikoku citrus groves to Shibuya neon — buy Japan one bullet-train stop at a time.</span></td>
+      <td><b>Nippon</b><br /><span class="desc">From Shikoku citrus groves to Shibuya neon — buy Japan one bullet-train stop at a time.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Zhongguo</b><br /><span style="color:#93a396;font-size:13.5px">Hotpot, high-speed rail and the Bund — five thousand years, one property empire.</span></td>
+      <td><b>Zhongguo</b><br /><span class="desc">Hotpot, high-speed rail and the Bund — five thousand years, one property empire.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Brasil</b><br /><span style="color:#93a396;font-size:13.5px">Own Brazil do Oiapoque ao Chuí — samba, football, açaí and beachfront rent.</span></td>
+      <td><b>Brasil</b><br /><span class="desc">Own Brazil do Oiapoque ao Chuí — samba, football, açaí and beachfront rent.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>Straya</b><br /><span style="color:#93a396;font-size:13.5px">Scoop up the Great Southern Land, from red-dirt roadhouses to harbourside penthouses.</span></td>
+      <td><b>Straya</b><br /><span class="desc">Scoop up the Great Southern Land, from red-dirt roadhouses to harbourside penthouses.</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
     </tr>
     <tr>
-      <td><b>The Great White North</b><br /><span style="color:#93a396;font-size:13.5px">Coast to coast to coast: grab a double-double and buy up the whole True North, eh?</span></td>
+      <td><b>The Great White North</b><br /><span class="desc">Coast to coast to coast: grab a double-double and buy up the whole True North, eh?</span></td>
       <td>40</td>
       <td>22</td>
       <td>8</td>
@@ -429,7 +494,7 @@
     to, take Classic. <a href="/how-to-play">The rules</a> are the same on all of them.
   </p>
 
-  <a class="cta" href="/">Start a game</a>
+  <a class="btn primary on-page cta" href="/">Start a game</a>
 
   <footer>
     An original implementation of the classic property-trading board game. Not affiliated with

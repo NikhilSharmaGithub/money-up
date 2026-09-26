@@ -44,10 +44,14 @@ struct FriendsSheet: View {
             .navigationTitle("Friends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
         .sheet(item: $dmFriend) { friend in
             DMSheet(friend: friend).environmentObject(store)
@@ -102,19 +106,17 @@ struct FriendsSheet: View {
                     .buttonStyle(MMButtonStyle(kind: .ghost))
                     .disabled(profile == nil)
 
+                    // The same ghost as Copy beside it. This was drawn by hand
+                    // to look like one, and once the buttons turned to glass
+                    // the pair read as one pane and one piece of paper.
                     ShareLink(item: shareText) {
                         HStack(spacing: 7) {
                             Image(systemName: "square.and.arrow.up")
                             Text("Share")
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(minHeight: 42)
-                        .background(P.sunken, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(P.rule, lineWidth: 1))
-                        .foregroundStyle(P.ink)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
                     }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
                     .disabled(profile == nil)
                 }
 

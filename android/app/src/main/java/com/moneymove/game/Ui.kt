@@ -36,6 +36,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -83,6 +84,7 @@ import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.StrokeCap
@@ -197,6 +199,67 @@ fun GlassSurface.labelInk(quiet: Boolean = false): Color {
 }
 
 /**
+ * The brass, for a number printed on glass: the table's gold taken half of
+ * the way to the glass's own ink. The raw gold on a daylight film is the
+ * pairing the spec measured at 3.22–4.36:1; halfway to the ink it clears
+ * 5.8:1 on all fourteen tables and still reads as the coin's colour. It is
+ * iOS's `glassGold` and the web's `--glass-gold-ink`, run on the same two
+ * slots, so a purse prints the same colour on all three clients. Under
+ * Reduce Transparency it follows the app's own face, as [labelInk] does.
+ */
+@Composable
+fun GlassSurface.goldInk(): Color {
+    if (LocalGlassLevel.current == GlassLevel.Opaque) {
+        val own = LocalTheme.current.glass(
+            if (LocalAppearanceDark.current) GlassAppearance.Dark else GlassAppearance.Light,
+        )
+        return mixSrgb(own.rimWarm, own.ink, 0.5f)
+    }
+    return mixSrgb(rimWarm, ink, 0.5f)
+}
+
+/**
+ * Green, for money coming in printed on glass — a balance, what a deal hands
+ * over. Raw, the day green on the film measures about 4.5:1 and the night red
+ * [badInk] 3.5:1; taken 40% of the way to the glass's own ink they clear 7.4
+ * and 5.4 over the page and over the board on all fourteen tables, and stay
+ * plainly green and red. Increase Contrast thickens the film, which eats into
+ * every coloured word on it, so there they go 55% of the way. iOS's
+ * `glass.good` and the web's `--glass-good-ink`, on the same slots. Under
+ * Reduce Transparency it follows the app's own face, as [labelInk] does.
+ */
+@Composable
+fun GlassSurface.goodInk(): Color = moneyInk(bad = false)
+
+/** Red, for money going out or owed, printed on glass. See [goodInk]. */
+@Composable
+fun GlassSurface.badInk(): Color = moneyInk(bad = true)
+
+@Composable
+private fun GlassSurface.moneyInk(bad: Boolean): Color {
+    val theme = LocalTheme.current
+    val pull = if (LocalIncreaseContrast.current) MONEY_PULL_CONTRAST else MONEY_PULL
+    // The day and night hues, once per table rather than once per number.
+    val (day, night) = remember(theme, bad) {
+        val light = theme.palette(false)
+        val dark = theme.palette(true)
+        if (bad) light.bad to dark.bad else light.good to dark.good
+    }
+    // An opaque slab wears the app's own face, and so do its numbers.
+    if (LocalGlassLevel.current == GlassLevel.Opaque) {
+        val dark = LocalAppearanceDark.current
+        val own = theme.glass(if (dark) GlassAppearance.Dark else GlassAppearance.Light)
+        return mixSrgb(if (dark) night else day, own.ink, pull)
+    }
+    // Otherwise the hue of whichever face the glass is wearing, crossfading
+    // with its ink when it flips.
+    return mixSrgb(mixSrgb(day, night, flip), ink, pull)
+}
+
+private const val MONEY_PULL = 0.40f
+private const val MONEY_PULL_CONTRAST = 0.55f
+
+/**
  * A recess drawn on glass: the glass's own ink at a tenth, as iOS fills a
  * ghost on a bar. The palette's `sunken` is a paper colour and only matches a
  * glass that happens to be wearing the app's own face; the ink flips with the
@@ -205,7 +268,7 @@ fun GlassSurface.labelInk(quiet: Boolean = false): Color {
  * strength iOS gives it there, the way it deepens the material's tint.
  */
 @Composable
-private fun GlassSurface.well(): Color =
+internal fun GlassSurface.well(): Color =
     labelInk().copy(alpha = if (LocalIncreaseContrast.current) WELL_ALPHA_CONTRAST else WELL_ALPHA)
 
 private const val WELL_ALPHA = 0.10f
@@ -227,17 +290,36 @@ private fun GlassSurface.hairline(): Color {
 
 private const val HAIRLINE_ALPHA_CONTRAST = 0.30f
 
-/** The quietest ink the spot allows: ink3 on paper, the lifted ink2 on glass. */
+/**
+ * The quietest ink the spot allows: ink3 on paper, the lifted ink2 on glass.
+ * A sheet's platter is glass too (MMSheet.kt). It says so through
+ * [LocalControlBackdrop] rather than [LocalGlassHost], because its controls
+ * stay panes of their own; a [Panel] on it puts paper back.
+ *
+ * Not only for the pieces here. A sheet's own small print — an empty state,
+ * a footnote, a caption set straight on the platter — asks this rather than
+ * naming ink3, which on the platter's night face falls from the 4.5:1 it had
+ * on the old paper to about 3:1. A card of a sheet's own that is not a
+ * [Panel] says it is paper the way a panel does, or its captions would lift
+ * with the platter's.
+ */
 @Composable
-private fun quietInk(): Color = LocalGlassHost.current?.labelInk(quiet = true) ?: P.current.ink3
+internal fun quietInk(): Color {
+    LocalGlassHost.current?.let { return it.labelInk(quiet = true) }
+    if (LocalControlBackdrop.current == BackdropKind.Sheet) {
+        return rememberGlassSurface(BackdropKind.Sheet).labelInk(quiet = true)
+    }
+    return P.current.ink3
+}
 
 /**
  * The semantic tint, for a mark drawn ON glass rather than a pane of it: the
  * strength `mmGlass` gives its own tint, and the 0.26 Increase Contrast asks
- * for.
+ * for. The dock washes its debt and deadlock blocks through the material at
+ * this strength too (ActionPanel.kt).
  */
 @Composable
-private fun tintAlpha(): Float = if (LocalIncreaseContrast.current) 0.26f else 0.14f
+internal fun tintAlpha(): Float = if (LocalIncreaseContrast.current) 0.26f else 0.14f
 
 /**
  * A control lives inside whatever it was put in — a card, a sheet, a row on
@@ -251,9 +333,13 @@ private fun tintAlpha(): Float = if (LocalIncreaseContrast.current) 0.26f else 0
  * so a button that sampled it would be sampling last frame's picture of
  * itself; and a sheet or a dialog is a window of its own, where the copy is
  * somewhere else entirely. Reduce Transparency passes straight through.
+ *
+ * Not only for the controls here: any glass that scrolls with the page — the
+ * Store's purse — is in the same place for the same reason, and says so
+ * through this rather than repeating it.
  */
 @Composable
-private fun Embedded(lightAngle: Float, content: @Composable () -> Unit) {
+internal fun Embedded(lightAngle: Float, content: @Composable () -> Unit) {
     val level = LocalGlassLevel.current
     CompositionLocalProvider(
         LocalGlassLevel provides (if (level == GlassLevel.Opaque) level else GlassLevel.Flat),
@@ -351,9 +437,10 @@ fun Modifier.glassPress(press: GlassPress): Modifier = graphicsLayer {
  * Where the finger landed, lit: a small bloom in the rim's hot colour —
  * white by day, brass by night — added rather than painted, inside the
  * shape and under the label. Only when [lit]; Reduce Motion and an opaque
- * slab have no light in them to bloom.
+ * slab have no light in them to bloom. The table's chat button, a plate that
+ * is not an [MMButton], blooms through this too (GameScreen.kt).
  */
-private fun Modifier.pressBloom(
+internal fun Modifier.pressBloom(
     press: GlassPress,
     glass: GlassSurface,
     shape: Shape,
@@ -447,6 +534,11 @@ enum class BtnKind { PRIMARY, GOLD, GHOST, GOOD, DANGER, PLAIN }
  * (a 15-point share arrow on a big button). [fitScale] keeps the label on one
  * line and lets it shrink to that fraction first, iOS's
  * lineLimit(1).minimumScaleFactor.
+ *
+ * An empty [label] is a button that is only its glyph — the dock's doors
+ * beside End turn, a seat's kick — and then there is no gap left for words
+ * that are not coming, so the glyph sits dead centre. Name it for a screen
+ * reader through [modifier]; a drawing has no name of its own.
  */
 @Composable
 fun MMButton(
@@ -470,6 +562,9 @@ fun MMButton(
     // takes the icon's place. This is the slot the landing screens kept their own button for
     // (PlayTab.kt's LandingButton), so with it they can wear this one.
     lead: (@Composable (ink: Color) -> Unit)? = null,
+    // The space between what leads and the words. Eight, as iOS's Label
+    // sets it; the two landing buttons that set their own keep theirs.
+    gap: Dp = 8.dp,
     onClick: () -> Unit,
 ) {
     val p = P.current
@@ -552,14 +647,15 @@ fun MMButton(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val worded = label.isNotEmpty()
             if (lead != null) {
                 lead(fg)
-                Spacer(Modifier.width(8.dp))
+                if (worded) Spacer(Modifier.width(gap))
             } else if (icon != null) {
                 Icon(icon, size = iconSize ?: if (big) 19.dp else 15.dp, tint = fg)
-                Spacer(Modifier.width(8.dp))
+                if (worded) Spacer(Modifier.width(gap))
             }
-            if (was != null) {
+            if (worded && was != null) {
                 Text(
                     "$was",
                     color = quiet,
@@ -569,7 +665,9 @@ fun MMButton(
                 )
                 Spacer(Modifier.width(7.dp))
             }
-            if (fitScale != null) {
+            if (!worded) {
+                // Only the glyph: nothing to set beside it.
+            } else if (fitScale != null) {
                 FitText(
                     label,
                     Modifier.weight(1f, fill = false),
@@ -743,6 +841,54 @@ fun Rule(modifier: Modifier = Modifier) {
     val colour = host?.hairline() ?: P.current.rule
     Box(modifier.fillMaxWidth().height(1.dp).background(colour))
 }
+
+/**
+ * The scroll edge under a sheet's bar: lines leaving the top of a scrolling
+ * column fade out over the last [SHEET_SCROLL_EDGE] instead of slicing off in
+ * a hard line where the bar ends — the edge iOS draws under a sheet's
+ * navigation bar, and the one the shell's page already draws above the tab
+ * bar (AppScaffold.kt). It is there only while something has gone up past
+ * the top: at rest the column opens on its own padding, and nothing is drawn,
+ * not even the layer. It comes in over the spec's 160 ms and is not reduced
+ * for Reduce Motion, because "there is more above" is information.
+ *
+ * Put it before the scroll — or on a lazy list's own modifier — so the mask
+ * lies on the viewport and not on the content. A mask reads alpha alone, so
+ * the two colours below are opacities, not paint; the layer is what keeps
+ * the cut to this column rather than the sheet's glass under it.
+ */
+fun Modifier.scrollEdge(state: ScrollableState): Modifier = composed {
+    val shown = animateFloatAsState(
+        targetValue = if (state.canScrollBackward) 1f else 0f,
+        animationSpec = tween(GlassMotion.SCROLL_EDGE_MS),
+        label = "mm.edge",
+    )
+    Modifier
+        .graphicsLayer {
+            compositingStrategy =
+                if (shown.value > 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+        }
+        .drawWithContent {
+            drawContent()
+            val t = shown.value
+            if (t > 0f) {
+                val band = SHEET_SCROLL_EDGE.toPx().coerceAtMost(size.height)
+                drawRect(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 1f - t),
+                        1f to Color.Black,
+                        startY = 0f,
+                        endY = band,
+                    ),
+                    size = Size(size.width, band),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
+}
+
+/** How much of a sheet's column fades under its bar — the tab bar's 28, the spec's. */
+private val SHEET_SCROLL_EDGE: Dp = 28.dp
 
 /**
  * Money, written the way every client writes it: no cents, thousands split —

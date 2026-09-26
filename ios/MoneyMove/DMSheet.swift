@@ -14,6 +14,7 @@ struct DMSheet: View {
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.dismiss) private var dismiss
 
     @State private var messages: [DMessage] = []
@@ -65,41 +66,16 @@ struct DMSheet: View {
                         .padding(.top, 6)
                 }
 
-                HStack(spacing: 8) {
-                    TextField("Message \(friend.name)…", text: $draft)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(P.ink)
-                        .padding(.vertical, 9)
-                        .padding(.horizontal, 14)
-                        .background(P.sunken, in: Capsule())
-                        .submitLabel(.send)
-                        .onSubmit { Task { await send() } }
-
-                    // Nothing to send is a dead tap, so let the button say so.
-                    let sendable = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(sendable ? P.accentInk : P.ink3)
-                            .frame(width: 36, height: 36)
-                            .background(sendable ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!sendable)
-                    .accessibilityLabel("Send")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .disabled(!rulesAgreed)
-                .opacity(rulesAgreed ? 1 : 0.45)
+                composer(P)
+                    .disabled(!rulesAgreed)
+                    .opacity(rulesAgreed ? 1 : 0.45)
             }
             .navigationTitle("\(friend.flag?.isEmpty == false ? "\(friend.flag!) " : "")\(friend.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .sheetBarItem(on: .sheet)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -118,12 +94,16 @@ struct DMSheet: View {
                             Label("Block \(friend.name)", systemImage: "hand.raised")
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        // The plain glyph and not the circled one: the button
+                        // around it is already the circle, on 26 and below.
+                        Image(systemName: "ellipsis")
                     }
                     .accessibilityLabel("Report or block")
+                    .sheetBarItem(on: .sheet)
                 }
             }
         }
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -134,6 +114,51 @@ struct DMSheet: View {
                 try? await Task.sleep(for: .seconds(2.5))
             }
         }
+    }
+
+    /// The field and its send button as one capsule of glass — the same
+    /// composer the table chat has, so a message is written the same way
+    /// wherever it is going. The capsule is the field; the send disc sits in
+    /// its trailing end.
+    private func composer(_ P: Palette) -> some View {
+        let glass = BackdropKind.sheet.settledGlass(P)
+        // Nothing to send is a dead tap, so let the button say so: the accent
+        // plate only once there is something to send, and until then a well
+        // in the glass with its glyph in the second ink.
+        let sendable = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return HStack(spacing: 8) {
+            // Spelled out so the placeholder wears the glass's second ink
+            // rather than the system's third-rank grey, which is 1.53:1 here.
+            TextField("Message \(friend.name)…", text: $draft,
+                      prompt: Text("Message \(friend.name)…").foregroundStyle(
+                        glass.label(secondary: true, increaseContrast: contrast == .increased)))
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(glass.ink)
+                .padding(.leading, 12)
+                .submitLabel(.send)
+                .onSubmit { Task { await send() } }
+
+            Button {
+                Task { await send() }
+            } label: {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(sendable
+                                     ? P.accentInk
+                                     : glass.label(secondary: true, increaseContrast: contrast == .increased))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(MMButtonStyle(kind: sendable ? .primary : .ghost, form: .disc))
+            .disabled(!sendable)
+            .accessibilityLabel("Send")
+        }
+        // A 36-point disc 4 in from a 44-point capsule: concentric. A field,
+        // so it is set into the sheet and casts nothing.
+        .padding(4)
+        .mmControls(on: .chrome)
+        .sheetGlass(on: .sheet, in: Capsule(), floats: false)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     private func bubble(_ msg: DMessage, _ P: Palette) -> some View {

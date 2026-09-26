@@ -28,6 +28,7 @@ struct TradeOfferSheet: View {
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.dismiss) private var dismiss
 
     /// A sheet nobody asked for arrives under whatever finger was already on
@@ -54,7 +55,6 @@ struct TradeOfferSheet: View {
         let P = Palette.current(scheme)
         VStack(spacing: 0) {
             header(P)
-            Divider().overlay(P.rule)
             ScrollView {
                 VStack(spacing: 0) {
                     ZStack {
@@ -71,8 +71,16 @@ struct TradeOfferSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             }
+            // Where a rule used to divide the header from the piles, a deal
+            // pulled up under the header now fades out instead of being cut
+            // against a line. The band is the piles' own top padding, so at
+            // rest nothing is in it.
+            .sheetScrollEdge(top: 16)
             actions(P)
         }
+        // Everything pressable here — the close disc, the three answers —
+        // stands straight on the sheet, and the sheet says what that is.
+        .mmControls(on: .platter(.sheet))
         .sheetPaper(P.sheet)
         // Sized for the deal rather than the screen: two piles, the meter and
         // the answers, with no gap under them and nothing cut off. A deal with
@@ -114,17 +122,20 @@ struct TradeOfferSheet: View {
                     .foregroundStyle(P.ink3)
             }
             Spacer(minLength: 4)
+            // The sheet's one piece of bar chrome, so it is glass — a disc,
+            // the shape 26 gives a close button — with its cross in the
+            // glass's second ink, which is as quiet as glass is allowed to go.
             Button {
                 Haptics.tap()
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(P.ink3)
+                    .foregroundStyle(BackdropKind.platter(.sheet).settledGlass(P)
+                        .label(secondary: true, increaseContrast: contrast == .increased))
                     .frame(width: 32, height: 32)
-                    .background(P.sunken, in: Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(MMButtonStyle(kind: .ghost, form: .disc))
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, 16)
@@ -331,7 +342,10 @@ struct TradeOfferSheet: View {
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 18)
-        .background(P.sheet)
+        // No fill of its own. This used to lay the sheet colour down again
+        // under the answers, which below 26 repainted the paper that was
+        // already there and on 26 hid the system's glass across the bottom
+        // of the sheet. The buttons are the chrome here, and they wear it.
     }
 }
 

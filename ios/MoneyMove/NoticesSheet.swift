@@ -67,34 +67,57 @@ final class NoticeWatch: ObservableObject {
 }
 
 /// The bell itself, for the top of the Social tab.
+///
+/// A control floating on the page, so it is a disc of glass rather than a
+/// paper circle with a ring drawn round it. News is the brass bell and the
+/// count; the gold outline the paper circle wore for it is gone, because the
+/// rim is already brass and a second gold line beside it would be a sticker's
+/// border. Nor does the glass take a tint for it — on 26 a tinted pane is a
+/// slab of the colour, and a gold slab behind a gold bell hides the bell.
 struct NoticeBell: View {
     @ObservedObject var watch: NoticeWatch
     var action: () -> Void
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.mmControlBackdrop) private var declared
+
+    /// It stands beside the Social tab's title, on the page itself and not on
+    /// a card, so that is its backdrop — unless whatever holds it has declared
+    /// itself glass, in which case it is drawn on that glass instead of as a
+    /// second pane over it.
+    private var backdrop: BackdropKind { declared == .chrome ? .chrome : .page }
 
     var body: some View {
         let P = Palette.current(scheme)
+        let news = watch.unread > 0
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: watch.unread > 0 ? "bell.badge.fill" : "bell.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(watch.unread > 0 ? P.gold : P.ink3)
-                    .frame(width: 38, height: 38)
-                    .background(P.sunken, in: Circle())
-                    .overlay(Circle().stroke(watch.unread > 0 ? P.gold : P.rule, lineWidth: 1))
-                if watch.unread > 0 {
-                    Text("\(min(watch.unread, 9))")
-                        .font(.system(size: 10, weight: .black, design: .rounded))
-                        .foregroundStyle(P.accentInk)
-                        .frame(width: 17, height: 17)
-                        .background(P.red, in: Circle())
-                        .offset(x: 3, y: -2)
-                }
+            Image(systemName: news ? "bell.badge.fill" : "bell.fill")
+                .font(.system(size: 16, weight: .semibold))
+                // Quiet, it is the glass's second ink: the third rank the
+                // paper circle used measures 1.53:1 on glass.
+                .foregroundStyle(news ? P.gold : backdrop.settledGlass(P)
+                    .label(secondary: true, increaseContrast: contrast == .increased))
+                .frame(width: 38, height: 38)
+        }
+        .buttonStyle(MMButtonStyle(kind: .ghost, form: .disc))
+        .mmControls(on: backdrop)
+        .accessibilityLabel(news ? "\(watch.unread) unread notes" : "Notes")
+        // The count rides outside the glass, over its shoulder: the material
+        // is free to clip what it holds to its own circle, and a badge is
+        // meant to break the edge.
+        .overlay(alignment: .topTrailing) {
+            if news {
+                Text("\(min(watch.unread, 9))")
+                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .foregroundStyle(P.accentInk)
+                    .frame(width: 17, height: 17)
+                    .background(P.red, in: Circle())
+                    .offset(x: 3, y: -2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(watch.unread > 0 ? "\(watch.unread) unread notes" : "Notes")
     }
 }
 
@@ -135,9 +158,13 @@ struct NoticesSheet: View {
             .navigationTitle("Notes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .sheetBarItem(on: .page)
+                }
             }
         }
+        .mmControls(on: .platter(.page))
         .sheetPaper(P.page)
         .task {
             await watch.load()

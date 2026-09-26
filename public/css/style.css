@@ -17,6 +17,11 @@
 
   /* --red is the brand accent slot; on the felt table it wears brass. */
   --red:        #b58223;
+  /* Ink printed ON an accent plate. The same number as iOS's accentInk and
+     Android's accentInk for each table: white where the accent is deep, a
+     near-black of the accent's own hue where it is light (brass, the pale
+     blush, cyan and amber nights), where white would fall under 3:1. */
+  --on-red: #201607;
   --red-deep:   #93690f;
   --red-soft:   #f7edd8;
   --red-ink:    #7a5a10;
@@ -36,6 +41,30 @@
   --page-ink-3:  var(--ink-3);
   --page-accent: var(--red);
 
+  /* The same family set as a page of prose — the five pages outside the game
+     (how to play, the boards, support, privacy, the app's redirect), which
+     are nothing but words printed straight onto the page. The accent is
+     lifted toward the ink because a table's accent is picked to fill a
+     button, and as words on a pale page it falls to 2.8:1; 60% of it by day
+     (90% after dark, below) leaves the worst of the fourteen at 5.2 and
+     5.1:1. Body copy sits between the first and second ink, small print takes
+     the second — the third is 2.6:1 on the pale tables — and a rule is the
+     ink itself thinned to a hairline, so it shows on the red page too. Kept
+     here rather than in the five pages so there is one copy to drift. */
+  --doc-body:    color-mix(in srgb, var(--page-ink) 50%, var(--page-ink-2));
+  --doc-quiet:   var(--page-ink-2);
+  --doc-accent:  color-mix(in srgb, var(--page-accent) 60%, var(--page-ink));
+  --doc-rule:    color-mix(in srgb, var(--page-ink) 12%, transparent);
+
+  /* The plate a primary wears when it is printed straight onto the page
+     rather than onto a card — the one call to action on each of those pages.
+     It is the accent's plate like every other primary, on every table but
+     one: crimson by day, whose page is its accent, where a red plate stood
+     on the red page at 1.38:1, found only by its rim, and the glass button
+     beside it read as the louder of the two. There it turns over (below). */
+  --page-plate:    var(--red);
+  --on-page-plate: var(--on-red);
+
   /* board */
   --board-bg:      #fdfbf4;
   --tile-face:     #ffffff;
@@ -51,6 +80,7 @@
   --ink-start:     #147445;
   --ink-treasure:  #8a5f10;
   --ink-surprise:  #9c4a86;
+  --ink-vacation:  #0f6d6d;
   --art-lift:      none;
   /* The flag medallion's rim. Card-white by day; after dark the card itself
      goes dark, so the rim borrows the ivory ink — a light ring on any felt. */
@@ -81,9 +111,13 @@
   --rule-2:     #31453c;
 
   --red:        #e3a93c;
+  --on-red: #201607;
   --red-deep:   #c08a25;
   --red-soft:   #2e2718;
   --red-ink:    #f2cd8b;
+
+  /* A pale accent on a dark page needs far less of the ink to carry. */
+  --doc-accent: color-mix(in srgb, var(--page-accent) 90%, var(--page-ink));
 
   --good:       #4fd98b;
   --good-soft:  #14291e;
@@ -106,6 +140,7 @@
   --ink-start:     #6ee7a0;
   --ink-treasure:  #e9be6b;
   --ink-surprise:  #e39ad1;
+  --ink-vacation:  #62dcd6;
   --art-lift:      brightness(1.35) saturate(1.05);
   --medal-ring:    var(--ink);
 
@@ -123,16 +158,25 @@
   --page: #b31527; --page-2: #8e0f1e; --card: #ffffff; --paper-2: #f4eeea;
   --ink: #1e1a1c; --ink-2: #5f5359; --ink-3: #948890; --rule: #e9e0db; --rule-2: #d8cac3;
   --red: #d92037; --red-deep: #a4142a; --red-soft: #fdecee; --red-ink: #7d0f20;
+  --on-red: #ffffff;
   --gold: #b7791f; --gold-soft: #fdf3e0;
   --board-bg: #fffaf7; --tile-face: #ffffff; --tile-corner: #fffdfb;
   /* The only light table with a dark page: dark ink would vanish into it. */
   --page-ink: #fff6f7; --page-ink-2: rgba(255, 246, 247, .84);
   --page-ink-3: rgba(255, 246, 247, .62); --page-accent: #ffd0d6;
 }
+/* A primary on this page turns over: the page's own ink for the plate and
+   the accent's ink on it — 6.5:1 against the red, 10:1 for its words. Still
+   one solid plate, still the one primary. After dark the page is near-black
+   and the accent's plate stands out on it, so this stays by day. */
+:root[data-palette="crimson"]:not([data-theme="dark"]) {
+  --page-plate: var(--page-ink); --on-page-plate: var(--red-ink);
+}
 :root[data-palette="crimson"][data-theme="dark"] {
   --page: #150a0e; --page-2: #0d0508; --card: #211319; --paper-2: #2b1a21;
   --ink: #f4eaed; --ink-2: #bda8b0; --ink-3: #8d757e; --rule: #382330; --rule-2: #4a2f3c;
   --red: #f04156; --red-deep: #c4243a; --red-soft: #3a1620; --red-ink: #ffb8c2;
+  --on-red: #ffffff;
   --gold: #fbbf24; --gold-soft: #35240d;
   --board-bg: #1a0e13; --tile-face: #2a1a22; --tile-corner: #33202a;
 }
@@ -141,6 +185,7 @@
   --page: #eae6f4; --page-2: #dcd5ec; --card: #ffffff; --paper-2: #efecf7;
   --ink: #1d1a26; --ink-2: #575168; --ink-3: #8f89a3; --rule: #e2ddef; --rule-2: #cec6e3;
   --red: #6d3fd6; --red-deep: #5530ab; --red-soft: #efe8fd; --red-ink: #4a278f;
+  --on-red: #ffffff;
   --gold: #a97b1d; --gold-soft: #f4edd8;
   --board-bg: #fcfbff; --tile-face: #ffffff; --tile-corner: #fdfcff;
 }
@@ -148,6 +193,7 @@
   --page: #14101f; --page-2: #0b0814; --card: #201a33; --paper-2: #2a2342;
   --ink: #efecf7; --ink-2: #b3accc; --ink-3: #7d7699; --rule: #322a4d; --rule-2: #453a66;
   --red: #8b5cf6; --red-deep: #6d3fd6; --red-soft: #251b3e; --red-ink: #cdb8ff;
+  --on-red: #ffffff;
   --gold: #d9a13a; --gold-soft: #2c2413;
   --board-bg: #191430; --tile-face: #251e3b; --tile-corner: #2e2647;
 }
@@ -156,6 +202,7 @@
   --page: #f7e8ee; --page-2: #efd8e2; --card: #ffffff; --paper-2: #f7edf2;
   --ink: #241a20; --ink-2: #67535d; --ink-3: #a08892; --rule: #f0dde6; --rule-2: #e2c7d4;
   --red: #d6479a; --red-deep: #b02c7a; --red-soft: #fbe7f2; --red-ink: #8f1f61;
+  --on-red: #ffffff;
   --gold: #b7791f; --gold-soft: #fdf3e0;
   --board-bg: #fffbfd; --tile-face: #ffffff; --tile-corner: #fffdfe;
 }
@@ -163,6 +210,7 @@
   --page: #1d1016; --page-2: #120a0e; --card: #2b1a23; --paper-2: #37222d;
   --ink: #f7ecf1; --ink-2: #cfacbd; --ink-3: #97768a; --rule: #43293a; --rule-2: #58374b;
   --red: #f472b6; --red-deep: #d6479a; --red-soft: #3a1e2f; --red-ink: #ffc0e0;
+  --on-red: #2c0b1e;
   --gold: #e3a93c; --gold-soft: #2e2718;
   --board-bg: #241419; --tile-face: #301d27; --tile-corner: #3a2430;
 }
@@ -171,6 +219,7 @@
   --page: #e2ebf2; --page-2: #d2dfe9; --card: #ffffff; --paper-2: #ebf1f6;
   --ink: #16202a; --ink-2: #4e5f6e; --ink-3: #84939f; --rule: #dde7ee; --rule-2: #c6d6e2;
   --red: #1d94cf; --red-deep: #14719f; --red-soft: #e2f3fc; --red-ink: #0d567b;
+  --on-red: #ffffff;
   --gold: #a97b1d; --gold-soft: #f4edd8;
   --board-bg: #fbfdff; --tile-face: #ffffff; --tile-corner: #fcfeff;
 }
@@ -178,6 +227,7 @@
   --page: #0b1220; --page-2: #070b15; --card: #14202f; --paper-2: #1c2b3f;
   --ink: #e9eef6; --ink-2: #a9b8cc; --ink-3: #74839a; --rule: #24354b; --rule-2: #314763;
   --red: #38bdf8; --red-deep: #1d94cf; --red-soft: #14293a; --red-ink: #a5e0ff;
+  --on-red: #06202e;
   --gold: #d9a13a; --gold-soft: #2c2413;
   --board-bg: #101b2b; --tile-face: #182535; --tile-corner: #1f2e40;
 }
@@ -186,6 +236,7 @@
   --page: #f2e9d8; --page-2: #e7dac2; --card: #fffdf8; --paper-2: #f4edde;
   --ink: #241e12; --ink-2: #665c46; --ink-3: #998c70; --rule: #eadfc9; --rule-2: #d9c9a9;
   --red: #b97509; --red-deep: #935c05; --red-soft: #faeed6; --red-ink: #7a4c06;
+  --on-red: #ffffff;
   --gold: #b97509; --gold-soft: #faeed6;
   --board-bg: #fffcf3; --tile-face: #fffdf8; --tile-corner: #fffef9;
 }
@@ -193,6 +244,7 @@
   --page: #191307; --page-2: #100c04; --card: #272013; --paper-2: #33291a;
   --ink: #f5efe2; --ink-2: #c8bba0; --ink-3: #93876e; --rule: #3d321f; --rule-2: #52432a;
   --red: #f59e0b; --red-deep: #cc7f06; --red-soft: #332508; --red-ink: #ffd591;
+  --on-red: #241700;
   --gold: #f59e0b; --gold-soft: #332508;
   --board-bg: #201a0e; --tile-face: #2c2415; --tile-corner: #362c1c;
 }
@@ -201,6 +253,7 @@
   --page: #e8e8e6; --page-2: #d9d9d6; --card: #ffffff; --paper-2: #f0f0ee;
   --ink: #1b1b1a; --ink-2: #56565a; --ink-3: #8e8e91; --rule: #e2e2df; --rule-2: #ccccc8;
   --red: #8a6a2f; --red-deep: #6d5325; --red-soft: #f2ead9; --red-ink: #5d4419;
+  --on-red: #ffffff;
   --gold: #8a6a2f; --gold-soft: #f2ead9;
   --board-bg: #fcfcfb; --tile-face: #ffffff; --tile-corner: #fdfdfc;
 }
@@ -208,17 +261,1194 @@
   --page: #101113; --page-2: #0a0b0c; --card: #1b1d20; --paper-2: #25282c;
   --ink: #f0f1f2; --ink-2: #b3b8bd; --ink-3: #7d8288; --rule: #2e3237; --rule-2: #414750;
   --red: #c9a86a; --red-deep: #a8874a; --red-soft: #2a2519; --red-ink: #ecd7ae;
+  --on-red: #1e1809;
   --gold: #c9a86a; --gold-soft: #2a2519;
   --board-bg: #17181b; --tile-face: #202226; --tile-corner: #292c30;
 }
 
+/* ═════════════════════════════════════════════════════════════════════════
+   The glass layer
+   Liquid glass is a material, not a colour, so almost nothing below is
+   authored. Nine glass colours hand-picked per table would have been 126
+   hexes that drift apart inside a month; these are six formulas read off the
+   fourteen blocks above, and they cannot drift because there is nothing to
+   drift from. iOS and Android compute the same names from the same slots.
+
+   The warmth is deliberate and it is the identity. --gold is the one slot all
+   fourteen tables agree on — it sits between hue 35.5° and 43.3° everywhere —
+   while the --red accent slot swings 316° across them, brass on felt, cyan on
+   marine, violet on royale. So the film pulls 8% of the gold and the rim is
+   brass on every table. Derive either from --red instead and you get a
+   different material on each of the fourteen, which is to say none.
+
+   Glass belongs on the navigation layer: bars, sheet chrome, popovers,
+   floating controls. The forty tiles, the deeds, the chat, the logs and the
+   leaderboards are what the player came to look at, and they stay paper.
+
+   Everything glass in this file reads these — the material, the controls,
+   the bars, the popovers and the sheets — and nothing glass reads anything
+   else, so that when one of the three clients changes its mind about the
+   material, one edit here moves all of them.
+   ═════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* The film: white with a breath of the table's brass in it. */
+  --glass-film:     color-mix(in srgb, var(--gold) 8%, #fff);
+  /* What that film actually composites to over this table's page — the fill
+     Reduce Transparency and a browser with no backdrop-filter both fall back
+     to, at identical geometry, radius and shadow, so nothing shifts by a
+     pixel when the optics go away. The 62% is spelled out rather than read
+     from --glass-alpha on purpose: a Clear surface or a high-contrast
+     override moves that alpha, and the opaque fallback must not follow it. */
+  --glass-solid:    color-mix(in srgb, var(--glass-film) 62%, var(--page));
+
+  /* Ink on glass. --ink clears 8:1 against the worst backdrop in the app and
+     needs no help. --ink-2 does not, so it is lifted 62% of the way toward
+     --ink before it is allowed onto the material — 4.95:1 raw, 5.82:1 lifted.
+     --ink-3 bottoms out at 1.53:1 and has no lifted form that is still a
+     third rank: it is banned on glass. Promote every use to --glass-ink-2. */
+  --glass-ink:      var(--ink);
+  --glass-ink-2:    color-mix(in srgb, var(--ink) 62%, var(--ink-2));
+
+  /* Paper keeps paper's ink. A pane of glass hands the lift above down to
+     everything inside it, and that includes the deeds, rows and cards laid on
+     it — paper, which was never short of contrast and whose third rank is how
+     a hint reads as a hint. These are the table's own ranks, fixed here at the
+     root where nothing has lifted them yet, so a paper ground inside glass can
+     take them back (see "Paper inside glass"). */
+  --paper-ink-2:    var(--ink-2);
+  --paper-ink-3:    var(--ink-3);
+
+  /* The colours a control is allowed to print its words in. The table's own
+     --red-ink is already the accent made legible and clears 5.4:1 as it is.
+     The three semantic hues do not: raw, they fall to 2.6–3.7:1 on a control
+     printed on a glass panel — crimson's panels by day sit over its red page,
+     sands' after dark over its brown one — so each is pulled toward the ink
+     until the worst of the fourteen tables clears AA. 60% keeps green and red
+     (6.3 and 4.7:1 at worst), 50% keeps the brass (5.8:1), measured over every
+     card, board and glass panel the controls actually sit on. */
+  --glass-accent-ink: var(--red-ink);
+  --glass-good-ink:   color-mix(in srgb, var(--good) 60%, var(--glass-ink));
+  --glass-bad-ink:    color-mix(in srgb, var(--bad) 60%, var(--glass-ink));
+  --glass-gold-ink:   color-mix(in srgb, var(--gold) 50%, var(--glass-ink));
+
+  /* The tint adapts to whatever slid under the glass; the rim never does. By
+     day white takes the hot corner and the brass moves to the far-edge
+     bounce, because a literal gold line in daylight is mush — it measures
+     3.2:1 on a pale table against 5.7:1 on a dark one. */
+  --glass-rim-warm: var(--gold);
+  --glass-rim-hot:  #fff;
+  --glass-angle:    135deg;
+
+  /* Regular: the default variant, and the only one allowed over media. */
+  --glass-alpha:      .62;
+  --glass-blur:       20px;
+  --glass-blur-board: 12px;   /* one full-screen blur over a live board costs about what 115 buttons cost */
+  --glass-sat:        180%;
+  --glass-bright:     1.04;
+
+  /* Clear: thinner, for chrome floating over content it does not need to
+     separate itself from. Never over media — Clear does not adapt, and
+     pinned dark over a dimmed bright frame it measures 2.85:1. */
+  --glass-clear-alpha:  .30;
+  --glass-clear-blur:   10px;
+  --glass-clear-sat:    145%;
+  --glass-clear-bright: 1.02;
+
+  /* A semantic tint, laid over the film at this strength. One per surface:
+     tint two things side by side and neither of them is primary any more. */
+  --glass-tint-a: .14;
+
+  /* The rim, in the order it is drawn: the angular hot-to-bounce gradient,
+     then a 1px inner stroke inset 1px — that inner stroke is the part that
+     reads as thickness, and leaving it out is the commonest way a hand-built
+     glass ends up looking like a sticker — then a half-pixel contour for the
+     moments when film and backdrop happen to match, then a top-weighted inner
+     glow so the surface reads convex. --shadow-in above is the same idea one
+     level down and is where this generalises from. */
+  --glass-rim-w:         1px;
+  --glass-rim-hot-a:     .85;
+  --glass-rim-quarter-a: .10;
+  --glass-rim-bounce-a:  .30;
+  --glass-rim-inner-a:   .35;
+  --glass-hair:          rgba(0, 0, 0, .10);
+  --glass-hair-w:        .5px;
+  --glass-glow-a:        .12;
+  --glass-glow-d:        4px;
+  /* By day the brass that gave up the hot corner goes here as well as to the
+     bounce: the convex glow along the top edge is warm, not white. */
+  --glass-glow-tone:     var(--glass-rim-warm);
+
+  /* Two shadow states, and the glass has to move between them, because a
+     shadow that never changes is the giveaway. --shadow above is already the
+     busy end and keeps its value; this is the resting end. */
+  --shadow-relaxed: 0 8px 24px rgba(30, 28, 14, .10);
+
+  /* Which way a piece of glass leans is decided from the WCAG luminance of
+     the colour we put behind it — declared, never read back off the screen,
+     which is why it can behave identically here, on an iOS 17 phone and on an
+     Android 24 one. Hysteresis, so a bar sliding along a gradient settles
+     instead of chattering at the boundary, and a cold start splits the
+     difference. The crossover looks impossibly low until you composite it: at
+     alpha .62 the light film dominates, so light glass beats dark glass
+     everywhere above L ≈ .068, not at mid-grey. Putting it at mid-grey drops
+     the worst case to 4.38:1 and fails AA. */
+  --glass-flip-enter-dark:  .062;
+  --glass-flip-enter-light: .078;
+  --glass-flip-cold:        .070;
+
+  /* The durations the material owns. The tint flip is information — it is
+     how you see the glass notice what moved underneath it — so it survives
+     Reduce Motion, and so does the shadow. The third is the glass changing
+     how much it refracts, which is the governor at work (see "The
+     material"): a crossfade long enough that nobody sees the level change,
+     and asked for less motion, no time at all. */
+  --glass-tint-ms:    280ms;
+  --glass-shadow-ms:  200ms;
+  --glass-quality-ms: 240ms;
+
+  /* A sheet arriving: fast off the mark and a long, soft landing, with no
+     overshoot — a sheet is heavy, and a bounce is for things you flick. */
+  --ease-sheet: cubic-bezier(.32, .72, 0, 1);
+
+  /* Concentric radii: arithmetic, step 4, so a child's radius is its parent's
+     minus its inset and nobody has to memorise a pairing. A 22px shell with
+     8px of padding holds 14px chips; the floor is 4px. --r-sm / --r / --r-lg
+     above still own every surface in this file — these are the ladder the
+     glass surfaces move onto as they are converted. */
+  --r-6:  6px;
+  --r-10: 10px;
+  --r-14: 14px;
+  --r-18: 18px;
+  --r-22: 22px;
+  --r-26: 26px;
+  --r-pill: 999px;
+}
+
+/* After dark the film lifts off the card rather than down from white — mix a
+   film straight into a near-black card and there is nothing left in it to
+   catch light with — and the brass takes the hot corner back. Everything else
+   gains a little, because a dark backdrop gives the material less to work
+   with. */
+:root[data-theme="dark"] {
+  --glass-film:  color-mix(in srgb, var(--gold) 8%, color-mix(in srgb, var(--ink) 14%, var(--card)));
+  --glass-solid: color-mix(in srgb, var(--glass-film) 60%, var(--page));
+
+  --glass-rim-hot: var(--glass-rim-warm);
+
+  --glass-alpha:  .60;
+  --glass-sat:    170%;
+  --glass-bright: 1.12;
+
+  --glass-clear-alpha:  .26;
+  --glass-clear-sat:    140%;
+  --glass-clear-bright: 1.06;
+
+  /* A wider rim and a brighter bounce. The hot stop must never fall below .35
+     after dark or it vanishes outright on noir and on felt. */
+  --glass-rim-w:        1.25px;
+  --glass-rim-bounce-a: .53;
+  --glass-hair:         rgba(255, 255, 255, .08);
+  --glass-glow-a:       .10;
+  --glass-glow-tone:    #fff;
+
+  --shadow-relaxed: 0 8px 24px rgba(0, 0, 0, .30);
+}
+
+/* Crimson by day is the one light table with a dark page, so its film
+   composited over --page lands on a muddy rose instead of the warm pale the
+   other thirteen produce. Bars on this table sit over its white cards, not
+   over that red, so the opaque fallback is pinned to the designed value. It
+   is the only hand-written colour in this whole block, and the :not() keeps
+   it off crimson's dark variant, which the formula gets right. */
+:root[data-palette="crimson"]:not([data-theme="dark"]) {
+  --glass-solid: #f8efec;
+}
+
+/* Registered so the specular sweep can animate the angle. Left unregistered
+   the sweep still runs, it just snaps between two static gradients instead of
+   travelling, and engines without @property degrade to exactly that. */
+@property --glass-angle {
+  syntax: '<angle>';
+  initial-value: 135deg;
+  inherits: false;
+}
+
+/* Registered so the blur can travel too, for the governor's crossfade (see
+   "The material"). The blur is the one number that has to move rather than
+   the filter it sits in: a pane carrying the lens has an SVG url() in that
+   filter, and a filter list with a url() in it cannot be interpolated at
+   all — it would snap however long its transition was — while a length
+   inside it can travel under any filter. Inherited, because it is set once
+   on the body and every pane reads it from there. Left unregistered it
+   snaps, which is what it did before. */
+@property --glass-blur {
+  syntax: '<length>';
+  initial-value: 20px;
+  inherits: true;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   The material
+   The block above says what the glass is made of; this is the one rule that
+   builds it, and every surface that puts it on joins this selector list.
+   There is no class to add: the rails and the sheets are written out by
+   js/ui.js from the classes they already carry, so the list names those.
+   .panel was the first surface in, and seven of its variants opt back out to
+   paper further down, where .panel is defined — read the two together. The
+   rest of the list is the navigation layer: the table's toolbar and the
+   landing's, the popovers, the turn banner, the toasts, and the action well
+   in the middle of the board. The two sheets that scroll — the modal and the
+   ad — wear the same material a different way, under "The sheets".
+
+   Painted in the order a real edge is: a film of the table's own brass over a
+   blurred, slightly over-saturated backdrop; an angular specular rim; a
+   stroke one pixel further in, which is the part that reads as thickness; a
+   half-pixel contour for the moments when film and backdrop happen to be the
+   same colour; and a top-weighted glow so the surface reads convex instead of
+   cut out. Leave the inner stroke off and the whole thing goes flat — that is
+   the commonest way a hand-built glass gives itself away.
+
+   The one optical property this rule cannot build is the lens, the edge
+   refraction that bends a straight line as it passes under the rim. It
+   cannot come from a stylesheet: it wants a displacement map authored at the
+   element's size and an <svg> filter to feed it, both of which live in
+   index.html. It is its own declaration under html[data-glass-lens="1"] (see
+   "The lens") and never a url(#…) appended to the filter list below —
+   Safari and Firefox parse that url() as perfectly valid, then fail to
+   render it and drop the entire declaration, taking the blur and the
+   saturate down with it. That is the same reason the gate is a Houdini probe
+   rather than @supports (backdrop-filter: url(#x)), which answers yes in all
+   three engines and tells you nothing.
+   ═════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* Which of the two shadows is live. It has to move between them: a shadow
+     that never changes is the tell that gives away a pasted card. */
+  --glass-shadow: var(--shadow-relaxed);
+}
+
+/* A token walking the board is the one thing on screen that would make a
+   full-screen blur expensive, so while anything is moving the glass stops
+   refracting and leans on its shadow instead. The material itself does not
+   flinch — only what it refracts freezes, which is the difference between a
+   governor and a flicker. js/board.js says when: it holds the board busy for
+   a walk, a carry, a set coming together and the deal. And the blur does not
+   snap off and back on several times a turn: every pane that refracts lists
+   the blur among its transitions, over --glass-quality-ms, so the change of
+   level is a crossfade nobody sees, and the shadow deepening is the one thing
+   that shows — which is meant to. */
+body.board-busy {
+  --glass-blur: 0px;
+  --glass-shadow: var(--shadow);
+}
+
+/* The other thing that presses the glass down into its deeper shadow is a
+   sheet above it. While a sheet or an ad is up — or, on a phone, the chat
+   docked over the board — every pane beneath it sits a level lower in the
+   stack than it did, and its shadow says so. The sheet itself already wears
+   the deep end, being the top of the stack. */
+body:has(> #modalRoot:not(.hidden), > .ad-root) {
+  --glass-shadow: var(--shadow);
+}
+@media (max-width: 1024px) {
+  body.chat-open { --glass-shadow: var(--shadow); }
+}
+
+/* The glass that hangs over the live board refracts through the thinner
+   blur. A blur is priced per pixel of whatever moves beneath it, and one the
+   size of a sheet over an animating board costs about what 115 buttons do.
+   Written against the busy state rather than on the surfaces themselves, so
+   the governor's zero above still reaches them: a surface that set a blur of
+   its own would shadow the one it inherits from body, and keep refracting
+   while a token walked. */
+body:not(.board-busy) :is(.center-panel, .tb-inner),
+body.chat-open:not(.board-busy) .panel.chat-panel,
+body:not(.board-busy) #app:not(.hidden) ~ #modalRoot > .modal {
+  --glass-blur: var(--glass-blur-board);
+}
+
+/* Only one blur is allowed over the live board at a time, and with a sheet
+   up it is the sheet's. So the action well and the turn banner stop
+   refracting underneath it — they are under the scrim, and a blur nobody can
+   see through a dimmed pane is the budget spent twice. Their film, rim and
+   place stay where they were; the blur fades out and back in with the
+   governor's crossfade. The chat is a sheet only where it docks, on a
+   screen of 1024 or less; wider, it is paper in the rail and takes nothing. */
+body:has(> #modalRoot:not(.hidden), > .ad-root) :is(.center-panel, .tb-inner) {
+  --glass-blur: 0px;
+}
+@media (max-width: 1024px) {
+  body.chat-open :is(.center-panel, .tb-inner) { --glass-blur: 0px; }
+}
+
+/* The same budget between the panes that live on the board itself. While
+   the turn banner is in flight it is the one that refracts, and the action
+   well waits its second and a half out — nobody reads the well while the
+   table is being told whose turn it is. The tooltip never spends it at all
+   (see .tile-tip). */
+.board-wrap:has(> .turn-banner-fly.show) .center-panel {
+  --glass-blur: 0px;
+}
+
+.glass,
+.panel,
+.brand-actions,
+.landing-floats,
+.palette-bar,
+.invite-strip,
+.profile-menu,
+.center-panel,
+.tb-inner,
+.tile-tip,
+.toast {
+  position: relative;
+  /* Safari leaks square corners out from under the rim's mask without a
+     stacking context of its own, and the rim's screen blend needs one in any
+     case, or it reaches past the film and lights up the page behind. */
+  isolation: isolate;
+  border: 0;
+  background: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair), var(--glass-shadow);
+
+  /* The third ink rank measures 1.53:1 on this material and there is no
+     lifted form of it that is still recognisably a third rank, so on glass
+     the rank simply does not exist: anything inside that reaches for it is
+     handed the lifted second one instead. The second is lifted for the same
+     reason, 4.95:1 raw against 5.82:1 once it is pulled toward --ink. */
+  --ink-2: var(--glass-ink-2);
+  --ink-3: var(--glass-ink-2);
+
+  /* The tint flip and the shadow are information — you are watching the glass
+     notice what moved underneath it — so they keep their own durations and
+     survive Reduce Motion. Then the theme-change easing this surface has
+     always had, and last the crossfade between refracting and not (see the
+     governor above) — the blur itself travelling, not the filter it sits in
+     (see where --glass-blur is registered). */
+  transition:
+    background-color var(--glass-tint-ms) var(--ease),
+    box-shadow var(--glass-shadow-ms) linear,
+    border-color .24s var(--ease),
+    color .24s var(--ease),
+    transform .24s var(--ease),
+    filter .24s var(--ease),
+    --glass-blur var(--glass-quality-ms) linear;
+}
+
+/* What a surface hands down to the controls printed on it. A button inside a
+   panel is part of the panel's assembly, not a second pane laid on top, so it
+   casts no shadow of its own onto the glass beneath it — the assembly casts
+   the one. Handed down rather than looked up, so a surface that joins this
+   list brings the rule with it and no control has to know where it stands.
+   The radius a nested control takes comes down the same way, but only a
+   surface that knows its own radius and padding can work that out, so each
+   one declares it where its geometry is (see .panel). */
+.glass,
+.panel,
+.brand-actions,
+.landing-floats,
+.palette-bar,
+.invite-strip,
+.profile-menu,
+.center-panel,
+.tb-inner,
+.tile-tip,
+.toast,
+.modal:not(.chart-modal),
+.ad-sheet,
+.quick-build,
+.chat-form {
+  --glass-nest-shadow: 0 0 transparent;
+}
+
+/* The specular rim. Additive, because brighter-than-white is the entire
+   difference between a reflection and a sticker outline, and angular, because
+   a real edge is lit unevenly: hot where the light comes from, a dimmer
+   bounce off the far edge, and almost nothing on the two sides between. By
+   day white takes the hot corner and the brass falls back to the bounce — a
+   literal gold line in daylight measures 3.2:1 and reads as mush. The
+   controls further down wear exactly this rim, so they are listed here with
+   the surfaces rather than given a copy of it. */
+.glass::before,
+.panel::before,
+.brand-actions::before,
+.landing-floats::before,
+.palette-bar::before,
+.invite-strip::before,
+.profile-menu::before,
+.center-panel::before,
+.tb-inner::before,
+.tile-tip::before,
+.toast::before,
+.quick-build::before,
+.chat-form::before,
+.btn::before,
+.qb-btn::before,
+.emote::before,
+.icon-btn::before,
+.link-btn::before,
+.sheet-x::before,
+.ad-x::before,
+.intro-skip::before,
+.cs-bubble::before,
+.trade-viewing::before,
+.trade-mini::before,
+.app-cta::before,
+.profile-chip::before,
+.chat-bubble::before,
+.coin-purse::before,
+.trade-arrow::before,
+.deal-swap::before,
+.chat-channels::before,
+.swatch::before,
+.pswatch::before {
+  content: '';
+  position: absolute; inset: 0; border-radius: inherit;
+  padding: var(--glass-rim-w);
+  background: conic-gradient(from var(--glass-angle),
+    color-mix(in srgb, var(--glass-rim-hot)  calc(var(--glass-rim-hot-a)     * 100%), transparent),
+    color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-quarter-a) * 100%), transparent) 25%,
+    color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a)  * 100%), transparent) 50%,
+    color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-quarter-a) * 100%), transparent) 75%,
+    color-mix(in srgb, var(--glass-rim-hot)  calc(var(--glass-rim-hot-a)     * 100%), transparent));
+  /* Ring, not a fill: the mask keeps the padding band and throws the middle
+     away, so nothing sits between the backdrop and the film. */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+/* Thickness, then convexity: the inner stroke set one rim-width further in,
+   under a glow weighted to the top edge because that is where the light is
+   coming from. --shadow-in has been doing the same job one level down for
+   every card in this file since the beginning; this is that idea generalised.
+   Both are light, so both add, the way the rim does: a warm glow laid over a
+   pale film with ordinary alpha darkens the edge it was meant to lift, which
+   is a shadow wearing a glow's name. The chat button and the channel picker
+   are missing from this list on purpose — their ::after is already the unread
+   mark and the travelling lozenge, so they carry these two in their own
+   box-shadow instead. */
+.glass::after,
+.panel::after,
+.brand-actions::after,
+.landing-floats::after,
+.palette-bar::after,
+.invite-strip::after,
+.profile-menu::after,
+.center-panel::after,
+.tb-inner::after,
+.tile-tip::after,
+.toast::after,
+.quick-build::after,
+.chat-form::after,
+.btn::after,
+.qb-btn::after,
+.emote::after,
+.icon-btn::after,
+.link-btn::after,
+.sheet-x::after,
+.ad-x::after,
+.intro-skip::after,
+.cs-bubble::after,
+.trade-viewing::after,
+.trade-mini::after,
+.app-cta::after,
+.profile-chip::after,
+.coin-purse::after,
+.trade-arrow::after,
+.deal-swap::after,
+.swatch::after,
+.pswatch::after {
+  content: '';
+  position: absolute; inset: var(--glass-rim-w); border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 var(--glass-rim-w) color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-inner-a) * 100%), transparent),
+    var(--shadow-in),
+    inset 0 var(--glass-glow-d) calc(var(--glass-glow-d) * 2) calc(var(--glass-glow-d) * -1) color-mix(in srgb, var(--glass-glow-tone) calc(var(--glass-glow-a) * 100%), transparent);
+  mix-blend-mode: screen;
+}
+
+/* Firefox before 103, and anyone behind something that strips the filter.
+   The film is swapped for the colour it would have composited to over this
+   table's page — a designed value, not a guess — at identical geometry,
+   radius, padding and shadow, so nothing moves by a pixel when the optics go
+   away. The rim stays: on an opaque surface it is honestly a border. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .panel,
+  .brand-actions,
+  .landing-floats,
+  .palette-bar,
+  .invite-strip,
+  .profile-menu,
+  .center-panel,
+  .tb-inner,
+  .tile-tip,
+  .toast { background-color: var(--glass-solid); }
+}
+
+/* Asked for less transparency, the material goes fully opaque rather than
+   thick — 0.62 nudged up to 0.80 is the answer that fools nobody — and the
+   rim comes down to the alpha a border would wear. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .panel,
+  .brand-actions,
+  .landing-floats,
+  .palette-bar,
+  .invite-strip,
+  .profile-menu,
+  .center-panel,
+  .tb-inner,
+  .tile-tip,
+  .toast {
+    background-color: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+    --glass-rim-hot-a: .30;
+  }
+}
+
+/* Asked for more contrast: a thicker film, a wider rim, a contour you can
+   actually see, and the second ink rank promoted to the first. Set on the
+   root rather than on the surfaces, so every piece of glass that follows
+   inherits it without having to know. */
+@media (prefers-contrast: more) {
+  :root {
+    --glass-alpha:   .82;
+    --glass-rim-w:   1.5px;
+    --glass-hair:    rgba(0, 0, 0, .30);
+    --glass-hair-w:  1px;
+    --glass-tint-a:  .26;
+    --glass-ink-2:   var(--glass-ink);
+    /* The thicker film and the heavier tint both eat into the coloured inks:
+       the accent on a .26 tint falls to 4.3:1, so under this setting the
+       accent words go to plain ink and green and red are pulled further in. */
+    --glass-accent-ink: var(--glass-ink);
+    --glass-good-ink:   color-mix(in srgb, var(--good) 45%, var(--glass-ink));
+    --glass-bad-ink:    color-mix(in srgb, var(--bad) 45%, var(--glass-ink));
+  }
+  :root[data-theme="dark"] {
+    --glass-alpha: .80;
+    --glass-rim-w: 1.5px;
+    --glass-hair:  rgba(255, 255, 255, .30);
+  }
+}
+
+/* The tint flip and the shadow are information, so they keep their durations
+   when motion is turned down — the shadow slows to 300ms and goes linear.
+   The blanket rule further down, after the phone layout, drops every
+   transition in the app to nothing with !important, which took these two
+   with it; this is the one place that is allowed to answer it. The
+   crossfade between refracting and not goes to nothing with the rest: it
+   is there to hide a change, and nobody who asked for less motion needs a
+   change hidden from them by more of it. */
+@media (prefers-reduced-motion: reduce) {
+  .glass,
+  .panel,
+  .brand-actions,
+  .landing-floats,
+  .palette-bar,
+  .profile-menu,
+  .center-panel,
+  .tb-inner,
+  .tile-tip,
+  .toast {
+    transition-duration: var(--glass-tint-ms), 300ms, .01ms, .01ms, .01ms, .01ms, 0s !important;
+  }
+  /* The invite slides in on its transform, which it lists first (see
+     .invite-strip): the slide goes, the tint and the shadow stay. */
+  .invite-strip {
+    transition-duration: .01ms, var(--glass-tint-ms), 300ms, 0s !important;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   The controls
+   Everything a thumb presses is glass too: the buttons, the fields, the keys,
+   the close crosses, the medallions, and the few controls that float free of
+   any panel. They wear the rim and the inner light listed in "The material"
+   and read the same tokens, so a table style that changes its mind moves a
+   button and the rail it sits in together. Each control's own rule further
+   down keeps its geometry; its paint comes from here.
+
+   What most of them do not do is blur. A button is printed on a card, and a
+   card is one flat colour: a Gaussian of a flat colour is that colour, and
+   nothing ever slides under a button, because the button scrolls with the
+   card it is printed on. The blur would cost a compositor pass per button
+   and change no pixel — the landing's buttons alone would spend the page's
+   whole budget of eight to twelve — so a control is glass at the flat level:
+   film and rim, no blur, over a backdrop with nothing in it to refract. The
+   handful that genuinely hang over something live are named below and
+   refract for real.
+
+   A button whose colour is its meaning — the primary, good, bad, gold — is
+   not glass at all but a solid plate in that colour, wearing from the glass
+   only the rim, the shadow and the press (see "buttons"): a row of tinted
+   films reads as a row with no primary in it. Everything else is film, and
+   ghost buttons are Clear: thinner glass, for the action you are allowed to
+   overlook.
+
+   Two bars are painted here too, because they sit where the controls do —
+   inside content, over a flat ground — and so are glass at the same flat
+   level: the quick-build bar inside a deed, and the chat's composer. Each
+   holds keys, and hands them its radius the way a surface does.
+   ═════════════════════════════════════════════════════════════════════════ */
+.btn,
+.qb-btn,
+.emote,
+.sheet-x,
+.icon-btn.sheet-x,    /* named twice: as a bare .icon-btn its reset would win */
+.icon-btn.send,
+.icon-btn.floating,
+.ad-x,
+.intro-skip,
+.cs-bubble,
+.trade-viewing,
+.trade-mini,
+.app-cta,
+.profile-chip,
+.chat-bubble,
+.coin-chip.coin-purse,
+.trade-arrow,
+.deal-swap,
+.chat-channels,
+.quick-build,
+.chat-form {
+  position: relative;
+  isolation: isolate;
+  border: 0;
+  /* One semantic colour, laid over the film. Reset on every control, so a
+     tinted one never hands its colour down to something nested inside it. */
+  --glass-tint: transparent;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--glass-tint) calc(var(--glass-tint-a) * 100%), transparent) 0 0);
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair);
+  color: var(--glass-ink);
+  /* The same promotion the surfaces make: nothing printed on glass is in the
+     third rank, and the second is the lifted one. */
+  --ink-2: var(--glass-ink-2);
+  --ink-3: var(--glass-ink-2);
+}
+
+/* Raised: the controls that stood proud of their card before they were glass,
+   and the ones that float. Printed on a glass surface they cast nothing of
+   their own — the surface hands down an empty nest shadow and the assembly
+   casts the one (see "The material"). */
+.btn:not(.ghost, .tiny),
+.icon-btn.floating,
+.app-cta,
+.profile-chip,
+.coin-chip.coin-purse,
+.trade-arrow,
+.deal-swap {
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair), var(--glass-nest-shadow, var(--glass-shadow));
+}
+
+/* The few that really do hang over something live — the landing's drifting
+   colour, the board on a phone, whatever the page has scrolled beneath them —
+   and the two swap medallions, which straddle the edges of two cards and so
+   have real edges under them to soften. These take the full optics, and
+   they freeze with every other pane while a token walks. All of them are
+   Regular: the chat button and the purse can land over anything at all, and
+   Clear does not adapt. */
+.app-cta,
+.profile-chip,
+.chat-bubble,
+.icon-btn.floating,
+.coin-chip.coin-purse,
+.trade-arrow,
+.deal-swap {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+}
+
+/* Bare glyph buttons — the seven in the table's own toolbar, the crosses in
+   the corners of sheets that are not a sheet's close, a link inside a
+   sentence — are not glass until they are touched. At rest they are ink on
+   whatever they sit on; under a pointer, a keyboard's focus or a thumb, a
+   lozenge of Regular glass comes up around them and the light finds its rim.
+   Seven lozenges standing in one toolbar at all times would be seven panes
+   where the toolbar means to be one. */
+.icon-btn,
+.link-btn {
+  position: relative;
+  isolation: isolate;
+}
+:is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating)::before,
+:is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating)::after {
+  opacity: 0;
+}
+:is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating):is(:hover, :focus-visible, :active) {
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair);
+  color: var(--glass-accent-ink);
+}
+:is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating):is(:hover, :focus-visible, :active)::before,
+:is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating):is(:hover, :focus-visible, :active)::after {
+  opacity: 1;
+}
+
+/* Fields. An <input> cannot carry a ::before or an ::after, so the rim every
+   other control wears cannot be drawn on one. It is drawn as the lights it
+   is made of instead: the hot stop along the two edges nearest the light, the
+   bounce along the other two, the inner stroke under both — uneven and
+   hottest where the light lands, which is what separates a rim from a
+   border, though it cannot turn under a press the way the drawn one does.
+   A field does not float, so there is no drop shadow, only the contour; and
+   checkboxes and sliders are left to their own rules, since the browser
+   draws those and a film behind one is just a smudge. */
+input:not([type="checkbox"], [type="radio"], [type="range"]),
+select {
+  isolation: isolate;
+  outline: none;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  color: var(--glass-ink);
+  --ink-2: var(--glass-ink-2);
+  --ink-3: var(--glass-ink-2);
+  --glass-field-rim:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent),
+    inset 0 0 0 calc(2 * var(--glass-rim-w)) color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-inner-a) * 100%), transparent);
+  box-shadow: var(--glass-field-rim), 0 0 0 var(--glass-hair-w) var(--glass-hair);
+  transition-property: background-color, box-shadow, color;
+  transition-duration: var(--glass-tint-ms), var(--glass-shadow-ms), .24s;
+  transition-timing-function: var(--ease), linear, var(--ease);
+}
+/* Focus is a ring in the table's accent outside the contour, the one place a
+   field says which of them is listening. */
+input:not([type="checkbox"], [type="radio"], [type="range"]):focus,
+select:focus {
+  box-shadow: var(--glass-field-rim), 0 0 0 var(--glass-hair-w) var(--glass-hair),
+    0 0 0 3px color-mix(in srgb, var(--red) 24%, transparent);
+}
+/* A film behind the list a <select> drops down would leave the list see-
+   through, or black, depending on the browser. The options are paper. */
+select option {
+  background-color: var(--card);
+  color: var(--ink);
+}
+
+/* How the controls move. The tint and the shadow keep the durations the
+   material owns; the scale is the press, and its release is a spring — past
+   1.0 to about 1.008 and back. linear() draws that spring exactly; an engine
+   without it keeps the first timing line and gets --pop, which overshoots to
+   1.003 — the same gesture, a little under half as springy. The second line
+   spells --ease out in full because a var() in it would put off checking the
+   line until it was too late to fall back.
+   The purse is missing on purpose: it keeps its own slide-in. */
+.btn,
+.qb-btn,
+.emote,
+.sheet-x,
+.icon-btn,
+.link-btn,
+.ad-x,
+.intro-skip,
+.cs-bubble,
+.trade-viewing,
+.trade-mini,
+.app-cta,
+.profile-chip,
+.chat-bubble,
+.trade-arrow,
+.deal-swap,
+.chat-channels,
+.swatch,
+.pswatch {
+  transition-property: background-color, box-shadow, color, scale, translate;
+  transition-duration: var(--glass-tint-ms), var(--glass-shadow-ms), .24s, 260ms, .16s;
+  transition-timing-function: var(--ease), linear, var(--ease), var(--pop), var(--ease);
+  transition-timing-function: cubic-bezier(.22, 1, .36, 1), linear, cubic-bezier(.22, 1, .36, 1),
+    linear(0, .5 11%, .9 24%, 1.15 38%, 1.23 48%, 1.17 59%, 1.06 74%, 1.01 88%, 1),
+    cubic-bezier(.22, 1, .36, 1);
+}
+/* The few that refract (see above) also carry the governor's crossfade, as
+   every pane does (see "The material"). Only those: the rest have no blur to
+   fade, and a transition on a number a control never reads is work for
+   nothing, thirty times over on a table. A list that runs out cycles back to
+   its start, so the blur's own timing is spelled out after the spring's. */
+.app-cta,
+.profile-chip,
+.chat-bubble,
+.icon-btn.floating,
+.trade-arrow,
+.deal-swap {
+  transition-property: background-color, box-shadow, color, scale, translate, --glass-blur;
+  transition-duration: var(--glass-tint-ms), var(--glass-shadow-ms), .24s, 260ms, .16s, var(--glass-quality-ms);
+  transition-timing-function: var(--ease), linear, var(--ease), var(--pop), var(--ease), linear;
+  transition-timing-function: cubic-bezier(.22, 1, .36, 1), linear, cubic-bezier(.22, 1, .36, 1),
+    linear(0, .5 11%, .9 24%, 1.15 38%, 1.23 48%, 1.17 59%, 1.06 74%, 1.01 88%, 1),
+    cubic-bezier(.22, 1, .36, 1), linear;
+}
+
+/* The press is a gel, not a click: a squash on the way down, held at .965,
+   then the spring above on release. The light moves with it — the hot corner
+   swings 40° while a control is held, which is all the touch response the
+   rim owns; the bloom under the finger wants the touch point, and only a
+   script knows where that is. Pointing at a control leans the light half as
+   far, which is the web's own hover and nothing a phone will ever see. */
+:is(.btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip,
+    .app-cta, .profile-chip, .chat-bubble, .swatch, .pswatch):active:not(:disabled) {
+  scale: .965;
+  animation: glassGel 110ms ease-out;
+}
+@keyframes glassGel {
+  0%   { scale: 1; }
+  45%  { scale: .94 1.03; }
+  100% { scale: .965; }
+}
+:is(.btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip,
+    .app-cta, .profile-chip, .chat-bubble, .swatch, .pswatch)::before,
+:is(.icon-btn, .link-btn)::after {
+  transition: --glass-angle 260ms var(--ease), opacity .16s var(--ease);
+}
+:is(.btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip,
+    .app-cta, .profile-chip, .chat-bubble, .swatch, .pswatch):hover:not(:disabled)::before {
+  --glass-angle: 155deg;   /* 135° + 20° */
+}
+:is(.btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip,
+    .app-cta, .profile-chip, .chat-bubble, .swatch, .pswatch):active:not(:disabled)::before {
+  --glass-angle: 175deg;   /* 135° + 40° */
+  transition-duration: 110ms, .16s;
+}
+
+/* Firefox before 103 cannot refract, so the few controls that do get the
+   colour they would have composited to instead, at the same size and on the
+   same shadow. The flat ones never refracted and need nothing here. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-cta,
+  .profile-chip,
+  .chat-bubble,
+  .icon-btn.floating,
+  .coin-chip.coin-purse,
+  .trade-arrow,
+  .deal-swap { background-color: var(--glass-solid); }
+}
+
+/* Less transparency: every control goes to the solid token, the rim to a
+   border's alpha, and the tint of a primary stays laid over the solid, so the
+   primary is still the primary. The coloured beads keep their colour — it is
+   what they are for — and lose only the brightness of their rim. */
+@media (prefers-reduced-transparency: reduce) {
+  .btn,
+  .qb-btn,
+  .emote,
+  .sheet-x,
+  .icon-btn.sheet-x,
+  .icon-btn.send,
+  .icon-btn.floating,
+  .ad-x,
+  .intro-skip,
+  .cs-bubble,
+  .trade-viewing,
+  .trade-mini,
+  .app-cta,
+  .profile-chip,
+  .chat-bubble,
+  .coin-chip.coin-purse,
+  .trade-arrow,
+  .deal-swap,
+  .chat-channels,
+  .quick-build,
+  .chat-form,
+  input:not([type="checkbox"], [type="radio"], [type="range"]),
+  select,
+  :is(.icon-btn, .link-btn):not(.send, .sheet-x, .floating):is(:hover, :focus-visible, :active) {
+    background-color: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+  }
+  .btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip, .cs-bubble,
+  .trade-viewing, .trade-mini, .app-cta, .profile-chip, .chat-bubble, .coin-purse,
+  .trade-arrow, .deal-swap, .chat-channels, .swatch, .pswatch, .quick-build, .chat-form,
+  input, select {
+    --glass-rim-hot-a: .30;
+  }
+}
+
+/* Less motion: the press keeps its scale and loses the squash and the spring
+   — a hundred milliseconds, eased out — and the tint and the shadow keep the
+   durations they have for the same reason the material's do. The governor's
+   crossfade goes, as the material's does. */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .qb-btn,
+  .emote,
+  .sheet-x,
+  .icon-btn,
+  .link-btn,
+  .ad-x,
+  .intro-skip,
+  .cs-bubble,
+  .trade-viewing,
+  .trade-mini,
+  .app-cta,
+  .profile-chip,
+  .chat-bubble,
+  .icon-btn.floating,
+  .trade-arrow,
+  .deal-swap,
+  .chat-channels,
+  .swatch,
+  .pswatch {
+    transition-duration: var(--glass-tint-ms), 300ms, .01ms, 100ms, .01ms, 0s !important;
+    transition-timing-function: var(--ease), linear, var(--ease), ease-out, var(--ease), linear;
+  }
+  input:not([type="checkbox"], [type="radio"], [type="range"]),
+  select {
+    transition-duration: var(--glass-tint-ms), 300ms, .01ms !important;
+  }
+  :is(.btn, .qb-btn, .emote, .sheet-x, .icon-btn, .link-btn, .ad-x, .intro-skip,
+      .app-cta, .profile-chip, .chat-bubble, .swatch, .pswatch)::before {
+    transition-duration: 110ms, .01ms !important;
+  }
+}
+
+/* Forced colours — Windows' high-contrast themes — throw every box-shadow
+   away and paint every background the one system colour, so a control whose
+   edge is a film, a rim and a contour has no edge left at all, a field whose
+   focus is a ring of shadow shows no focus, and the lozenge that says which
+   channel is on is the same colour as the track it sits in. There the border
+   these controls gave up comes back in whatever colour the system picks, a
+   field that is listening gets an outline, and the channel that is on is
+   underlined. Nothing here reaches anyone who has not asked for it. */
+@media (forced-colors: active) {
+  .btn, .qb-btn, .emote, .sheet-x, .icon-btn.sheet-x, .icon-btn.send, .icon-btn.floating,
+  .ad-x, .intro-skip, .cs-bubble, .trade-viewing, .trade-mini, .app-cta, .profile-chip,
+  .chat-bubble, .coin-chip.coin-purse, .trade-arrow, .deal-swap, .chat-channels,
+  .quick-build, .chat-form,
+  input:not([type="checkbox"], [type="radio"], [type="range"]),
+  select {
+    border: 1px solid;
+  }
+  /* The surfaces lose their edge the same way, and get it back the same way.
+     The composer's field sits inside a capsule that now has the border, so
+     the field itself goes without. */
+  .panel, .brand-actions, .landing-floats, .palette-bar, .invite-strip, .profile-menu,
+  .center-panel, .tb-inner, .tile-tip, .toast, .modal, .ad-sheet {
+    border: 1px solid;
+  }
+  .chat-form input { border: 0; }
+  input:not([type="checkbox"], [type="radio"], [type="range"]):focus,
+  select:focus {
+    outline: 2px solid; outline-offset: 1px;
+  }
+  .chat-channels button.on { text-decoration: underline; text-underline-offset: 3px; }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   The sheets
+   A modal is the one surface that scrolls, and a scrolling box cannot wear
+   the rim the way the others do: a ring placed absolutely inside a scroller
+   is placed against the scrolled content, not against the box, so the first
+   long sheet to scroll would carry its own rim away with it. A sheet draws
+   its rim in its border instead, with the film clipped to the padding box
+   inside it: a scroller clips its content at the padding edge, so the
+   border is the one band no scrolled card can ever cover, and it never
+   moves. It is drawn the way a field draws its rim, as the lights it is
+   made of — the hot stop along the two edges the angular rim is hot on, the
+   bounce along the other two, the browser blending them round the corners —
+   because a gradient cannot be confined to a border under a film that is
+   see-through. What that costs is the additive blend, the same trade the
+   fields and the scrollbar already make. The inner stroke and the convex
+   glow ride in the sheet's own box-shadow. The ad's sheet scrolls too, and
+   is built the same way.
+
+   The body of a sheet is content — deeds, rows, cards — and stays paper, laid
+   on the glass; see "Paper inside glass". The one sheet that stays paper
+   whole is the cup's bracket: its round headings stick to the top while the
+   tree scrolls under them, painted in the card's colour, and on glass they
+   would be stripes of paper across the pane. A tree of results is content
+   from edge to edge.
+
+   The shadow is the busy end and stays there: a sheet is the top of the
+   stack, and nothing ever slides over it to lift it higher.
+   ═════════════════════════════════════════════════════════════════════════ */
+.modal:not(.chart-modal),
+.ad-sheet {
+  isolation: isolate;
+  --glass-sheet-film: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  border: var(--glass-rim-w) solid;
+  border-color:
+    color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent)
+    color-mix(in srgb, var(--glass-rim-hot)  calc(var(--glass-rim-hot-a)    * 100%), transparent)
+    color-mix(in srgb, var(--glass-rim-hot)  calc(var(--glass-rim-hot-a)    * 100%), transparent)
+    color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent);
+  background: var(--glass-sheet-film) padding-box;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+          backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  box-shadow:
+    inset 0 0 0 var(--glass-rim-w) color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-inner-a) * 100%), transparent),
+    var(--shadow-in),
+    inset 0 var(--glass-glow-d) calc(var(--glass-glow-d) * 2) calc(var(--glass-glow-d) * -1) color-mix(in srgb, var(--glass-glow-tone) calc(var(--glass-glow-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--shadow);
+  /* The same promotion every pane of glass makes (see "The material"). */
+  --ink-2: var(--glass-ink-2);
+  --ink-3: var(--glass-ink-2);
+  /* And the same transitions, the rim riding with the tint because here the
+     rim is the border. A sheet over the table is the pane the governor most
+     needs to hide its work on: the bots keep playing under it, so the board
+     behind it goes busy and still again while it is open. */
+  transition:
+    background-color var(--glass-tint-ms) var(--ease),
+    border-color var(--glass-tint-ms) var(--ease),
+    box-shadow var(--glass-shadow-ms) linear,
+    color .24s var(--ease),
+    transform .24s var(--ease),
+    filter .24s var(--ease),
+    --glass-blur var(--glass-quality-ms) linear;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .modal:not(.chart-modal),
+  .ad-sheet { --glass-sheet-film: var(--glass-solid); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .modal:not(.chart-modal),
+  .ad-sheet {
+    --glass-sheet-film: var(--glass-solid);
+    --glass-rim-hot-a: .30;
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+  }
+  /* The pinned bar's film goes solid with the sheet's, and its blur has to go
+     too. The blur lives in the bar's scroll-driven keyframes, which outrank
+     any ordinary declaration, so only !important reaches it; and with the
+     sheet no longer refracting, the bar's blur would otherwise look straight
+     through the sheet at the table behind it. */
+  .modal:not(.chart-modal) > .modal-actions:last-child:not(.go-actions) {
+    -webkit-backdrop-filter: none !important;
+            backdrop-filter: none !important;
+  }
+}
+
+/* The pinned bar. On a long sheet the way out stays in reach: the last row
+   of buttons sticks to the bottom edge while the rest scrolls up under it,
+   and while there is content under it — only then — it is a bar of glass the
+   content blurs into, lit along the edge that faces the light, instead of a
+   row the content slices off against. Scrolled to the end, with nothing left
+   under it, the glass fades out over the last 28px and it is the plain row it
+   always was; on a sheet too short to scroll it never comes up at all.
+   The bar reaches out through the sheet's padding to its edges, and `bottom`
+   hands back the padding it borrowed underneath: a sticky box measures from
+   the scroller's padding edge, not its border. Only where the scroll itself
+   can drive the glass — a row pinned over content with nothing behind it
+   would be worse than one that scrolls away. The game-over sheet's actions
+   are half the sheet, and stay in the flow. */
+.modal { --sheet-pad: 24px; }
+@supports (animation-timeline: scroll()) {
+  .modal:not(.chart-modal) > .modal-actions:last-child:not(.go-actions) {
+    position: sticky; bottom: calc(-1 * var(--sheet-pad)); z-index: 3;
+    margin: 6px calc(-1 * var(--sheet-pad)) calc(-1 * var(--sheet-pad));
+    padding: 12px var(--sheet-pad) var(--sheet-pad);
+    animation: sheetBar linear both;
+    animation-timeline: scroll(nearest block);
+    animation-range: calc(100% - 28px) 100%;
+  }
+}
+@keyframes sheetBar {
+  from {
+    background-color: var(--glass-sheet-film);
+    -webkit-backdrop-filter: blur(var(--glass-blur-board)) saturate(var(--glass-sat));
+            backdrop-filter: blur(var(--glass-blur-board)) saturate(var(--glass-sat));
+    box-shadow:
+      inset 0 var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+      0 calc(-1 * var(--glass-hair-w)) 0 var(--glass-hair);
+  }
+  to {
+    background-color: transparent;
+    -webkit-backdrop-filter: blur(0px) saturate(100%);
+            backdrop-filter: blur(0px) saturate(100%);
+    box-shadow: inset 0 0 0 transparent, 0 0 0 transparent;
+  }
+}
+
+/* A sheet arrives the way a sheet does: quick off the mark, a long soft
+   landing, no bounce. Asked for less motion it simply fades in, a fifth of a
+   second, rather than not arriving at all; and its tint, rim and shadow keep
+   their durations while the governor's crossfade goes, as every other
+   pane's do (see "The material"). */
+@media (prefers-reduced-motion: reduce) {
+  .modal, .ad-sheet {
+    animation-name: fadeIn !important;
+    animation-duration: 200ms !important;
+    animation-timing-function: ease !important;
+  }
+  .modal:not(.chart-modal), .ad-sheet {
+    transition-duration: var(--glass-tint-ms), var(--glass-tint-ms), 300ms, .01ms, .01ms, .01ms, 0s !important;
+  }
+  /* The pinned bar's glass is driven by the scroll, not by time; the blanket
+     rule's duration would otherwise pin it to its last frame. */
+  .modal:not(.chart-modal) > .modal-actions:last-child:not(.go-actions) {
+    animation-duration: auto !important;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Paper inside glass
+   A deed on a sheet, a row in the rail, a deed in the action well: content
+   laid on glass is still paper, with its own opaque ground, and paper keeps
+   paper's ink. The lift a pane of glass hands down is for words printed on
+   the film itself; inherited by a card sitting on the pane it turned every
+   hint and small print on that card nearly as dark as its headline, and a
+   third rank that reads as a first is not a hierarchy. Each of these takes
+   the table's own ranks back. A control printed on one lifts itself again,
+   because it is glass.
+   ═════════════════════════════════════════════════════════════════════════ */
+:is(.deed, .trade-side, .trade-totals, .deal-side, .store-card, .pack-card, .map-card,
+    .board-box, .board-all, .board-sets, .lb-row, .rank-row, .stats-scroll, .go-chart, .go-doubled,
+    .friend, .fm-code, .dm-msg, .cd-tiles > div, .cd-next, .cd-round, .cup-ladder li, .poster-when,
+    .poster-rules li, .poster-rungs .rung, .intro-points, .leave-choice, .ach-tile, .ach-row,
+    .prop-row, .quick-seat, .rolled-chip, .flag-picker, .piece-chip, .one-away, .alert) {
+  --ink-2: var(--paper-ink-2);
+  --ink-3: var(--paper-ink-3);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   The lens
+   Edge refraction: a straight line passing under the rim bows, and snaps
+   straight again a band in from the edge. Chromium only — it is the one
+   engine that will run an SVG filter as a backdrop-filter — and gated on the
+   Houdini probe in index.html's pre-paint script, never on @supports, which
+   says yes to url() everywhere and means it nowhere. The map and the filter
+   are built in index.html at each surface's own size, from the same distance
+   field and the same smoothstep-squared falloff as the iOS and Android
+   shaders, so all three clients bend light the same way.
+   At most two surfaces carry it at once, and only the sheet and the rail
+   panel ever do: an open sheet takes it alone, the rail standing down under
+   the scrim where nobody is looking at it, and with no sheet up the first
+   two rail panels in view take the two. Every other pane of glass on screen
+   is a frost — film, blur and rim, no lens. Its url() sits last in its own
+   declaration, after the blur, so what is bent is the already-softened
+   backdrop; and while a token walks it goes with the blur, because the
+   governor freezes everything the glass refracts. It comes back only once
+   the blur has faded back in — the script holds the slot empty for that
+   long — so no frame ever bends a backdrop the blur has not softened yet.
+   ═════════════════════════════════════════════════════════════════════════ */
+html[data-glass-lens="1"] body:not(.board-busy) [data-lens] {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright)) var(--glass-lens);
+}
+/* The <svg> that holds the filters is a place to keep them, not a picture:
+   it takes no room and is never seen. */
+.lens-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+
 .map-section { margin: 18px 0 2px; font-size: 16px; font-weight: 850; }
 .auth-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 
+/* The way back into a game you left. It used to be a brass-washed button, and
+   the landing card already has its one tinted primary in Play now — two tints
+   on one card and neither is primary — so it keeps its difference in its
+   words instead: the accent's own ink, a little heavier. */
 .continue-btn {
   margin-bottom: 12px; font-weight: 800;
-  border-color: var(--gold); color: var(--red-deep);
-  background: var(--gold-soft);
+  color: var(--glass-accent-ink);
 }
 
 /* ── store ── */
@@ -273,20 +1503,29 @@
 .token-face.skin { font-size: clamp(11px, 1.3vw, 19px); }
 .avatar.has-skin { font-size: 17px; }
 
-/* the picker itself */
+/* the picker itself — a popover of glass (see "The material"), so its paint
+   comes from there; the pixel its border gave up is back in the padding, and
+   the script that parks it under its button still gets the width it measures
+   for. */
 .palette-bar {
   position: fixed; z-index: 90; display: flex; gap: 8px;
-  padding: 10px 12px; background: var(--card); border: 1px solid var(--rule-2);
-  border-radius: 99px; box-shadow: var(--shadow);
+  padding: 11px 13px;
+  border-radius: var(--r-pill);
   animation: popIn .25s var(--pop);
 }
+/* Each table style is a bead of its own colour under the same rim as every
+   other control: the glass is laid over the colour, not a film that would
+   wash it out, because the colour is the whole of what the button says. The
+   ring that marks the table you are on sits inside the bead, where the border
+   used to draw it. */
 .pswatch {
+  position: relative; isolation: isolate;
   width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
-  background: var(--dot); border: 2px solid transparent;
-  transition: transform .15s var(--pop), border-color .15s;
+  background: var(--dot); border: 0;
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair);
 }
-.pswatch:hover { transform: scale(1.18); }
-.pswatch.on { border-color: var(--ink); transform: scale(1.12); }
+.pswatch:hover { scale: 1.18; }
+.pswatch.on { box-shadow: inset 0 0 0 2px var(--ink), 0 0 0 var(--glass-hair-w) var(--glass-hair); scale: 1.12; }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -324,8 +1563,22 @@ button, input, select, textarea { font-family: inherit; color: inherit; font-siz
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+/* The thumb is glass of the other kind: a film the colour of the card it
+   scrolls would vanish into that card, so it is the ink itself, mostly
+   see-through, under a lit rim — which also means it flips with the ink, dark
+   on a pale table and pale on a dark one, the way a phone's own scroll
+   indicator does. The rim is every control's rim at about a third of its
+   strength, drawn the way a field draws it — hot along the two edges nearest
+   the light, the bounce along the other two — because one even ring all the
+   way round is the sticker outline a rim is there to not be. */
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--glass-ink) 22%, transparent);
+  border-radius: var(--r-pill); border: 2px solid transparent; background-clip: padding-box;
+  box-shadow:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 35%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 35%), transparent);
+}
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--glass-ink) 38%, transparent); }
 
 /* ─────────────────────────────────────────────────────── drawn glyphs ── */
 /* js/icons.js returns inline SVG on a 32×32 grid. Most glyphs paint with
@@ -341,64 +1594,76 @@ button, input, select, textarea { font-family: inherit; color: inherit; font-siz
 .chip .ico, .tag .ico { margin-right: 2px; }
 
 /* ───────────────────────────────────────────────────────────── buttons ── */
+/* A button's paint — film, rim, light, contour and lift — comes from "The
+   controls"; what is left here is its shape. The border went into the rim,
+   so every size takes the pixel back in padding and comes out exactly the
+   size it was. Radii come off the ladder or, printed on a glass surface, off
+   the surface: it hands down its own radius less its padding, so a button in
+   a panel's corner is concentric with that corner instead of pinching it. */
 .btn {
-  position: relative;
-  background: var(--card);
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
-  padding: 10px 15px;
+  border-radius: var(--glass-nest-r, var(--r-10));
+  padding: 11px 16px;
   cursor: pointer;
   font-weight: 650;
-  color: var(--ink);
-  box-shadow: var(--shadow-sm);
-  transition: transform .12s var(--pop), box-shadow .16s, background .16s, border-color .16s;
   white-space: nowrap;
 }
-.btn:hover:not(:disabled) { border-color: var(--red); color: var(--red-deep); transform: translateY(-1px); }
-.btn:active:not(:disabled) { transform: translateY(1px) scale(.99); }
-.btn:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+/* Pointed at, a plain button takes the accent's ink. The ones whose words
+   already mean something keep them. */
+.btn:hover:not(:disabled, .primary, .good, .bad, .gold) { color: var(--glass-accent-ink); }
+.btn:disabled { opacity: .42; cursor: not-allowed; box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair); }
 
-.btn.primary {
-  /* the highlight follows whatever accent the table style wears */
-  background: linear-gradient(180deg, color-mix(in srgb, var(--red) 72%, white), var(--red));
-  border-color: var(--red-deep);
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--red) 35%, transparent), var(--shadow-in);
+/* The coloured buttons keep a solid plate: the table's accent for the one
+   primary, green, red and gold for the ones whose colour is their meaning.
+   W2 first made them the accent laid thinly over the film with coloured
+   words, and a row of Play now, Create a game and Sign in then read as three
+   of the same cream — which is the tell of a glass pass with no primary left
+   in it. iOS (MMButtonFace) and Android (MMButton) came to the same answer:
+   a plate in the colour, ink on it from the palette, and from the glass only
+   what a plate can wear — the rim, the shadow and the press. So the three
+   clients still show one product. */
+.btn.primary,
+.btn.good,
+.btn.bad,
+.btn.gold {
+  background-image: none;
+  text-shadow: none;
+  --ink-2: currentColor;
+  --ink-3: currentColor;
 }
-.btn.primary:hover:not(:disabled) { color: #fff; border-color: var(--red-deep); filter: brightness(1.06); }
-.btn.good { background: linear-gradient(180deg, #1c9a59, var(--good)); border-color: #0f6339; color: #fff; box-shadow: 0 6px 16px rgba(21, 127, 74, .28); }
-.btn.good:hover:not(:disabled) { color: #fff; border-color: #0f6339; }
-.btn.bad  { background: linear-gradient(180deg, #d8394d, var(--bad)); border-color: #8f1b2b; color: #fff; }
-.btn.bad:hover:not(:disabled) { color: #fff; border-color: #8f1b2b; }
-.btn.gold { background: linear-gradient(180deg, #d9932c, var(--gold)); border-color: #8a5a13; color: #fff; }
-.btn.gold:hover:not(:disabled) { color: #fff; border-color: #8a5a13; }
-.btn.ghost { background: transparent; box-shadow: none; }
+.btn.primary { background-color: var(--red);  color: var(--on-red); }
+.btn.gold    { background-color: var(--gold); color: var(--on-red); }
+.btn.good    { background-color: var(--good); color: #fff; }
+.btn.bad     { background-color: var(--bad);  color: #fff; }
+.btn:is(.primary, .good, .bad, .gold):hover:not(:disabled) { filter: brightness(1.06); }
+/* A primary printed straight onto the page instead of a card — the call to
+   action on the pages outside the game — takes the page's plate, which is
+   the accent's everywhere but crimson by day (see --page-plate). */
+.btn.primary.on-page { background-color: var(--page-plate); color: var(--on-page-plate); }
+/* Clear: the thinner glass, and it does not stand up off its card. */
+.btn.ghost { --glass-alpha: var(--glass-clear-alpha); }
 
-.btn.small { padding: 7px 11px; font-size: 12.5px; }
-.btn.tiny  { padding: 3px 8px; font-size: 12px; border-radius: 6px; line-height: 1.35; box-shadow: none; }
-.btn.big   { padding: 15px 22px; font-size: 16.5px; width: 100%; border-radius: var(--r); font-weight: 750; }
+.btn.small { padding: 8px 12px; font-size: 12.5px; }
+.btn.tiny  { padding: 4px 9px; font-size: 12px; border-radius: var(--glass-nest-r, var(--r-6)); line-height: 1.35; }
+.btn.big   { padding: 16px 23px; font-size: 16.5px; width: 100%; border-radius: var(--glass-nest-r, var(--r-14)); font-weight: 750; }
 .btn.wide  { width: 100%; }
 .btn-ico { margin-right: 6px; }
 
+/* Glass only when touched — see "The controls" for the lozenge that comes up
+   under a pointer. */
 .icon-btn {
   background: transparent; border: none; cursor: pointer;
-  font-size: 17px; color: var(--ink-2); padding: 5px 7px; border-radius: 8px;
-  transition: color .15s, background .15s;
+  font-size: 17px; color: var(--ink-2); padding: 5px 7px; border-radius: var(--r-10);
 }
-.icon-btn:hover { color: var(--red); background: var(--red-soft); }
 
+/* The shape every input shares. A field's paint is in "The controls"; the
+   checkboxes and the slider are drawn by the browser and by rules of their
+   own, and keep the browser's focus ring, which a field swaps for its own. */
 input, select {
   width: 100%;
-  background: var(--card);
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
-  padding: 11px 13px;
-  color: var(--ink);
-  outline: none;
-  transition: border-color .16s, box-shadow .16s;
+  border: 0;
+  border-radius: var(--glass-nest-r, var(--r-10));
+  padding: 12px 14px;
 }
-input:focus, select:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(191, 141, 40, .18); }
 input::placeholder { color: var(--ink-3); }
 select { cursor: pointer; }
 
@@ -439,30 +1704,28 @@ select { cursor: pointer; }
    iPhone") reads first, and the price — free — sits under it where a doubt
    would otherwise sit. It wears the table's own accent so it belongs to the
    page instead of arriving from Apple, and it stays a link, so a long press
-   still offers copy and share the way a link should. */
+   still offers copy and share the way a link should.
+   It is one of the few controls that hangs straight over the page, with the
+   landing's colour drifting underneath, so it is real glass that refracts
+   (see "The controls"). Its small print was --page-ink-3 on a white card,
+   which on crimson by day is a translucent white on white; on the glass it
+   takes the glass's own second rank like everything else. */
 .app-cta {
   display: inline-flex;
   align-items: center;
   gap: 12px;
   margin: -12px 0 26px;
-  padding: 10px 16px 10px 13px;
-  border: 1px solid var(--rule-2);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--ink);
+  padding: 11px 17px 11px 14px;
+  border-radius: var(--r-pill);
   text-decoration: none;
-  box-shadow: var(--shadow-sm);
-  transition: transform .12s var(--pop), box-shadow .16s, border-color .16s, color .16s;
 }
-.app-cta:hover { border-color: var(--red); color: var(--red-deep); transform: translateY(-1px); }
-.app-cta:active { transform: translateY(1px) scale(.99); }
-.app-cta-ico { width: 30px; height: 30px; flex: none; color: var(--red); }
-.app-cta:hover .app-cta-ico { color: var(--red-deep); }
+.app-cta:hover { color: var(--glass-accent-ink); }
+.app-cta-ico { width: 30px; height: 30px; flex: none; color: var(--glass-accent-ink); }
 .app-cta-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
 .app-cta-text strong { font-size: 15px; font-weight: 800; letter-spacing: .01em; }
-.app-cta-text small { font-size: 12.5px; color: var(--page-ink-3); font-weight: 600; }
+.app-cta-text small { font-size: 12.5px; color: var(--ink-3); font-weight: 600; }
 .app-cta:hover .app-cta-text small { color: inherit; }
-.app-cta-go { font-size: 22px; line-height: 1; color: var(--page-ink-3); margin-left: 2px; }
+.app-cta-go { font-size: 22px; line-height: 1; color: var(--ink-3); margin-left: 2px; }
 
 /* Safari is already offering the app at the top of the page — see the script
    in the head that sets this. One offer is enough. */
@@ -471,7 +1734,7 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 /* On a phone the row is the widest thing on the screen, so it stops being a
    pill that floats and becomes a full-width shelf like every other control. */
 @media (max-width: 480px) {
-  .app-cta { display: flex; width: min(100%, 340px); border-radius: var(--r-sm); justify-content: flex-start; }
+  .app-cta { display: flex; width: min(100%, 340px); border-radius: var(--r-10); justify-content: flex-start; }
   .app-cta-go { margin-left: auto; }
 }
 
@@ -485,7 +1748,7 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 .field { display: block; text-align: left; margin-bottom: 15px; }
 .field span { display: block; font-size: 12.5px; color: var(--ink-2); margin-bottom: 7px; font-weight: 600; }
 .field.tight { margin-bottom: 9px; }
-.field.tight input { padding: 8px 10px; font-size: 13px; }
+.field.tight input { padding: 9px 11px; font-size: 13px; }
 
 .or { position: relative; margin: 20px 0; color: var(--ink-3); font-size: 12px; }
 .or::before, .or::after { content: ''; position: absolute; top: 50%; width: 30%; height: 1px; background: var(--rule); }
@@ -583,8 +1846,14 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 .server-down span { font-size: 11.5px; color: var(--ink-2); line-height: 1.5; }
 .server-down code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: 11px; word-break: break-all; }
 .server-form { display: flex; gap: 6px; margin-top: 4px; }
-.server-form input { padding: 8px 10px; font-size: 12px; }
-.link-btn { background: none; border: none; color: var(--red-deep); font-size: 11px; text-decoration: underline; cursor: pointer; padding: 0; text-align: left; }
+.server-form input { padding: 9px 11px; font-size: 12px; }
+/* A link inside a sentence. The padding is there for the glass that comes up
+   around it under a pointer, and the margin hands the same space straight
+   back, so the sentence it sits in never moves. */
+.link-btn {
+  background: none; border: none; color: var(--red-deep); font-size: 11px; text-decoration: underline;
+  cursor: pointer; padding: 2px 6px; margin: -2px -6px; border-radius: var(--r-6); text-align: left;
+}
 
 /* ---- friends ---- */
 .friends-card { margin-top: 14px; padding: 18px; }
@@ -643,16 +1912,27 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 .daily-card .btn.gold { margin-top: 13px; }
 
 /* An invite, dropped in at the top of whatever is on screen. A modal would
-   take the board away from somebody mid-turn; this sits over it. */
+   take the board away from somebody mid-turn; this sits over it.
+   It is glass (see "The material"): it lands over anything at all — the
+   landing, the rail, the board on a phone — so it is Regular and refracts
+   for real. The brass border it wore is the rim now, brass on every table.
+   The pixel the border gave up is back in the padding, and the padding is
+   what the Join button's radius comes off: 18 less 12. It slides on its
+   transform, so it restates the transitions the material gives every
+   surface rather than trade the tint, the shadow and the governor's
+   crossfade for the slide. */
 .invite-strip {
   position: fixed; top: 0; left: 50%; z-index: 60;
   transform: translate(-50%, -120%);
   display: flex; align-items: center; gap: 11px;
   width: min(92vw, 420px); margin-top: 12px;
-  padding: 11px 13px; border-radius: 15px;
-  background: var(--card); border: 1px solid var(--gold);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, .4);
-  transition: transform .24s var(--ease);
+  padding: 12px 14px; border-radius: var(--r-18);
+  --glass-nest-r: max(calc(var(--r-18) - 12px), 4px);
+  transition:
+    transform .24s var(--ease),
+    background-color var(--glass-tint-ms) var(--ease),
+    box-shadow var(--glass-shadow-ms) linear,
+    --glass-blur var(--glass-quality-ms) linear;
 }
 .invite-strip.in { transform: translate(-50%, 0); }
 .is-mark {
@@ -1048,12 +2328,13 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 }
 /* The knock on an invite-only cup: a code and the button beside it. */
 .cup-code { display: flex; gap: 8px; margin-top: 12px; }
+/* The same glass as every other field, and the same radius as the button
+   beside it; only the type is its own, monospaced and spaced, because a code
+   is read back one character at a time. */
 .cup-code input {
-  flex: 1; min-width: 0; padding: 11px 13px;
+  flex: 1; min-width: 0; padding: 12px 14px;
   font-size: 15px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--ink); background: var(--paper-2);
-  border: 1px solid var(--rule); border-radius: 12px;
 }
 .cup-code input::placeholder { letter-spacing: 1.5px; color: var(--ink-3); }
 .cup-code .btn { flex: none; }
@@ -1130,20 +2411,30 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 
 /* The stand-in counter: the landing's chip is off screen during a game, and a
    payout still has to land somewhere the eye already looks. Same chip, same
-   corner, gone a couple of seconds later. */
-.coin-purse {
+   corner, gone a couple of seconds later.
+   It floats over whatever the game has under that corner — the red page on
+   crimson by day, the board on a phone — so it is real glass that refracts,
+   and its number is printed in ink rather than in brass: even the brass ink
+   darkened for glass only reaches 3.5:1 over that red. The coin beside the
+   number is brass by its own drawing and needs no help. Named by both its
+   classes, as "The controls" names it, or that rule's position: relative
+   would pin it into the page. Its own slide-in, and after it the governor's
+   crossfade every pane that refracts carries (see "The material"). */
+.coin-chip.coin-purse {
   position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px; z-index: 94;
   display: flex; align-items: center; gap: 6px;
-  font-size: 15px; padding: 6px 13px;
-  background: var(--card); box-shadow: var(--shadow);
+  font-size: 15px; padding: 7px 14px;
   opacity: 0; transform: translateY(-8px);
-  transition: opacity .28s var(--ease), transform .28s var(--pop);
+  transition:
+    opacity .28s var(--ease),
+    transform .28s var(--pop),
+    --glass-blur var(--glass-quality-ms) linear;
 }
 .coin-purse.in { opacity: 1; transform: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .coin-fly { display: none; }
-  .coin-purse { transition: none; }
+  .coin-chip.coin-purse { transition: none; }
 }
 
 /* ---- leaderboard: five on the landing, fifty in the sheet ---- */
@@ -1223,13 +2514,53 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 .col.left, .col.right { overflow: hidden; }
 .col.center { align-items: center; justify-content: center; }
 
+/* The rail panel wears the glass — it is named up in "The material", which is
+   where its background, border and shadow now come from. What is left here is
+   the geometry, and the geometry is the same whether a given panel ends up
+   glass or paper, so that switching one costs nothing in layout: 14 off the
+   radius ladder, and a padding that is a multiple of four so the ladder's
+   arithmetic works out on whatever is put inside it. The border it used to
+   draw is gone into the rim, and the four pixels that frees up are why the
+   padding comes down from 13 rather than up to 16.
+   What the geometry hands down is the radius a control printed on the panel
+   takes so that it sits concentric in the panel's corner: the panel's own
+   radius less its padding, floored at four. On this panel that arithmetic
+   comes out at the floor — 14 less 12 is 2 — so the rail's buttons and
+   fields are nearly square-cornered, which is what concentric means at this
+   padding. Should they want to be rounder, the lever is here: a 22 radius
+   over 8 of padding hands down 14. */
 .panel {
+  border-radius: var(--r-14);
+  padding: 12px;
+  --glass-nest-r: max(calc(var(--r-14) - 12px), 4px);
+}
+
+/* These seven are not the frame, they are the thing being framed: the log and
+   the chat you came to read, an offer to weigh up, the deeds you are about to
+   sell, the pot, the lap counter, the line that says nobody has started yet.
+   Content does not go on glass — it is what the glass has to refract — so
+   they take the paper card back, and with it the border-colour each of them
+   uses to say what sort of news it is carrying. */
+.panel:is(.log-panel, .chat-panel, .raise-panel, .deadlock, .trade-offer, .pot, .waiting) {
   background: var(--card);
   border: 1px solid var(--rule);
-  border-radius: var(--r);
-  padding: 13px;
   box-shadow: var(--shadow-sm);
+  isolation: auto;
+  -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+  /* Paper again, so the page's own ink ranks come back with it — and a button
+     printed on paper stands up off it with its own shadow and its own radius,
+     because there is no glass assembly here for it to belong to. */
+  --ink-2: inherit;
+  --ink-3: inherit;
+  --glass-nest-shadow: initial;
+  --glass-nest-r: initial;
 }
+.panel:is(.log-panel, .chat-panel, .raise-panel, .deadlock, .trade-offer, .pot, .waiting)::before,
+.panel:is(.log-panel, .chat-panel, .raise-panel, .deadlock, .trade-offer, .pot, .waiting)::after {
+  display: none;
+}
+
 .panel-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
   color: var(--ink-3); margin-bottom: 9px; font-weight: 750;
@@ -1238,16 +2569,34 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 /* On a phone the row is wider than the screen, and the last icon out — the way
    off the table — was the one that fell off it. Let it wrap instead. */
 .brand { display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap; padding: 2px 5px; }
-.brand-actions { display: flex; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
-/* Seven equal squares fit the side column; left to size themselves the emoji
-   ones ran wide and pushed Leave, Sound and Help off the panel entirely. */
+/* The table's toolbar is one capsule of glass (see "The material") — seven
+   buttons, one pane, where seven lozenges of their own would have been seven
+   blurs and a row of beads instead of a bar. The buttons in it are bare
+   glyphs until a pointer finds one (see "The controls"). The wordmark beside
+   it is printed on the page in the page's ink and stays there: on crimson by
+   day that ink is a pale one meant for a red page, and it would vanish into
+   the film. A 14 capsule over four of padding hands its buttons the 10 they
+   have always had. */
+.brand-actions {
+  display: flex; gap: 2px; flex-wrap: nowrap; justify-content: flex-end;
+  min-width: 0; padding: 4px; border-radius: var(--r-14);
+  --glass-nest-r: max(calc(var(--r-14) - 4px), 4px);
+}
+/* Seven equal keys, 28 wide where the column has the room; left to size
+   themselves the emoji ones ran wide and pushed Leave, Sound and Help off the
+   panel entirely. The side column only has the room for all seven at 28 from
+   about 1575px up, and below that the last key used to wrap on to a line of
+   its own — which in a capsule of glass is a slab with one key stranded in
+   it. So the keys give up width instead, down to 22, which the narrowest
+   column still holds, and the bar stays one row. */
 .brand-actions .icon-btn {
-  flex: none; width: 28px; height: 28px; padding: 0;
+  flex: 0 1 auto; width: 28px; min-width: 22px; height: 28px; padding: 0;
   display: grid; place-items: center; font-size: 15px; line-height: 1;
+  border-radius: var(--glass-nest-r);
 }
 
 .share-row { display: flex; gap: 7px; }
-.share-row input { font-size: 12px; padding: 8px 11px; }
+.share-row input { font-size: 12px; padding: 9px 12px; }
 
 /* An empty log used to be a tall blank box; it now grows with its content
    and only starts scrolling once it has earned the height. */
@@ -1295,27 +2644,113 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
   border: 1px solid currentColor; border-radius: 99px;
   padding: 0 5px; margin-right: 3px; opacity: .9; vertical-align: 1px;
 }
-.chat-channels { display: flex; gap: 6px; margin-bottom: 8px; }
+/* The channel picker is a segmented control: one track of glass, and a
+   lozenge on it that travels to whichever side is on — stretching as it goes,
+   the way a drop does when it is drawn across a surface, rather than sliding
+   like a drawer in a runner. The two sides are the same width, so the trip is
+   exactly one of them. The lozenge is the track's ::after, so the track wears
+   its inner stroke and glow in its own box-shadow, and the words sit on top
+   of both in the glass's ink, the one on the lozenge a rank above the other. */
+.chat-channels {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  align-self: flex-start;
+  padding: 2px; margin-bottom: 8px;
+  border-radius: var(--r-pill);
+  box-shadow:
+    inset 0 0 0 calc(var(--glass-rim-w) * 2) color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-inner-a) * 100%), transparent),
+    var(--shadow-in),
+    inset 0 var(--glass-glow-d) calc(var(--glass-glow-d) * 2) calc(var(--glass-glow-d) * -1) color-mix(in srgb, var(--glass-glow-tone) calc(var(--glass-glow-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair);
+}
+.chat-channels::after {
+  content: ''; position: absolute; z-index: -1;
+  top: 2px; bottom: 2px; left: 2px; width: calc(50% - 2px);
+  border-radius: inherit;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+  box-shadow:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--shadow-sm);
+  transition: translate 320ms var(--ease);
+  animation: glassSegA 320ms var(--ease);
+}
+/* A second, identical keyframe, so that changing sides changes the
+   animation's name and the stretch plays again on every trip. */
+.chat-channels:has(> :nth-child(2).on)::after {
+  translate: 100% 0;
+  animation-name: glassSegB;
+}
+@keyframes glassSegA { 50% { scale: 1.12 1; } }
+@keyframes glassSegB { 50% { scale: 1.12 1; } }
 .chat-channels button {
   font: inherit; font-size: 11px; font-weight: 750; letter-spacing: .2px;
-  color: var(--ink-3); background: var(--paper-2);
-  border: 1px solid transparent; border-radius: 99px;
-  padding: 4px 11px; cursor: pointer; transition: all .15s var(--ease);
+  color: var(--ink-2); background: none;
+  border: 0; border-radius: var(--r-pill); justify-content: center;
+  padding: 3px 12px; cursor: pointer; transition: color .15s var(--ease);
 }
-.chat-channels button.on { color: var(--gold); background: var(--gold-soft); border-color: var(--gold); }
-.chat-channels button:hover:not(.on) { color: var(--ink-2); }
-.chat-form { display: flex; gap: 7px; margin-top: 9px; }
-.chat-form input { padding: 9px 11px; font-size: 13px; }
-.icon-btn.send { background: var(--red); color: #fff; border-radius: var(--r-sm); padding: 6px 13px; }
-.icon-btn.send:hover { background: var(--red-deep); color: #fff; }
+.chat-channels button.on,
+.chat-channels button:hover { color: var(--glass-ink); }
+/* Without :has() the lozenge cannot tell which side is on, and a lozenge that
+   sits on the wrong word is worse than none: the side that is on wears the
+   glass itself instead, and simply does not travel. */
+@supports not selector(:has(*)) {
+  .chat-channels::after { display: none; }
+  .chat-channels button.on {
+    background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+    box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair), var(--shadow-sm);
+  }
+}
+/* Solid, the lozenge is the colour its film would have made over the solid
+   track, so the two still read as two layers with one on top. */
+@media (prefers-reduced-transparency: reduce) {
+  .chat-channels::after,
+  .chat-channels button.on { background-color: color-mix(in srgb, var(--glass-film) 62%, var(--glass-solid)); }
+  .chat-channels button:not(.on) { background-color: transparent; }
+}
+/* The composer is one capsule of glass, painted in "The controls": the words
+   you are typing and the key that sends them, in one pane, the way a phone's
+   composer is — a field of glass beside a key of glass was two panes where
+   the bar means one. So the field inside gives up its own film and rim to
+   the capsule, and takes four pixels off its padding to hand them to the
+   capsule's, which leaves the row exactly as tall as it was. The ring that
+   says a field is listening goes round the capsule, since that is the field
+   now. A 14 capsule over four of padding hands the send key its usual 10. */
+.chat-form {
+  display: flex; gap: 4px; margin-top: 9px;
+  padding: 4px; border-radius: var(--r-14);
+  --glass-nest-r: max(calc(var(--r-14) - 4px), 4px);
+}
+.chat-form input,
+.chat-form input:focus {
+  padding: 6px 8px; font-size: 13px;
+  background-color: transparent;
+  box-shadow: none;
+}
+.chat-form:focus-within {
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair),
+    0 0 0 3px color-mix(in srgb, var(--red) 24%, transparent);
+}
+/* The composer's one primary, and so, like every coloured button, a solid
+   plate in the accent with the palette's ink on it rather than a tint of it
+   (see "buttons") — the one opaque thing in the capsule, the way a phone's
+   send key is. It keeps the rim, the press and the capsule's radius. */
+.icon-btn.send {
+  background-color: var(--red); background-image: none;
+  color: var(--on-red);
+  border-radius: var(--glass-nest-r, var(--r-10)); padding: 6px 13px;
+}
+.icon-btn.send:hover:not(:disabled) { filter: brightness(1.06); }
 
+/* The reactions are keys of Regular glass — never Clear, because the faces
+   on them are emoji people send each other, colour of their own that cannot
+   adapt to what is behind it. */
 .emote-row { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 8px; }
 .emote {
-  background: var(--paper-2); border: 1px solid var(--rule);
-  border-radius: 7px; font-size: 14px; line-height: 1; padding: 4px 6px;
-  cursor: pointer; transition: transform .12s var(--pop), background .12s;
+  border-radius: var(--glass-nest-r, var(--r-6)); font-size: 14px; line-height: 1; padding: 5px 7px;
+  cursor: pointer;
 }
-.emote:hover { background: var(--red-soft); transform: translateY(-2px) scale(1.1); }
+.emote:hover { translate: 0 -2px; scale: 1.1; }
 
 /* ─────────────────────────────────────────────────────────────── board ── */
 .board-wrap { position: relative; width: min(100%, calc(100vh - 22px)); aspect-ratio: 1 / 1; }
@@ -1662,13 +3097,53 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 }
 .center-logo span { color: var(--red); }
 
-/* No panel chrome in the middle — the dice float straight on the board,
-   with the actions and status hanging below them. */
+/* The action well: the dice, the deed you landed on, the buttons and the
+   line that says what is happening, on one platter of glass in the middle of
+   the felt — the web's twin of the dock the phones carry, and like it the
+   one pane allowed over the live board. It refracts the felt and the table's
+   murmur drifting across it, through the thinner blur the board gets, and it
+   is the surface the governor freezes while a token walks: the blur goes,
+   the film and the rim stay, and nobody is looking at it then anyway — they
+   are watching the piece. The dice and the deed sit on it as what they are,
+   an ivory object and a paper card. A 26 platter over twelve of padding
+   hands its buttons 14, the radius the big ones already wear. */
 .center-panel {
   display: flex; flex-direction: column; align-items: center; gap: 16px;
-  padding: 0; background: none; border: none; box-shadow: none;
+  padding: 12px 16px; border-radius: var(--r-26);
+  --glass-nest-r: max(calc(var(--r-26) - 12px), 4px);
   max-width: 94%;
+  /* The platter shrink-wraps whatever is on it, and the action row takes 80%
+     of that — so with only the two dice on it, the platter was as wide as the
+     dice and "Roll dice" ran three pixels past its own padding. Invisible on
+     bare felt, cramped on glass. A floor measured against the board centre
+     (a definite width, so no percentage chases itself) makes it the bar the
+     phones' dock is. */
+  min-width: min(240px, 94%);
 }
+/* With nothing in it, there is nothing to frame — a pane of empty glass in
+   the middle of the board is a blur for its own sake. */
+.center-panel:not(:has(> .dice-row .die.show, > :not(.dice-row, .hidden):not(:empty))) {
+  padding: 0; border: 0; background: none; box-shadow: none;
+  -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+  --ink-2: inherit; --ink-3: inherit;
+  --glass-nest-shadow: initial; --glass-nest-r: initial;
+}
+.center-panel:not(:has(> .dice-row .die.show, > :not(.dice-row, .hidden):not(:empty)))::before,
+.center-panel:not(:has(> .dice-row .die.show, > :not(.dice-row, .hidden):not(:empty)))::after {
+  display: none;
+}
+/* The words the well prints in brass, the accent and red — the auction's
+   label and its bid, the quick-play countdown, the cup's note, a turn clock
+   running out — were picked for the bare felt, and on the platter they are
+   printed on the film instead, where the raw brass falls to 3.4:1 by day and
+   the raw red to 3.5:1 after dark. So they take the inks made for glass (see
+   "The glass layer"), which clear 7.4:1 and 5.4:1 over the platter; those
+   are pulled toward the ink, so they carry just as well on the phone's bare
+   felt, where the well has no platter. */
+.center-panel :is(.auction-label, .cup-note, .quick-count b) { color: var(--glass-gold-ink); }
+.center-panel .auction-bid { color: var(--glass-accent-ink); }
+.center-panel .turn-clock-well.urgent { color: var(--glass-bad-ink); }
 body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .35); }
 
 .dice-row { display: flex; gap: 18px; height: 86px; align-items: center; }
@@ -1701,8 +3176,12 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 @keyframes breathe { 50% { transform: scale(1.07); } }
 .turn-line { font-size: 17px; font-weight: 800; }
 .win-line { font-size: 24px; font-weight: 900; }
+/* The border was a literal #f3c3ca, which is the accent mixed a quarter of
+   the way into white — true back when the accent was red, and a pink hairline
+   on a brass table ever since. Same recipe, read off whichever accent the
+   table is actually wearing. */
 .alert {
-  background: var(--red-soft); border: 1px solid #f3c3ca;
+  background: var(--red-soft); border: 1px solid color-mix(in srgb, var(--red) 22%, var(--red-soft));
   border-radius: var(--r-sm); padding: 9px 13px; color: var(--red-ink); margin-bottom: 7px; font-size: 13.5px;
 }
 
@@ -1713,22 +3192,52 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .auction-timer i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, var(--red), #f2748a); }
 .bid-row { display: flex; gap: 7px; justify-content: center; flex-wrap: wrap; }
 
+/* The flight happens to the banner itself, not to the strip it rides in: the
+   strip is a full-width row, and a row faded by opacity is a wall a pane of
+   glass cannot see through — with its ancestor below full opacity the
+   banner would have had nothing behind it to refract but the empty strip.
+   So the strip stays put at full strength and the banner does the rising,
+   the holding and the fading, hidden outright between flights so an
+   invisible pane is not left blurring the board for nothing. */
 .turn-banner-fly {
   position: absolute; top: 17%; left: 0; right: 0; z-index: 20;
-  display: flex; justify-content: center; pointer-events: none; opacity: 0;
+  display: flex; justify-content: center; pointer-events: none;
 }
-.turn-banner-fly.show { animation: bannerIn 1.6s var(--ease); }
+.turn-banner-fly .tb-inner { opacity: 0; visibility: hidden; }
+.turn-banner-fly.show .tb-inner { visibility: visible; animation: bannerIn 1.6s var(--ease); }
 @keyframes bannerIn {
   0%   { opacity: 0; transform: translateY(16px) scale(.9); }
   14%  { opacity: 1; transform: translateY(0) scale(1); }
   78%  { opacity: 1; transform: translateY(0) scale(1); }
   100% { opacity: 0; transform: translateY(-14px) scale(.97); }
 }
+/* A pill of glass over the board (see "The material"), tinted with the
+   player it announces — the one tint on it, where a ring of their colour
+   round the edge would have been a sticker outline laid over the rim. The
+   two pixels the ring took are back in the padding, and a 56 pill less its
+   twelve is a 32 circle, which is the avatar's own shape. The light sweeps
+   once round the rim as it arrives: a turn changing hands is the one moment
+   the glass is allowed to show off. */
 .tb-inner {
   display: flex; align-items: center; gap: 11px;
-  background: var(--card); border: 2px solid var(--c);
-  border-radius: 99px; padding: 9px 22px 9px 9px;
-  box-shadow: var(--shadow);
+  border-radius: var(--r-pill); padding: 12px 24px 12px 12px;
+  background-image: linear-gradient(color-mix(in srgb, var(--c) calc(var(--glass-tint-a) * 100%), transparent) 0 0);
+}
+.turn-banner-fly.show .tb-inner::before { animation: glassSweep 900ms var(--ease); }
+@keyframes glassSweep {
+  from { --glass-angle: 135deg; }
+  to   { --glass-angle: 495deg; }
+}
+/* Asked for less motion, the banner neither rises nor sweeps: it fades in,
+   holds for the length of its flight, and is gone. Left to the blanket rule
+   at the bottom of this file the flight would run in a hundredth of a
+   millisecond and settle on its last frame, which is fully faded, so whose
+   turn it is would never be said at all. */
+@media (prefers-reduced-motion: reduce) {
+  .turn-banner-fly.show .tb-inner {
+    opacity: 1;
+    animation: fadeIn 160ms ease !important;
+  }
 }
 .tb-avatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; color: #fff; font-size: 15px; }
 .tb-text { font-size: 17px; font-weight: 800; color: var(--ink); }
@@ -1774,8 +3283,12 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 }
 .tag.host { background: var(--gold-soft); color: var(--gold); }
 .tag.you  { background: var(--red-soft); color: var(--red-deep); }
-.tag.off, .tag.jail { background: #fdeaec; color: var(--bad); }
-.tag.vac  { background: #e6f6f6; color: #0f6d6d; }
+/* These three carried light-mode hexes, so after dark they were pale chips
+   stranded on a dark card. --bad-soft is the same pink by day and a dark one
+   by night; the vacation chip borrows the vacation tile's own ground and ink,
+   which is the colour it was always imitating. */
+.tag.off, .tag.jail { background: var(--bad-soft); color: var(--bad); }
+.tag.vac  { background: var(--tile-vacation); color: var(--ink-vacation); }
 .tag.card { background: var(--gold-soft); color: var(--gold); }
 .tag.team { font-weight: 800; }
 
@@ -1831,29 +3344,61 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .s-body { flex: 1; min-width: 0; }
 .s-name { font-size: 13px; font-weight: 750; }
 .s-desc { font-size: 11px; color: var(--ink-3); line-height: 1.35; margin-top: 1px; }
-.setting select { width: auto; padding: 6px 9px; font-size: 12.5px; }
+.setting select { width: auto; padding: 7px 10px; font-size: 12.5px; }
 
 .switch { position: relative; width: 42px; height: 23px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 2; width: 100%; height: 100%; }
-.switch .track { position: absolute; inset: 0; background: var(--rule-2); border-radius: 99px; transition: background .2s; }
+/* The switch keeps a solid track — on and off is information, and the
+   track's colour is all of it — and its knob is paper at rest. While a finger
+   is on it the knob turns to glass: it swells, goes clear enough for the
+   track to show through, and the light finds its rim, which is the moment
+   the phone's own switch becomes a lens. The move across is `translate`, not
+   a transform, so the swell grows the knob where it stands instead of flinging
+   it along the track. */
+.switch .track {
+  position: absolute; inset: 0; background: var(--rule-2); border-radius: var(--r-pill);
+  box-shadow: inset 0 0 0 var(--glass-hair-w) var(--glass-hair);
+  transition: background .2s;
+}
 .switch .thumb {
   position: absolute; top: 3px; left: 3px; width: 17px; height: 17px;
-  background: var(--card); border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
-  transition: transform .22s var(--pop);
+  background-color: var(--card); border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  transition-property: translate, scale, background-color, box-shadow;
+  transition-duration: .22s, 260ms, .16s, .16s;
+  transition-timing-function: var(--pop), var(--pop), var(--ease), var(--ease);
 }
 .switch input:checked ~ .track { background: var(--red); }
-.switch input:checked ~ .thumb { transform: translateX(19px); }
+.switch input:checked ~ .thumb { translate: 19px 0; }
+.switch input:active:not(:disabled) ~ .thumb {
+  scale: 1.3 1.12;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-clear-alpha) * 100%), transparent);
+  box-shadow:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--shadow-sm);
+}
 .switch input:disabled ~ .track { opacity: .5; }
+@media (prefers-reduced-transparency: reduce) {
+  .switch input:active:not(:disabled) ~ .thumb { background-color: var(--glass-solid); --glass-rim-hot-a: .30; }
+}
 
 .name-field { margin-bottom: 10px; }
 .swatches { display: flex; gap: 7px; flex-wrap: wrap; }
+/* A player's colour is a bead under the same rim as every other control —
+   the glass laid over the colour rather than a film that would wash it out.
+   The white ring that marks your pick sits where the border used to be. */
 .swatch {
+  position: relative; isolation: isolate;
   width: 27px; height: 27px; border-radius: 50%; cursor: pointer;
-  background: var(--c); border: 2px solid transparent;
-  transition: transform .15s var(--pop), box-shadow .15s;
+  background: var(--c); border: 0;
+  box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair);
 }
-.swatch:hover:not(:disabled) { transform: scale(1.13); }
-.swatch.sel { border-color: var(--card); box-shadow: 0 0 0 2px var(--c); }
+/* Not while it is held: this ties the press in "The controls" on specificity
+   and comes later, so under a finger the bead would squash and then spring
+   straight back up to its hover size and sit there until let go. */
+.swatch:hover:not(:disabled, :active) { scale: 1.13; }
+.swatch.sel { box-shadow: inset 0 0 0 2px var(--card), 0 0 0 2px var(--c); }
 .swatch:disabled { opacity: .25; cursor: not-allowed; }
 
 /* The piece you play as, chosen where you sit down instead of two screens away
@@ -1945,13 +3490,18 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 /* Someone has your offer open. An eye that blinks on its own carries "a
    person is looking at this" in a way a pulsing word never does — so the
    glyph blinks on a human rhythm, twice, with a long pause between. */
+/* A pill of glass tinted brass — the one tint on the panel it sits in — with
+   its words in the brass ink rather than the raw gold, which falls to 2.6:1
+   on a glass panel over crimson's red page. */
 .trade-viewing {
   display: flex; align-items: center; gap: 7px;
-  margin-top: 8px; padding: 5px 9px 5px 7px; border-radius: 999px;
-  background: color-mix(in srgb, var(--gold) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--gold) 34%, transparent);
-  font-size: 11.5px; font-weight: 700; color: var(--gold);
+  margin-top: 8px; padding: 6px 10px 6px 8px; border-radius: var(--r-pill);
+  --glass-tint: var(--gold);
+  font-size: 11.5px; font-weight: 700; color: var(--glass-gold-ink);
 }
+/* Under the thicker film and the heavier tint the brass ink drops to 4.1:1,
+   so it gives way to plain ink. */
+@media (prefers-contrast: more) { .trade-viewing { color: var(--glass-ink); } }
 .tv-eye { display: grid; place-items: center; flex: none; }
 .tv-eye .ico { transform-origin: 50% 55%; animation: eyeBlink 4.2s infinite; }
 @keyframes eyeBlink {
@@ -1972,10 +3522,19 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 
 /* A deal you put off. It is still live and the sender is still waiting, so it
    keeps a face and a way back in — and gives up the rest of the panel. */
+/* A pill of glass. The dashed edge that used to say "put off" went into the
+   rim with every other border; the words "set aside" and their snooze glyph
+   were already saying it. Regular and not Clear: it lies straight on the
+   page in the right-hand column, and Clear over crimson's red page leaves
+   the name at 3.5:1.
+   The Open button sits in the pill's round end, so it hands down a round
+   end: a pill less its padding is still a pill, and a six-pixel corner in
+   there pinches against the curve around it. */
 .trade-mini {
   display: flex; align-items: center; gap: 8px;
-  padding: 7px 8px 7px 9px; margin-bottom: 8px;
-  background: var(--card); border: 1px dashed var(--rule-2); border-radius: 999px;
+  padding: 8px 9px 8px 10px; margin-bottom: 8px;
+  border-radius: var(--r-pill);
+  --glass-nest-r: var(--r-pill);
 }
 .tm-text {
   flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700;
@@ -1988,17 +3547,32 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .trade-mini .btn.tiny { flex: none; }
 
 /* ────────────────────────────────────────────────────────────── modals ── */
+/* The scrim dims; it does not blur. It used to carry an unprefixed
+   backdrop-filter, which Safari parses, then throws the whole declaration
+   away — so every iOS browser has been showing a plain dim here anyway. It
+   stays a plain dim deliberately: the sheet sitting on top of it is the
+   surface that blurs, and stacking a second blur underneath only muddies what
+   that one is meant to be refracting. One blur per stack, same on every
+   engine.
+   It fades in its colour, not its opacity. An ancestor below full opacity is
+   where a backdrop-filter stops looking, so for the fifth of a second the
+   scrim took to fade in, the sheet riding on it had nothing to refract but
+   the scrim itself — and snapped to the table behind the moment the fade was
+   done. */
 .modal-root {
   position: fixed; inset: 0; background: var(--overlay);
   display: grid; place-items: center; z-index: 60; padding: 22px;
-  backdrop-filter: blur(4px); animation: fadeIn .18s ease;
+  animation: scrimIn .18s ease;
 }
 @keyframes fadeIn { from { opacity: 0; } }
+@keyframes scrimIn { from { background-color: transparent; } }
+/* The sheet's geometry, and the paper the bracket keeps. Every other sheet
+   is glass, painted under "The sheets". */
 .modal {
   background: var(--card);
-  border: 1px solid var(--rule); border-radius: var(--r-lg);
-  padding: 24px; width: min(480px, 96vw); max-height: 88vh; overflow-y: auto;
-  box-shadow: var(--shadow); animation: modalIn .26s var(--pop);
+  border: 1px solid var(--rule); border-radius: var(--r-22);
+  padding: var(--sheet-pad); width: min(480px, 96vw); max-height: 88vh; overflow-y: auto;
+  box-shadow: var(--shadow); animation: modalIn .42s var(--ease-sheet);
 }
 @keyframes modalIn { from { transform: scale(.92) translateY(10px); opacity: 0; } }
 .modal.small { width: min(380px, 94vw); }
@@ -2059,8 +3633,6 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .trade-arrow {
   align-self: center; width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center; color: var(--ink-2);
-  background: var(--card); border: 1px solid var(--rule-2);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
 }
 .trade-side { background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r); padding: 12px; }
 .trade-side.good { border-color: color-mix(in srgb, var(--good) 40%, var(--rule)); }
@@ -2089,7 +3661,15 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 
 .go-crown { font-size: 52px; text-align: center; animation: popIn .5s var(--pop); }
 .go-title { text-align: center; font-size: 27px; font-weight: 900; }
-.go-chart { margin: 6px 0 2px; }
+/* The worth chart is content, and on a sheet of glass it is laid on a card of
+   its own: its grid is drawn in the paper's rule and its lines in the players'
+   colours, both picked against paper, and on the film the grid all but
+   vanished while every line took on whatever the table behind was doing. On
+   the card it looks exactly as it did on the paper sheet it was drawn for. */
+.go-chart {
+  margin: 6px 0 2px; padding: 10px 12px 8px;
+  background: var(--card); border: 1px solid var(--rule); border-radius: var(--r-sm);
+}
 .go-chart svg { width: 100%; height: auto; display: block; }
 .gc-grid { stroke: var(--rule); stroke-width: 1; }
 .gc-label { font-size: 9px; font-weight: 650; fill: var(--ink-3); }
@@ -2119,7 +3699,10 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 
 /* The report card. Eleven columns will never fit a phone, so the table rides
    inside its own scroller while the sheet itself stays put. */
-.stats-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-sm); }
+/* On a sheet of glass the table is a well of paper: its name column already
+   stuck in place on the card's colour as the numbers slid under it, and a
+   strip of paper across a pane would have been the tell. */
+.stats-scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-sm); background: var(--card); }
 .stats-table { border-collapse: collapse; min-width: 100%; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .stats-table th, .stats-table td {
   padding: 6px 9px; white-space: nowrap; text-align: right;
@@ -2204,21 +3787,56 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   z-index: 80; display: flex; flex-direction: column; gap: 8px; align-items: center;
   pointer-events: none;
 }
+/* A toast is a pill of glass (see "The material"), and it is the wildest
+   one in the app: it rises over the landing, the rail, the board, a sheet —
+   anything at all — so it is Regular and never Clear, which does not adapt
+   to what it lands on. It used to be the ink turned into a plate with the
+   card's colour on it, which is the one pill in the app printed in
+   negative; on glass it prints in the glass's ink like everything else. */
 .toast {
   display: flex; align-items: center; gap: 8px;
-  background: var(--ink); color: var(--card);
-  padding: 11px 17px; border-radius: 99px; font-size: 13.5px; font-weight: 550;
-  box-shadow: var(--shadow); animation: toastIn .28s var(--pop);
+  color: var(--glass-ink);
+  padding: 11px 17px; border-radius: var(--r-pill); font-size: 13.5px; font-weight: 550;
+  animation: toastIn .28s var(--pop);
   /* Long messages have to wrap: unbounded they ran off both edges of a phone. */
   max-width: min(92vw, 420px); text-align: center; line-height: 1.35;
 }
-.toast.error { background: var(--red-deep); }
+/* Something went wrong: the one tint the pill wears, and the warning glyph
+   in the red that carries on glass. The words stay in ink — red words on a
+   red tint are the one pairing on the material that fails. */
+.toast.error {
+  background-image: linear-gradient(color-mix(in srgb, var(--bad) calc(var(--glass-tint-a) * 100%), transparent) 0 0);
+}
+.toast.error > span:first-child { color: var(--glass-bad-ink); }
 .toast.out { animation: toastOut .3s ease forwards; }
-.toast-n:not(:empty) { font-size: 11px; font-weight: 800; background: rgba(255, 255, 255, .22); padding: 2px 7px; border-radius: 99px; }
+/* The repeat counter was a wash of white, which was a chip on the dark
+   plate and would be nothing at all on a pale film. It is a wash of the ink
+   now, and flips with it. */
+.toast-n:not(:empty) {
+  font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--glass-ink) 10%, transparent);
+}
 @keyframes toastIn { from { transform: translateY(14px); opacity: 0; } }
 @keyframes toastOut { to { transform: translateY(10px); opacity: 0; } }
 
-.tile-tip { position: fixed; z-index: 90; pointer-events: none; animation: fadeIn .12s ease; }
+/* The tile under the pointer, as a popover: its deed card — paper, as a deed
+   always is — held in a frame of glass over the board, the way a phone
+   lifts a preview off the page. Four of padding around it, and the deed
+   inside takes the 14 an 18 frame leaves it rather than the 13 it wears on
+   a sheet, which is the one pixel concentric costs.
+   It is the one pane over the board that refracts nothing. Only one blur is
+   allowed over the live board (see "The material"), and a blur behind a
+   frame four pixels wide is one nobody can see through — so the frame keeps
+   the film, the rim and the shadow, the flat level, and the budget stays
+   with the action well it would otherwise be sharing it with. */
+.tile-tip {
+  position: fixed; z-index: 90; pointer-events: none; animation: fadeIn .12s ease;
+  padding: 4px; border-radius: var(--r-18);
+  --glass-nest-r: max(calc(var(--r-18) - 4px), 4px);
+  -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+}
+.tile-tip .deed { border-radius: var(--glass-nest-r); }
 .tile-tip .deed.compact { width: 215px; }
 .confetti { position: fixed; inset: 0; z-index: 75; pointer-events: none; }
 
@@ -2236,20 +3854,28 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    Nothing here renders unless the server said ads are on. There is no
    interstitial, no pre-roll and no auto-play anywhere in this file: every
    one of these screens is the far side of a button somebody pressed. */
+/* Same story as the modal scrim: the blur here was unprefixed, so it never
+   ran on Safari, and the ad sheet above does its own refracting. Dim only —
+   and, like that scrim, faded by its colour rather than its opacity, so the
+   sheet on it has the page to refract from its first frame. */
 .ad-root {
   position: fixed; inset: 0; z-index: 85;
   background: var(--overlay);
   display: grid; place-items: center; padding: 18px;
-  backdrop-filter: blur(6px); animation: fadeIn .2s ease;
+  animation: scrimIn .2s ease;
 }
+/* The ad is shown on a sheet of glass, painted under "The sheets", and it is
+   Regular: an ad is media, and Clear — which does not adapt — falls to 2.85:1
+   over a bright frame. What the phones add over media is a 35% dim under the
+   glass; here the scrim beneath already is that dim, .5 of shade by day and
+   .68 after dark, and a second one in the filter would take the page down
+   to mud. The brand's art and words on it are content, printed on the film. */
 .ad-sheet {
   position: relative;
   width: min(420px, 100%); max-height: 92vh; overflow: hidden auto;
-  background: linear-gradient(170deg, var(--card), var(--paper-2));
-  border: 1px solid var(--rule-2); border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  border-radius: var(--r-22);
   padding: 26px 24px 22px; text-align: center;
-  animation: modalIn .3s var(--pop);
+  animation: modalIn .42s var(--ease-sheet);
 }
 /* The label an ad is legally and morally required to wear. It goes at the
    top, before the art, so nobody has to work out what they are looking at. */
@@ -2264,11 +3890,9 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   position: absolute; top: 8px; right: 8px;
   width: 32px; height: 32px; border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--paper-2); border: 1px solid var(--rule);
   color: var(--ink-3); cursor: pointer; padding: 0;
-  transition: color .15s, border-color .15s, background .15s;
 }
-.ad-x:hover { color: var(--bad); border-color: var(--bad); }
+.ad-x:hover { color: var(--glass-bad-ink); }
 .ad-x svg { width: 13px; height: 13px; }
 
 /* The mark: the same die-on-a-gold-ring the iOS splash rolls in, drawn flat. */
@@ -2407,6 +4031,19 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
      and clipped the name of the street off the top — so the well keeps the
      name and the price, and the table stays one tap away on the tile. */
   .center-panel { gap: 10px; max-height: 100%; min-height: 0; overflow-y: auto; }
+  /* …and it has no room for a platter either. Twelve pixels of padding and a
+     rim on every side is a tenth of a well this size, and the well scrolls
+     here, which carries a drawn rim away with the content. On a phone the
+     dice and the buttons stand straight on the felt again, as they did. */
+  .center-panel {
+    padding: 0; border: 0; background: none; box-shadow: none;
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+    --ink-2: inherit; --ink-3: inherit;
+    --glass-nest-shadow: initial; --glass-nest-r: initial;
+  }
+  .center-panel::before,
+  .center-panel::after { display: none; }
   .center-card .deed-rows { display: none; }
   .turn-banner-fly { top: 8%; }
   .tb-avatar { width: 25px; height: 25px; font-size: 12px; }
@@ -2424,7 +4061,7 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
      standings" and "Back to home" side by side needed three hundred, and the
      second one hung a full inch off the right edge of the screen. */
   .center-action .row-2 { grid-template-columns: 1fr; }
-  .btn.big { padding: 12px 16px; font-size: 14.5px; }
+  .btn.big { padding: 13px 17px; font-size: 14.5px; }
   .landing-feats { gap: 20px; }
 }
 
@@ -2510,22 +4147,45 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    on top of it they printed over the wordmark at every width. */
 /* Signed-in presence: the chip is the proof that the Google button did
    something, and the menu behind it holds the details. */
+/* A bead of glass over the top of the landing, refracting whatever of the
+   page is drifting behind it. The brass ring it used to wear is the rim now,
+   brass on every table; with a photo in it the rim and the inner light sit
+   over the photo, which is what makes it read as under glass rather than
+   pasted on. */
 .profile-chip {
-  position: absolute; top: 0; right: 126px; z-index: 5;
+  position: absolute; top: 2px; right: 114px; z-index: 5;
   width: 34px; height: 34px; border-radius: 50%; padding: 0;
-  border: 2px solid var(--gold); background: var(--card);
   overflow: hidden; cursor: pointer;
   display: grid; place-items: center;
-  font-weight: 850; font-size: 14px; color: var(--ink);
-  box-shadow: var(--shadow-sm);
+  font-weight: 850; font-size: 14px;
 }
 .profile-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The menu is a popover of glass that stretches out of the chip it belongs
+   to rather than dropping in from nowhere: it grows from the chip's centre —
+   114px in from the menu's right edge plus half the chip, 23px above its top
+   — with the same overshoot a pressed control springs back with, so for a
+   moment it is recognisably the chip, made large. A generous radius, the way
+   a phone's menus are, over sixteen of padding hands its buttons the ten they
+   wear everywhere else. Asked for less motion, it fades. */
 .profile-menu {
   position: absolute; top: 42px; right: 0; z-index: 30;
-  width: min(280px, 86vw); padding: 14px;
-  background: var(--card); border: 1px solid var(--rule);
-  border-radius: var(--r); box-shadow: var(--shadow);
+  width: min(280px, 86vw); padding: 16px;
+  border-radius: var(--r-26);
+  --glass-nest-r: max(calc(var(--r-26) - 16px), 4px);
   text-align: left;
+  transform-origin: calc(100% - 131px) -23px;
+  animation: glassStretch 380ms var(--pop);
+}
+@keyframes glassStretch {
+  from { scale: .12; opacity: 0; }
+  40%  { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-menu {
+    animation-name: fadeIn !important;
+    animation-duration: 160ms !important;
+    animation-timing-function: ease !important;
+  }
 }
 .pm-head { display: flex; gap: 11px; align-items: center; margin-bottom: 10px; }
 .pm-photo {
@@ -2544,21 +4204,38 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .pm-row b { color: var(--ink); font-weight: 750; }
 .pm-actions { margin-top: 10px; display: flex; gap: 8px; }
 
-.theme-float, .palette-float, .help-float {
-  position: absolute; top: 0; font-size: 17px;
-  background: var(--paper-2); border: 1px solid var(--rule);
-  border-radius: 50%; line-height: 1; padding: 6px 8px;
+/* The landing's three corner buttons — the rules, the table style, light or
+   dark — were three discs of paper, and as glass they would have been three
+   panes where the corner means one. They are one capsule of glass now,
+   hanging over the landing's drifting colour and refracting it, and the
+   buttons in it are bare glyphs that raise a lozenge only under a pointer,
+   the way the table's own toolbar does. Three pads of 32 with 3 around them
+   is the 38 the wordmark was already clear of; the capsule's round end less
+   those 3 is a circle, which is the lozenge's shape. The signed-in chip sits
+   to its left, off the same centre line. */
+.landing-floats {
+  position: absolute; top: 0; right: 0; z-index: 5;
+  display: flex; gap: 2px; padding: 3px;
+  border-radius: var(--r-pill);
+  --glass-nest-r: var(--r-pill);
 }
-.theme-float { right: 0; }
-.palette-float { right: 42px; }
-/* The rules, before you sit down. Right of the signed-in chip, which moved
-   along to make room. */
-.help-float { right: 84px; }
+.landing-floats .icon-btn {
+  width: 32px; height: 32px; padding: 0;
+  display: grid; place-items: center;
+  font-size: 17px; line-height: 1;
+  border-radius: var(--glass-nest-r);
+}
 /* The landing wore hard-coded white text for a dark hero it never had: on a
    light table the wordmark, tagline and stats vanished into the page. */
 
-/* Theme changes ease instead of snapping. */
-.panel, .player-card, .landing-card, .tile, .board, .center-panel, .modal, .btn, input, select {
+/* Theme changes ease instead of snapping. .panel has left this list: it does
+   the same easing in "The material", where the tint and the shadow get the
+   two durations the glass owns instead of sharing this one. The buttons and
+   the fields have left it for the same reason, for "The controls" — and
+   because this rule, coming later, was quietly overriding the press timing
+   every button had been given further up. The action well has left with
+   them, for the material. */
+.player-card, .landing-card, .tile, .board, .modal {
   transition-property: background-color, border-color, color, box-shadow, transform, filter;
   transition-duration: .24s;
   transition-timing-function: var(--ease);
@@ -2580,14 +4257,14 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 body.focus-board .app { grid-template-columns: 0 minmax(0, 1fr) clamp(242px, 18vw, 290px); }
 body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden; }
 .col.left { transition: opacity .2s var(--ease); }
-#focusBtn.on { color: var(--red); background: var(--red-soft); }
+#focusBtn.on { color: var(--glass-accent-ink); }
 /* Parked on the screen while the panel it belongs to is hidden, so there is
-   always a way back to the side panel. */
+   always a way back to the side panel. Parked, it floats over the board, so
+   it is real glass that refracts (see "The controls"). */
 #focusBtn.floating {
   position: fixed; top: 12px; left: 12px; z-index: 60;
   width: 34px; height: 34px; display: grid; place-items: center; padding: 0;
-  border: 1px solid var(--rule); border-radius: 10px;
-  background: var(--card); box-shadow: var(--shadow-sm);
+  border-radius: var(--r-10);
 }
 
 @media (max-width: 1024px) {
@@ -2619,7 +4296,7 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   display: flex; gap: 8px; align-items: stretch;
   margin-bottom: 0; font-size: 16px; font-weight: 400; color: var(--ink);
 }
-.dice-btn { flex: none; padding: 0 14px; font-size: 18px; }
+.dice-btn { flex: none; padding: 0 15px; font-size: 18px; }
 
 /* ── store: coin packs (bought in the iOS app, shown here) ── */
 /* 96px so all three packs still sit on one row on a phone — at 118 the third
@@ -2668,61 +4345,98 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   height: 6px; border-radius: 99px;
   background: linear-gradient(90deg, var(--red) 0 calc(var(--pct) * 100%), var(--rule-2) calc(var(--pct) * 100%) 100%);
 }
+/* The knob is paper at rest and glass while it is held, the same moment the
+   switch's knob turns: it swells, drops its ring and goes clear enough for
+   the fill it is dragging to show through it. The track stays a track. */
 .cs-track input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 18px; height: 18px; margin-top: -6px; border-radius: 50%;
-  background: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+  background-color: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+  transition: scale 260ms var(--pop), background-color .16s var(--ease), border-color .16s var(--ease);
 }
 .cs-track input[type="range"]::-moz-range-thumb {
   width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
-  background: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+  background-color: var(--card); border: 2px solid var(--red); box-shadow: var(--shadow-sm);
+  transition: scale 260ms var(--pop), background-color .16s var(--ease), border-color .16s var(--ease);
+}
+.cs-track input[type="range"]:active:not(:disabled)::-webkit-slider-thumb {
+  scale: 1.25;
+  border-color: transparent;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-clear-alpha) * 100%), transparent);
+  box-shadow:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--shadow-sm);
+}
+.cs-track input[type="range"]:active:not(:disabled)::-moz-range-thumb {
+  scale: 1.25;
+  border-color: transparent;
+  background-color: color-mix(in srgb, var(--glass-film) calc(var(--glass-clear-alpha) * 100%), transparent);
+  box-shadow:
+    inset calc(-1 * var(--glass-rim-w)) calc(-1 * var(--glass-rim-w)) 0 color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-hot-a) * 100%), transparent),
+    inset var(--glass-rim-w) var(--glass-rim-w) 0 color-mix(in srgb, var(--glass-rim-warm) calc(var(--glass-rim-bounce-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--shadow-sm);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .cs-track input[type="range"]:active:not(:disabled)::-webkit-slider-thumb { background-color: var(--glass-solid); }
+  .cs-track input[type="range"]:active:not(:disabled)::-moz-range-thumb { background-color: var(--glass-solid); }
+}
+/* The blanket rule that turns motion down reaches every element and its
+   ::before and ::after, but a slider's knob is neither, so it would have kept
+   its overshooting swell. Asked for less motion it gets what every other
+   press gets — the scale alone, a hundred milliseconds, eased out. */
+@media (prefers-reduced-motion: reduce) {
+  .cs-track input[type="range"]::-webkit-slider-thumb { transition-duration: 100ms, .16s, .16s; transition-timing-function: ease-out, var(--ease), var(--ease); }
+  .cs-track input[type="range"]::-moz-range-thumb { transition-duration: 100ms, .16s, .16s; transition-timing-function: ease-out, var(--ease), var(--ease); }
 }
 /* The pill rides the thumb: half a thumb in, then across the track it can reach. */
 .cs-bubble {
   position: absolute; top: 27px; left: calc(9px + var(--pct) * (100% - 18px));
   transform: translateX(-50%); pointer-events: none; white-space: nowrap;
-  font-size: 12px; font-weight: 850; color: var(--red-ink);
-  background: var(--red-soft); border: 1px solid var(--red);
-  border-radius: 99px; padding: 1px 9px;
+  font-size: 12px; font-weight: 850; color: var(--glass-accent-ink);
+  border-radius: var(--r-pill); padding: 2px 10px;
 }
 .cs-max { display: block; font-size: 11px; color: var(--ink-3); font-weight: 650; }
 
 /* ── deed sheet: quick build bar ── */
 /* It lives inside the deed now, between the price and the rent table, so it is
-   inset from the card edge rather than stacked under it. */
+   inset from the card edge rather than stacked under it.
+   The deed is paper and stays paper; the bar of keys set into it is glass,
+   painted in "The controls" at the flat level — there is nothing moving
+   under a card to refract. The pixel its border gave up is back in the
+   padding, and an 18 bar over twelve of padding hands its keys a 6. */
 .quick-build {
-  margin: 10px 13px 4px; padding: 11px 12px; border-radius: var(--r);
-  background: var(--paper-2); border: 1px solid var(--rule);
+  margin: 10px 13px 4px; padding: 12px 13px; border-radius: var(--r-18);
+  --glass-nest-r: max(calc(var(--r-18) - 12px), 4px);
 }
 .qb-status { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; text-align: center; }
 .qb-level { font-size: 15px; font-weight: 850; letter-spacing: 1px; }
 .qb-next { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
 .qb-row { display: flex; align-items: center; gap: 6px; }
+/* Glass keys, painted in "The controls"; the border's pixel is back in the
+   padding, so the bar is the height it always was. */
 .qb-btn {
   font: inherit; flex: none; cursor: pointer;
-  min-width: 40px; padding: 9px 11px; border-radius: var(--r-sm);
-  background: var(--card); border: 1px solid var(--rule-2); color: var(--ink);
+  min-width: 40px; padding: 10px 12px; border-radius: var(--glass-nest-r, var(--r-10));
   font-size: 15px; font-weight: 850; line-height: 1;
-  transition: transform .12s var(--pop), border-color .16s, color .16s;
 }
-.qb-btn:hover:not(:disabled) { border-color: var(--red); color: var(--red-deep); }
-.qb-btn:active:not(:disabled) { transform: scale(.94); }
+.qb-btn:hover:not(:disabled, .all, .gold) { color: var(--glass-accent-ink); }
 .qb-btn:disabled { opacity: .38; cursor: not-allowed; }
 .qb-btn.mort { flex: 1; font-size: 12.5px; font-weight: 750; }
 /* The whole country in one press. It wears the accent because it is the one
    button here that does more than the obvious thing, and it only ever appears
-   when it would save more than a single tap — see buildAllCount(). */
+   when it would save more than a single tap — see buildAllCount(). Worn as
+   every coloured button wears it: a solid plate, the palette's ink on it. */
 .qb-btn.all {
   flex: 1; gap: 5px; font-size: 12.5px; font-weight: 800;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--red) 72%, white), var(--red));
-  border-color: var(--red-deep); color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  background-color: var(--red); background-image: none;
+  color: var(--on-red);
 }
-.qb-btn.all:hover:not(:disabled) {
-  color: #fff; border-color: var(--red-deep); filter: brightness(1.06);
-}
+.qb-btn.all:hover:not(:disabled) { filter: brightness(1.06); }
 .qb-btn.all .ico { width: 15px; height: 15px; }
-.qb-btn.gold { border-color: var(--gold); color: var(--gold); }
+.qb-btn.gold { color: var(--glass-gold-ink); }
 .qb-count { flex: 1; text-align: center; font-size: 17px; font-weight: 900; }
 .qb-count small { font-size: 11px; font-weight: 700; color: var(--ink-3); }
 
@@ -3044,17 +4758,23 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 
    Nothing about the panel's contents changes. It is the same #chatList, the
    same Everyone/Team chips, the same emotes and input — only where it sits. */
+/* The button is a disc of glass hanging over whatever has scrolled under it —
+   the board, the seats, the rail — so it refracts for real (see "The
+   controls"). Its ::after is the unread mark, so the inner stroke and the
+   glow the other controls draw there ride in its own box-shadow instead,
+   under the rim, and the press is the same gel as every other control's. */
 .chat-bubble {
   display: none;
   position: fixed; right: 14px; bottom: 18px; z-index: 60;
-  width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
-  background: linear-gradient(135deg, var(--gold), var(--red));
-  color: #fff;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .34);
+  width: 52px; height: 52px; border-radius: 50%; cursor: pointer;
+  box-shadow:
+    inset 0 0 0 calc(var(--glass-rim-w) * 2) color-mix(in srgb, var(--glass-rim-hot) calc(var(--glass-rim-inner-a) * 100%), transparent),
+    var(--shadow-in),
+    inset 0 var(--glass-glow-d) calc(var(--glass-glow-d) * 2) calc(var(--glass-glow-d) * -1) color-mix(in srgb, var(--glass-glow-tone) calc(var(--glass-glow-a) * 100%), transparent),
+    0 0 0 var(--glass-hair-w) var(--glass-hair),
+    var(--glass-shadow);
   align-items: center; justify-content: center;
-  transition: transform .16s var(--pop), box-shadow .16s;
 }
-.chat-bubble:active { transform: scale(.94); }
 .chat-bubble .ico { width: 22px; height: 22px; }
 /* An unread mark rather than a number: the count matters less than knowing
    somebody said something while you were looking at the board. */
@@ -3064,7 +4784,10 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   padding: 0 5px; border-radius: 999px;
   background: var(--red); color: #fff;
   font-size: 11px; font-weight: 800; line-height: 19px; text-align: center;
-  box-shadow: 0 0 0 2px var(--bg);
+  /* The mark overhangs the button, so the ring that lifts it off the page has
+     to be the page. It named --bg, which this file has never defined, and so
+     resolved to white on all fourteen tables. */
+  box-shadow: 0 0 0 2px var(--page);
 }
 .chat-scrim {
   display: none; position: fixed; inset: 0; z-index: 55;
@@ -3072,12 +4795,14 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   animation: fadeIn .18s ease;
 }
 @keyframes fadeIn { from { opacity: 0; } }
-/* The close cross the panel only wears while it is a sheet. */
+/* The close cross the panel only wears while it is a sheet — and every other
+   sheet's close: a disc of glass in the corner, the way a phone's sheets
+   close, painted in "The controls". */
 .sheet-x {
-  border: none; background: none; cursor: pointer; color: var(--ink-3);
-  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  cursor: pointer; color: var(--ink-3);
+  width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
 }
-.sheet-x:hover { color: var(--ink); background: var(--paper-2); }
+.sheet-x:hover { color: var(--glass-ink); }
 .sheet-x .ico { width: 15px; height: 15px; }
 .sheet-x.inline { display: none; margin-left: auto; }
 
@@ -3089,14 +4814,81 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   body.chat-open .chat-scrim { display: block; }
   body.chat-open .chat-panel {
     display: flex; position: fixed; z-index: 58;
-    box-shadow: 0 18px 44px rgba(0, 0, 0, .5);
     right: 14px; bottom: 82px; width: min(380px, calc(100vw - 28px));
     max-height: min(62vh, 520px);
-    animation: dockIn .2s var(--pop);
+    /* It stretches out of the button that opened it, the way the profile
+       menu comes out of its chip: grown from the button's centre — 26px in
+       from the dock's right edge, 38px under its foot — with the overshoot
+       every pressed control springs back with, so for a moment it is
+       recognisably the button, made large. */
+    transform-origin: calc(100% - 26px) calc(100% + 38px);
+    animation: glassStretch 380ms var(--pop);
+  }
+  /* In the rail the chat is paper, a panel of words you came to read. Docked
+     over the board it is a sheet, and a sheet is glass: the same panel takes
+     back everything the paper opt-out under .panel took from it — the film,
+     the blur, the rim, the lifted inks, the assembly its keys belong to —
+     and casts the material's shadow instead of the heavy one it floated on.
+     It is the sheet that is glass, not the chat: see the messages below. */
+  body.chat-open .panel.chat-panel {
+    isolation: isolate;
+    border: 0;
+    background: color-mix(in srgb, var(--glass-film) calc(var(--glass-alpha) * 100%), transparent);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+            backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+    box-shadow: 0 0 0 var(--glass-hair-w) var(--glass-hair), var(--glass-shadow);
+    --ink-2: var(--glass-ink-2);
+    --ink-3: var(--glass-ink-2);
+    --glass-nest-shadow: 0 0 transparent;
+    --glass-nest-r: max(calc(var(--r-14) - 12px), 4px);
+  }
+  body.chat-open .panel.chat-panel::before,
+  body.chat-open .panel.chat-panel::after {
+    display: block;
   }
   body.chat-open .chat-list { flex: 1 1 auto; }
+  /* The messages are content, and content does not go on glass. In the rail
+     the panel under them is paper; docked, the paper comes with each message
+     instead — a card of the table's own paper with its hairline, the way both
+     phones draw a line of chat on their glass sheet — so a name keeps the
+     ground its player's colour was picked against and the words keep
+     paper's ink ranks rather than the lifted ones the sheet hands down. */
+  body.chat-open .panel.chat-panel .chat-msg {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: var(--r-10); padding: 7px 11px;
+    --ink-2: var(--paper-ink-2);
+    --ink-3: var(--paper-ink-3);
+  }
 }
-@keyframes dockIn { from { transform: translateY(12px) scale(.97); opacity: 0; } }
+@media (max-width: 1024px) and (prefers-reduced-transparency: reduce) {
+  body.chat-open .panel.chat-panel {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+    --glass-rim-hot-a: .30;
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (max-width: 1024px) {
+    body.chat-open .panel.chat-panel { background: var(--glass-solid); }
+  }
+}
+/* The dock gave its border up to the rim, and under forced colours the rim
+   goes with every other shadow: the edge comes back as a border there, as it
+   does for every other surface (see the forced colours under "The
+   controls"). */
+@media (max-width: 1024px) and (forced-colors: active) {
+  body.chat-open .panel.chat-panel { border: 1px solid; }
+}
+/* Asked for less motion it fades in rather than stretching, as the profile
+   menu does; left to the blanket rule it would simply be there. */
+@media (max-width: 1024px) and (prefers-reduced-motion: reduce) {
+  body.chat-open .chat-panel {
+    animation-name: fadeIn !important;
+    animation-duration: 160ms !important;
+    animation-timing-function: ease !important;
+  }
+}
 
 /* On a phone the same panel is worth the whole width, and the message box
    wants to sit above the button that opened it rather than under the thumb. */
@@ -3105,6 +4897,8 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   body.chat-open .chat-panel {
     right: 8px; left: 8px; bottom: 74px; width: auto;
     max-height: 68vh;
+    /* The button's centre, measured from this dock: 29px in, 35px under. */
+    transform-origin: calc(100% - 29px) calc(100% + 35px);
   }
 }
 
@@ -3113,9 +4907,10 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
    as things — a coin, a street in its own colour with its own flag, a card —
    with a swap medallion between them and a meter underneath that weighs the
    two by the price on the deeds and admits that is all it is doing. */
+/* Its edge is the sheet's rim like every other; the darker border it wore to
+   stand apart from the paper sheets would sit in the rim's place. */
 .modal.offer-sheet {
-  width: min(460px, 94vw); padding: 0; overflow: hidden;
-  border-color: var(--rule-2);
+  width: min(460px, 94vw); --sheet-pad: 0px; overflow: hidden;
 }
 
 .offer-top {
@@ -3180,8 +4975,7 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center; z-index: 2;
-  background: var(--card); border: 1px solid var(--rule-2);
-  color: var(--ink-2); box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  color: var(--ink-2);
 }
 
 /* which way it leans */
@@ -3210,9 +5004,12 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px; padding: 14px 18px 0;
 }
-.offer-actions .btn.big { grid-column: 1 / -1; padding: 13px 16px; font-size: 15px; }
-.btn.ghost.danger { color: var(--bad); }
-.btn.ghost.danger:hover:not(:disabled) { color: #fff; background: var(--bad); border-color: var(--bad); }
+.offer-actions .btn.big { grid-column: 1 / -1; padding: 14px 17px; font-size: 15px; }
+/* Declining in the bad ink, and under a pointer the Clear glass thickens to
+   Regular — the ghost fills in — rather than flooding red: a bad tint under
+   bad words measures 4.4:1 and is the one combination here that fails. */
+.btn.ghost.danger { color: var(--glass-bad-ink); }
+.btn.ghost.danger:hover:not(:disabled) { --glass-alpha: inherit; }
 .offer-foot { margin: 12px 18px 18px; text-align: center; font-size: 11.5px; }
 
 @media (max-width: 560px) {
@@ -3400,12 +5197,14 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 /* ─────────────────────────────────────────────── the first six cards ── */
 .intro-modal { max-width: 460px; text-align: center; }
 .intro { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+/* A capsule of glass in the corner of the sheet, the way a phone offers to
+   let you skip a tour. */
 .intro-skip {
   position: absolute; top: -6px; right: -4px; z-index: 2;
-  background: none; border: 0; cursor: pointer; padding: 6px 10px;
+  cursor: pointer; padding: 6px 10px; border-radius: var(--r-pill);
   font: inherit; font-size: 13px; font-weight: 800; color: var(--ink-3);
 }
-.intro-skip:hover { color: var(--ink-2); }
+.intro-skip:hover { color: var(--glass-ink); }
 .intro-hero {
   width: 108px; height: 108px; flex: none; display: grid; place-items: center;
   border-radius: 50%; background: var(--gold-soft);
@@ -3429,7 +5228,10 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
   transition: width .25s var(--pop), background .25s;
 }
 .intro-dots i.on { width: 20px; background: var(--gold); }
-#introNext.gold { background: var(--gold); border-color: var(--gold); }
+/* The last card's button goes gold simply by being .btn.gold: a gold plate
+   with the palette's on-accent ink, like every gold button. It used to tint
+   the film and print brass words, which on a solid plate would be gold on
+   gold. */
 .intro-foot { margin: 0; font-size: 11px; font-weight: 650; color: var(--ink-3); }
 
 @media (max-width: 420px) {

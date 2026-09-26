@@ -25,7 +25,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -326,10 +325,9 @@ fun ReportSheet(
         }
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
         dragHandle = { SheetGrabber() },
     ) {
         Column(
@@ -601,19 +599,20 @@ fun BlockedPlayersSheet(
         scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
     }
 
-    ModalBottomSheet(
+    MMSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = p.sheet,
         dragHandle = { SheetGrabber() },
     ) {
         Column(Modifier.fillMaxWidth().fillMaxHeight()) {
             SafetyBar("Blocked players") { close() }
+            val sheetScroll = rememberScrollState()
             Column(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                    .scrollEdge(sheetScroll)
+                    .verticalScroll(sheetScroll)
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -621,7 +620,7 @@ fun BlockedPlayersSheet(
                 if (codes.isEmpty()) {
                     Text(
                         "You haven't blocked anyone.",
-                        color = p.ink3, fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                        color = quietInk(), fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(top = 40.dp),
                     )
                 }
@@ -665,15 +664,23 @@ fun BlockedPlayersSheet(
 
 // ── sheet chrome ───────────────────────────────────────────────────────────
 
-/** iOS's grabber, for a sheet with more than one height to stop at. */
+/**
+ * iOS's grabber, for a sheet with more than one height to stop at.
+ *
+ * It sits on the sheet's glass ([MMSheet] draws it there), so it is inked
+ * as a mark on the material rather than on paper: the glass's own quiet ink
+ * at the half-strength it always had. The palette's ink3 is the one ink the
+ * material cannot carry — it measures 1.53:1 on glass at worst.
+ */
 @Composable
 private fun SheetGrabber() {
+    val glass = rememberGlassSurface(BackdropKind.Sheet)
     Box(
         Modifier
             .padding(top = 5.dp, bottom = 3.dp)
             .size(36.dp, 5.dp)
             .clip(RoundedCornerShape(99.dp))
-            .background(P.current.ink3.copy(alpha = 0.5f)),
+            .background(glass.labelInk(quiet = true).copy(alpha = 0.5f)),
     )
 }
 
