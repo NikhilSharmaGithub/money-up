@@ -70,21 +70,26 @@ export const INTERSTITIALS = ['preGame'];
 
 /**
  * The kinds of client that ask. Not an inventory of operating systems — an
- * inventory of ad surfaces, and the Android build is its own surface even
- * though it is a WebView around the same page money-up serves to Chrome.
+ * inventory of ad surfaces.
  *
- * It is on the house, and that is a policy decision rather than a technical
- * one. H5 Games Ads is AdSense inventory, and AdSense is for websites: Google
- * does not allow it to be served inside an app that wraps a page in a WebView,
- * and tells publishers to use AdMob for apps. The tag would load in there and
- * ads would appear, which is exactly what makes it worth refusing here — the
- * cost of finding out the slow way is not a bad night's revenue, it is the
- * owner's AdSense account, and the browser's ads with it. The day a native
- * Android shell with the AdMob SDK in it ships, this line is the one that
- * changes, to 'admob'.
+ * Android is AdMob now, because Android is a native app now: the WebView
+ * shell that wrapped the browser's page has been replaced by a Kotlin client
+ * that links Google's SDK the same way the iPhone does. It is still a
+ * different AdMob app from the iPhone's — its own app id, its own unit ids —
+ * so it reads its own block of settings and falls back to the house on its
+ * own until those ids are pasted in, whatever the iPhone is doing.
+ *
+ * The WebView shell has not stopped existing on the phones it was installed
+ * on, and it is the reason H5 is still never the answer for 'android'. H5
+ * Games Ads is AdSense inventory, and AdSense is for websites: Google does not
+ * allow it inside an app that wraps a page in a WebView. The tag would load in
+ * there and ads would appear, which is exactly what makes it worth refusing —
+ * the cost of finding out the slow way is the owner's AdSense account, and the
+ * browser's ads with it. That shell cannot load AdMob either, and `platformOf`
+ * is what keeps it on the house.
  */
 export const PLATFORMS = ['ios', 'android', 'web'];
-const NETWORK_FOR = { ios: 'admob', android: 'house', web: 'h5' };
+const NETWORK_FOR = { ios: 'admob', android: 'admob', web: 'h5' };
 
 /**
  * Google's own test ids, published in its docs precisely so that nobody has to
@@ -188,6 +193,13 @@ const defaults = () => ({
   admob: {
     // Account-specific and deliberately left blank: filled in from the desk
     // or the environment the day there is an AdMob account behind them.
+    //
+    // The ids at this level are the iPhone app's. They were the only AdMob
+    // app there was when this block was written, and they are live on the
+    // server's disk under exactly these names — so they stay exactly here.
+    // Moving them into an `ios` block would read as a tidy migration and
+    // would switch the iPhone's ads off on the next boot, because an ads.json
+    // with ids at the top level would then have none where the code looked.
     appId: process.env.ADMOB_APP_ID || '',
     units: {
       doubleWin: process.env.ADMOB_UNIT_DOUBLE_WIN || '',
@@ -205,6 +217,30 @@ const defaults = () => ({
     // reject your own revenue. The desk shows the last one seen; paste that in
     // if you want the check.
     adNetworkId: process.env.ADMOB_AD_NETWORK_ID || '',
+    // The Android app's ids, beside the iPhone's rather than instead of them.
+    // In AdMob an app is one platform: the Android build is a second app in
+    // the same account, with its own "~" app id and its own "/" unit ids, and
+    // a unit made under one app will not serve the other. Every id the
+    // iPhone has, this has one of too. The ad network pin above is shared —
+    // it names who filled the slot, and that is the same list on both.
+    //
+    // Unlike the iPhone's, these are written in as defaults. The iPhone's
+    // were pasted in through the desk, whose key is the owner's alone; the
+    // Android app was created after that, and an AdMob id is no secret — it
+    // ships inside every copy of the app — so it can ride in with the code
+    // that serves it. The desk still overrides any of them, and so does the
+    // environment — including set to nothing, which is how a test (or an
+    // owner who wants Android back on the house ad) says "no ids".
+    android: {
+      appId: process.env.ADMOB_ANDROID_APP_ID ?? 'ca-app-pub-1179201999959612~9068269365',
+      units: {
+        doubleWin: process.env.ADMOB_ANDROID_UNIT_DOUBLE_WIN ?? 'ca-app-pub-1179201999959612/2383441510',
+        freeCoins: process.env.ADMOB_ANDROID_UNIT_FREE_COINS ?? 'ca-app-pub-1179201999959612/8701437852',
+      },
+      interstitialUnits: {
+        preGame: process.env.ADMOB_ANDROID_UNIT_PREGAME ?? 'ca-app-pub-1179201999959612/2203563833',
+      },
+    },
   },
   // The browser half: Google's H5 Games Ads, which is AdSense inventory served
   // through adBreak(). The publisher id is the whole configuration; the slot
@@ -296,6 +332,20 @@ function merge(base, raw) {
       preGame: str(raw.admob?.interstitialUnits?.preGame, base.admob.interstitialUnits?.preGame || ''),
     },
     adNetworkId: str(raw.admob?.adNetworkId, base.admob.adNetworkId),
+    // Absent from every ads.json written before there was an Android app, and
+    // that file must come back meaning what it meant: the iPhone's ids where
+    // they were, and Android on whatever the environment says — usually
+    // nothing, which is the house.
+    android: {
+      appId: str(raw.admob?.android?.appId, base.admob.android.appId),
+      units: {
+        doubleWin: str(raw.admob?.android?.units?.doubleWin, base.admob.android.units.doubleWin),
+        freeCoins: str(raw.admob?.android?.units?.freeCoins, base.admob.android.units.freeCoins),
+      },
+      interstitialUnits: {
+        preGame: str(raw.admob?.android?.interstitialUnits?.preGame, base.admob.android.interstitialUnits.preGame),
+      },
+    },
   };
   out.h5 = {
     clientId: str(raw.h5?.clientId, base.h5.clientId),
@@ -397,7 +447,15 @@ function platformOf(req) {
   if (native) return { platform: 'ios', declared };
   // "; wv)" is the WebView's own mark, and Chrome for Android never carries
   // it. Read before the declared field, never after.
-  if (/;\s*wv[);]/i.test(ua)) return { platform: 'android', declared };
+  //
+  // It is also the one client whose say-so is not enough to be sold AdMob.
+  // The page in the old WebView shell is the same ui.js Chrome runs, so it
+  // declares 'web' — which would count as declaring, and 'android' now means
+  // AdMob. It has no SDK and never will, and an AdMob ticket handed to it
+  // would wait for a callback nobody was ever going to send. Only a client
+  // that names itself 'android' was written against the native SDK, so a
+  // WebView is only "declared" if it does, and nothing shipped ever has.
+  if (/;\s*wv[);]/i.test(ua)) return { platform: 'android', declared: said === 'android' };
   if (PLATFORMS.includes(said)) return { platform: said, declared };
   if (said === 'iphone' || said === 'ipad' || said === 'ipados') return { platform: 'ios', declared };
   if (/okhttp|Dalvik|Ktor-client/i.test(ua)) return { platform: 'android', declared };
@@ -550,27 +608,53 @@ const H5_WATCHED = new Set(['viewed', 'adviewed', 'ad_viewed', 'ok', 'complete',
 const H5_MIN_WATCH_MS = 4000;
 
 // -------------------------------------------------------------- which ids ---
-// Every read of an account id goes through these three, so test mode is one
-// decision made once rather than a conditional at each use.
+// Every read of an account id goes through these, so test mode is one
+// decision made once rather than a conditional at each use — and so is which
+// AdMob app is being asked about. Android reads its own block; everything
+// else reads the top level, which is the iPhone's and is where every id lived
+// before there were two apps.
+const admobApp = (platform) => (platform === 'android' ? 'android' : 'ios');
+const admobIds = (platform) => (admobApp(platform) === 'android' ? settings.admob.android || {} : settings.admob);
 const admobAppId = (platform) =>
-  (settings.testMode ? TEST_IDS.admob.appId[platform === 'android' ? 'android' : 'ios'] : settings.admob.appId) || '';
+  (settings.testMode ? TEST_IDS.admob.appId[admobApp(platform)] : admobIds(platform).appId) || '';
 const admobUnit = (slot, platform) =>
-  (settings.testMode ? TEST_IDS.admob.unit[platform === 'android' ? 'android' : 'ios'] : settings.admob.units[slot]) || '';
+  (settings.testMode ? TEST_IDS.admob.unit[admobApp(platform)] : admobIds(platform).units?.[slot]) || '';
 const h5ClientId = () => (settings.testMode ? TEST_IDS.h5.clientId : settings.h5.clientId) || '';
 const admobInterstitial = (slot, platform) => (settings.testMode
-  ? TEST_IDS.admob.interstitial[platform === 'android' ? 'android' : 'ios']
-  : settings.admob.interstitialUnits?.[slot]) || '';
+  ? TEST_IDS.admob.interstitial[admobApp(platform)]
+  : admobIds(platform).interstitialUnits?.[slot]) || '';
 
 /** The tag that rides to Google as user_id — derived from the nonce, never the token. */
 const ssvUserId = (nonce) =>
   crypto.createHmac('sha256', settings.secret).update(`ssv.${nonce}`).digest('base64url').slice(0, 22);
 
 /**
+ * An ad unit reduced to the part Google sends back. The callback names the
+ * unit by its bare numeric id ("2662122626"); what the desk holds, and what
+ * the app is handed, is the full "ca-app-pub-<pub>/<id>". Comparing them whole
+ * rejected every callback there has ever been — six of them, and six rewarded
+ * views that paid nobody — so every comparison goes through here.
+ */
+const bareUnit = (id) => String(id || '').trim().split('/').pop();
+
+/** Which app a rewarded unit belongs to, by the ids on the desk — '' when neither's. */
+function appOfUnit(unit) {
+  const bare = bareUnit(unit);
+  if (!bare) return '';
+  for (const platform of ['ios', 'android']) {
+    if (PLACEMENTS.some((slot) => { const u = admobUnit(slot, platform); return u && bareUnit(u) === bare; })) return platform;
+  }
+  return '';
+}
+
+/**
  * The network the owner has chosen for this platform — 'house' when that is
  * the choice, and 'house' again when the chosen network has no ids yet. The
  * fallback is per platform on purpose: AdSense approval and an AdMob account
  * do not arrive on the same day, and the phone should not have to wait for the
- * browser.
+ * browser. Nor one phone for the other — the Android app is a second AdMob
+ * app with ids of its own, and until they are pasted in `available('android')`
+ * says no and Android shows the house while the iPhone carries on with AdMob.
  *
  * `declared` is the third way to end up on the house, and it is about the
  * builds already on people's phones. AdMob is the one network whose claim is
@@ -601,57 +685,78 @@ const adapterForTicket = (rec) => ADAPTERS[rec?.network] || ADAPTERS.house;
 
 /**
  * One plain line for the desk about who is serving and what is missing —
- * overall, and then per network, because "ready" is now a different answer for
- * the phone and the browser and the desk has to be able to say which.
+ * overall, and then per network, because "ready" is a different answer for
+ * each surface and the desk has to be able to say which.
+ *
+ * AdMob is two networks here in everything but name. The iPhone app and the
+ * Android app are two AdMob apps with two sets of ids, and either can be
+ * ready while the other is still waiting on the console, so each gets its own
+ * entry. `admob` keeps meaning the iPhone's, which is what it meant when it
+ * was the only app there was; `admobAndroid` sits beside it.
  */
+const NETWORK_PROBES = [
+  // [entry on the desk, adapter, the surface it is asked about]
+  ['admob', 'admob', 'ios'],
+  ['admobAndroid', 'admob', 'android'],
+  ['h5', 'h5', 'web'],
+];
+const SURFACE_NAME = { ios: 'the iPhone app', android: 'the Android app', web: 'the browser' };
+const NETWORK_NAME = { admob: 'AdMob', h5: 'H5' };
+
 export function providerStatus() {
   const chosen = settings.provider;
   const per = {};
   for (const platform of PLATFORMS) per[platform] = adapterFor(platform).id;
   const networks = {};
-  for (const id of ['admob', 'h5']) {
+  for (const [key, id, probe] of NETWORK_PROBES) {
     const net = ADAPTERS[id];
-    // AdMob is configured per app id, and the ios one is the app that exists.
-    const probe = id === 'admob' ? 'ios' : 'web';
     const ready = net.available(probe);
-    networks[id] = {
+    networks[key] = {
       ready,
+      platform: probe,
       test: !!settings.testMode,
       missing: ready ? '' : net.missing(probe),
       serving: chosen === 'google' && ready,
-      line: describeNetwork(id, ready),
+      line: describeNetwork(id, ready, probe),
     };
   }
-  const live = per.web === 'house' && per.ios === 'house' ? 'house' : `${per.ios}/${per.web}`;
+  const entries = NETWORK_PROBES.map(([key, id, probe]) => ({ ...networks[key], id, probe }));
+  const live = PLATFORMS.every((p) => per[p] === 'house') ? 'house' : PLATFORMS.map((p) => per[p]).join('/');
   let line;
   if (chosen !== 'google') {
     line = 'House ads are serving — the game shows its own full-screen promo.';
-  } else if (networks.admob.ready && networks.h5.ready) {
+  } else if (entries.every((n) => n.ready)) {
     line = settings.testMode
-      ? 'Google TEST ids are serving on both surfaces — AdMob on the app, H5 in the browser. No revenue, and no verification.'
-      : 'Google is serving on both surfaces — AdMob on the app, H5 in the browser.';
-  } else if (networks.admob.ready) {
-    line = `AdMob is serving the app; the browser is on house ads (${networks.h5.missing} not set).`;
-  } else if (networks.h5.ready) {
-    line = `H5 is serving the browser; the app is on house ads (${networks.admob.missing} not set).`;
+      ? 'Google TEST ids are serving on every surface — AdMob in both apps, H5 in the browser. No revenue, and no verification.'
+      : 'Google is serving on every surface — AdMob in the iPhone and Android apps, H5 in the browser.';
+  } else if (!entries.some((n) => n.ready)) {
+    line = 'Google is chosen but nothing is configured (' +
+      entries.map((n) => `${NETWORK_NAME[n.id]} for ${SURFACE_NAME[n.probe]}: ${n.missing}`).join('; ') +
+      ') — house ads are serving everywhere.';
   } else {
-    line = `Google is chosen but nothing is configured (AdMob: ${networks.admob.missing}; H5: ${networks.h5.missing}) — house ads are serving everywhere.`;
+    // Some of each. Whatever is serving is named first, so the line opens
+    // with a network's name and reads as a sentence without help.
+    line = [
+      ...entries.filter((n) => n.ready).map((n) => `${NETWORK_NAME[n.id]} is serving ${SURFACE_NAME[n.probe]}`),
+      ...entries.filter((n) => !n.ready).map((n) => `${SURFACE_NAME[n.probe]} is on house ads (${n.missing} not set)`),
+    ].join('; ') + '.';
   }
   return {
     chosen, live, per, networks, testMode: !!settings.testMode,
     // `ok` keeps its old meaning for the alert on the overview: true when what
     // is serving is what was asked for.
-    ok: chosen !== 'google' || networks.admob.ready || networks.h5.ready,
+    ok: chosen !== 'google' || entries.some((n) => n.ready),
     line,
   };
 }
 
-function describeNetwork(id, ready) {
+function describeNetwork(id, ready, platform) {
   const test = settings.testMode ? ' Google test ids are in use — no revenue, and rewards pay without verification.' : '';
   if (id === 'admob') {
+    const app = platform === 'android' ? 'Android' : 'iPhone';
     return ready
-      ? `AdMob is ready — app id and rewarded unit ids are set.${test}`
-      : `AdMob is not configured (${ADAPTERS.admob.missing('ios')}). Paste the ids from the AdMob console.`;
+      ? `AdMob for the ${app} app is ready — app id and rewarded unit ids are set.${test}`
+      : `AdMob for the ${app} app is not configured (${ADAPTERS.admob.missing(platform)}). Paste the ids of the ${app} app from the AdMob console; until then it shows house ads.`;
   }
   return ready
     ? `H5 Games Ads is ready — publisher id is set. There is no server-side verification in this product; the caps are the limit.${test}`
@@ -675,9 +780,18 @@ const ADMOB_KEYS_URL = process.env.ADMOB_KEYS_URL || 'https://gstatic.com/admob/
  */
 const ssvLog = {
   ok: 0, rejected: 0,
-  lastOkAt: 0, lastOkUnit: '', lastOkNetwork: '', lastOkTxn: '',
-  lastRejectAt: 0, lastRejectReason: '', lastRejectUnit: '',
+  lastOkAt: 0, lastOkUnit: '', lastOkNetwork: '', lastOkTxn: '', lastOkPlatform: '',
+  lastRejectAt: 0, lastRejectReason: '', lastRejectUnit: '', lastRejectPlatform: '',
   keysAt: 0, keyCount: 0, keysError: '',
+  // The same record per app. The SSV URL is set on each rewarded unit by
+  // hand, and the Android units are made months after the iPhone's — so the
+  // day the Android ids go in, "callbacks are arriving" has to be answerable
+  // for Android alone, or the iPhone's steady traffic hides the fact that
+  // nobody pasted the URL onto the new units.
+  byPlatform: {
+    ios: { ok: 0, lastOkAt: 0, lastOkUnit: '' },
+    android: { ok: 0, lastOkAt: 0, lastOkUnit: '' },
+  },
 };
 const KEY_TTL_MS = 24 * 60 * 60 * 1000;
 // A key fetch happens inside a callback Google is waiting on, so it gets a
@@ -1191,7 +1305,7 @@ async function payClaim(req, res, token) {
   // the client usually wins by a second or two. Refusing on that basis alone
   // would put "not confirmed" in front of a player who watched the whole
   // thing, so the claim waits at the door for a moment before saying no.
-  if (proof.error && live.id === 'admob') proof = await waitForSsv(ticket, live, req.body || {});
+  if (proof.error && live.id === 'admob') proof = await waitForSsv(ticket, live, req.body || {}, proof);
   if (proof.error) {
     return res.status(proof.status || 402).json({
       error: proof.error, retryInSec: proof.retryInSec,
@@ -1257,10 +1371,14 @@ async function payClaim(req, res, token) {
  * shared promise between them would be a lot of machinery for four seconds of
  * waiting. Bounded by the admin's own number, and by nothing else.
  */
-async function waitForSsv(ticket, live, body) {
+async function waitForSsv(ticket, live, body, first) {
   const budgetMs = Math.min(30, Math.max(0, capNum(settings.caps.ssvWaitSec, 5))) * 1000;
   const deadline = Date.now() + budgetMs;
-  let proof = { error: 'AdMob has not confirmed that view yet', retryInSec: 3 };
+  // Starts from the adapter's own answer rather than a made-up one. With the
+  // wait set to zero the loop never runs, and a stand-in refusal here once
+  // came back without `pending` — so a claim that had merely beaten Google's
+  // callback home read to the phone as a final no, and its retry never came.
+  let proof = first;
   while (Date.now() < deadline) {
     await new Promise((r) => { const t = setTimeout(r, 250); t.unref?.(); });
     proof = await live.verify(ticket, body);
@@ -1290,12 +1408,18 @@ async function waitForSsv(ticket, live, body) {
  */
 adsRouter.get('/ssv', async (req, res) => {
   const raw = String(req.originalUrl.split('?')[1] || '');
+  // Which app the callback is about, once the ticket says so. Before that it
+  // is guessed from the unit, which is enough for the desk to say "the
+  // Android units are misconfigured" rather than just "something is".
+  let from = '';
   const deny = (reason, unit = '') => {
+    const app = from || appOfUnit(unit);
     ssvLog.rejected += 1;
     ssvLog.lastRejectAt = Date.now();
     ssvLog.lastRejectReason = reason;
     ssvLog.lastRejectUnit = unit;
-    console.warn(`ads: rejected an SSV callback — ${reason}${unit ? ` (ad_unit ${unit})` : ' (no ad_unit)'}`);
+    ssvLog.lastRejectPlatform = app;
+    console.warn(`ads: rejected an SSV callback — ${reason}${unit ? ` (ad_unit ${unit})` : ' (no ad_unit)'}${app ? ` [${app}]` : ''}`);
     return res.status(200).send('ignored');
   };
 
@@ -1322,19 +1446,24 @@ adsRouter.get('/ssv', async (req, res) => {
     return deny(spent.has(nonce) ? 'Ticket already claimed' : 'No open ticket for that custom_data', unit);
   }
 
+  // The unit is checked against the app the ticket was cut for, not against
+  // whichever app happens to be first in the settings. An Android ticket is
+  // paid by a callback from the Android unit and by nothing else — the
+  // iPhone's unit, however valid its callback, is somebody else's impression.
+  from = admobApp(rec.platform);
   const want = admobUnit(rec.placement, rec.platform);
-  // Google sends the ad unit as its bare numeric id ("2662122626"); what the
-  // desk holds, and what the app is handed, is the full "ca-app-pub-<pub>/<id>".
-  // Comparing them whole rejected every callback there has ever been — six of
-  // them, and six rewarded views that paid nobody — so both sides are reduced
-  // to the part after the slash before they are compared.
-  const unitId = (id) => String(id || '').trim().split('/').pop();
-  if (want && unit && unitId(unit) !== unitId(want)) {
-    return deny(`Callback is for a different ad unit (expected ${want})`, unit);
+  if (want && unit && bareUnit(unit) !== bareUnit(want)) {
+    return deny(`Callback is for a different ad unit (expected ${want} for the ${from} app)`, unit);
   }
   if (!want) {
     // Nothing to compare against means the unit id was cleared after the offer
-    // went out. Let it through — the ticket is still ours — but say so.
+    // went out. Let it through — the ticket is still ours — but say so. Not
+    // from the other app's unit, though: that is the one callback we can
+    // still recognise as wrong with nothing of this app's to compare it to.
+    const other = from === 'android' ? 'ios' : 'android';
+    if (unit && appOfUnit(unit) === other) {
+      return deny(`Callback is from the ${other} app's ad unit, for a ticket cut on ${from}`, unit);
+    }
     console.warn(`ads: SSV callback accepted with no configured unit to check it against (${unit || 'no ad_unit'})`);
   }
 
@@ -1353,9 +1482,128 @@ adsRouter.get('/ssv', async (req, res) => {
   ssvLog.lastOkUnit = unit;
   ssvLog.lastOkNetwork = network;
   ssvLog.lastOkTxn = txn;
+  ssvLog.lastOkPlatform = from;
+  const mine = ssvLog.byPlatform[from];
+  if (mine) {
+    mine.ok += 1;
+    mine.lastOkAt = now;
+    mine.lastOkUnit = unit;
+  }
   console.log(`ads: SSV confirmed ${rec.placement} on ${rec.platform} (ad_unit ${unit || '?'}, network ${network || '?'})`);
   res.status(200).send('ok');
 });
+
+// ---------------------------------------------------------- AdMob id kinds --
+/**
+ * One AdMob app's ids, copied off a desk patch onto its block of settings.
+ * The iPhone's block and the Android's are the same shape, so they are
+ * written by the same hands and read back in the same words.
+ */
+function applyAdmobIds(from, to, label, changes) {
+  if (typeof from.appId === 'string' && from.appId.trim() !== to.appId) {
+    to.appId = from.appId.trim().slice(0, 120);
+    changes.push(`${label} app id`);
+  }
+  to.units ??= {};
+  for (const slot of PLACEMENTS) {
+    const unit = from.units?.[slot];
+    if (typeof unit !== 'string' || unit.trim() === (to.units[slot] || '')) continue;
+    to.units[slot] = unit.trim().slice(0, 120);
+    changes.push(`${label} ${slot} unit`);
+  }
+  to.interstitialUnits ??= {};
+  for (const slot of INTERSTITIALS) {
+    const unit = from.interstitialUnits?.[slot];
+    if (typeof unit !== 'string' || unit.trim() === (to.interstitialUnits[slot] || '')) continue;
+    to.interstitialUnits[slot] = unit.trim().slice(0, 120);
+    changes.push(`${label} ${slot} interstitial unit`);
+  }
+}
+
+/**
+ * Whether every AdMob id in a desk patch is the kind of id its field is for,
+ * and the first one that is not, in words the owner can act on.
+ *
+ * Not a format check — the digits are Google's business — but the three
+ * mistakes that are easy to make in the console and expensive to have made.
+ * None of them crashes anything and none of them errors anywhere; each one
+ * sends a phone to AdMob because "an id is there", every load then fails, the
+ * house ad plays in its place, and every claim waits for a callback from a
+ * unit that does not exist. Two buttons that never pay, and nothing in any
+ * log that says why.
+ *
+ *   An app id where a unit goes, or a unit where the app id goes. They sit
+ *   side by side in the console and differ by one character: the app id is
+ *   "ca-app-pub-…~…" and starts the SDK, a unit is "ca-app-pub-…/…" and loads
+ *   an ad. The prefix and that separator are what both clients check an app
+ *   id for before it gets near the SDK, and they are all that is checked here.
+ *
+ *   The other app's id. AdMob keeps the iPhone and Android apps apart, and a
+ *   unit made under one will not serve the other — so "the same ads as the
+ *   iPhone" can never mean the iPhone's ids pasted into the Android fields,
+ *   and a patch that does that is refused with where to get the right ones.
+ *
+ * Only ids the patch actually changes are judged. The desk sends every field
+ * on every save, and an old value this function would dislike must not stop
+ * the owner saving an unrelated new one beside it.
+ */
+function admobIdProblem(admob) {
+  if (!admob || typeof admob !== 'object') return '';
+  const APP_NAME = { ios: 'iPhone', android: 'Android' };
+  const incoming = { ios: admob, android: admob.android && typeof admob.android === 'object' ? admob.android : null };
+  const stored = { ios: settings.admob, android: settings.admob.android || {} };
+  // Every id each app will hold once this patch lands, to catch the other
+  // app's ids against — the patch's value where it sends one, the stored
+  // value where it does not.
+  const after = (platform) => {
+    const from = incoming[platform] || {};
+    const have = stored[platform];
+    const pick = (v, was) => (typeof v === 'string' ? v.trim() : String(was || ''));
+    return [
+      pick(from.appId, have.appId),
+      ...PLACEMENTS.map((slot) => pick(from.units?.[slot], have.units?.[slot])),
+      ...INTERSTITIALS.map((slot) => pick(from.interstitialUnits?.[slot], have.interstitialUnits?.[slot])),
+    ].filter(Boolean);
+  };
+  for (const platform of ['ios', 'android']) {
+    const from = incoming[platform];
+    if (!from) continue;
+    const have = stored[platform];
+    const app = APP_NAME[platform];
+    const other = platform === 'ios' ? 'android' : 'ios';
+    const theirs = after(other);
+    const fields = [
+      ['app', `${app} app id`, from.appId, have.appId],
+      ...PLACEMENTS.map((slot) => ['unit', `${app} ${slot} unit`, from.units?.[slot], have.units?.[slot]]),
+      ...INTERSTITIALS.map((slot) => ['unit', `${app} ${slot} interstitial unit`, from.interstitialUnits?.[slot], have.interstitialUnits?.[slot]]),
+    ];
+    for (const [kind, label, raw, was] of fields) {
+      if (typeof raw !== 'string') continue;
+      const id = raw.trim();
+      // Blank is how a field is cleared, and unchanged is not this patch's doing.
+      if (!id || id === String(was || '')) continue;
+      const looksApp = id.startsWith('ca-app-pub-') && id.includes('~') && !id.includes('/');
+      const looksUnit = id.startsWith('ca-app-pub-') && id.includes('/') && !id.includes('~');
+      if (kind === 'app' && !looksApp) {
+        return looksUnit
+          ? `${label}: that is an ad unit id (it has a /). The app id is the one with a ~ in it — ca-app-pub-…~…`
+          : `${label} does not look like an AdMob app id — it should read ca-app-pub-…~…`;
+      }
+      if (kind === 'unit' && !looksUnit) {
+        return looksApp
+          ? `${label}: that is an app id (it has a ~). A unit id has a / in it — ca-app-pub-…/…`
+          : `${label} does not look like an AdMob unit id — it should read ca-app-pub-…/…`;
+      }
+      if (theirs.includes(id)) {
+        return `${label}: that is the ${APP_NAME[other]} app's id. The ${app} app is a separate app in AdMob with ids of its own — ` +
+          (platform === 'android'
+            ? 'add it there (Apps → Add app → Android) and paste the ids it gives you.'
+            : 'paste the ids from the iPhone app in the AdMob console.');
+      }
+    }
+  }
+  return '';
+}
 
 // ------------------------------------------------------------------- admin --
 // Same key as the rest of the desk, same discipline: reads carry it in the
@@ -1406,6 +1654,11 @@ adsRouter.post('/admin', (req, res) => {
   if (!guard(req, res, 'body')) return;
   const body = req.body || {};
   const changes = [];
+
+  // Before anything moves: a patch with a wrong-kind id in it is refused
+  // whole, rather than half-applied with the switches saved and the ids not.
+  const idProblem = admobIdProblem(body.admob);
+  if (idProblem) return res.status(400).json({ error: idProblem });
 
   if (typeof body.enabled === 'boolean' && body.enabled !== settings.enabled) {
     settings.enabled = body.enabled;
@@ -1493,31 +1746,23 @@ adsRouter.post('/admin', (req, res) => {
     if (v !== settings.caps[key]) { settings.caps[key] = v; changes.push(`${key}=${v}`); }
   }
 
-  // Account ids: trimmed, length-capped, and otherwise taken as typed. They
-  // are Google's format to validate, not ours — a server that decided it knew
-  // what an ad unit id looks like would be the thing standing between the
-  // owner and his revenue the day the format changes.
+  // Account ids: trimmed, length-capped, checked for which kind of id they
+  // are (see `admobIdProblem`, which has already run), and otherwise taken as
+  // typed. The rest of the format is Google's to validate, not ours — a
+  // server that decided it knew what an ad unit id looks like digit by digit
+  // would be the thing standing between the owner and his revenue the day the
+  // format changes.
   if (body.admob && typeof body.admob === 'object') {
-    if (typeof body.admob.appId === 'string' && body.admob.appId.trim() !== settings.admob.appId) {
-      settings.admob.appId = body.admob.appId.trim().slice(0, 120);
-      changes.push('admob app id');
-    }
-    for (const slot of PLACEMENTS) {
-      const unit = body.admob.units?.[slot];
-      if (typeof unit !== 'string' || unit.trim() === settings.admob.units[slot]) continue;
-      settings.admob.units[slot] = unit.trim().slice(0, 120);
-      changes.push(`admob ${slot} unit`);
-    }
-    settings.admob.interstitialUnits ??= {};
-    for (const slot of INTERSTITIALS) {
-      const unit = body.admob.interstitialUnits?.[slot];
-      if (typeof unit !== 'string' || unit.trim() === settings.admob.interstitialUnits[slot]) continue;
-      settings.admob.interstitialUnits[slot] = unit.trim().slice(0, 120);
-      changes.push(`admob ${slot} interstitial unit`);
-    }
+    // The iPhone's ids, at the top level where they have always been, and
+    // the change log's words for them unchanged with them.
+    applyAdmobIds(body.admob, settings.admob, 'admob', changes);
     if (typeof body.admob.adNetworkId === 'string' && body.admob.adNetworkId.trim() !== settings.admob.adNetworkId) {
       settings.admob.adNetworkId = body.admob.adNetworkId.trim().slice(0, 64);
       changes.push('admob ad network pin');
+    }
+    if (body.admob.android && typeof body.admob.android === 'object') {
+      settings.admob.android ??= defaults().admob.android;
+      applyAdmobIds(body.admob.android, settings.admob.android, 'admob android', changes);
     }
   }
 
@@ -1576,9 +1821,15 @@ export function adsTxt() {
   return publisherOf(settings.h5.clientId) && SELLER_LINE(publisherOf(settings.h5.clientId));
 }
 
-/** The app's, vouching for the AdMob account. Same publisher, different file. */
+/**
+ * The apps', vouching for the AdMob account. Same publisher, different file —
+ * and one file for both apps, since the iPhone's and the Android's ids are two
+ * apps under the one account. Either app id names the publisher; the
+ * iPhone's is asked first only because it was there first.
+ */
 export function appAdsTxt() {
-  return publisherOf(settings.admob.appId) && SELLER_LINE(publisherOf(settings.admob.appId));
+  const pub = publisherOf(settings.admob.appId) || publisherOf(settings.admob.android?.appId);
+  return pub && SELLER_LINE(pub);
 }
 
 load();

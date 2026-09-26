@@ -564,7 +564,7 @@ export const adminPageHTML = `<!doctype html>
       </div>
       <div class="card">
         <h2>Who is serving</h2>
-        <p class="hint">The house shows the game's own full-screen promo and needs nothing configured. Google is one choice serving two networks — AdMob in the app, H5 in the browser — and each falls back to the house on its own until its ids are pasted in below.</p>
+        <p class="hint">The house shows the game's own full-screen promo and needs nothing configured. Google is one choice serving every surface — AdMob in the iPhone and Android apps, H5 in the browser — and each falls back to the house on its own until its ids are pasted in below. The two apps are two separate apps in AdMob, each with ids of its own.</p>
         <div id="adprovider"></div>
         <div style="margin-top:14px"><button class="btn sm" id="ad-mob-save">Save ids</button></div>
         <div class="msg" id="adprovmsg"></div>
@@ -1221,7 +1221,8 @@ export const adminPageHTML = `<!doctype html>
       } else if (!ads.provider.ok) {
         html += '<div class="alert amber"><b>Rewarded ads are live on the house adapter.</b> ' +
           esc(ads.provider.line) + ' Coins are being paid for house promos, not for anything an advertiser has bought.</div>';
-      } else if (ads.ssv && ads.provider.per && ads.provider.per.ios === 'admob' && !ads.ssv.lastOkAt && ads.ssv.rejected) {
+      } else if (ads.ssv && ads.provider.per && (ads.provider.per.ios === 'admob' || ads.provider.per.android === 'admob') &&
+          !ads.ssv.lastOkAt && ads.ssv.rejected) {
         html += '<div class="alert amber"><b>Every AdMob verification callback so far has been turned away.</b> ' +
           esc(ads.ssv.lastRejectReason || '') + ' — no reward on the app can be paid until one lands. See Ads → Verification.</div>';
       }
@@ -2008,6 +2009,7 @@ export const adminPageHTML = `<!doctype html>
     'ad-pre-every',
     'ad-gap', 'ad-ceiling', 'ad-ttl', 'ad-window', 'ad-ssvwait',
     'ad-mob-app', 'ad-mob-dw', 'ad-mob-fc', 'ad-mob-net', 'ad-mob-pre',
+    'ad-and-app', 'ad-and-dw', 'ad-and-fc', 'ad-and-pre',
     'ad-h5-client', 'ad-h5-dw', 'ad-h5-fc'];
 
   // What each kind of client is told, in the words the desk should use for it.
@@ -2054,7 +2056,8 @@ export const adminPageHTML = `<!doctype html>
     var ssv = a.ssv || {};
     var pv = a.provider || {};
     var nets = pv.networks || {};
-    var mobLive = (pv.per || {}).ios === 'admob';
+    var per = pv.per || {};
+    var byApp = ssv.byPlatform || {};
 
     var html = '<div class="mini-forms" style="gap:26px;margin-bottom:14px">' +
       '<div><div class="dim" style="font-size:11px;letter-spacing:.06em;text-transform:uppercase">callback URL</div>' +
@@ -2069,15 +2072,22 @@ export const adminPageHTML = `<!doctype html>
       '</div></div>' +
       '</div>';
 
+    // One row per AdMob app. The SSV URL is pasted onto each app's units by
+    // hand, months apart, so "is Google calling" is asked of each app on its
+    // own — the iPhone's traffic must not be what makes Android look fine.
     var rows = '<tr><th>network</th><th>state</th><th>last word from it</th></tr>';
-    rows += '<tr><td>AdMob <span class="dim">app</span></td>' +
-      '<td>' + (nets.admob && nets.admob.ready
-        ? (mobLive ? '<span class="pill ok">serving</span>' : '<span class="pill dim">configured, not chosen</span>')
-        : '<span class="pill warn">not configured</span>') + '</td>' +
-      '<td>' + (ssv.lastOkAt
-        ? 'confirmed ' + fmtWhen(ssv.lastOkAt) + ' <span class="dim">— unit ' + esc(ssv.lastOkUnit || '?') +
-          ', network ' + esc(ssv.lastOkNetwork || '?') + '</span>'
-        : '<span class="dim">no callback has ever reached this server</span>') + '</td></tr>';
+    [{ id: 'ios', net: 'admob', label: 'iOS' }, { id: 'android', net: 'admobAndroid', label: 'Android' }].forEach(function (app) {
+      var n = nets[app.net] || {};
+      var heard = byApp[app.id] || {};
+      rows += '<tr><td>AdMob <span class="dim">' + esc(app.label) + ' app</span></td>' +
+        '<td>' + (n.ready
+          ? (per[app.id] === 'admob' ? '<span class="pill ok">serving</span>' : '<span class="pill dim">configured, not chosen</span>')
+          : '<span class="pill warn">not configured</span>') + '</td>' +
+        '<td>' + (heard.lastOkAt
+          ? 'confirmed ' + fmtWhen(heard.lastOkAt) + ' <span class="dim">— ' + fmtNum(heard.ok) + ' since boot, last unit ' +
+            esc(heard.lastOkUnit || '?') + '</span>'
+          : '<span class="dim">no callback for this app has reached this server since boot</span>') + '</td></tr>';
+    });
     rows += '<tr><td>H5 <span class="dim">browser</span></td>' +
       '<td>' + (nets.h5 && nets.h5.ready
         ? ((pv.per || {}).web === 'h5' ? '<span class="pill ok">serving</span>' : '<span class="pill dim">configured, not chosen</span>')
@@ -2088,12 +2098,14 @@ export const adminPageHTML = `<!doctype html>
     if (ssv.lastRejectAt) {
       html += '<div class="alert amber" style="margin-top:12px"><b>Last rejected callback:</b> ' +
         esc(ssv.lastRejectReason || 'unknown reason') +
-        ' <span class="dim">— ad unit ' + esc(ssv.lastRejectUnit || 'not named') + ', ' + fmtWhen(ssv.lastRejectAt) + '.</span>' +
+        ' <span class="dim">— ' + (ssv.lastRejectPlatform ? esc(ssv.lastRejectPlatform === 'android' ? 'Android' : 'iOS') + ' app, ' : '') +
+        'ad unit ' + esc(ssv.lastRejectUnit || 'not named') + ', ' + fmtWhen(ssv.lastRejectAt) + '.</span>' +
         ' Every rejection is on the server log with its reason and unit.</div>';
     }
-    if (mobLive && !s.testMode && !ssv.lastOkAt) {
-      html += '<div class="caption" style="margin-top:10px">AdMob is serving and nothing has called yet. Until a callback lands, every claim on the app answers <span class="mono">402</span> — check the SSV URL on <b>each</b> rewarded unit in the console.</div>';
-    }
+    [{ id: 'ios', label: 'iOS' }, { id: 'android', label: 'Android' }].forEach(function (app) {
+      if (per[app.id] !== 'admob' || s.testMode || (byApp[app.id] || {}).lastOkAt) return;
+      html += '<div class="caption" style="margin-top:10px">AdMob is serving the ' + app.label + ' app and no callback for it has arrived yet. Until one lands, every claim on that app answers <span class="mono">402</span> — check the SSV URL on <b>each</b> of the ' + app.label + ' app\\'s rewarded units in the console.</div>';
+    });
     if (ssv.keysError) {
       html += '<div class="caption" style="margin-top:8px">Last key fetch failed: ' + esc(ssv.keysError) + '. Callbacks are refused rather than trusted while the set cannot be read.</div>';
     }
@@ -2115,18 +2127,22 @@ export const adminPageHTML = `<!doctype html>
     var inters = s.interstitials || {};
     var preGame = inters.preGame || {};
     var interUnits = (s.admob && s.admob.interstitialUnits) || {};
+    var droid = (s.admob && s.admob.android) || {};
+    var droidUnits = droid.units || {};
+    var droidInter = droid.interstitialUnits || {};
     var dw = slots.doubleWin || {};
     var fc = slots.freeCoins || {};
 
-    // Who is serving is now two answers, because the app and the browser buy
-    // from different Google desks and one of them can be ready before the
-    // other. The tile says both rather than picking a winner.
+    // Who is serving is three answers, because the two apps and the browser
+    // are three different Google set-ups and any one of them can be ready
+    // before the others. The tile says all three rather than picking a winner.
     var per = pv.per || {};
-    var serving = (AD_NET_NAME[per.ios] || 'House') + ' / ' + (AD_NET_NAME[per.web] || 'House');
+    var serving = (AD_NET_NAME[per.ios] || 'House') + ' / ' + (AD_NET_NAME[per.android] || 'House') +
+      ' / ' + (AD_NET_NAME[per.web] || 'House');
 
     swap('adtiles',
       tileHtml(s.enabled ? 'ADS ON' : 'ADS OFF', 'rewarded ads', s.enabled ? 'the watch-an-ad buttons are showing' : 'every ad button is hidden in the app and the web') +
-      tileHtml(serving, 'serving', s.testMode ? 'TEST ids — no revenue' : 'app / browser') +
+      tileHtml(serving, 'serving', s.testMode ? 'TEST ids — no revenue' : 'iOS / Android / browser') +
       tileHtml(fmtNum(today.views), 'views today', '') +
       tileHtml(fmtNum(today.coins), 'coins paid today', '') +
       tileHtml(fmtNum(today.players), 'players reached', 'distinct wallets') +
@@ -2159,7 +2175,7 @@ export const adminPageHTML = `<!doctype html>
     sw += '<div><div class="field"><label>Pre-game break</label>' +
       adSeg('interstitial:preGame', preGame.enabled ? '1' : '0',
         [{ val: '0', text: 'Off' }, { val: '1', text: 'On' }]) +
-      '</div><div class="caption" style="max-width:260px">A full-screen ad while a quick match is being found. Pays the player nothing — it is the only ad here that does not. iPhone only, and only with an interstitial unit id below.</div></div>';
+      '</div><div class="caption" style="max-width:260px">A full-screen ad while a quick match is being found. Pays the player nothing — it is the only ad here that does not. In each app only once that app has an interstitial unit id below.</div></div>';
     sw += '</div>';
     if (!s.enabled) {
       sw += '<div class="caption" style="margin-top:12px">Nothing pays out while ads are off: both the offer and the reward endpoint refuse, and <span class="mono">/api/ads/config</span> reports <span class="mono">enabled: false</span> — so every client, including one already installed on a phone, draws no ad button until you switch it back on. It takes effect on the next screen a player opens; no redeploy, no app update.</div>';
@@ -2253,20 +2269,43 @@ export const adminPageHTML = `<!doctype html>
       (pv.ok ? '<span class="pill ok">ready</span>' : '<span class="pill warn">falling back</span>') +
       ' <span class="dim">' + esc(pv.line || '') + '</span></div>' +
       '<hr class="divider">' +
+      // The two AdMob apps side by side, each under its own name. They are
+      // one form because they are one decision, and two columns because the
+      // mistake this layout exists to prevent is pasting one app's ids into
+      // the other's fields — the server refuses that too, but it is better
+      // not made.
+      '<div class="mini-forms" style="gap:26px;align-items:flex-start">' +
+      '<div style="flex:1;min-width:260px"><h3>iOS — the iPhone app</h3>' +
       netLine(nets.admob) +
       '<div class="mini-forms" style="gap:16px">' +
-      adText('ad-mob-app', 'AdMob app id', mob.appId, 'ca-app-pub-…~…', '') +
+      adText('ad-mob-app', 'iOS AdMob app id', mob.appId, 'ca-app-pub-…~…', '') +
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
-      adText('ad-mob-dw', 'Double-win rewarded unit', units.doubleWin, 'ca-app-pub-…/…', '') +
-      adText('ad-mob-fc', 'Free-coins rewarded unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      adText('ad-mob-dw', 'iOS double-win rewarded unit', units.doubleWin, 'ca-app-pub-…/…', '') +
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
-      adText('ad-mob-pre', 'Pre-game INTERSTITIAL unit', interUnits.preGame, 'ca-app-pub-…/…',
+      adText('ad-mob-fc', 'iOS free-coins rewarded unit', units.freeCoins, 'ca-app-pub-…/…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-mob-pre', 'iOS pre-game INTERSTITIAL unit', interUnits.preGame, 'ca-app-pub-…/…',
         'A different kind of unit from the two above — make it as Interstitial in AdMob, not Rewarded.') +
+      '</div></div>' +
+      '<div style="flex:1;min-width:260px"><h3>Android — the Android app</h3>' +
+      netLine(nets.admobAndroid) +
+      '<div class="mini-forms" style="gap:16px">' +
+      adText('ad-and-app', 'Android AdMob app id', droid.appId, 'ca-app-pub-…~…',
+        'From the Android app in AdMob (Apps → Add app → Android), not the iPhone\\'s. The Android build carries this same id; this copy decides whether Android is sent to AdMob at all.') +
       '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
-      adText('ad-mob-net', 'Pin ad_network (optional)', mob.adNetworkId, '5450213213286189855',
+      adText('ad-and-dw', 'Android double-win rewarded unit', droidUnits.doubleWin, 'ca-app-pub-…/…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-and-fc', 'Android free-coins rewarded unit', droidUnits.freeCoins, 'ca-app-pub-…/…', '') +
+      '</div><div class="mini-forms" style="gap:16px;margin-top:8px">' +
+      adText('ad-and-pre', 'Android pre-game INTERSTITIAL unit', droidInter.preGame, 'ca-app-pub-…/…',
+        'Interstitial, not Rewarded — made under the Android app.') +
+      '</div></div>' +
+      '</div>' +
+      '<div class="mini-forms" style="gap:16px;margin-top:12px">' +
+      adText('ad-mob-net', 'Pin ad_network (optional, both apps)', mob.adNetworkId, '5450213213286189855',
         'Leave blank unless you have seen what arrives. Under mediation the callback names whoever filled the slot, and pinning the wrong one rejects your own revenue.') +
       '</div>' +
-      '<div class="caption" style="margin-top:10px">On AdMob a reward is paid only once the server-side verification callback from Google reaches <span class="mono">/api/ads/ssv</span> and its signature checks out. Paste that path, on this host, into the SSV URL field of <b>each</b> rewarded ad unit in the AdMob console.</div>' +
+      '<div class="caption" style="margin-top:10px">On AdMob a reward is paid only once the server-side verification callback from Google reaches <span class="mono">/api/ads/ssv</span> and its signature checks out. Paste that path, on this host, into the SSV URL field of <b>each</b> rewarded ad unit in the AdMob console — the iPhone app\\'s two <b>and</b> the Android app\\'s two. Until an app has all of its ids here it shows house ads; nothing breaks while it waits.</div>' +
       '<hr class="divider">' +
       netLine(nets.h5) +
       '<div class="mini-forms" style="gap:16px">' +
@@ -3143,6 +3182,11 @@ export const adminPageHTML = `<!doctype html>
         units: { doubleWin: adFieldText('ad-mob-dw'), freeCoins: adFieldText('ad-mob-fc') },
         interstitialUnits: { preGame: adFieldText('ad-mob-pre') },
         adNetworkId: adFieldText('ad-mob-net'),
+        android: {
+          appId: adFieldText('ad-and-app'),
+          units: { doubleWin: adFieldText('ad-and-dw'), freeCoins: adFieldText('ad-and-fc') },
+          interstitialUnits: { preGame: adFieldText('ad-and-pre') },
+        },
       },
       h5: {
         clientId: adFieldText('ad-h5-client'),

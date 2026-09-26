@@ -25,7 +25,10 @@ function table(mapId = 'classic') {
   room.maybeBot = () => {};
   room.armTurnTimer = () => {};
   room.map = getMap(mapId);
-  room.settings = { ...room.settings, mapId };
+  // Seated in order: every rule below is written from Ana's turn, and a
+  // shuffled start handed Bo the dice half the time, which refused Ana's roll
+  // and left the journey check reading legs that were never walked.
+  room.settings = { ...room.settings, mapId, randomizeOrder: false };
   room.addPlayer({ id: 'a', name: 'Ana' });
   room.addPlayer({ id: 'b', name: 'Bo' });
   room.hostId = 'a';
