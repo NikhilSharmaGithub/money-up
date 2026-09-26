@@ -449,23 +449,50 @@ final class TurnSpotlight: ObservableObject {
 
 /// Walks each token tile-by-tile when its player moved by dice — with a tick
 /// per step and a soft thump on arrival — and glides it when teleported.
+///
+/// A scripted walk is always one of the store's acts, played on the act's own
+/// clock: the same start time and lead the store used to work out when the
+/// act's money lands, so the thump and the ka-ching agree to the frame. A leg
+/// the store opened no act for — the first state after a reconnect — is a
+/// position, and the piece is simply put where it stands.
 @MainActor
 final class TokenWalker: ObservableObject {
     @Published var shown: [String: Int] = [:]
     /// Lit at leg boundaries only, never mid-walk.
     weak var spotlight: TurnSpotlight?
+    /// Where the acts come from, and what counts as a position.
+    weak var store: GameStore?
+    /// Legacy single-move walks, one per piece.
     private var tasks: [String: Task<Void, Never>] = [:]
+    /// Scripted acts, keyed by the act rather than the piece: a doubles
+    /// re-roll's act waits behind the walk still going instead of cutting it.
+    private var acts: [Double: (pid: String, task: Task<Void, Never>)] = [:]
     private var targets: [String: Int] = [:]
     private var lastMoveAt: Double = 0
 
     private var seenActionAt: Double = 0
 
-    func reconcile(_ state: GameState) {
-        let alive = state.players.filter { !$0.isBankrupt }
+    /// `alive` is the table as presented: a player whose bankruptcy has not
+    /// landed yet is still in it, so their piece finishes its walk to the
+    /// square that broke them and only leaves when the bust is shown.
+    func reconcile(_ state: GameState, alive: [PlayerState]) {
         for gone in shown.keys where !alive.contains(where: { $0.id == gone }) {
             shown.removeValue(forKey: gone)
             spotlight?.at.removeValue(forKey: gone)
             tasks[gone]?.cancel()
+            cutActs(of: gone)
+        }
+
+        // A position — the first state of a table or after a reconnect — puts
+        // every piece where it stands: no walk, no thump.
+        let position = state.version == store?.positionVersion
+        if position {
+            // Whatever was mid-walk belonged to acts the store has just let go.
+            tasks.values.forEach { $0.cancel() }
+            acts.values.forEach { $0.task.cancel() }
+            tasks = [:]
+            acts = [:]
+            targets = [:]
         }
 
         // A scripted action plays leg by leg; the legacy single-move path
@@ -474,26 +501,36 @@ final class TokenWalker: ObservableObject {
         var scripted: String? = nil
         if let newest = legs.last?.at, newest != seenActionAt, let pid = legs.first?.playerId {
             seenActionAt = newest
-            if shown[pid] != nil { playLegs(legs, state: state); scripted = pid }
+            if shown[pid] != nil, !position, let act = store?.journey(for: newest) {
+                playLegs(legs, state: state, act: act)
+                scripted = pid
+            }
         }
 
         let move = state.lastMove
         let fresh = move != nil && move!.at != lastMoveAt
         if fresh { lastMoveAt = move!.at }
+        // Only a server that ships no script walks off lastMove. On one that
+        // does, every walk is an act above; a fresh move without an act is a
+        // position and snaps.
+        let legacyWalk = fresh && state.moves == nil && !position
 
         for p in alive where p.id != scripted {
+            // An act on stage owns its piece until it lands.
+            if !position, walkingAct(p.id) { continue }
             let current = shown[p.id]
             guard current != p.pos else { targets.removeValue(forKey: p.id); continue }
             // A walk already heading to this exact tile keeps going — state
             // pushes mid-walk (rent, cards) must not snap the token forward.
             if targets[p.id] == p.pos, tasks[p.id] != nil { continue }
             tasks[p.id]?.cancel()
+            cutActs(of: p.id)
 
-            // First sight of a player, or a teleport: glide straight there.
-            guard let from = current, fresh, let move, move.playerId == p.id, move.steps != 0 else {
+            // First sight of a player, a teleport or a position: put it there.
+            guard let from = current, legacyWalk, let move, move.playerId == p.id, move.steps != 0 else {
                 shown[p.id] = p.pos
                 spotlight?.at[p.id] = p.pos
-                if current != nil { SoundKit.shared.land() }
+                if current != nil, !position { SoundKit.shared.land() }
                 continue
             }
 
@@ -521,18 +558,37 @@ final class TokenWalker: ObservableObject {
         }
     }
 
-    /// Walks one action's legs on their cues: dice lead-in first, the card's
-    /// leg only after the popup has had its read, teleport legs as one glide.
-    private func playLegs(_ legs: [MoveLeg], state: GameState) {
+    private func walkingAct(_ pid: String) -> Bool {
+        acts.values.contains { $0.pid == pid }
+    }
+
+    private func cutActs(of pid: String) {
+        for (key, act) in acts where act.pid == pid {
+            act.task.cancel()
+            acts.removeValue(forKey: key)
+        }
+    }
+
+    /// Walks one act's legs on its cues: the lead-in first, the card's leg
+    /// only after the popup has had its read, teleport legs as one glide.
+    /// Timed from the act's own start — for a queued act that is the moment
+    /// the walk ahead of it lands, so it sleeps until then.
+    private func playLegs(_ legs: [MoveLeg], state: GameState, act: GameStore.Journey) {
         guard let pid = legs.first?.playerId, let finalTo = legs.last?.to else { return }
-        tasks[pid]?.cancel()
+        if !act.queued {
+            // Nothing to wait behind: whatever this piece was still doing is
+            // superseded (the store has already shown what that act held).
+            tasks[pid]?.cancel()
+            tasks.removeValue(forKey: pid)
+            cutActs(of: pid)
+        }
         targets[pid] = finalTo
         let size = state.map.size
-        let hasCard = state.lastCard.map { abs($0.at - (legs.last?.at ?? 0)) < 2500 } ?? false
-        let (starts, _) = Choreography.timeline(legs, boardSize: size, hasCard: hasCard)
-        let t0 = Date()
+        let (starts, _) = Choreography.timeline(legs, boardSize: size, hasCard: act.hasCard, lead: act.lead)
+        let t0 = act.startAt
+        let key = act.key
 
-        tasks[pid] = Task { [weak self] in
+        let task = Task { [weak self] in
             for (i, leg) in legs.enumerated() {
                 let wait = starts[i] - Date().timeIntervalSince(t0)
                 if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
@@ -560,9 +616,11 @@ final class TokenWalker: ObservableObject {
                 // the card orders one, has not happened yet.
                 self?.spotlight?.at[pid] = leg.to
             }
-            self?.tasks.removeValue(forKey: pid)
-            self?.targets.removeValue(forKey: pid)
+            guard let self else { return }
+            self.acts.removeValue(forKey: key)
+            if !self.walkingAct(pid) { self.targets.removeValue(forKey: pid) }
         }
+        acts[key] = (pid, task)
     }
 }
 
@@ -574,18 +632,26 @@ struct TokenLayer: View {
 
     var body: some View {
         if let state = store.state, state.isPlaying || state.isEnded {
-            let alive = state.players.filter { !$0.isBankrupt }
+            // As presented: a piece whose bankruptcy is still held finishes
+            // its walk, and fades off the board when the bust lands.
+            let alive = store.shownPlayers.filter { !$0.isBankrupt }
             ZStack(alignment: .topLeading) {
                 ForEach(alive) { p in
                     PlacedToken(player: p, alive: alive, walker: walker, geom: geom,
                                 isTurn: state.turn?.playerId == p.id,
                                 isMine: store.isLocal(p.id))
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
             }
-            .onChange(of: state.lastMove?.at) { walker.reconcile(state) }
-            .onChange(of: state.moves?.last?.at) { walker.reconcile(state) }
-            .onChange(of: state.version) { walker.reconcile(state) }
-            .onAppear { walker.spotlight = spotlight; walker.reconcile(state) }
+            .animation(.easeOut(duration: 0.3), value: alive.map(\.id))
+            .onChange(of: state.lastMove?.at) { walker.reconcile(state, alive: alive) }
+            .onChange(of: state.moves?.last?.at) { walker.reconcile(state, alive: alive) }
+            .onChange(of: state.version) { walker.reconcile(state, alive: alive) }
+            .onAppear {
+                walker.spotlight = spotlight
+                walker.store = store
+                walker.reconcile(state, alive: alive)
+            }
         }
     }
 }

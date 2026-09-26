@@ -43,8 +43,12 @@ object SoundKit {
 
     var enabled: Boolean = true
 
-    fun attach(@Suppress("UNUSED_PARAMETER") context: Context, on: Boolean) {
+    /** Kept for the one question only [launch] asks: is the ringer on? */
+    private var audio: AudioManager? = null
+
+    fun attach(context: Context, on: Boolean) {
         enabled = on
+        audio = (context.applicationContext ?: context).getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     }
 
     /**
@@ -166,6 +170,92 @@ object SoundKit {
 
     private fun jitter(f: Double, spread: Double = 0.02) = f * (1 + Random.nextDouble(-spread, spread))
     private fun slop(t: Double) = maxOf(0.0, t + Random.nextDouble(-0.012, 0.012))
+    private fun rnd(a: Double, b: Double) = Random.nextDouble(a, b)
+
+    /**
+     * One buffer that many voices are summed into, for the flourishes.
+     *
+     * [tone] and [noise] above give every voice a coroutine and an AudioTrack
+     * of its own, which is right for a clack and wrong for a fanfare: fifty
+     * voices in two seconds is fifty tracks, past the thirty-two Android 7's
+     * mixer will run at once, and every `delay` on the way adds its own few
+     * milliseconds of drift to a chord that has to land together. So the
+     * long recipes are mixed down here first — the same maths, voice for
+     * voice, added into one float buffer at each voice's own offset — and
+     * played as one track.
+     */
+    private class Mix(seconds: Double) {
+        val data = FloatArray((seconds * RATE).toInt().coerceAtLeast(1))
+
+        fun tone(
+            freq: Double,
+            to: Double? = null,
+            dur: Double = 0.16,
+            wave: Wave = Wave.SINE,
+            vol: Double = 0.22,
+            after: Double = 0.0,
+        ) {
+            val frames = (dur * RATE).toInt()
+            if (frames <= 0) return
+            val start = (after * RATE).toInt()
+            var phase = 0.0
+            for (i in 0 until frames) {
+                val k = start + i
+                if (k >= data.size) break
+                val t = i.toDouble() / frames
+                val f = if (to != null) freq * (to / freq).pow(t) else freq
+                phase += 2 * PI * f / RATE
+                val raw = when (wave) {
+                    Wave.SINE -> sin(phase)
+                    Wave.TRIANGLE -> 2 / PI * asin(sin(phase))
+                    Wave.SQUARE -> if (sin(phase) > 0) 1.0 else -1.0
+                }
+                val env = minOf(t / 0.03, 1.0) * (1 - t).pow(1.6)
+                data[k] += (raw * env * vol).toFloat()
+            }
+        }
+
+        fun noise(dur: Double = 0.2, vol: Double = 0.12, bright: Double = 0.5, after: Double = 0.0) {
+            val frames = (dur * RATE).toInt()
+            if (frames <= 0) return
+            val start = (after * RATE).toInt()
+            var last = 0.0
+            for (i in 0 until frames) {
+                val k = start + i
+                if (k >= data.size) break
+                val t = i.toDouble() / frames
+                val white = Random.nextDouble(-1.0, 1.0)
+                last += (white - last) * (0.08 + bright * 0.6)
+                data[k] += (last * (1 - t).pow(2.0) * vol * 2).toFloat()
+            }
+        }
+    }
+
+    /**
+     * Mixes a recipe down and plays it as one track. Converted with the same
+     * clamp every other sound uses; no voice in a recipe is louder than 0.13,
+     * so at the worst instant the sum sits far under it and nothing clips.
+     */
+    private fun recipe(seconds: Double, build: Mix.() -> Unit) {
+        if (!enabled) return
+        scope.launch {
+            val mix = Mix(seconds).apply(build)
+            val out = ShortArray(mix.data.size) { i ->
+                (mix.data[i] * Short.MAX_VALUE).toInt().coerceIn(-32768, 32767).toShort()
+            }
+            play(out)
+        }
+    }
+
+    /**
+     * One coin: a tick of bright metal, then the ring — with a partial at
+     * 2.41 times the note, which is what makes it a coin and not a bell.
+     */
+    private fun Mix.coin(at: Double, f: Double, v: Double) {
+        noise(dur = 0.014, vol = v * 0.6, bright = 0.95, after = at)
+        tone(jitter(f, 0.01), dur = 0.11, wave = Wave.SINE, vol = v, after = at)
+        tone(jitter(f * 2.41, 0.01), dur = 0.07, wave = Wave.SINE, vol = v * 0.45, after = at + 0.003)
+    }
 
     // ── the effects ────────────────────────────────────────────────────────
 
@@ -345,9 +435,83 @@ object SoundKit {
         }
     }
 
-    fun bankrupt() {
-        tone(jitter(400.0), to = 90.0, dur = 0.7, wave = Wave.TRIANGLE, vol = 0.15f)
-        noise(dur = 0.4, vol = 0.06f, bright = 0.15, after = 0.15)
+    /**
+     * The seat on THIS device just went bankrupt: comic, not cruel. Three
+     * sad-trombone steps down, each bending a semitone flat as it goes, then
+     * the long sag — a detuned twin under it, and the beat between the two is
+     * the "wah-wah" wobble — onto a soft thud, and the last three coins
+     * rolling away. About 2.1s. Pair with Haptics.warn() at the start.
+     */
+    fun bankruptFall() = recipe(2.25) {
+        for ((t, f) in listOf(0.0 to 392.0, 0.29 to 370.0, 0.58 to 349.2)) {
+            tone(jitter(f, 0.005), to = f * 0.95, dur = 0.26, wave = Wave.TRIANGLE, vol = 0.12, after = t)
+            tone(f / 2, to = f * 0.475, dur = 0.26, wave = Wave.SINE, vol = 0.05, after = t)
+        }
+        tone(329.6, to = 207.7, dur = 0.9, wave = Wave.TRIANGLE, vol = 0.13, after = 0.87)
+        tone(333.4, to = 210.0, dur = 0.9, wave = Wave.TRIANGLE, vol = 0.05, after = 0.87)
+        tone(164.8, to = 103.8, dur = 0.9, wave = Wave.SINE, vol = 0.06, after = 0.87)
+        // The floor.
+        tone(90.0, to = 48.0, dur = 0.32, wave = Wave.SINE, vol = 0.13, after = 1.62)
+        noise(dur = 0.28, vol = 0.07, bright = 0.15, after = 1.62)
+        // The last money rolls away.
+        coin(1.70, 1760.0, 0.035)
+        coin(1.86, 1480.0, 0.028)
+        coin(2.06, 1250.0, 0.02)
+    }
+
+    /**
+     * A seat on THIS device is the one the bust paid: a cash register in a
+     * triumphant register — the keys, the drawer, the bell, a rising sting
+     * into a bright chord, and the takings dropping into the till. About
+     * 0.95s. Pair with Haptics.turn() at 0.12s, on the bell.
+     */
+    fun bankruptKaching() = recipe(1.0) {
+        // Keys.
+        noise(dur = 0.03, vol = 0.12, bright = 0.85, after = 0.0)
+        tone(jitter(210.0), to = 150.0, dur = 0.05, wave = Wave.TRIANGLE, vol = 0.06, after = 0.002)
+        // Drawer.
+        noise(dur = 0.05, vol = 0.10, bright = 0.55, after = 0.07)
+        tone(jitter(140.0), to = 95.0, dur = 0.08, wave = Wave.TRIANGLE, vol = 0.07, after = 0.075)
+        // Bell.
+        tone(2093.0, dur = 0.7, wave = Wave.SINE, vol = 0.10, after = 0.12)
+        tone(2637.0, dur = 0.5, wave = Wave.SINE, vol = 0.05, after = 0.121)
+        tone(4186.0, dur = 0.28, wave = Wave.SINE, vol = 0.025, after = 0.122)
+        tone(1046.5, dur = 0.55, wave = Wave.TRIANGLE, vol = 0.045, after = 0.12)
+        // Sting, then the chord.
+        tone(jitter(783.99, 0.004), to = 1046.5, dur = 0.14, wave = Wave.TRIANGLE, vol = 0.09, after = 0.22)
+        tone(1046.5, dur = 0.45, wave = Wave.TRIANGLE, vol = 0.08, after = 0.34)
+        tone(1318.5, dur = 0.45, wave = Wave.TRIANGLE, vol = 0.065, after = 0.35)
+        tone(1568.0, dur = 0.5, wave = Wave.SINE, vol = 0.045, after = 0.36)
+        // Into the till.
+        for ((t, v) in listOf(0.40 to 0.05, 0.46 to 0.047, 0.51 to 0.044, 0.58 to 0.04, 0.67 to 0.035, 0.79 to 0.03)) {
+            coin(t, rnd(2000.0, 2900.0), v)
+        }
+    }
+
+    /**
+     * Somebody at the table went bankrupt and it was nobody on this device,
+     * on either side of it: a weight hitting the floor and a crash of coins
+     * scattering across it, the gaps widening as they go, and one last coin
+     * spinning down flat. About 1.2s, and no knock — it is not yours.
+     */
+    fun bankruptCrash() = recipe(1.25) {
+        // Weight.
+        tone(jitter(130.0), to = 70.0, dur = 0.24, wave = Wave.SINE, vol = 0.10, after = 0.0)
+        noise(dur = 0.20, vol = 0.08, bright = 0.5, after = 0.0)
+        // The old fall, quieter, underneath.
+        tone(jitter(400.0), to = 110.0, dur = 0.55, wave = Wave.TRIANGLE, vol = 0.06, after = 0.0)
+        // Crash.
+        noise(dur = 0.12, vol = 0.07, bright = 0.95, after = 0.015)
+        // Scatter: each gap 1.2x the last.
+        val scatter = listOf(0.030, 0.052, 0.078, 0.110, 0.148, 0.194, 0.249, 0.315, 0.394, 0.489, 0.602, 0.738)
+        for ((k, t) in scatter.withIndex()) coin(t, rnd(1600.0, 3000.0), 0.05 * (1 - 0.055 * k))
+        // One coin spinning down.
+        for ((j, t) in listOf(0.86, 0.93, 0.99, 1.04, 1.08, 1.11).withIndex()) {
+            noise(dur = 0.01, vol = 0.035 * (1 - 0.1 * j), bright = 0.9, after = t)
+            tone(jitter(2400.0, 0.02), dur = 0.02, wave = Wave.SINE, vol = 0.015, after = t)
+        }
+        // And falling flat.
+        tone(jitter(1900.0), dur = 0.06, wave = Wave.SINE, vol = 0.02, after = 1.15)
     }
 
     /**
@@ -368,11 +532,88 @@ object SoundKit {
         }
     }
 
-    fun win() {
-        for ((i, f) in listOf(523.0, 659.0, 784.0, 1047.0, 1319.0).withIndex()) {
-            val at = slop(i * 0.09)
-            tone(jitter(f, 0.006), dur = 0.5, wave = Wave.TRIANGLE, vol = 0.14f, after = at)
-            tone(jitter(f * 2, 0.006), dur = 0.3, vol = 0.04f, after = at + 0.02)
+    /**
+     * The game is over.
+     *
+     * A pickup arpeggio into a held C major — a low root under it, and a twin
+     * five cents sharp on the top C, which is where the chord's shimmer lives
+     * — with a bell on top. When a seat on THIS device took it ([mine]) a
+     * shimmer climbs over the chord and nine coins pour into the pile, slowing
+     * as they land, then the pile settles: about 1.9s. Everybody else hears
+     * the table cheer, not their own till — the fanfare alone, a quarter
+     * quieter. The winner's knock (Haptics.turn() at 0.32s, on the chord) is
+     * the caller's.
+     */
+    fun win(mine: Boolean = true) = recipe(1.8) {
+        val g = if (mine) 1.0 else 0.75
+        for ((i, f) in listOf(392.0, 523.25, 659.25, 783.99).withIndex()) {
+            val at = slop(0.075 * i)
+            tone(jitter(f, 0.006), dur = 0.18, wave = Wave.TRIANGLE, vol = 0.10 * g, after = at)
+            tone(jitter(2 * f, 0.006), dur = 0.12, wave = Wave.SINE, vol = 0.03 * g, after = at + 0.01)
+        }
+        // The held chord.
+        tone(130.8, dur = 1.2, wave = Wave.SINE, vol = 0.09 * g, after = 0.32)
+        tone(jitter(523.25, 0.004), dur = 1.3, wave = Wave.TRIANGLE, vol = 0.085 * g, after = 0.32)
+        tone(jitter(659.25, 0.004), dur = 1.3, wave = Wave.TRIANGLE, vol = 0.07 * g, after = 0.33)
+        tone(jitter(783.99, 0.004), dur = 1.3, wave = Wave.TRIANGLE, vol = 0.065 * g, after = 0.34)
+        tone(1046.5, dur = 1.4, wave = Wave.SINE, vol = 0.055 * g, after = 0.32)
+        tone(1049.5, dur = 1.4, wave = Wave.SINE, vol = 0.025 * g, after = 0.32)
+        // Top bell.
+        tone(jitter(1318.5, 0.004), dur = 0.9, wave = Wave.SINE, vol = 0.04 * g, after = 0.40)
+        if (!mine) return@recipe
+
+        // Shimmer run.
+        for ((k, f) in listOf(2093.0, 2637.0, 3136.0, 3520.0, 4186.0).withIndex()) {
+            tone(jitter(f, 0.01), dur = 0.16, wave = Wave.SINE, vol = 0.026, after = 0.46 + 0.065 * k)
+        }
+        // The coins pour, then slow.
+        val pour = listOf(0.62, 0.69, 0.75, 0.80, 0.85, 0.905, 0.97, 1.05, 1.15)
+        for ((k, t) in pour.withIndex()) coin(slop(t), rnd(1900.0, 2800.0), 0.055 * (1 - 0.06 * k))
+        // The pile settles.
+        noise(dur = 0.16, vol = 0.035, bright = 0.5, after = 1.24)
+        coin(1.30, 2200.0, 0.025)
+    }
+
+    /**
+     * The app opening, on the splash's own clock (SplashView): the die
+     * tumbling in — three clacks while it spins — a knock as it lands at
+     * 0.40, a warm G then C as the wordmark rises (0.66, 0.86), and a slow
+     * shimmer with the tagline. Rung out by about 1.8s, before the splash
+     * fades at 1.92.
+     *
+     * The one sound the player did not cause, so it is the one that minds
+     * the ringer: on silent or vibrate it keeps quiet, which is what the
+     * iPhone's silent switch does to it there. Every other sound plays on
+     * the game stream as it always has.
+     */
+    fun launch() {
+        if (audio?.ringerMode?.let { it != AudioManager.RINGER_MODE_NORMAL } == true) return
+        recipe(1.85) {
+            // The tumble.
+            for ((i, at) in listOf(0.0, 0.11, 0.21).withIndex()) {
+                val t = slop(at)
+                val fade = 1 - 0.2 * i
+                noise(dur = rnd(0.028, 0.045), vol = 0.12 * fade, bright = rnd(0.82, 1.0), after = t)
+                tone(jitter(rnd(900.0, 2100.0)), dur = 0.03, wave = Wave.TRIANGLE, vol = 0.04 * fade, after = t + 0.002)
+            }
+            // It lands, on the spring's first settle.
+            tone(jitter(260.0), to = 175.0, dur = 0.12, wave = Wave.TRIANGLE, vol = 0.10, after = 0.40)
+            tone(jitter(1500.0), dur = 0.03, wave = Wave.SINE, vol = 0.035, after = 0.412)
+            tone(98.0, to = 92.0, dur = 0.30, wave = Wave.SINE, vol = 0.08, after = 0.40)
+            noise(dur = 0.06, vol = 0.05, bright = 0.3, after = 0.40)
+            // G with the wordmark rising...
+            tone(jitter(392.0, 0.004), dur = 0.55, wave = Wave.TRIANGLE, vol = 0.10, after = 0.66)
+            tone(jitter(784.0, 0.004), dur = 0.40, wave = Wave.SINE, vol = 0.035, after = 0.67)
+            tone(196.0, dur = 0.50, wave = Wave.SINE, vol = 0.05, after = 0.66)
+            // ...and home to C.
+            tone(jitter(523.25, 0.004), dur = 0.95, wave = Wave.TRIANGLE, vol = 0.11, after = 0.86)
+            tone(jitter(659.25, 0.004), dur = 0.80, wave = Wave.SINE, vol = 0.04, after = 0.88)
+            tone(261.6, dur = 0.95, wave = Wave.SINE, vol = 0.06, after = 0.86)
+            tone(jitter(1046.5, 0.004), dur = 0.60, wave = Wave.SINE, vol = 0.03, after = 0.87)
+            // Shimmer with the tagline: two notes 4Hz apart, a slow beat.
+            tone(2093.0, dur = 0.55, wave = Wave.SINE, vol = 0.02, after = 0.98)
+            tone(2097.0, dur = 0.55, wave = Wave.SINE, vol = 0.012, after = 0.98)
+            tone(3136.0, dur = 0.40, wave = Wave.SINE, vol = 0.014, after = 1.06)
         }
     }
 }

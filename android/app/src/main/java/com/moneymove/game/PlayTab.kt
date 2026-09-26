@@ -237,30 +237,65 @@ private fun BrandStat(value: String, label: String) {
  * — iOS's LogoMark (LogoView.swift) at the same proportions. Drawn rather
  * than shipped as a picture so it re-inks with every table style; the ring
  * is the palette's gold, and the die is ivory on every one of them, as it is
- * on iOS. Only the still version: the roll-in is iOS's splash, and Android's
- * splash is the system's.
+ * on iOS.
+ *
+ * `animated` is the splash's roll-in, iOS's to the beat: the die spins in
+ * from -200° and a third of its size onto its -11° tilt while the ring grows
+ * in behind it, on iOS's spring(duration 0.85, bounce 0.38) — a damping of
+ * 1 − bounce and a stiffness of (2π / duration)², the conversion DicePair
+ * already uses — and from 0.52s the five pips pop in one every 90ms, each on
+ * its own spring(0.25, 0.55). One progress drives the die and the ring, as
+ * one `rolledIn` flag drives both on iOS, so they overshoot and settle
+ * together.
  *
  * The box is the die; the ring spills past it, as iOS's does.
  */
 @Composable
-internal fun LogoMark(size: Dp, modifier: Modifier = Modifier) {
+internal fun LogoMark(size: Dp, modifier: Modifier = Modifier, animated: Boolean = false) {
     val p = P.current
     val ring = p.gold.copy(alpha = 0.55f)
     val face = RoundedCornerShape(size * 0.19f)
+    val roll = remember { Animatable(if (animated) 0f else 1f) }
+    var pips by remember { mutableIntStateOf(if (animated) 0 else PIPS.size) }
+    LaunchedEffect(animated) {
+        if (!animated) return@LaunchedEffect
+        launch { roll.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 54.6f)) }
+        delay(520)
+        for (n in 1..PIPS.size) {
+            pips = n
+            delay(90)
+        }
+    }
+    val pipScale = PIPS.indices.map { k ->
+        animateFloatAsState(
+            if (k < pips) 1f else 0.01f,
+            spring(dampingRatio = 0.45f, stiffness = 631.7f),
+            label = "pip$k",
+        )
+    }
     Box(modifier.size(size), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(size)) {
             val d = this.size.minDimension
+            val t = roll.value
+            // The ring grows from 0.6 of itself and fades up as it does.
+            val grow = 0.6f + 0.4f * t
             drawCircle(
-                color = ring,
-                radius = d * 0.62f,
-                center = center + Offset(0f, d * 0.02f),
-                style = Stroke(width = d * 0.02f),
+                color = ring.copy(alpha = ring.alpha * t.coerceIn(0f, 1f)),
+                radius = d * 0.62f * grow,
+                center = center + Offset(0f, d * 0.02f * grow),
+                style = Stroke(width = d * 0.02f * grow),
             )
         }
         Box(
             Modifier
                 .size(size)
-                .rotate(-11f)
+                .graphicsLayer {
+                    val t = roll.value
+                    rotationZ = -200f + 189f * t
+                    val grow = 0.3f + 0.7f * t
+                    scaleX = grow
+                    scaleY = grow
+                }
                 .shadow(size * 0.1f, face, clip = false, ambientColor = LOGO_SHADOW, spotColor = LOGO_SHADOW)
                 .clip(face)
                 .background(Brush.linearGradient(listOf(Color(0xFFFFFCF4), Color(0xFFEFE7D8))))
@@ -270,8 +305,9 @@ internal fun LogoMark(size: Dp, modifier: Modifier = Modifier) {
                 val d = this.size.minDimension
                 val r = d * 0.105f
                 val off = d * 0.27f
-                for ((x, y) in PIPS) {
-                    drawCircle(LOGO_PIP, radius = r, center = center + Offset(x * off, y * off))
+                for ((k, spot) in PIPS.withIndex()) {
+                    val (x, y) = spot
+                    drawCircle(LOGO_PIP, radius = r * pipScale[k].value, center = center + Offset(x * off, y * off))
                 }
             }
         }

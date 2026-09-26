@@ -290,6 +290,7 @@ export function tileElement(i) { return tileEls[i]; }
 export function resetBoard() {
   builtMapId = null; tileEls = []; tokens.clear(); resetSetTracking();
   playedTo = 0; seeded = false; animating.clear();
+  chains.clear(); chainEnd.clear();
   // Leaving mid-deal must not strand the flying deck on the next table,
   // nor leave its clean-up timer to go off over the next room's board.
   dealtRoom = null;
@@ -312,6 +313,42 @@ let playedTo = 0;
 let seeded = false;
 /** Players whose journey is still running, so a re-render leaves them alone. */
 const animating = new Set();
+/**
+ * Each walking player's journey as a promise, and the tile it ends on. A bot
+ * that rolls doubles has its second roll pushed while the first walk is still
+ * on the felt; when that roll starts where the first one ends, it queues
+ * behind it instead of cutting it short — the first walk finishes, the second
+ * follows, and each lands with its own money.
+ */
+const chains = new Map();
+const chainEnd = new Map();
+/**
+ * Who has left the board, as the caller sees it. A player whose bankruptcy is
+ * still being held back — the rent that broke them has not been shown yet —
+ * keeps their piece and their slot on the tile until it has.
+ */
+let gone = (p) => !!p.bankrupt;
+
+/**
+ * The dice tumble for .55s on screen (`.die.rolling` in style.css); a roll's
+ * walk waits for them to land, as it does on the iPhone and Android, so the
+ * number is read before the piece acts on it. A second walk queued behind a
+ * first only takes a breath: its dice were seen during the first walk.
+ */
+export const DICE_LEAD = 550;
+export const SETTLE = 180;
+
+/**
+ * The first state after a reconnect is a position, not a journey: whatever
+ * was walked while the socket was down is not replayed. The move counter is
+ * forgotten too, because a server that restarted starts counting from one.
+ */
+export function reseed() { seeded = false; playedTo = 0; }
+
+/** Where this player's walk (and anything queued behind it) ends, while one is running. */
+export function walkingTo(playerId) {
+  return animating.has(playerId) ? (chainEnd.get(playerId) ?? null) : null;
+}
 
 const SLOT_OFFSETS = [
   [-0.20, -0.18], [0.20, -0.18], [-0.20, 0.18], [0.20, 0.18],
@@ -327,7 +364,7 @@ function tileCenter(i) {
 }
 
 function slotFor(state, playerId, tileIndex) {
-  const here = state.players.filter((p) => !p.bankrupt && p.pos === tileIndex).map((p) => p.id);
+  const here = state.players.filter((p) => !gone(p) && p.pos === tileIndex).map((p) => p.id);
   const k = here.indexOf(playerId);
   if (here.length <= 1 || k === -1) return [0, 0];
   return SLOT_OFFSETS[k % SLOT_OFFSETS.length];
@@ -355,6 +392,17 @@ function place(state, playerId, tileIndex, ms = 0, ease = 'linear', lift = 0) {
   rec.pos = tileIndex;
 }
 
+/**
+ * A piece leaving the board — its player is bankrupt, and that has now been
+ * shown. It fades off the tile it was standing on rather than blinking out,
+ * which read as a rendering glitch rather than somebody losing.
+ */
+function retire(el) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.remove(); return; }
+  el.classList.add('leaving');
+  setTimeout(() => el.remove(), 300);
+}
+
 /** A step of a walk: quick, with a little overshoot, so it lands rather than stops. */
 const STEP_EASE = 'cubic-bezier(.32, 1.45, .52, 1)';
 /** Carried through the air: slow out, slow in, nothing abrupt at either end. */
@@ -365,19 +413,33 @@ const FLIGHT_EASE = 'cubic-bezier(.45, 0, .25, 1)';
  * player rolled, and glide directly when they were teleported by a card.
  *
  * `onSettle(player, leg, next)` is awaited between two legs of one journey —
- * that pause is where the caller turns a drawn card over.
+ * that pause is where the caller turns a drawn card over. With no `next` it
+ * is the journey's landing, which is where the caller shows its money.
+ *
+ * `isOut` is who has left the board. It defaults to the server's bankrupt
+ * flag; the caller passes its own when a bankruptcy is being held back, so a
+ * piece bankrupted by the rent it is walking towards still gets there, and
+ * leaves when the bust is shown rather than vanishing mid-step.
  */
-export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId } = {}) {
+export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId, isOut } = {}) {
   layerEl = document.getElementById('tokenLayer');
   if (!layerEl) return;
+  gone = isOut || ((p) => !!p.bankrupt);
 
   // add / remove
-  const live = new Set(state.players.filter((p) => !p.bankrupt).map((p) => p.id));
+  const live = new Set(state.players.filter((p) => !gone(p)).map((p) => p.id));
   for (const [id, rec] of tokens) {
-    if (!live.has(id)) { rec.el.remove(); tokens.delete(id); }
+    if (!live.has(id)) {
+      retire(rec.el);
+      tokens.delete(id);
+      // Whatever it was still doing, it is not doing it any more.
+      walkGen.set(id, (walkGen.get(id) || 0) + 1);
+      animating.delete(id);
+      chainEnd.delete(id);
+    }
   }
   for (const p of state.players) {
-    if (p.bankrupt) continue;
+    if (gone(p)) continue;
     let rec = tokens.get(p.id);
     if (!rec) {
       const el = document.createElement('div');
@@ -430,8 +492,9 @@ export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId }
   const replay = seeded ? legs : [];
   seeded = true;
 
+  const cbs = { onStep, onArrive, onJailed, onSettle };
   for (const p of state.players) {
-    if (p.bankrupt) continue;
+    if (gone(p)) continue;
     const rec = tokens.get(p.id);
     if (!rec) continue;
     const mine = replay.filter((m) => m.playerId === p.id);
@@ -443,10 +506,24 @@ export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId }
     if (!mine.length && (animating.has(p.id) || flying.get(p.id) === p.pos)) continue;
     if (!mine.length && rec.pos === p.pos) { place(state, p.id, p.pos, 220, 'ease-out'); continue; }
 
+    // Doubles: the next roll picks up exactly where this walk will end, so
+    // it waits its turn behind it rather than cutting it off — same
+    // generation, so a later drift still stops the pair of them together.
+    if (mine.length && animating.has(p.id) && chainEnd.get(p.id) === mine[0].from) {
+      const gen = walkGen.get(p.id);
+      chainEnd.set(p.id, mine[mine.length - 1].to);
+      chains.set(p.id, (chains.get(p.id) || Promise.resolve())
+        .catch(() => {})
+        .then(() => playChain(state, p, mine, gen, cbs, SETTLE)));
+      continue;
+    }
+
     const gen = (walkGen.get(p.id) || 0) + 1;
     walkGen.set(p.id, gen);
     if (mine.length) {
-      playChain(state, p, mine, gen, { onStep, onArrive, onJailed, onSettle });
+      chainEnd.set(p.id, mine[mine.length - 1].to);
+      // A card's own leg has no dice to wait for.
+      chains.set(p.id, playChain(state, p, mine, gen, cbs, mine[0].cause === 'card' ? 0 : DICE_LEAD));
     } else {
       // Standing somewhere else with no leg to explain it — a state that
       // arrived without its moves, a reconnect part-way through a journey.
@@ -466,15 +543,17 @@ export function syncTokens(state, { onStep, onArrive, onJailed, onSettle, meId }
  * Surprise, the Surprise lights up, the card turns over, and only then does
  * what the card says actually happen.
  */
-async function playChain(state, player, legs, gen, { onStep, onArrive, onJailed, onSettle }) {
+async function playChain(state, player, legs, gen, { onStep, onArrive, onJailed, onSettle }, lead = 0) {
   const rec = tokens.get(player.id);
   if (!rec) return;
+  if (walkGen.get(player.id) !== gen) return;
   animating.add(player.id);
   // The whole journey holds the glass still, the pauses between legs
   // included: that pause is where a card is on screen being read, and a card
   // on the table is not the moment for the panes around it to start moving.
   const release = holdBoard();
   try {
+    if (lead) await sleep(lead);
     for (let k = 0; k < legs.length; k++) {
       if (walkGen.get(player.id) !== gen) return;
       const leg = legs[k];

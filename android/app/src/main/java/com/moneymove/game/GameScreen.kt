@@ -6,6 +6,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseIn
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
@@ -72,6 +74,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,6 +118,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * A table.
@@ -948,7 +952,9 @@ private fun Seats(
     val ranks = store.liveRanks
     val nextUp = store.nextUpId
     val list = rememberLazyListState()
-    val players = state.players
+    // The seats as shown: money a piece is still walking toward has not left
+    // anybody's chip yet, and a bankruptcy has not happened until it lands.
+    val players = store.shownPlayers
 
     // Un-animated the first time, the way iOS scrolls on appear; animated on
     // every turn and every arrival after that.
@@ -1004,7 +1010,9 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
                 .clip(shape)
                 .background(p.card)
                 .border(if (isTurn) 2.dp else 1.dp, ring, shape)
-                .clickable(enabled = store.canTradeWith(player)) { store.openTrade(to = player.id) }
+                // Who can be traded with is a decision, so it asks the table
+                // as it is, not as it is shown.
+                .clickable(enabled = store.canTradeWith(state.player(player.id) ?: player)) { store.openTrade(to = player.id) }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1031,11 +1039,14 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
                 ) {
                     // In the red the number wears the bad colour and breathes —
                     // the balance itself is the debt, climbing back to zero.
+                    // It counts to what it became as the money lands.
                     MoneyText(
                         player.money,
                         fontSize = 13.sp,
                         bankrupt = player.isBankrupt,
                         text = player.outcomeWord ?: money(player.money),
+                        count = true,
+                        snapKey = store.paintEpoch,
                     )
                     val owned = state.ownedCount(player.id)
                     if (owned > 0 && !player.isBankrupt) {
@@ -1047,6 +1058,9 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
                 }
             }
         }
+        // The coins leave the payer's chip and drop into the payee's, under
+        // the badge that says how many.
+        CoinSpill(store, player.id, Modifier.align(Alignment.Center))
         // The +/- rides the chip's right shoulder, clear of the name and the
         // money under it; a long amount grows back across the chip's own top
         // rather than out over the seats either side.
@@ -1138,6 +1152,69 @@ fun MoneyDeltaBadge(store: GameStore, playerId: String, modifier: Modifier = Mod
 }
 
 /**
+ * Three coins for one change of cash, so money is seen to travel: they lift
+ * off a seat that paid — up and away, shrinking as they go, over the first
+ * half second — and drop into a seat that was paid, starting a fifth of a
+ * second later, as its count starts climbing. Keyed on the badge's own id,
+ * so it is born and gone with the badge above it. Under Reduce Motion the
+ * number and the badge carry it alone.
+ */
+@Composable
+fun CoinSpill(store: GameStore, playerId: String, modifier: Modifier = Modifier) {
+    val d = store.moneyDeltas[playerId] ?: return
+    if (rememberReduceMotion()) return
+    val paying = d.amount < 0
+    val coins = remember(d.id) { List(3) { Animatable(0f) } }
+    LaunchedEffect(d.id) {
+        coins.forEachIndexed { i, coin ->
+            launch {
+                if (paying) {
+                    delay(COIN_STAGGER * i)
+                    coin.animateTo(1f, tween(550, easing = EaseOut))
+                } else {
+                    delay(200L + COIN_STAGGER * i)
+                    coin.animateTo(1f, tween(500, easing = EaseIn))
+                }
+            }
+        }
+    }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        coins.forEachIndexed { i, coin ->
+            Box(
+                Modifier.graphicsLayer {
+                    val t = coin.value
+                    val lift = 22.dp.toPx()
+                    translationX = (i - 1) * 10.dp.toPx()
+                    if (paying) {
+                        translationY = -lift * t
+                        scaleX = 1f - 0.4f * t
+                        scaleY = 1f - 0.4f * t
+                        alpha = 1f - t
+                    } else {
+                        // Falling in from above, and gone as it lands in the
+                        // purse — never sitting on top of the number.
+                        translationY = -lift * (1f - t)
+                        scaleX = 0.6f + 0.4f * t
+                        scaleY = 0.6f + 0.4f * t
+                        alpha = when {
+                            t <= 0f -> 0f
+                            t < 0.2f -> t / 0.2f
+                            t > 0.75f -> (1f - t) / 0.25f
+                            else -> 1f
+                        }
+                    }
+                },
+            ) {
+                Icon("coin", size = 12.dp)
+            }
+        }
+    }
+}
+
+/** The gap between one coin of a spill and the next. */
+private const val COIN_STAGGER = 50L
+
+/**
  * Keep an item in the middle of the strip. Taken from the laid-out chips, so
  * a name that is longer than the rest is centred on its own width; one that
  * is off screen is brought in first. The list's own bounds clamp both ends,
@@ -1181,13 +1258,16 @@ private fun Modifier.overhangTop(lift: Dp): Modifier = layout { measurable, cons
 @Composable
 private fun CornerPods(store: GameStore, modifier: Modifier = Modifier) {
     val state = store.state ?: return
-    val mine = state.players.filter { store.isLocal(it.id) && !it.isBankrupt }
+    val mine = store.shownPlayers.filter { store.isLocal(it.id) && !it.isBankrupt }
     val seats = mine.firstOrNull { it.id == store.meId }?.let { listOf(it) + (mine - it) } ?: mine
+    // Each pod is keyed on its seat, so when a seat on this phone goes out
+    // and the others close up a corner, a balance keeps counting its own
+    // money rather than counting from the number that sat there before.
     Box(modifier.fillMaxSize().padding(12.dp)) {
-        seats.getOrNull(2)?.let { PlayerPod(store, state, it, flipped = true, Modifier.align(Alignment.TopStart)) }
-        seats.getOrNull(3)?.let { PlayerPod(store, state, it, flipped = true, Modifier.align(Alignment.TopEnd)) }
-        seats.getOrNull(0)?.let { PlayerPod(store, state, it, flipped = false, Modifier.align(Alignment.BottomStart)) }
-        seats.getOrNull(1)?.let { PlayerPod(store, state, it, flipped = false, Modifier.align(Alignment.BottomEnd)) }
+        seats.getOrNull(2)?.let { key(it.id) { PlayerPod(store, state, it, flipped = true, Modifier.align(Alignment.TopStart)) } }
+        seats.getOrNull(3)?.let { key(it.id) { PlayerPod(store, state, it, flipped = true, Modifier.align(Alignment.TopEnd)) } }
+        seats.getOrNull(0)?.let { key(it.id) { PlayerPod(store, state, it, flipped = false, Modifier.align(Alignment.BottomStart)) } }
+        seats.getOrNull(1)?.let { key(it.id) { PlayerPod(store, state, it, flipped = false, Modifier.align(Alignment.BottomEnd)) } }
     }
 }
 
@@ -1232,6 +1312,7 @@ private fun PlayerPod(store: GameStore, state: GameState, player: PlayerState, f
                     with(column) { PodFace(store, state, player, isTurn) }
                 }
             }
+            CoinSpill(store, player.id, Modifier.align(Alignment.Center))
             // On the pod's own top edge: inside the card it landed on the name
             // and the clock as soon as the amount ran long.
             MoneyDeltaBadge(store, player.id, Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-13).dp))
@@ -1254,7 +1335,7 @@ private fun ColumnScope.PodFace(store: GameStore, state: GameState, player: Play
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 // The balance is printed on the pod's glass, so it is the
                 // glass's green, or its red in the hole.
-                GlassMoney { MoneyText(player.money, fontSize = 15.sp) }
+                GlassMoney { MoneyText(player.money, fontSize = 15.sp, count = true, snapKey = store.paintEpoch) }
                 if (player.lapsBlocked > 0 && !player.isBankrupt) DeadlockLaps(player.lapsToRelief)
             }
         }

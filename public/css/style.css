@@ -3003,6 +3003,13 @@ html[data-smart-banner="yes"] .app-cta { display: none; }
 }
 .token.in-flight .token-face { transform: scale(1.16); }
 .token .token-face { transition: transform .2s var(--pop); }
+/* Bankrupt, and now shown to be: the piece fades off its tile rather than
+   blinking out. An animation, not a transition — the token's own transition
+   is its walk, written inline by board.js on every step. board.js removes it
+   at once for anyone who has asked for less motion. */
+.token.leaving { animation: tokenLeave .3s ease-out forwards; pointer-events: none; }
+.token.leaving .token-face { transform: scale(.6); }
+@keyframes tokenLeave { to { opacity: 0; } }
 .token-face { font-size: clamp(6.5px, .8vw, 11px); font-weight: 900; color: rgba(255, 255, 255, .95); }
 
 /* ─────────────────────────────────────────────── a bought piece ──
@@ -3334,6 +3341,31 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   70%  { opacity: 1; transform: translateY(-14px); }
   100% { opacity: 0; transform: translateY(-26px); }
 }
+
+/* A payment's three coins, beside its badge: lifting off the purse that paid,
+   dropping into the one that was paid a beat later, fanned -10 / 0 / +10px by
+   their index so they read as a handful rather than one disc. The coin wears
+   its own drawn fills; --gold only tints anything the drawing leaves open. */
+.coin-spill {
+  --dx: calc((var(--k) - 1) * 10px);
+  position: absolute; right: 4px; top: 16px;
+  display: block; width: 13px; height: 13px; line-height: 0;
+  color: var(--gold);
+  opacity: 0; pointer-events: none;
+}
+.coin-spill .ico { width: 13px; height: 13px; display: block; }
+.coin-spill.out { animation: coinOut .55s var(--ease) calc(var(--k) * 50ms) both; }
+.coin-spill.in  { animation: coinIn .5s var(--ease) calc(200ms + var(--k) * 50ms) both; }
+@keyframes coinOut {
+  from { opacity: 1; transform: translate(var(--dx), 0) scale(1); }
+  to   { opacity: 0; transform: translate(var(--dx), -22px) scale(.6); }
+}
+@keyframes coinIn {
+  0%   { opacity: 0; transform: translate(var(--dx), -22px) scale(.6); }
+  55%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .coin-spill { display: none; } }
 
 /* ─────────────────────────────────────────────────────────── right panel ── */
 .right-panel { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 3px; }

@@ -3,6 +3,7 @@ package com.moneymove.game
 import android.app.Application
 import android.util.Log
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -16,6 +17,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONObject
+import kotlin.math.abs
 
 /**
  * The one observable the whole app hangs off: identity, connection, the
@@ -152,6 +154,87 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      */
     var holdUntil: Long by mutableStateOf(0L)
         private set
+
+    // ── the purse ledger ───────────────────────────────────────────────────
+    //
+    // One rule, the same on all three clients: MONEY IS SHOWN WHEN ITS CAUSE
+    // IS. The server charges the rent in the very push that starts the walk
+    // onto the hotel, so a seat that painted what it was sent would show the
+    // money leave before the piece had taken a step — the surprise told
+    // backwards. Money that belongs to a journey still on stage (a piece
+    // walking, a card being read) is held here along with everything it would
+    // say — the number, the badge, the coins, the count, its sound and knock,
+    // any bankruptcy it caused and any game-over — and all of it is released
+    // together on the journey's payday. Everything else shows the moment it
+    // arrives: trades, auctions, other players' money, and anything that
+    // comes while nothing is walking.
+    //
+    // What is held is shown, never decided on: seats, pods, ranks and pieces
+    // read [shownPlayers]; the buy button, trade limits, the debt panel and
+    // every purse sum keep reading the raw state.
+
+    /** Money waiting on its journey: player id -> what has not been shown yet. */
+    var held: Map<String, Int> by mutableStateOf(emptyMap())
+        private set
+
+    /** Seats already out on the server whose bankruptcy has not landed on screen. */
+    var heldBusts: Set<String> by mutableStateOf(emptySet())
+        private set
+
+    /**
+     * The game is over on the server but the push that ended it is waiting
+     * on a piece still walking: the well and the dock keep playing until the
+     * fanfare says otherwise.
+     */
+    var gameOverHeld: Boolean by mutableStateOf(false)
+        private set
+
+    /**
+     * Bumped whenever a push is a position rather than news — the first paint
+     * of a table, the first state after a reconnect. A counting balance keyed
+     * on it snaps into place instead of counting up from what it said before.
+     */
+    var paintEpoch: Int by mutableIntStateOf(0)
+        private set
+
+    /**
+     * The journeys the board has to perform, oldest first: the walker plays
+     * each one on the journey's own clock, so a piece and the store's timers
+     * agree about when it lands. Only journeys opened here are ever walked,
+     * which is what makes a reconnect snap rather than replay.
+     */
+    var stage: List<Journey> by mutableStateOf(emptyList())
+        private set
+
+    private val journeys = ArrayList<Journey>()
+
+    /**
+     * A push has been seen on this connection since it (re)connected. Until
+     * then everything is a position: numbers snap, nothing sounds, nothing
+     * walks.
+     */
+    private var primed = false
+
+    /** The newest leg `seq` a journey has been opened for. */
+    private var journeySeq = 0
+
+    /** The seat as the table shows it: money still on its way held back, a bankruptcy not landed yet undone. */
+    fun shown(p: PlayerState): PlayerState {
+        val h = held[p.id] ?: 0
+        val bust = p.id in heldBusts
+        if (h == 0 && !bust) return p
+        return p.copy(
+            money = p.money - h,
+            netWorth = p.netWorth?.minus(h),
+            bankrupt = if (bust) false else p.bankrupt,
+        )
+    }
+
+    /** Every seat at the table as it is shown — see [shown]. */
+    val shownPlayers: List<PlayerState> get() = state?.players.orEmpty().map { shown(it) }
+
+    /** The journey keyed on this leg stamp, while it is still on stage. */
+    fun journeyFor(key: Double): Journey? = journeys.lastOrNull { it.key == key && !it.cut }
 
     /**
      * Log lines at or before this stamp stay out of the at-a-glance feed. Set
@@ -523,12 +606,14 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     /**
      * Live standings by net worth, player id -> position. Ties fall back to
      * seat order, so two equal fortunes do not swap badges on every tick.
+     * Read off the seats as shown, so the crown does not change hands before
+     * the rent that moved it has landed.
      */
     val liveRanks: Map<String, Int>
         get() {
             val s = state ?: return emptyMap()
             if (!s.isPlaying) return emptyMap()
-            return s.players.withIndex()
+            return shownPlayers.withIndex()
                 .filter { !it.value.isBankrupt }
                 .sortedWith(compareByDescending<IndexedValue<PlayerState>> { it.value.netWorth ?: 0 }.thenBy { it.index })
                 .withIndex()
@@ -794,6 +879,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             m.forget()
             onTable(mine) {
                 connection = Connection.CONNECTED
+                // Whatever arrives first on the new line is where the table
+                // is, not something that just happened to it.
+                primed = false
                 sendJoin()
             }
         }
@@ -974,6 +1062,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         socket = null
         session++
         holdJob?.cancel(); cardJob?.cancel(); gameOverJob?.cancel()
+        dropJourneys()
         if (!quiet) {
             val room = roomId
             closeGuests()
@@ -1049,6 +1138,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         heldMover = null
         auctionUnderHold = false
         pendingCard = null
+        dropJourneys()
+        primed = false
+        journeySeq = 0
         guestTeamChat = emptyList()
         pendingOffer = null
         pendingOfferJob?.cancel()
@@ -1163,11 +1255,24 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         noteUnfinished(next)
         if (next.isEnded) dropUnfinished(next.id)
 
-        noteMoney(old, next)
-        noteCurtain(old, next)
-        noteAuction(old, next)
-        noteSets(old, next)
-        noteCard(old, next)
+        // The lines this push brought, read once: the ledger files most of
+        // their sounds with the journey they belong to, and the dice are
+        // sounded below the moment they are thrown.
+        val freshLog = next.log.filter { it.at > heardLogAt }
+        heardLogAt = next.log.lastOrNull()?.at ?: heardLogAt
+
+        // The journey first, the money second: whether this push's money
+        // shows now or waits for a piece to land depends on what it opens.
+        val news = noteJourney(old, next, freshLog)
+        // A position — the first state after a reconnect — is not news to
+        // these either: no gavel for an auction already running, no fanfare
+        // for a set closed while the line was down, no card turned over that
+        // was drawn out of sight. The iPhone keeps the same quiet.
+        if (news) {
+            noteAuction(old, next)
+            noteSets(old, next)
+        }
+        noteCard(old, next, news)
 
         // The deadlock rule explains itself the one time it becomes possible.
         // The server keeps the card in every push from then on, so the `at`
@@ -1218,17 +1323,22 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
         noteTimeout(old, next)
 
-        // The result, once. It waits a beat so the last move can land on the
-        // board before the sheet covers it.
+        // The result, once. History files it now; the fanfare and the sheet
+        // are the ledger's, because the push that ended the game can arrive
+        // while the last piece is still walking to the square that ended it
+        // — see [voice]. A table that was already over when this device
+        // first saw it gets its sheet without the fanfare: that is a
+        // position, not news.
         if (next.isEnded && old?.isEnded != true) {
-            SoundKit.win()
             recordMatch(next)
             sheet = null
             confirm = null
-            gameOverJob?.cancel()
-            gameOverJob = viewModelScope.launch {
-                delay(700)
-                if (state?.isEnded == true) showGameOver = true
+            if (!news) {
+                gameOverJob?.cancel()
+                gameOverJob = viewModelScope.launch {
+                    delay(700)
+                    if (state?.isEnded == true) showGameOver = true
+                }
             }
         }
         if (!next.isEnded) {
@@ -1237,7 +1347,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         }
 
         noteOffers(old, next)
-        soundsFor(old, next)
+        if (news) soundsFor(freshLog)
     }
 
     /**
@@ -1355,71 +1465,330 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Money moved: float a +/- badge on everyone whose cash changed, and give
-     * the seats on THIS device their own sound and knock — losing money makes
-     * its little "ishh", gaining rings like a till, and somebody else's money
-     * is a quieter cash sound. A rematch resets every wallet at once, which is
-     * why both states have to be mid-game.
+     * The purse ledger, run on every push before anything else looks at the
+     * money: opens a journey when a piece has somewhere new to walk, raises
+     * the curtain the decision UI waits behind, and decides for each change of
+     * cash whether it shows now or waits for the piece it belongs to. Returns
+     * whether this push was news at all — false for the first paint of a
+     * table and the first state after a reconnect, which are positions.
      */
-    private fun noteMoney(old: GameState?, next: GameState) {
-        if (old == null || !old.isPlaying || !next.isPlaying) return
-        var localGain = false
-        var localLoss = false
-        var remote = false
-        var deltas = moneyDeltas
+    private fun noteJourney(old: GameState?, next: GameState, freshLog: List<LogLine>): Boolean {
+        val legs = next.moves.orEmpty()
+        val newest = legs.lastOrNull()?.at
+        val freshLeg = newest != null && newest != heldActionAt
+        if (freshLeg) {
+            heldActionAt = newest!!
+            holdJob?.cancel()
+            auctionUnderHold = false
+        }
+
+        // A position, not news: the first paint, the first push after a
+        // reconnect, a game being dealt, a rematch going back to its lobby.
+        // Numbers snap into place, nothing sounds and nothing walks — the
+        // legs already on the table are marked seen so they never replay. A
+        // game that has just ended is still news: the push that ended it may
+        // be waiting on a piece still walking, and a chat line arriving
+        // behind it must not wipe the fanfare off the ledger.
+        val inGame = { s: GameState -> s.isPlaying || s.isEnded }
+        if (old == null || !primed || !inGame(old) || !inGame(next)) {
+            primed = true
+            // A game-over that was still waiting on its walk when the line
+            // dropped is owed its result sheet. The push that ended the game
+            // has come and gone, so nothing after this position would ever
+            // raise it — the fanfare is lost with the walk, the sheet is not.
+            val owed = gameOverHeld && next.isEnded
+            dropJourneys()
+            journeySeq = maxOf(journeySeq, legs.mapNotNull { it.seq }.maxOrNull() ?: 0)
+            if (freshLeg) {
+                heldMover = null
+                holdUntil = 0L
+            }
+            if (owed) {
+                gameOverJob?.cancel()
+                gameOverJob = viewModelScope.launch {
+                    delay(700)
+                    if (state?.isEnded == true) showGameOver = true
+                }
+            }
+            paintEpoch++
+            return false
+        }
+
+        val now = System.currentTimeMillis()
+        val delta = HashMap<String, Int>()
         for (p in next.players) {
             val was = old.player(p.id)?.money ?: continue
-            if (was == p.money) continue
-            val delta = MoneyDelta(amount = p.money - was, id = ++deltaSeq)
-            deltas = deltas + (p.id to delta)
-            val pid = p.id
-            viewModelScope.launch {
-                delay(1_600)
-                if (moneyDeltas[pid]?.id == delta.id) moneyDeltas = moneyDeltas - pid
+            if (p.money != was) delta[p.id] = p.money - was
+        }
+        val busts = next.players
+            .filter { it.isBankrupt && old.player(it.id)?.isBankrupt == false }
+            .mapTo(HashSet()) { it.id }
+        val ended = next.isEnded && !old.isEnded
+        val kinds = freshLog.mapTo(HashSet()) { it.kind }.apply { remove("dice"); remove("auction") }
+        // The walker clangs the gate itself on the walk to prison.
+        val walkedToJail = legs.any { it.cause == "jail" }
+
+        // A fresh leg opens a journey. A piece still walking its last one —
+        // a double's re-roll landing while the first walk is under way —
+        // queues behind it rather than cutting it off.
+        var opening: Journey? = null
+        if (freshLeg) {
+            val playable = legs.filter { (it.seq ?: Int.MAX_VALUE) > journeySeq }.ifEmpty { legs }
+            journeySeq = maxOf(journeySeq, legs.mapNotNull { it.seq }.maxOrNull() ?: 0)
+            val mover = playable.first().playerId
+            val size = next.map.size
+            val hasCard = next.lastCard?.let { abs(it.at - newest!!) < 2500 } == true
+            // Only a walk still to land is queued behind — one whose payday
+            // is already due is over, and the new roll's dice get their full
+            // spring rather than the breath a queued walk takes.
+            var ahead = journeys.filter { it.mover == mover && !it.landed && it.landAt > now }
+            var startAt = maxOf(now, ahead.maxOfOrNull { it.landAt } ?: now)
+            if (startAt - now > QUEUE_LIMIT_MS) {
+                // Too far behind to be worth waiting for: the older walk is
+                // cut and everything it was holding shows now.
+                ahead.forEach { flush(it) }
+                ahead = emptyList()
+                startAt = now
             }
-            if (isLocal(pid)) {
-                if (delta.amount < 0) localLoss = true else localGain = true
+            val lead = if (ahead.isEmpty()) Choreography.DICE_LEAD else Choreography.SETTLE
+            val landAt = startAt + seconds(Choreography.payday(playable, size, hasCard, lead))
+            val cast = HashSet<String>().apply {
+                add(mover)
+                addAll(delta.keys)
+                addAll(busts)
+                // Rent owed by a debtor who paid nothing yet moves nobody's
+                // money in this push, and it is still this journey's news.
+                next.turn?.debt?.let { d ->
+                    d.creditor?.let { add(it) }
+                    d.owedTo?.let { addAll(it) }
+                }
+            }
+            val journey = Journey(newest!!, mover, playable, size, hasCard, lead, cast, startAt, landAt)
+            journeys += journey
+            journey.job = viewModelScope.launch {
+                delay(landAt - System.currentTimeMillis())
+                release(journey)
+            }
+            stage = journeys.filter { !it.cut }
+            opening = journey
+
+            // The curtain: the decision UI born of this walk — the buy prompt,
+            // an auction the landing opened — waits for the piece. Cosmetic,
+            // since the shot clock runs on the server, so never more than four
+            // seconds of the journey.
+            if (next.isPlaying) {
+                val run = minOf(Choreography.curtain(playable, size, hasCard, lead) + 0.3, 4.0)
+                heldMover = mover
+                holdUntil = startAt + seconds(run)
+                holdJob = viewModelScope.launch {
+                    delay(holdUntil - System.currentTimeMillis())
+                    holdUntil = 0L
+                    // The gavel waited behind the curtain with its auction.
+                    if (auctionUnderHold && state?.auction != null) SoundKit.auction()
+                    auctionUnderHold = false
+                }
             } else {
-                remote = true
+                heldMover = null
+                holdUntil = 0L
             }
         }
-        if (deltas !== moneyDeltas) moneyDeltas = deltas
-        when {
-            localLoss -> { SoundKit.lose(); Haptics.warn() }
-            localGain -> { SoundKit.gain(); Haptics.tap() }
-            remote -> SoundKit.cash()
+
+        val opened = opening
+
+        // Money that is never held: a trade, and an auction — escrow moves
+        // cash on every bid, and the box is on screen for all to watch. An
+        // auction still waiting behind its landing's curtain is the landing's.
+        val exempt = opened == null && (
+            freshLog.any { it.kind == "trade" } ||
+                ((old.auction != null || next.auction != null) && !auctionCurtained)
+            )
+        val live = journeys.filter { !it.landed }
+        val target = when {
+            opened != null -> opened
+            exempt -> null
+            else -> live.lastOrNull { it.mover == old.turn?.playerId }
+                ?: live.lastOrNull { j -> delta.keys.any { it in j.cast } || busts.any { it in j.cast } }
         }
+
+        // Who each bankruptcy paid: whoever the debt named, or — for a card
+        // that collected from everyone and broke somebody — the player who
+        // drew it. Nobody when it went to the bank.
+        val creditors = busts.associateWith { bust ->
+            val debt = old.turn?.debt?.takeIf { it.debtor == bust } ?: next.turn?.debt?.takeIf { it.debtor == bust }
+            when {
+                debt != null -> (listOfNotNull(debt.creditor) + debt.owedTo.orEmpty()).toSet()
+                opened != null && opened.hasCard && opened.mover != bust -> setOf(opened.mover)
+                else -> emptySet()
+            }
+        }
+
+        val mine = target?.let { t -> delta.filterKeys { it in t.cast } }.orEmpty()
+        val bustIn = target?.let { t -> busts.filterTo(HashSet()) { it in t.cast } }.orEmpty()
+        // Only what a journey is about waits for it. A later push that moved
+        // nobody in its cast, bankrupted nobody in it and did not end the
+        // game is not its news — it is said now, log lines and all, as the
+        // web and the iPhone say it.
+        if (target == null || (opened == null && !ended && mine.isEmpty() && bustIn.isEmpty())) {
+            voice(Entry(delta, kinds, busts, creditors, ended, walkedToJail))
+            return true
+        }
+        val rest = delta - mine.keys
+        val bustOut = busts - bustIn
+        val entry = Entry(mine, kinds, bustIn, creditors, ended, walkedToJail)
+        if (!entry.isEmpty) {
+            target.entries += entry
+            if (mine.isNotEmpty()) held = held.plusDelta(mine)
+            if (bustIn.isNotEmpty()) heldBusts = heldBusts + bustIn
+            if (ended) gameOverHeld = true
+        }
+        if (rest.isNotEmpty() || bustOut.isNotEmpty()) {
+            voice(Entry(rest, emptySet(), bustOut, creditors, false, walkedToJail))
+        }
+        return true
     }
 
     /**
-     * The curtain: how long the board is still busy telling the story of the
-     * action that just arrived. Reconnects (no old state) and stale stamps show
-     * everything at once, and the hold is cosmetic — the shot clock runs on the
-     * server — so it is never allowed to eat more than four seconds.
+     * A journey's payday: its entries land one after another — the rent, a
+     * bot's scramble to raise the cash, the bust — [Choreography.ENTRY_GAP]
+     * apart, four at most, anything after the fourth folded into it.
      */
-    private fun noteCurtain(old: GameState?, next: GameState) {
-        val legs = next.moves.orEmpty()
-        val newest = legs.lastOrNull()?.at ?: return
-        if (newest == heldActionAt) return
-        heldActionAt = newest
-        holdJob?.cancel()
-        auctionUnderHold = false
-        if (old != null && next.isPlaying) {
-            val hasCard = next.lastCard?.let { kotlin.math.abs(it.at - newest) < 2500 } == true
-            // A small beat after the landing thump, capped hard.
-            val run = minOf(Choreography.curtain(legs, next.map.size, hasCard) + 0.3, 4.0)
-            heldMover = legs.firstOrNull()?.playerId
-            holdUntil = System.currentTimeMillis() + (run * 1000).toLong()
-            holdJob = viewModelScope.launch {
-                delay((run * 1000).toLong())
-                holdUntil = 0L
-                // The gavel waited behind the curtain with its auction.
-                if (auctionUnderHold && state?.auction != null) SoundKit.auction()
-                auctionUnderHold = false
+    private suspend fun release(journey: Journey) {
+        journey.landed = true
+        val entries = journey.entries.toList()
+        val queue = if (entries.size <= MAX_ENTRIES) entries
+        else entries.take(MAX_ENTRIES - 1) + entries.drop(MAX_ENTRIES - 1).reduce(Entry::plus)
+        for ((k, entry) in queue.withIndex()) {
+            if (k > 0) delay(seconds(Choreography.ENTRY_GAP))
+            land(entry)
+        }
+        journeys.remove(journey)
+        stage = journeys.filter { !it.cut }
+    }
+
+    /** One entry off the ledger and onto the table. */
+    private fun land(entry: Entry) {
+        if (entry.delta.isNotEmpty()) held = held.plusDelta(entry.delta.mapValues { -it.value })
+        if (entry.busts.isNotEmpty()) heldBusts = heldBusts - entry.busts
+        voice(entry)
+    }
+
+    /** A journey cut short: its walk stops and everything it held shows at once. */
+    private fun flush(journey: Journey) {
+        journey.job?.cancel()
+        journey.cut = true
+        journey.landed = true
+        journeys.remove(journey)
+        stage = journeys.filter { !it.cut }
+        if (journey.entries.isNotEmpty()) land(journey.entries.reduce(Entry::plus))
+    }
+
+    /** Off the stage, every journey, with nothing said: a reconnect, a new table, a rematch. */
+    private fun dropJourneys() {
+        for (j in journeys) {
+            j.job?.cancel()
+            j.cut = true
+            j.landed = true
+        }
+        journeys.clear()
+        if (stage.isNotEmpty()) stage = emptyList()
+        if (held.isNotEmpty()) held = emptyMap()
+        if (heldBusts.isNotEmpty()) heldBusts = emptySet()
+        gameOverHeld = false
+    }
+
+    /**
+     * Everything one change of cash says, said together: the badge and its
+     * coins on every seat that moved, and one sound for this device.
+     *
+     * A seat here that paid hears its "ishh" and feels the warning; a seat
+     * here that was paid hears the till a quarter second later, as the first
+     * coin drops into it and its count starts; anybody else's money is the
+     * rent's sag when it was rent, and the quiet till otherwise. A bankruptcy
+     * outranks all of it: the seat that fell hears the fall, the seat it paid
+     * the register, and everyone else the crash of coins — and the fallen
+     * seat gets no "+$300" for the debt the bankruptcy wiped. Then the log's
+     * own voices, and last the game-over, after the bust has had its say.
+     */
+    private fun voice(entry: Entry) {
+        val moved = entry.delta.filterKeys { it !in entry.busts }
+        if (moved.isNotEmpty()) {
+            var deltas = moneyDeltas
+            for ((pid, amount) in moved) {
+                val badge = MoneyDelta(amount = amount, id = ++deltaSeq)
+                deltas = deltas + (pid to badge)
+                viewModelScope.launch {
+                    delay(1_600)
+                    if (moneyDeltas[pid]?.id == badge.id) moneyDeltas = moneyDeltas - pid
+                }
+            }
+            moneyDeltas = deltas
+        }
+
+        var winAfter = 0L
+        if (entry.busts.isNotEmpty()) {
+            val paid = entry.busts.flatMap { entry.creditors[it].orEmpty() }
+            when {
+                entry.busts.any { isLocal(it) } -> {
+                    SoundKit.bankruptFall()
+                    Haptics.warn()
+                    winAfter = 2_100
+                }
+                paid.any { isLocal(it) } -> {
+                    SoundKit.bankruptKaching()
+                    viewModelScope.launch {
+                        delay(120)
+                        Haptics.turn()
+                    }
+                    winAfter = 1_200
+                }
+                else -> {
+                    SoundKit.bankruptCrash()
+                    winAfter = 1_200
+                }
             }
         } else {
-            heldMover = null
-            holdUntil = 0L
+            when {
+                moved.any { (pid, d) -> d < 0 && isLocal(pid) } -> {
+                    SoundKit.lose()
+                    Haptics.warn()
+                }
+                moved.any { (pid, d) -> d > 0 && isLocal(pid) } -> viewModelScope.launch {
+                    delay(250)
+                    SoundKit.gain()
+                    Haptics.tap()
+                }
+                moved.isNotEmpty() -> if ("rent" in entry.kinds) SoundKit.rent() else SoundKit.cash()
+            }
+            val kinds = entry.kinds
+            when {
+                "buy" in kinds -> {
+                    SoundKit.buy()
+                    Haptics.tap()
+                }
+                "jail" in kinds && !entry.walkedToJail -> SoundKit.jail()
+                "build" in kinds -> SoundKit.build()
+                "trade" in kinds -> SoundKit.trade()
+            }
+        }
+
+        if (entry.ended) {
+            gameOverJob?.cancel()
+            gameOverJob = viewModelScope.launch {
+                if (winAfter > 0) delay(winAfter)
+                gameOverHeld = false
+                val s = state?.takeIf { it.isEnded } ?: return@launch
+                val mine = localSeatWon(s)
+                SoundKit.win(mine)
+                // The winner's knock lands on the chord, not the pickup.
+                if (mine) {
+                    delay(320)
+                    Haptics.turn()
+                    delay(380)
+                } else {
+                    delay(700)
+                }
+                if (state?.isEnded == true) showGameOver = true
+            }
         }
     }
 
@@ -1467,20 +1836,27 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     /**
      * A drawn card waits for the piece it belongs to. The board releases it
      * (BoardView calls [revealCard] as a leg lands); this is only the floor
-     * under states with nothing to animate — a spectator opening the table
-     * mid-action, or a reconnect.
+     * under it, for a card whose walk the board is not performing. It is
+     * measured on the journey's own clock, so a card drawn on a double's
+     * re-roll waits for the walk it is queued behind as well as its own. A
+     * position — the first state of a table, or after a reconnect — only
+     * marks the card seen: it was drawn out of sight, and turning it over
+     * now would replay a moment nobody walked to.
      */
-    private fun noteCard(old: GameState?, next: GameState) {
+    private fun noteCard(old: GameState?, next: GameState, news: Boolean) {
         val card = next.lastCard ?: return
         if (card.at == lastCardAt) return
         lastCardAt = card.at
         cardJob?.cancel()
-        if (old == null) return
-        val legs = next.moves.orEmpty()
-        val delaySec = Choreography.timeline(legs, next.map.size, hasCard = true).cardAt ?: 0.0
+        if (old == null || !news) return
+        val journey = journeys.lastOrNull { !it.cut && abs(card.at - it.key) < 2500 }
+        val legs = journey?.legs ?: next.moves.orEmpty()
+        val lead = journey?.lead ?: Choreography.DICE_LEAD
+        val cardAt = Choreography.timeline(legs, next.map.size, hasCard = true, lead = lead).cardAt ?: 0.0
+        val reveal = (journey?.startAt ?: System.currentTimeMillis()) + seconds(cardAt + 0.35)
         pendingCard = card
         cardJob = viewModelScope.launch {
-            delay(((delaySec + 0.35) * 1000).toLong())
+            delay(reveal - System.currentTimeMillis())
             revealCard()
         }
     }
@@ -1529,34 +1905,16 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     private var heardLogAt: Double = 0.0
 
     /**
-     * Turns fresh log lines into sound.
+     * The one log line that is never held: the dice, heard the moment they
+     * are thrown, before the walk they start.
      *
-     * The log is the one feed that says what actually happened rather than
-     * what the board now looks like, which is why iOS and the web drive their
-     * sounds from it too. Money, auctions and chat have voices of their own
-     * above, so they are not here twice. Only lines newer than the last one
-     * heard play, and only the most telling one per push — iOS sounds the
-     * newest line alone, which leaves a roll that lands on rent silent; this
-     * picks the loudest thing that happened instead.
+     * Every other line's voice — the buy, the build, the trade, the prison
+     * door — is filed by the ledger with the money it came with, and heard
+     * when that lands (see [voice]). A first state never gets here: joining a
+     * game in progress must not play the last sixty lines.
      */
-    private fun soundsFor(old: GameState?, next: GameState) {
-        val fresh = next.log.filter { it.at > heardLogAt }
-        heardLogAt = next.log.lastOrNull()?.at ?: heardLogAt
-        // A first state is a position, not a journey: joining a game in
-        // progress must not play the last sixty lines.
-        if (old == null || fresh.isEmpty()) return
-
-        val kinds = fresh.mapTo(HashSet()) { it.kind }
-        // The token walker already clangs the gate on the walk to prison.
-        val walkedToJail = next.moves.orEmpty().any { it.cause == "jail" }
-        when {
-            "bankrupt" in kinds -> { SoundKit.bankrupt(); Haptics.warn() }
-            "jail" in kinds && !walkedToJail -> SoundKit.jail()
-            "trade" in kinds -> SoundKit.trade()
-            "build" in kinds -> SoundKit.build()
-            "buy" in kinds -> { SoundKit.buy(); Haptics.tap() }
-            "dice" in kinds -> SoundKit.dice()
-        }
+    private fun soundsFor(freshLog: List<LogLine>) {
+        if (freshLog.any { it.kind == "dice" }) SoundKit.dice()
     }
 
     /**
@@ -1566,9 +1924,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * that drew it, and by the floor timer above for the states where nothing
      * is animating. Idempotent on purpose: whichever gets there first wins and
      * the other is a no-op.
+     *
+     * `near` is the walker saying which journey it has just landed: a card
+     * drawn by the double queued behind it is not this landing's to turn.
      */
-    fun revealCard() {
+    fun revealCard(near: Double? = null) {
         val card = pendingCard ?: return
+        if (near != null && abs(card.at - near) >= 2500) return
         pendingCard = null
         if (state?.lastCard?.at != card.at) return
         cardPopup = card
@@ -2485,6 +2847,80 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
         private val PUBLIC_ROOMS = ListSerializer(PublicRoom.serializer())
         private val CHAT_LINES = ListSerializer(ChatMessage.serializer())
+
+        /**
+         * A journey that would have to wait longer than this behind its
+         * piece's last one is not queued: the older walk is cut and its money
+         * shown, as a cut walk always was.
+         */
+        private const val QUEUE_LIMIT_MS = 6_000L
+
+        /** A journey lands at most this many entries; anything after folds into the last. */
+        private const val MAX_ENTRIES = 4
+
+    }
+
+    /**
+     * One piece's walk on stage — every leg one push shipped, and the card it
+     * drew — with the money that belongs to it.
+     *
+     * [key] is the newest leg's stamp. [cast] is who the journey is about:
+     * the mover, everybody whose money moved in the push that opened it, and
+     * whoever a debt it left names — rent owed by a debtor who paid nothing
+     * yet moves no money and is still this journey's news. [startAt] and
+     * [landAt] are wall-clock ms: when the walk begins (after the one ahead
+     * of it, for a double's re-roll) and its payday. The walker plays the
+     * legs on exactly this clock.
+     */
+    class Journey internal constructor(
+        val key: Double,
+        val mover: String,
+        val legs: List<MoveLeg>,
+        val boardSize: Int,
+        val hasCard: Boolean,
+        val lead: Double,
+        val cast: Set<String>,
+        val startAt: Long,
+        val landAt: Long,
+    ) {
+        internal val entries = ArrayList<Entry>()
+        internal var job: Job? = null
+
+        /** Payday has come: nothing more is filed with it. */
+        internal var landed = false
+
+        /** Cut short — a reconnect, a new table, a walk too far behind — and not to be walked any further. */
+        var cut = false
+            internal set
+    }
+
+    /**
+     * One push's worth of a journey's money and what it would say: the change
+     * per seat, the log's kinds (less the dice and the gavel, which are never
+     * held), who went bankrupt, who each bankruptcy paid, and whether it
+     * ended the game.
+     */
+    data class Entry(
+        val delta: Map<String, Int>,
+        val kinds: Set<String>,
+        val busts: Set<String>,
+        val creditors: Map<String, Set<String>>,
+        val ended: Boolean,
+        val walkedToJail: Boolean,
+    ) {
+        val isEmpty: Boolean get() = delta.isEmpty() && kinds.isEmpty() && busts.isEmpty() && !ended
+
+        /** Two entries said as one — the tail of a journey that filed more than four. */
+        operator fun plus(o: Entry) = Entry(
+            delta = delta.plusDelta(o.delta),
+            kinds = kinds + o.kinds,
+            busts = busts + o.busts,
+            creditors = (creditors.keys + o.creditors.keys).associateWith {
+                creditors[it].orEmpty() + o.creditors[it].orEmpty()
+            },
+            ended = ended || o.ended,
+            walkedToJail = walkedToJail || o.walkedToJail,
+        )
     }
 }
 
@@ -2590,6 +3026,19 @@ enum class TableConfirm {
      * of the game."
      */
     DEBT_BANKRUPT,
+}
+
+/** Seconds on the choreography's clock, as the milliseconds a timer waits. */
+private fun seconds(s: Double): Long = (s * 1000).toLong()
+
+/** Adds one change of cash to another, forgetting any seat it brings back to zero. */
+private fun Map<String, Int>.plusDelta(d: Map<String, Int>): Map<String, Int> {
+    val out = HashMap(this)
+    for ((pid, amount) in d) {
+        val sum = (out[pid] ?: 0) + amount
+        if (sum == 0) out.remove(pid) else out[pid] = sum
+    }
+    return out
 }
 
 /** One seat's cash just moved by [amount]; [id] tells two moves on the same seat apart. */

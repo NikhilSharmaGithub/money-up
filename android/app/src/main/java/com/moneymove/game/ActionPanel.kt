@@ -172,6 +172,9 @@ private fun Dock(
     val moment = when {
         store.isMyTurn && turn != null -> DockMoment(DockStage.MINE, turn.playerId)
         state.isPlaying -> DockMoment(DockStage.WAITING)
+        // The game is over on the server, but the piece whose walk ended it
+        // has not landed yet: the dock keeps waiting until the fanfare.
+        state.isEnded && store.gameOverHeld -> DockMoment(DockStage.WAITING)
         state.isEnded -> DockMoment(DockStage.ENDED)
         else -> DockMoment(DockStage.IDLE)
     }
@@ -715,7 +718,8 @@ private fun DebtControls(
 @Composable
 private fun WaitingRow(store: GameStore, state: GameState) {
     val p = P.current
-    val locals = state.players.filter { store.isLocal(it.id) }
+    // As shown: "you went bankrupt" is news, and waits for its piece to land.
+    val locals = store.shownPlayers.filter { store.isLocal(it.id) }
     val me = locals.firstOrNull { it.id == store.meId } ?: locals.firstOrNull()
     if (me != null && locals.all { it.isBankrupt }) {
         Row(

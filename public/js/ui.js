@@ -245,13 +245,21 @@ let livePlayersState = null;
 const isOut = (p) => !!(p.bankrupt || p.timedOut);
 
 /**
+ * How a seat reads when the caller has nothing held back: the server's own
+ * numbers. app.js passes its own reading instead while a piece is still
+ * walking to the rent it has already been charged — see "the purse ledger".
+ * `snap` is a first paint: numbers are put in place, not counted to.
+ */
+const RAW = { money: (p) => p.money || 0, worth: (p) => p.netWorth || 0, out: isOut, snap: false };
+
+/**
  * Live standings by net worth. Seating order breaks ties so two players on the
  * same money don't swap numbers back and forth on every push.
  */
-function rankByWorth(state) {
+function rankByWorth(state, shown = RAW) {
   const rank = new Map();
   state.players
-    .map((p, seat) => ({ id: p.id, seat, worth: p.netWorth || 0, out: isOut(p) }))
+    .map((p, seat) => ({ id: p.id, seat, worth: shown.worth(p), out: shown.out(p) }))
     .sort((a, b) => Number(a.out) - Number(b.out) || b.worth - a.worth || a.seat - b.seat)
     .forEach((p, k) => rank.set(p.id, k + 1));
   return rank;
@@ -274,19 +282,21 @@ function nextUpId(state) {
   return null;
 }
 
-export function renderPlayers(state, meId, el, actions) {
+export function renderPlayers(state, meId, el, actions, shown = RAW) {
+  // The trade sheet reads this, and a trade is made with real money — so it
+  // is the server's state, never the shown one.
   livePlayersState = state;
-  const rank = rankByWorth(state);
+  const rank = rankByWorth(state, shown);
   const nextUp = nextUpId(state);
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
-  const structure = state.players.map((p) => `${p.id}:${isOut(p) ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
+  const structure = state.players.map((p) => `${p.id}:${shown.out(p) ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
     + `:${state.status}:${state.hostId}:${emptySeats}`;
 
   if (el.dataset.structure !== structure) {
     el.dataset.structure = structure;
     el.innerHTML = state.players.map((p) => `
-      <div class="player-card ${isOut(p) ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
+      <div class="player-card ${shown.out(p) ? 'dead' : ''} ${p.id === meId ? 'me' : ''}" data-pid="${p.id}">
         <span class="prank hidden"></span>
         <div class="avatar ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">
           <span class="avatar-face"></span>
@@ -384,28 +394,38 @@ export function renderPlayers(state, meId, el, actions) {
 
     // money + delta bubble
     const moneyEl = card.querySelector('.pmoney');
+    const cash = shown.money(p);
+    const out = shown.out(p);
     // Below zero the wallet IS the debt: it wears the danger red, and the row
     // pulses quietly until the balance climbs back into the black.
-    const inRed = p.money < 0 && !isOut(p);
+    const inRed = cash < 0 && !out;
     card.classList.toggle('in-debt', inRed);
     moneyEl.classList.toggle('neg', inRed);
-    const shown = state.status === 'lobby' ? money(p.money)
-      : p.timedOut ? '<span class="dim">out of the game</span>'
-      : p.bankrupt ? '<span class="dim">bankrupt</span>' : money(p.money);
-    if (moneyEl.dataset.v !== shown) {
+    const label = state.status === 'lobby' ? money(p.money)
+      : out ? `<span class="dim">${p.timedOut ? 'out of the game' : 'bankrupt'}</span>`
+      : money(cash);
+    if (moneyEl.dataset.v !== label) {
       const before = prevMoney.get(p.id);
-      moneyEl.dataset.v = shown;
-      moneyEl.innerHTML = shown;
-      // A rematch resets every wallet at once; that is a new game starting,
-      // not eight players suddenly winning money.
-      if (before != null && before !== p.money && !isOut(p) && state.status === 'playing') {
-        spawnDelta(card, p.money - before);
+      moneyEl.dataset.v = label;
+      // A payment lands as one event: the badge, the coins, the number
+      // counting to its new value. A lobby is not a game yet, a rematch
+      // resets every wallet at once (a new game, not eight players suddenly
+      // winning), a first paint is a position, and a seat that has just gone
+      // bankrupt says so instead of "+$300" for the debt it walked away from.
+      if (before != null && before !== cash && !out && state.status !== 'lobby' && !shown.snap) {
+        const paid = cash > before;
+        countMoney(moneyEl, before, cash, paid ? 250 : 0);
+        spawnDelta(card, cash - before);
+        spillCoins(card, cash - before);
         moneyEl.classList.remove('bump');
         void moneyEl.offsetWidth;
         moneyEl.classList.add('bump');
+      } else {
+        stopCount(moneyEl);
+        moneyEl.innerHTML = label;
       }
     }
-    prevMoney.set(p.id, p.money);
+    prevMoney.set(p.id, cash);
 
     // owned set chips — they stay up after the last bankruptcy, because the
     // final board is exactly what everyone wants to read on the way out.
@@ -427,7 +447,7 @@ export function renderPlayers(state, meId, el, actions) {
       }).join('')
         + (rails ? `<i class="chip plain" title="Airports">${icon('plane')}${rails}</i>` : '')
         + (utils ? `<i class="chip plain" title="Utilities">${icon('bulb')}${utils}</i>` : '');
-      const final = html || `<span class="dim">${isOut(p) ? 'nothing left' : 'no property yet'}</span>`;
+      const final = html || `<span class="dim">${out ? 'nothing left' : 'no property yet'}</span>`;
       if (chips.dataset.v !== final) { chips.dataset.v = final; chips.innerHTML = final; }
     } else if (chips.dataset.v !== 'lobby') {
       chips.dataset.v = 'lobby';
@@ -483,6 +503,66 @@ function spawnDelta(card, amount) {
   el.textContent = `${amount > 0 ? '+' : '−'}${money(Math.abs(amount))}`;
   slot.appendChild(el);
   setTimeout(() => el.remove(), 1500);
+}
+
+/**
+ * Three coins for a payment: lifting off the purse that paid, dropping into
+ * the one that was paid — a beat later, so the money reads as travelling
+ * from one seat to the other. The stylesheet does the moving (and hides them
+ * for anyone who has asked for less motion).
+ */
+function spillCoins(card, amount) {
+  const slot = card.querySelector('.delta-slot');
+  if (!slot) return;
+  const way = amount < 0 ? 'out' : 'in';
+  const coins = [0, 1, 2].map((k) => {
+    const el = document.createElement('i');
+    el.className = `coin-spill ${way}`;
+    el.style.setProperty('--k', String(k));
+    el.innerHTML = icon('coin', 13);
+    slot.appendChild(el);
+    return el;
+  });
+  setTimeout(() => coins.forEach((el) => el.remove()), 900);
+}
+
+/**
+ * A purse counting to its new value instead of snapping to it — the number
+ * moving is the money arriving. 600ms, easing out; a payee starts a quarter
+ * second late, as its first coin lands. A second payment mid-count picks up
+ * from whatever the purse is showing, so the number never jumps backwards.
+ */
+const counts = new WeakMap();
+
+function stopCount(el) {
+  const run = counts.get(el);
+  if (!run) return;
+  cancelAnimationFrame(run.raf);
+  clearTimeout(run.wait);
+  counts.delete(el);
+}
+
+function countMoney(el, from, to, delay = 0) {
+  const running = counts.get(el);
+  const start = running ? running.now : from;
+  stopCount(el);
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.innerHTML = money(to); return; }
+  const run = { raf: 0, wait: 0, now: start };
+  counts.set(el, run);
+  el.innerHTML = money(start);
+  const go = () => {
+    const t0 = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - t0) / 600);
+      run.now = Math.round(start + (to - start) * (1 - (1 - t) ** 3));
+      el.innerHTML = money(run.now);
+      if (t < 1) run.raf = requestAnimationFrame(step);
+      else counts.delete(el);
+    };
+    run.raf = requestAnimationFrame(step);
+  };
+  if (delay) run.wait = setTimeout(go, delay);
+  else go();
 }
 
 // ──────────────────────────────────────────────────────────── right panel ──

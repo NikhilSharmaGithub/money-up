@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +91,11 @@ fun AppScaffold(
     // something existing players should read, INTRO_VERSION goes up and it
     // shows once more.
     var welcome by remember { mutableStateOf(store.prefs.introSeen < INTRO_VERSION) }
+    // The rolling die, once per launch. Saveable rather than remembered, so
+    // turning the phone or a theme rebuilding the activity mid-game never
+    // plays it again — but the app opened afresh from its icon does, as the
+    // iPhone does every time it starts.
+    var splashing by rememberSaveable { mutableStateOf(true) }
     var howTo by remember { mutableStateOf(false) }
     var notices by remember { mutableStateOf(false) }
 
@@ -194,8 +200,9 @@ fun AppScaffold(
             CompositionLocalProvider(LocalBackdrop provides null) {
                 // Six cards for somebody who has never been here, over everything
                 // else, because a stranger dropped onto a board with eight buttons on
-                // it is how a game loses the people who would have liked it.
-                if (welcome) {
+                // it is how a game loses the people who would have liked it. Not
+                // under the splash: two flourishes at once is neither.
+                if (welcome && !splashing) {
                     WelcomeIntro {
                         welcome = false
                         store.prefs.introSeen = INTRO_VERSION
@@ -212,6 +219,15 @@ fun AppScaffold(
 
             // Toasts sit above everything, including a table.
             ToastLayer(store, atTable, Modifier.align(Alignment.BottomCenter))
+
+            // The splash, over all of it — a table a deep link has already
+            // seated included, which it fades off, as on iOS. Nothing it
+            // draws samples the page it covers.
+            if (splashing) {
+                CompositionLocalProvider(LocalBackdrop provides null) {
+                    SplashView { splashing = false }
+                }
+            }
         }
     }
 }

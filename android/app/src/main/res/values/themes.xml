@@ -13,10 +13,17 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
-    <!-- Shown while the app boots, so it never flashes white. -->
+    <!--
+      Shown while the app boots, so it never flashes white. It is only the
+      page: the die is drawn once, rolling, by the splash the app itself
+      plays on its first frame (Splash.kt), so the system's icon is left
+      empty rather than showing a still die that then vanishes and rolls
+      back in. The page is the default table style's, light or night, so the
+      hand-over to that first frame is seamless for most players.
+    -->
     <style name="Theme.MoneyMove.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/felt</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_die</item>
+        <item name="windowSplashScreenBackground">@color/splash_page</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_clear</item>
         <item name="postSplashScreenTheme">@style/Theme.MoneyMove</item>
     </style>
 </resources>

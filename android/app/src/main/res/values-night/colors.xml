@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Midnight Felt's night page (Theme.kt), under the system splash. -->
+    <color name="splash_page">#0C1310</color>
+</resources>

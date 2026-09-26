@@ -6,9 +6,10 @@ package com.moneymove.game
  * The server resolves a whole roll instantly — dice, walk, card, second walk
  * — and ships every leg in `state.moves`. These timings decide when each part
  * is ALLOWED on stage: the dice get their spring, the piece walks, the card is
- * read, the piece obeys it. One source of truth so the walker and the popup
- * agree, ported beat for beat from the iOS app so a player on a phone and a
- * player on a browser watch the same thing happen at the same speed.
+ * read, the piece obeys it — and only then does the money move ([payday]).
+ * One source of truth so the walker, the popup and the purse agree, ported
+ * beat for beat from the iOS app so a player on a phone and a player on a
+ * browser watch the same thing happen at the same speed.
  */
 object Choreography {
 
@@ -23,6 +24,26 @@ object Choreography {
 
     /** Breath between legs. */
     const val SETTLE = 0.18
+
+    /**
+     * A card that pays or charges without moving the piece is read before the
+     * money moves: this long after it turns over, the purse follows it.
+     */
+    const val CARD_READ = 0.45
+
+    /**
+     * The longest any money may wait on its journey. The walk is theatre and
+     * the shot clock is not, so a balance is never more than this far behind
+     * the server, however long the story.
+     */
+    const val MONEY_CAP = 6.0
+
+    /**
+     * Between the entries one journey releases: the rent, then a bot's
+     * scramble to raise cash, then the bust — heard as three things that
+     * happened, not one chord.
+     */
+    const val ENTRY_GAP = 0.5
 
     fun pace(distance: Int): Double = when {
         distance > 12 -> 0.07
@@ -45,13 +66,18 @@ object Choreography {
 
     /**
      * Per-leg start offsets plus the card-reveal moment, all measured from the
-     * push's arrival. `cardAt` is null when the action drew no card.
+     * journey's start. `cardAt` is null when the action drew no card.
+     *
+     * `lead` is the pause before a rolled first leg: [DICE_LEAD] while the dice
+     * are still landing, or [SETTLE] for a journey queued behind the same
+     * piece's last one — a double's re-roll, whose dice were already watched
+     * landing while the first walk was still going.
      */
-    fun timeline(legs: List<MoveLeg>, boardSize: Int, hasCard: Boolean): Timeline {
+    fun timeline(legs: List<MoveLeg>, boardSize: Int, hasCard: Boolean, lead: Double = DICE_LEAD): Timeline {
         if (legs.isEmpty()) return Timeline(emptyList(), if (hasCard) 0.2 else null)
         val starts = ArrayList<Double>(legs.size)
         var cardAt: Double? = null
-        var t = if (legs[0].cause == "card") 0.2 else DICE_LEAD
+        var t = if (legs[0].cause == "card") 0.2 else lead
         for ((i, leg) in legs.withIndex()) {
             if (i > 0) {
                 t += SETTLE
@@ -74,10 +100,25 @@ object Choreography {
      * rode along, it has had its read. The decision UI born of this action —
      * the buy prompt, an auction the landing opened — waits for this moment.
      */
-    fun curtain(legs: List<MoveLeg>, boardSize: Int, hasCard: Boolean): Double {
-        val (starts, cardAt) = timeline(legs, boardSize, hasCard)
+    fun curtain(legs: List<MoveLeg>, boardSize: Int, hasCard: Boolean, lead: Double = DICE_LEAD): Double {
+        val (starts, cardAt) = timeline(legs, boardSize, hasCard, lead)
         var end = starts.zip(legs) { s, leg -> s + legDuration(leg, boardSize) }.maxOrNull() ?: 0.0
         if (cardAt != null) end = maxOf(end, cardAt + CARD_HOLD)
         return end
+    }
+
+    /**
+     * When the money a journey carries may show: its payday.
+     *
+     * The end of the last leg — a beat after the landing thump, so the rent
+     * reads as knock, then ka-ching. A card that pays or charges without a leg
+     * of its own turns over after the walk, and the purse waits [CARD_READ]
+     * more for it to be read. Never later than [MONEY_CAP].
+     */
+    fun payday(legs: List<MoveLeg>, boardSize: Int, hasCard: Boolean, lead: Double = DICE_LEAD): Double {
+        val (starts, cardAt) = timeline(legs, boardSize, hasCard, lead)
+        val lastEnd = starts.lastOrNull()?.let { it + legDuration(legs.last(), boardSize) } ?: 0.0
+        val pay = if (hasCard && cardAt != null && cardAt >= lastEnd) cardAt + CARD_READ else lastEnd
+        return minOf(pay, MONEY_CAP)
     }
 }

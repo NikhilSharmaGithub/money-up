@@ -28,7 +28,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -149,17 +148,18 @@ fun BoardView(
     // server's tile lights the card's destination before the card has been
     // read — so the board follows the piece instead.
     //
-    // The walk is keyed on the journey alone. The server bumps the version on
-    // every push, and a push landing mid-walk — the rent, the card, somebody's
-    // chat — used to cancel the walk and snap the piece to its last tile.
-    // iOS keeps a walk that is already heading somewhere going; so does this.
-    // Every other piece is set down on each push by the cheap effect below,
-    // which leaves the walking one alone.
-    val latest = rememberUpdatedState(state)
-    LaunchedEffect(state.moves?.lastOrNull()?.seq) {
-        walker.reconcile(state, latest = { latest.value }) { store.revealCard() }
+    // The walks are the store's journeys, performed for as long as the board
+    // is up: one long-lived effect, not one keyed on the newest leg, so a
+    // double's re-roll queues behind the walk in progress instead of
+    // relaunching over it — and each journey plays on the clock the store
+    // holds its money to, so the rent lands a beat after the piece does and
+    // never before. Every other piece is set down on each push by the cheap
+    // effect below, which leaves the walking ones alone; it runs again when a
+    // bankruptcy lands, so a fallen piece leaves the board on its release.
+    LaunchedEffect(walker) {
+        walker.perform(store) { journey -> store.revealCard(near = journey.key) }
     }
-    LaunchedEffect(state.version) { walker.settle(state) }
+    LaunchedEffect(state.version, store.heldBusts) { walker.settle(store) }
 
     // The light moves a leg at a time, as iOS's TurnSpotlight moves it: it
     // stays on the tile the turn set off from while the piece walks, and
@@ -958,7 +958,9 @@ private fun TokenLayer(
     // Only a table in play has pieces on it; a lobby shows the board bare.
     if (!state.isPlaying && !state.isEnded) return
     val measurer = rememberTextMeasurer(cacheSize = 16)
-    val alive = state.players.filter { !it.isBankrupt }
+    // The seats as shown: a piece whose bankruptcy is still waiting on its
+    // walk finishes that walk before it leaves the board.
+    val alive = store.shownPlayers.filter { !it.isBankrupt }
     val breathe = rememberInfiniteTransition(label = "piece")
     val pulse = breathe.animateFloat(
         0f, 1f, infiniteRepeatable(tween(900, easing = EaseInOut), RepeatMode.Reverse), label = "pulse",

@@ -2,6 +2,8 @@
 // style: an ivory die (showing five) on a gold ring, plus the wordmark.
 // Also home of the cold-launch splash — the die rolls in, the pips land,
 // the name slides up, then the whole thing hands over to the landing screen.
+// Android draws the same splash on the same clock (Splash.kt); SoundKit's
+// launch() is scored to these timings on both.
 
 import SwiftUI
 
@@ -13,10 +15,13 @@ struct LogoMark: View {
     var animated = false
 
     @Environment(\.colorScheme) private var scheme
+    /// No roll, no ring swelling, no pip cascade: the mark is simply there,
+    /// and the splash fades it in.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rolledIn = false
     @State private var pipsShown = 0
 
-    private var settled: Bool { !animated || rolledIn }
+    private var settled: Bool { !animated || reduceMotion || rolledIn }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -47,7 +52,7 @@ struct LogoMark: View {
                 .scaleEffect(settled ? 1 : 0.3)
         }
         .onAppear {
-            guard animated, !rolledIn else { pipsShown = 5; return }
+            guard animated, !rolledIn, !reduceMotion else { pipsShown = 5; return }
             withAnimation(.spring(duration: 0.85, bounce: 0.38)) { rolledIn = true }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(520))
@@ -74,7 +79,7 @@ struct LogoMark: View {
                     .fill(Color(hex: 0x1B5E3F))
                     .frame(width: r * 2, height: r * 2)
                     .offset(spot)
-                    .scaleEffect(!animated || k < pipsShown ? 1 : 0.01)
+                    .scaleEffect(!animated || reduceMotion || k < pipsShown ? 1 : 0.01)
             }
         }
     }
@@ -102,10 +107,19 @@ struct Wordmark: View {
 
 /// Cold-launch flourish: felt table, the die rolls in and lands its pips,
 /// the wordmark rises, then everything fades into the landing screen.
+///
+/// Scored: launch() clacks while the die spins in, thumps as its spring
+/// settles (0.40), rises G → C with the wordmark (0.66 / 0.86) and shimmers
+/// with the tagline (0.97), and has rung out before the fade at 1.92. Under
+/// Reduce Motion the mark and the name simply fade in together — the sound
+/// still plays, because sound is not motion.
 struct SplashView: View {
     let done: () -> Void
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Only Reduce Motion uses it: the settled mark's fade-in.
+    @State private var showMark = false
     @State private var showWord = false
     @State private var showTag = false
     @State private var leaving = false
@@ -124,10 +138,11 @@ struct SplashView: View {
             VStack(spacing: 26) {
                 LogoMark(size: 118, animated: true)
                     .padding(.bottom, 8)
+                    .opacity(!reduceMotion || showMark ? 1 : 0)
 
                 Wordmark(fontSize: 38)
                     .opacity(showWord ? 1 : 0)
-                    .offset(y: showWord ? 0 : 16)
+                    .offset(y: showWord || reduceMotion ? 0 : 16)
 
                 Text("Buy streets. Build hotels. Bankrupt your friends.")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
@@ -139,10 +154,15 @@ struct SplashView: View {
         .opacity(leaving ? 0 : 1)
         .task {
             SoundKit.shared.warmUp()
-            SoundKit.shared.dice()
-            try? await Task.sleep(for: .milliseconds(650))
-            withAnimation(.spring(duration: 0.5, bounce: 0.25)) { showWord = true }
-            try? await Task.sleep(for: .milliseconds(320))
+            SoundKit.shared.launch()
+            if reduceMotion {
+                withAnimation(.easeOut(duration: 0.3)) { showMark = true; showWord = true }
+                try? await Task.sleep(for: .milliseconds(970))
+            } else {
+                try? await Task.sleep(for: .milliseconds(650))
+                withAnimation(.spring(duration: 0.5, bounce: 0.25)) { showWord = true }
+                try? await Task.sleep(for: .milliseconds(320))
+            }
             withAnimation(.easeOut(duration: 0.4)) { showTag = true }
             try? await Task.sleep(for: .milliseconds(950))
             withAnimation(.easeInOut(duration: 0.45)) { leaving = true }

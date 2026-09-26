@@ -13,6 +13,7 @@ import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -24,6 +25,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -1050,6 +1052,14 @@ val PagePadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
  * `text` is for the rows that say more than the number — the debt panel's
  * "$300 in the red" is `MoneyText(balance, text = "${money(-balance)} in the
  * red")` — and the colour and the pulse still follow `amount`.
+ *
+ * `count` is for the seats money lands on: rather than rolling, the number
+ * counts to what it became over 0.6s — straight away for a seat that paid,
+ * a quarter second later for one that was paid, as the first coin drops into
+ * it. A change of `snapKey` (the store's paint epoch: a first paint, a
+ * reconnect) sets it down without counting, because that is a position, not
+ * news. Under Reduce Motion it steps, as the plain roll does. A swap to
+ * words — "bankrupt" — still rolls.
  */
 @Composable
 fun MoneyText(
@@ -1060,6 +1070,8 @@ fun MoneyText(
     positive: Color = P.current.good,
     bankrupt: Boolean = false,
     text: String = money(amount),
+    count: Boolean = false,
+    snapKey: Any? = null,
 ) {
     val p = P.current
     val inDebt = amount < 0 && !bankrupt
@@ -1067,6 +1079,38 @@ fun MoneyText(
         bankrupt -> quietInk()
         inDebt -> p.bad
         else -> positive
+    }
+    if (count && !rememberReduceMotion()) {
+        val counted = remember { Animatable(amount, Int.VectorConverter) }
+        var epoch by remember { mutableStateOf(snapKey) }
+        LaunchedEffect(amount, snapKey) {
+            if (snapKey != epoch) {
+                epoch = snapKey
+                counted.snapTo(amount)
+                return@LaunchedEffect
+            }
+            val paid = amount > counted.value
+            counted.animateTo(amount, tween(600, delayMillis = if (paid) 250 else 0, easing = EaseOutCubic))
+        }
+        // Words replace the number rather than count to it.
+        val words = text.takeIf { it != money(amount) }
+        AnimatedContent(
+            targetState = words,
+            modifier = modifier.debtPulse(inDebt),
+            transitionSpec = {
+                val roll = tween<IntOffset>(400, easing = FastOutSlowInEasing)
+                (slideInVertically(roll) { h -> -h / 2 } + fadeIn(tween(400))) togetherWith
+                    (slideOutVertically(roll) { h -> h / 2 } + fadeOut(tween(200))) using
+                    SizeTransform(clip = false)
+            },
+            label = "moneyCount",
+        ) { said ->
+            Text(
+                said ?: money(counted.value),
+                color = colour, fontSize = fontSize, fontWeight = fontWeight, maxLines = 1, softWrap = false,
+            )
+        }
+        return
     }
     AnimatedContent(
         targetState = amount to text,

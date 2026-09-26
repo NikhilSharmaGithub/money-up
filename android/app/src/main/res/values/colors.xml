@@ -6,4 +6,6 @@
     <color name="ink">#EFEDE2</color>
     <color name="ink_dim">#8A968C</color>
     <color name="gold">#E3A93C</color>
+    <!-- Midnight Felt's light page (Theme.kt), under the system splash. -->
+    <color name="splash_page">#EFE9DC</color>
 </resources>

@@ -76,6 +76,20 @@ const slop = (t) => Math.max(0, t + (Math.random() * 2 - 1) * 0.012);
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 /**
+ * One coin, struck. A tick of bright air for the edge meeting something, the
+ * ring itself, and a second partial 2.41 times up — that inharmonic partial is
+ * what makes it a coin rather than a bell. Every recipe that pays, pours or
+ * drops money is built out of this, so a win, a bust and a bankruptcy all
+ * spend the same currency. The iPhone and Android kits hold the same helper
+ * with the same numbers.
+ */
+function coin(at, f, v) {
+  noise({ dur: 0.014, from: 5200, to: 3800, q: 6, vol: v * 0.5, at });
+  tone({ freq: jit(f, 0.01), dur: 0.11, type: 'sine', vol: v, at });
+  tone({ freq: jit(f * 2.41, 0.01), dur: 0.07, type: 'sine', vol: v * 0.45, at: at + 0.003 });
+}
+
+/**
  * What a piece sounds like on the move. Only the ones with an obvious voice
  * are listed; everything else — a hat, a briefcase, a diamond — keeps the
  * plain tick, because inventing a noise for a top hat is how a board starts
@@ -264,9 +278,67 @@ export const sfx = {
     tone({ freq: jit(1174), dur: 0.18, type: 'sine', vol: 0.05, at: 0.24 });
   },
   error: () => tone({ freq: jit(180), dur: 0.18, type: 'triangle', vol: 0.13 }),
-  bankrupt: () => {
-    tone({ freq: jit(400), to: 90, dur: 0.7, type: 'triangle', vol: 0.16 });
-    noise({ dur: 0.4, from: 500, to: 120, q: 0.8, vol: 0.06, at: 0.15 });
+
+  // ── A bankruptcy, heard three ways ──
+  // One event, and the table hears it from three chairs. The player it
+  // happened to gets the comic fall; the player who did it gets the till
+  // ringing; everyone else hears a pile of money hit the floor. Played once,
+  // when the bust is shown — which is after the piece that caused it has
+  // landed, never while it is still walking there.
+
+  // Yours: three sad-trombone steps, each sagging a semitone as it sounds,
+  // then the long "wah-wah" — a detuned twin beating against it — the thud
+  // of the floor, and the last of your money rolling away from you.
+  bankruptFall: () => {
+    [[0, 392], [0.29, 370], [0.58, 349.2]].forEach(([t, f]) => {
+      tone({ freq: jit(f, 0.005), to: f * 0.95, dur: 0.26, type: 'triangle', vol: 0.12, at: t });
+      tone({ freq: f / 2, to: f * 0.475, dur: 0.26, type: 'sine', vol: 0.05, at: t });
+    });
+    tone({ freq: 329.6, to: 207.7, dur: 0.9, type: 'triangle', vol: 0.13, at: 0.87 });
+    tone({ freq: 333.4, to: 210, dur: 0.9, type: 'triangle', vol: 0.05, at: 0.87 });
+    tone({ freq: 164.8, to: 103.8, dur: 0.9, type: 'sine', vol: 0.06, at: 0.87 });
+    tone({ freq: 90, to: 48, dur: 0.32, type: 'sine', vol: 0.13, at: 1.62 });
+    noise({ dur: 0.28, from: 500, to: 120, q: 0.8, vol: 0.07, at: 1.62 });
+    coin(1.70, 1760, 0.035);
+    coin(1.86, 1480, 0.028);
+    coin(2.06, 1250, 0.02);
+  },
+
+  // The creditor's: a cash register. Keys, the drawer thrown open, the bell,
+  // a rising sting into a bright chord, and the takings dropped into the till
+  // one coin after another.
+  bankruptKaching: () => {
+    noise({ dur: 0.03, from: 3000, to: 1700, q: 6, vol: 0.11, at: 0 });
+    tone({ freq: jit(210), to: 150, dur: 0.05, type: 'triangle', vol: 0.06, at: 0.002 });
+    noise({ dur: 0.05, from: 1600, to: 700, q: 2, vol: 0.10, at: 0.07 });
+    tone({ freq: jit(140), to: 95, dur: 0.08, type: 'triangle', vol: 0.07, at: 0.075 });
+    tone({ freq: 2093, dur: 0.7, type: 'sine', vol: 0.10, at: 0.12 });
+    tone({ freq: 2637, dur: 0.5, type: 'sine', vol: 0.05, at: 0.121 });
+    tone({ freq: 4186, dur: 0.28, type: 'sine', vol: 0.025, at: 0.122 });
+    tone({ freq: 1046.5, dur: 0.55, type: 'triangle', vol: 0.045, at: 0.12 });
+    tone({ freq: jit(783.99, 0.004), to: 1046.5, dur: 0.14, type: 'triangle', vol: 0.09, at: 0.22 });
+    tone({ freq: 1046.5, dur: 0.45, type: 'triangle', vol: 0.08, at: 0.34 });
+    tone({ freq: 1318.5, dur: 0.45, type: 'triangle', vol: 0.065, at: 0.35 });
+    tone({ freq: 1568, dur: 0.5, type: 'sine', vol: 0.045, at: 0.36 });
+    [[0.40, 0.05], [0.46, 0.047], [0.51, 0.044], [0.58, 0.04], [0.67, 0.035], [0.79, 0.03]]
+      .forEach(([t, v]) => coin(t, rnd(2000, 2900), v));
+  },
+
+  // Everyone else's: the weight of it landing, the old fall underneath, a
+  // crash, a dozen coins scattering further apart as they go (each gap 1.2×
+  // the last), and one coin left spinning down until it lies flat.
+  bankruptCrash: () => {
+    tone({ freq: jit(130), to: 70, dur: 0.24, type: 'sine', vol: 0.10, at: 0 });
+    noise({ dur: 0.20, from: 2000, to: 600, q: 0.9, vol: 0.09, at: 0 });
+    tone({ freq: jit(400), to: 110, dur: 0.55, type: 'triangle', vol: 0.06, at: 0 });
+    noise({ dur: 0.12, from: 5200, to: 2600, q: 1.2, vol: 0.08, at: 0.015 });
+    [0.030, 0.052, 0.078, 0.110, 0.148, 0.194, 0.249, 0.315, 0.394, 0.489, 0.602, 0.738]
+      .forEach((t, k) => coin(t, rnd(1600, 3000), 0.05 * (1 - 0.055 * k)));
+    [0.86, 0.93, 0.99, 1.04, 1.08, 1.11].forEach((t, j) => {
+      noise({ dur: 0.01, from: 4200, to: 3000, q: 5, vol: 0.03 * (1 - 0.1 * j), at: t });
+      tone({ freq: jit(2400, 0.02), dur: 0.02, type: 'sine', vol: 0.015, at: t });
+    });
+    tone({ freq: jit(1900), dur: 0.06, type: 'sine', vol: 0.02, at: 1.15 });
   },
   // an accelerating riffle of card snaps, then a rising run
   shuffle: () => {
@@ -279,11 +351,60 @@ export const sfx = {
     noise({ dur: 0.24, from: 1400, to: 500, q: 1, vol: 0.09, at: t });
     [392, 494, 587, 784].forEach((f, i) => tone({ freq: jit(f, 0.006), dur: 0.18, type: 'triangle', vol: 0.09, at: t + 0.18 + i * 0.07 }));
   },
-  win: () => {
-    [523, 659, 784, 1047, 1319].forEach((f, i) => {
-      const at = slop(i * 0.09);
-      tone({ freq: jit(f, 0.006), dur: 0.5, type: 'triangle', vol: 0.14, at });
-      tone({ freq: jit(f * 2, 0.006), dur: 0.3, type: 'sine', vol: 0.04, at: at + 0.02 });
+  // The game is over. The winner hears a pickup arpeggio into a held C major
+  // (a +5-cent twin on the top C gives it its shimmer), a run of sparkle, and
+  // then their winnings poured out: nine coins that pour and slow, and the
+  // pile settling. Everyone else hears the same fanfare a little quieter and
+  // without the coins — the table cheering, not their own till.
+  win: (mine = true) => {
+    const k = mine ? 1 : 0.75;
+    [392, 523.25, 659.25, 783.99].forEach((f, i) => {
+      const at = slop(0.075 * i);
+      tone({ freq: jit(f, 0.006), dur: 0.18, type: 'triangle', vol: 0.10 * k, at });
+      tone({ freq: jit(2 * f, 0.006), dur: 0.12, type: 'sine', vol: 0.03 * k, at: at + 0.01 });
     });
+    tone({ freq: 130.8, dur: 1.2, type: 'sine', vol: 0.09 * k, at: 0.32 });
+    tone({ freq: jit(523.25, 0.004), dur: 1.3, type: 'triangle', vol: 0.085 * k, at: 0.32 });
+    tone({ freq: jit(659.25, 0.004), dur: 1.3, type: 'triangle', vol: 0.07 * k, at: 0.33 });
+    tone({ freq: jit(783.99, 0.004), dur: 1.3, type: 'triangle', vol: 0.065 * k, at: 0.34 });
+    tone({ freq: 1046.5, dur: 1.4, type: 'sine', vol: 0.055 * k, at: 0.32 });
+    tone({ freq: 1049.5, dur: 1.4, type: 'sine', vol: 0.025 * k, at: 0.32 });
+    tone({ freq: jit(1318.5, 0.004), dur: 0.9, type: 'sine', vol: 0.04 * k, at: 0.40 });
+    if (!mine) return;
+    [2093, 2637, 3136, 3520, 4186].forEach((f, i) =>
+      tone({ freq: jit(f, 0.01), dur: 0.16, type: 'sine', vol: 0.026, at: 0.46 + 0.065 * i }));
+    [0.62, 0.69, 0.75, 0.80, 0.85, 0.905, 0.97, 1.05, 1.15]
+      .forEach((t, i) => coin(slop(t), rnd(1900, 2800), 0.055 * (1 - 0.06 * i)));
+    noise({ dur: 0.16, from: 1500, to: 600, q: 1, vol: 0.04, at: 1.24 });
+    coin(1.30, 2200, 0.025);
+  },
+
+  // The app opening, on the iPhone and Android splash: a die tumbling in with
+  // three clacks, landing as its spring settles, a warm G to C as the
+  // wordmark rises, and a slow shimmer under the tagline, rung out before the
+  // splash fades. The web has no splash, and a browser will not let a page
+  // make a sound before it has been touched — so here it plays once, on the
+  // first touch of the landing, which is the web's moment of opening.
+  launch: () => {
+    [0, 0.11, 0.21].forEach((base, i) => {
+      const t = slop(base);
+      const fade = 1 - 0.2 * i;
+      noise({ dur: rnd(0.025, 0.045), from: rnd(2200, 3400), to: rnd(1000, 1600), q: 7, vol: 0.10 * fade, at: t });
+      tone({ freq: jit(rnd(900, 2100)), dur: 0.03, type: 'triangle', vol: 0.04 * fade, at: t + 0.002 });
+    });
+    tone({ freq: jit(260), to: 175, dur: 0.12, type: 'triangle', vol: 0.10, at: 0.40 });
+    tone({ freq: jit(1500), dur: 0.03, type: 'sine', vol: 0.035, at: 0.412 });
+    tone({ freq: 98, to: 92, dur: 0.30, type: 'sine', vol: 0.08, at: 0.40 });
+    noise({ dur: 0.06, from: 600, to: 200, q: 0.9, vol: 0.05, at: 0.40 });
+    tone({ freq: jit(392, 0.004), dur: 0.55, type: 'triangle', vol: 0.10, at: 0.66 });
+    tone({ freq: jit(784, 0.004), dur: 0.40, type: 'sine', vol: 0.035, at: 0.67 });
+    tone({ freq: 196, dur: 0.50, type: 'sine', vol: 0.05, at: 0.66 });
+    tone({ freq: jit(523.25, 0.004), dur: 0.95, type: 'triangle', vol: 0.11, at: 0.86 });
+    tone({ freq: jit(659.25, 0.004), dur: 0.80, type: 'sine', vol: 0.04, at: 0.88 });
+    tone({ freq: 261.6, dur: 0.95, type: 'sine', vol: 0.06, at: 0.86 });
+    tone({ freq: jit(1046.5, 0.004), dur: 0.60, type: 'sine', vol: 0.03, at: 0.87 });
+    tone({ freq: 2093, dur: 0.55, type: 'sine', vol: 0.02, at: 0.98 });
+    tone({ freq: 2097, dur: 0.55, type: 'sine', vol: 0.012, at: 0.98 });
+    tone({ freq: 3136, dur: 0.40, type: 'sine', vol: 0.014, at: 1.06 });
   },
 };

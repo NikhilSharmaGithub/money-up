@@ -1,7 +1,10 @@
 package com.moneymove.game
 
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Walks each piece to where the server says it is — leg by leg, in order.
@@ -18,118 +21,190 @@ import kotlinx.coroutines.delay
  * and what the highlight follows, which is the whole point: the tile that is
  * lit is the tile the player is standing on, not the one they are about to be
  * sent to.
+ *
+ * What it walks, and when, is the store's to say. Every journey the store
+ * opens (GameStore.stage) carries its own clock — when it starts, after the
+ * dice have had their moment or after the same piece's last walk, and the
+ * store holds the money it carries until that same clock says the piece has
+ * landed. The walker plays each leg at exactly the moment the clock gives it,
+ * so the thump of the landing and the rent it costs can never drift apart.
+ * A double's re-roll is a second journey queued behind the first, so the
+ * piece walks twice instead of snapping. And since only journeys the store
+ * opened are ever walked, a reconnect — which opens none — sets every piece
+ * straight down where it is.
  */
 class TokenWalker {
 
     /** Where each piece is standing on screen right now. */
     val shown = mutableStateMapOf<String, Int>()
 
-    /** The highest leg `seq` already played out on this board. */
-    private var playedTo = 0
-
     /** Whether a first state has been seen — the one that places, never replays. */
     private var seeded = false
 
-    /**
-     * The piece whose legs are being played right now, if any. A push that
-     * lands mid-walk — rent, a card, anybody's chat — must leave it walking:
-     * iOS's walker keeps a walk "already heading to this exact tile" going,
-     * and snapping it to the end would give the card's destination away.
-     */
-    var walking: String? = null
-        private set
+    /** Journeys this board has already taken on, by key: walked, walking, or found under way. */
+    private val taken = HashSet<Double>()
+
+    /** Walks still to finish per piece — a double queues a second behind the first. */
+    private val busy = HashMap<String, Int>()
+
+    /** The journeys this board is walking or about to, by key. */
+    private val playing = HashSet<Double>()
+
+    /** The stage has been looked at once; see [perform]. */
+    private var joined = false
 
     /**
      * Every piece that is not mid-journey, set down where the server has it.
      * Cheap and immediate, so the board can call it on every push without
-     * touching a walk in progress: the piece being walked, and any piece with
-     * legs still waiting to be played, are left alone.
+     * touching a walk in progress: a piece walking, or with a journey on the
+     * stage it has not started yet, is left alone.
+     *
+     * The seats are the store's shown ones: a piece whose bankruptcy has not
+     * landed yet finishes its walk and leaves the board when it does.
      */
-    fun settle(state: GameState) {
-        val alive = state.players.filter { !it.isBankrupt }.map { it.id }.toSet()
+    fun settle(store: GameStore) {
+        if (store.state == null) return
+        val seats = store.shownPlayers
+        val alive = seats.filter { !it.isBankrupt }.mapTo(HashSet()) { it.id }
         shown.keys.filter { it !in alive }.forEach { shown.remove(it) }
 
         // The first state of a table is a position, not a journey: opening a
-        // game already in progress must not replay its last three moves.
+        // game already in progress must not replay its last three moves. A
+        // board drawn afresh while a walk it will still perform is waiting on
+        // its dice — the table re-laid mid-game — sets that piece down where
+        // the walk starts, not where the server already has it: standing on
+        // the destination first would give the landing away.
         if (!seeded) {
             seeded = true
-            for (p in state.players) shown[p.id] = p.pos
-            state.moves.orEmpty().mapNotNull { it.seq }.maxOrNull()?.let { playedTo = maxOf(playedTo, it) }
+            for (p in seats) {
+                if (p.id !in alive) continue
+                val next = store.stage.filter { it.mover == p.id && it.key in playing }.minByOrNull { it.startAt }
+                shown[p.id] = next?.legs?.firstOrNull()?.from ?: p.pos
+            }
             return
         }
 
-        val pending = state.moves.orEmpty().filter { (it.seq ?: 0) > playedTo }.mapTo(HashSet()) { it.playerId }
-        for (p in state.players) {
-            if (p.isBankrupt || p.id == walking || p.id in pending) continue
+        val waiting = store.stage.filter { it.key !in taken }.mapTo(HashSet()) { it.mover }
+        for (p in seats) {
+            if (p.id !in alive || (busy[p.id] ?: 0) > 0 || p.id in waiting) continue
             if (shown[p.id] != p.pos) shown[p.id] = p.pos
         }
     }
 
     /**
-     * Plays anything new in [state]'s legs, then settles on [latest] — the
-     * freshest state there is by the time the walk ends, since pushes that
-     * arrived during it were deliberately not allowed to move the walker.
+     * Plays every journey the store puts on its stage, for as long as the
+     * board is on screen: one coroutine each, sleeping until its own start,
+     * so a queued double walks after the first rather than over it.
      *
-     * [onLanded] is called the moment a piece finishes a leg with another leg
-     * still to come — the beat the caller turns a drawn card over in.
+     * [onLanded] is called at the journey's card moment — standing on the tile
+     * that drew it, before any move the card orders, or after the walk for a
+     * card that only pays or charges — which is when the card may turn over.
+     *
+     * A board that has only just been drawn (the screen turned, the layout
+     * changed) can find a journey already under way. That one is not walked
+     * from a tile the piece has already left: it is set down where it is going.
      */
-    suspend fun reconcile(state: GameState, latest: () -> GameState = { state }, onLanded: () -> Unit) {
-        settle(state)
-        val legs = state.moves.orEmpty().filter { (it.seq ?: 0) > playedTo }
-        if (legs.isEmpty()) return
-        legs.lastOrNull()?.seq?.let { playedTo = it }
-
-        val size = state.map.size.coerceAtLeast(1)
-        val mover = legs.first().playerId
-        walking = mover
-        try {
-            for ((i, leg) in legs.withIndex()) {
-                // A board that has drifted from the server — a reconnect part-way
-                // through a journey — starts the leg where the server started it.
-                if (shown[mover] != leg.from && shown[mover] != leg.to) shown[mover] = leg.from
-
-                val distance = Choreography.distance(leg, size)
-                if (distance == 0) {
-                    // A card or a jailing: the piece is carried rather than walked.
-                    delay(240)
-                    shown[mover] = leg.to
-                    // The clank belongs to the door closing, not to the server
-                    // saying so — it waits for the piece to be set down inside.
-                    if (leg.cause == "jail") SoundKit.jail() else SoundKit.land()
-                } else {
-                    val dir = if (leg.steps > 0) 1 else -1
-                    val pace = (Choreography.pace(distance) * 1000).toLong()
-                    var at = shown[mover] ?: leg.from
-                    repeat(distance) {
-                        at = ((at + dir) % size + size) % size
-                        shown[mover] = at
-                        // Each hop is heard and felt: step() and land() carry
-                        // iOS's light knock at 0.55 along with the sound.
-                        if (at == leg.to) SoundKit.land() else SoundKit.step()
-                        delay(pace)
+    suspend fun perform(store: GameStore, onLanded: (GameStore.Journey) -> Unit) = coroutineScope {
+        snapshotFlow { store.stage }.collect { stage ->
+            val now = System.currentTimeMillis()
+            for (j in stage) {
+                if (!taken.add(j.key)) continue
+                val underWay = !joined &&
+                    now >= j.startAt + ms(Choreography.timeline(j.legs, j.boardSize, j.hasCard, j.lead).starts.firstOrNull() ?: 0.0)
+                if (underWay || j.cut) continue
+                busy[j.mover] = (busy[j.mover] ?: 0) + 1
+                playing += j.key
+                launch {
+                    try {
+                        play(j, onLanded)
+                    } finally {
+                        playing -= j.key
+                        val left = (busy[j.mover] ?: 1) - 1
+                        if (left <= 0) busy.remove(j.mover) else busy[j.mover] = left
+                        settle(store)
                     }
-                    shown[mover] = leg.to
-                }
-
-                if (i < legs.lastIndex) {
-                    // Standing on the tile that drew the card, with the card's own
-                    // move still to come. This is the only moment it may be read.
-                    onLanded()
-                    delay((Choreography.CARD_HOLD * 1000).toLong())
                 }
             }
-        } finally {
-            if (walking == mover) walking = null
+            joined = true
+            val onStage = stage.mapTo(HashSet()) { it.key }
+            taken.retainAll(onStage)
+            settle(store)
         }
-        // Nothing left to walk: a card with no move of its own turns over here.
-        onLanded()
-        settle(latest())
+    }
+
+    /** One journey, on its own clock. Stops the moment the store cuts it. */
+    private suspend fun play(j: GameStore.Journey, onLanded: (GameStore.Journey) -> Unit) {
+        val size = j.boardSize.coerceAtLeast(1)
+        val (starts, cardAt) = Choreography.timeline(j.legs, size, j.hasCard, j.lead)
+        val mover = j.mover
+        for ((i, leg) in j.legs.withIndex()) {
+            sleepUntil(j.startAt + ms(starts[i]))
+            if (j.cut) return
+            // Every leg starts where the server started it. A piece already
+            // standing on the leg's end — a board drawn afresh and set down
+            // on the server's tile before this walk began — would otherwise
+            // count its hops on from there, overshoot, and snap back.
+            if (shown[mover] != leg.from) shown[mover] = leg.from
+
+            val distance = Choreography.distance(leg, size)
+            if (distance == 0) {
+                // A card or a jailing: the piece is carried rather than walked.
+                delay(240)
+                if (j.cut) return
+                shown[mover] = leg.to
+                // The clank belongs to the door closing, not to the server
+                // saying so — it waits for the piece to be set down inside.
+                if (leg.cause == "jail") SoundKit.jail() else SoundKit.land()
+            } else {
+                val dir = if (leg.steps > 0) 1 else -1
+                val pace = ms(Choreography.pace(distance))
+                var at = leg.from
+                repeat(distance) {
+                    if (j.cut) return
+                    at = ((at + dir) % size + size) % size
+                    shown[mover] = at
+                    // Each hop is heard and felt: step() and land() carry
+                    // iOS's light knock at 0.55 along with the sound.
+                    if (at == leg.to) SoundKit.land() else SoundKit.step()
+                    delay(pace)
+                }
+                shown[mover] = leg.to
+            }
+
+            // Standing on the tile that drew the card, with the card's own
+            // move still to come. This is the only moment it may be read.
+            val next = starts.getOrNull(i + 1)
+            if (next != null && cardAt != null && cardAt >= starts[i] && cardAt < next) {
+                sleepUntil(j.startAt + ms(cardAt))
+                if (j.cut) return
+                onLanded(j)
+            }
+        }
+        // Nothing left to walk: a card with no move of its own turns over
+        // here, a beat after the landing.
+        val lastEnd = (starts.lastOrNull() ?: 0.0) + (j.legs.lastOrNull()?.let { Choreography.legDuration(it, size) } ?: 0.0)
+        if (cardAt != null && cardAt >= lastEnd) {
+            sleepUntil(j.startAt + ms(cardAt))
+            if (!j.cut) onLanded(j)
+        }
     }
 
     fun forget() {
         shown.clear()
-        playedTo = 0
         seeded = false
-        walking = null
+        taken.clear()
+        busy.clear()
+        playing.clear()
+        joined = false
+    }
+
+    private companion object {
+        fun ms(seconds: Double): Long = (seconds * 1000).toLong()
+
+        /** Sleeps until a wall-clock moment on the journey's clock; at once if it has passed. */
+        suspend fun sleepUntil(at: Long) {
+            val wait = at - System.currentTimeMillis()
+            if (wait > 0) delay(wait)
+        }
     }
 }

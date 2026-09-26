@@ -145,7 +145,7 @@ struct ActionPanel: View {
             if (store.me?.lapsBlocked ?? 0) > 0 { key += " deadlock" }
             return key
         }
-        if state.isPlaying { return "waiting \(state.turn?.playerId ?? "")" }
+        if state.isPlaying || store.endOnStage { return "waiting \(state.turn?.playerId ?? "")" }
         return state.isEnded ? "ended" : ""
     }
 
@@ -218,7 +218,9 @@ struct ActionPanel: View {
             } else {
                 myTurnControls(turn: turn, P: P)
             }
-        } else if store.state?.isPlaying == true {
+        } else if store.state?.isPlaying == true || store.endOnStage {
+            // The game is over on the server, but the act that ended it is
+            // still on stage: "Play again" would give the ending away.
             waitingRow(P)
         } else if store.state?.isEnded == true {
             // Anyone can call the next game — the chair goes to whoever asks
@@ -465,7 +467,9 @@ struct ActionPanel: View {
         // "…is playing" forever with no hint that your seat is done. On a
         // pass & play phone "you" means every seat this device holds — while
         // any of them still plays, the dock is theirs, not a spectator's.
-        let locals = (store.state?.players ?? []).filter { store.isLocal($0.id) }
+        // As presented, so the dock never announces a bust the board has not
+        // shown yet.
+        let locals = store.shownPlayers.filter { store.isLocal($0.id) }
         if !locals.isEmpty, locals.allSatisfy(\.isBankrupt),
            let me = locals.first(where: { $0.id == store.meId }) ?? locals.first {
             HStack(spacing: 8) {

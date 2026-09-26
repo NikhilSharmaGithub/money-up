@@ -112,7 +112,10 @@ fun CenterWell(
 
             state.isLobby -> LobbyWell(state, Modifier.align(Alignment.Center))
 
-            state.isEnded -> EndedWell(store, state, showResults = actionsInWell, Modifier.align(Alignment.Center))
+            // Who took it waits for the walk that settled it: until the
+            // fanfare, the well is still the table in play.
+            state.isEnded && !store.gameOverHeld ->
+                EndedWell(store, state, showResults = actionsInWell, Modifier.align(Alignment.Center))
 
             else -> PlayingWell(store, state, actionsInWell, onHistory)
         }

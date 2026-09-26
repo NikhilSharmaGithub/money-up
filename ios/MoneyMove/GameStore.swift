@@ -153,6 +153,94 @@ final class GameStore: ObservableObject {
     }
     @Published var moneyDeltas: [String: MoneyDelta] = [:]
 
+    // MARK: - the purse ledger
+    //
+    // MONEY IS SHOWN WHEN ITS CAUSE IS. The server resolves a whole roll
+    // before the first die settles, so the push that starts a walk onto
+    // somebody's hotel already carries the rent — and painting it on arrival
+    // showed the purse falling before the piece had even set off. So a money
+    // change that belongs to an act still on stage is held, along with
+    // everything it would say — the figure, the badge, the coins, its sound,
+    // a bankruptcy it caused, a game it ended — and all of it is released
+    // together at the act's payday (Choreography.payday). Trades, auction
+    // escrow, anybody outside the act's cast, and anything that arrives with
+    // nothing on stage show the moment they arrive.
+    //
+    // Seats, pods, ranks and pieces read the presented player (shown(_:));
+    // decisions — the buy button, trade limits, the debt panel — keep reading
+    // the raw state, because on the server the money has genuinely moved.
+
+    /// One walk on stage and the money it carries.
+    struct Journey {
+        /// The newest leg's stamp: what the walker asks for.
+        let key: Double
+        let mover: String
+        /// Whose money this act may hold: the mover, everyone paid or charged
+        /// by the push that started it, and whoever a debt the landing opened
+        /// is owed to — rent owed by a debtor who could pay $0 moved nobody.
+        let cast: Set<String>
+        let startAt: Date
+        let landAt: Date
+        /// How long the piece waits before it sets off (Choreography.timeline).
+        let lead: Double
+        /// Waiting behind this mover's walk still on stage — a doubles re-roll
+        /// — rather than cutting it short.
+        let queued: Bool
+        let hasCard: Bool
+        /// What is still waiting for the landing, oldest first.
+        var entries: [Entry] = []
+        /// How many entries have already landed.
+        var landed = 0
+        var task: Task<Void, Never>?
+    }
+
+    /// One push's worth of what an act holds back.
+    struct Entry {
+        var delta: [String: Int] = [:]
+        /// The push's fresh log kinds, less the dice and the auction — those
+        /// are never held.
+        var kinds: [String] = []
+        var busts: [String] = []
+        /// Who put each bust out, as far as this device can tell.
+        var creditors: [String: [String]] = [:]
+        var ended = false
+
+        var isEmpty: Bool { delta.isEmpty && kinds.isEmpty && busts.isEmpty && !ended }
+
+        mutating func merge(_ other: Entry) {
+            for (pid, d) in other.delta { delta[pid, default: 0] += d }
+            for k in other.kinds where !kinds.contains(k) { kinds.append(k) }
+            for b in other.busts where !busts.contains(b) { busts.append(b) }
+            creditors.merge(other.creditors) { mine, _ in mine }
+            ended = ended || other.ended
+        }
+    }
+
+    /// Money that has moved on the server but not yet on screen, per player.
+    @Published private(set) var held: [String: Int] = [:]
+    /// Bankruptcies waiting for their act to land. Published because a bust
+    /// can land with no money of its own left to move.
+    @Published private var heldBusts: Set<String> = []
+    private var journeys: [Journey] = []
+    /// False until this connection's first state has been taken as a
+    /// position. A (re)connect is not news: numbers snap, nothing sounds.
+    private var primed = false
+    /// The version of the push last taken as a position, so the walker can
+    /// snap the pieces on it instead of replaying legs it never saw start.
+    private(set) var positionVersion: Int?
+    /// The fanfare and then the result sheet, once the last act has landed.
+    private var finaleTask: Task<Void, Never>?
+    private var finalePending = false
+    /// The server has called the game, but the act that ended it is still on
+    /// stage, or its bust is still having its say. The well's trophy and the
+    /// dock's "Play again" wait for the fanfare with everything else — a
+    /// "wins!" over a piece still walking onto the hotel gives the ending away.
+    @Published private(set) var endOnStage = false
+
+    /// The state on screen is a position — the first of a table, or the first
+    /// after a (re)connect — so its figures snap into place instead of counting.
+    var isPosition: Bool { state.map { $0.version == positionVersion } ?? true }
+
     /// A finished (or abandoned) game, kept on this device for History.
     struct MatchRecord: Codable, Identifiable {
         var id = UUID()
@@ -410,6 +498,9 @@ final class GameStore: ObservableObject {
             // A reconnect is a new socket as far as the server is concerned, so
             // whatever it remembered sending us died with the old one.
             mirror.forget()
+            // …and the first state it sends is where everything stands, not
+            // a replay of what happened while we were away.
+            primed = false
             socket.emit("join", [[
                 "roomId": roomId,
                 "token": token,
@@ -500,71 +591,40 @@ final class GameStore: ObservableObject {
         noteUnfinished(new)
         if new.isEnded { dropUnfinished(new.id) }
 
-        // Money moved: float a +/- badge on everyone whose cash changed, and
-        // give the seats on THIS device their own gain/loss sound — losing
-        // money makes that little "ishh", gaining rings like a till.
-        if let old, new.isPlaying, old.isPlaying {
-            var localGain = false, localLoss = false, remoteChange = false
-            for p in new.players {
-                guard let was = old.player(p.id)?.money, was != p.money else { continue }
-                let delta = MoneyDelta(amount: p.money - was)
-                moneyDeltas[p.id] = delta
-                let pid = p.id
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(1.6))
-                    if self?.moneyDeltas[pid]?.id == delta.id {
-                        _ = withAnimation { self?.moneyDeltas.removeValue(forKey: pid) }
-                    }
-                }
-                if localIds.contains(pid) {
-                    if delta.amount < 0 { localLoss = true } else { localGain = true }
-                } else {
-                    remoteChange = true
-                }
-            }
-            if localLoss { SoundKit.shared.lose(); Haptics.warn() }
-            else if localGain { SoundKit.shared.gain(); Haptics.tap() }
-            else if remoteChange { SoundKit.shared.cash() }
+        // A rematch puts the table back in the lobby: whatever the last game
+        // still had on stage is over with it.
+        if new.isLobby { resetLedger() }
+        // The first state of a table, the first after a (re)connect, and the
+        // first of a game just dealt are a position, not news: every number
+        // snaps into place, nothing sounds and no walk starts. A game that
+        // has only just ended is still news — its last act may be on stage.
+        let priming = old.map { !primed || !($0.isPlaying || $0.isEnded) } ?? true
+        if priming {
+            resetLedger()
+            primed = true
+            positionVersion = new.version
         }
+        let freshLines = new.log.filter { $0.at > lastLogAt }
+        if let last = new.log.last, last.at > lastLogAt { lastLogAt = last.at }
 
-        // The server resolves the whole roll before the first die settles, so
-        // the push that starts a walk already carries its consequences — a
-        // buy prompt, sometimes a whole auction. Hold those back until the
-        // piece has actually arrived: the same fresh-stamp discipline as the
-        // walker, the same Choreography math as the card popup below.
-        // Reconnects (no old state) and stale stamps show everything at once,
-        // and the hold is cosmetic — the shot clock runs on the server — so
-        // it is never allowed to eat more than 4s.
-        if let legs = new.moves, let newest = legs.last?.at, newest != heldActionAt {
-            heldActionAt = newest
-            holdTask?.cancel()
-            auctionUnderHold = false
-            if old != nil, new.isPlaying {
-                let hasCard = new.lastCard.map { abs($0.at - newest) < 2500 } ?? false
-                // A small beat after the landing thump, capped hard.
-                let run = min(Choreography.curtain(legs, boardSize: new.map.size,
-                                                   hasCard: hasCard) + 0.3, 4.0)
-                heldMover = legs.first?.playerId
-                holdUntil = Date().addingTimeInterval(run)
-                holdTask = Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(run))
-                    guard let self, !Task.isCancelled else { return }
-                    withAnimation { self.holdUntil = nil }
-                    // The gavel waited behind the curtain with its auction.
-                    if self.auctionUnderHold, self.state?.auction != nil {
-                        SoundKit.shared.auction()
-                    }
-                    self.auctionUnderHold = false
-                }
-            } else {
-                heldMover = nil
-                holdUntil = nil
-            }
+        // Open the act this push starts, and its curtain, before any money is
+        // looked at: a push that starts a walk is exactly the push whose rent
+        // must wait for it.
+        let opened = noteJourney(old, new, priming: priming)
+        if !priming, let old {
+            ledger(old, new, opened: opened, lines: freshLines)
+        }
+        // The dice are the one thing a roll says out loud on arrival — they
+        // are what everybody is watching while the piece waits to set off.
+        if !priming, freshLines.contains(where: { $0.kind == "dice" }) {
+            SoundKit.shared.dice()
         }
 
         // Auction has its own voice: the gavel when it opens, and a rising
         // paddle-tick for every new bid — pitched by how high the bid is.
-        if let old {
+        // Never held; only a position (a reconnect into a running auction)
+        // keeps it quiet.
+        if let old, !priming {
             if new.auction != nil, old.auction == nil {
                 // Born of a landing whose walk is still on stage: the box
                 // waits for the curtain (auctionCurtained hides it for every
@@ -583,7 +643,7 @@ final class GameStore: ObservableObject {
 
         // A completed country set is a moment — the tiles flash (TileView),
         // the fanfare plays exactly once from here.
-        if let old, new.isPlaying, old.isPlaying, let groups = new.map.groups {
+        if let old, !priming, new.isPlaying, old.isPlaying, let groups = new.map.groups {
             for (_, idxs) in groups where idxs.count > 1 {
                 guard let firstOwner = new.owner(of: idxs[0])?.owner,
                       idxs.allSatisfy({ new.owner(of: $0)?.owner == firstOwner }) else { continue }
@@ -601,13 +661,19 @@ final class GameStore: ObservableObject {
         // instantly; the reveal must not beat the piece to the square.
         if let card = new.lastCard, card.at != lastCardAt {
             lastCardAt = card.at
-            if old != nil {
+            if !priming {
                 // Servers that ship the moves script give the exact reveal
                 // cue; the walk-length heuristic covers the older ones.
                 let legs = new.moves ?? []
                 let delay: Double
                 if let newest = legs.last?.at, abs(newest - card.at) < 2500 {
-                    delay = Choreography.timeline(legs, boardSize: new.map.size, hasCard: true).cardAt ?? 0
+                    // On the act's own clock: a doubles re-roll queued behind
+                    // the walk before it has not set off yet, and sets off
+                    // after a breath rather than the dice spring.
+                    let act = journey(for: newest)
+                    let wait = act.map { max(0, $0.startAt.timeIntervalSinceNow) } ?? 0
+                    delay = wait + (Choreography.timeline(legs, boardSize: new.map.size, hasCard: true,
+                                                          lead: act?.lead ?? Choreography.diceLead).cardAt ?? 0)
                 } else {
                     delay = walkDelay(in: new, eventAt: card.at)
                 }
@@ -731,11 +797,17 @@ final class GameStore: ObservableObject {
             timedOut = false
         }
 
-        // game over sheet, once — the result lands in History and the win
-        // may have paid out coins, so the wallet is worth another look
+        // game over, once — the result lands in History and the win may have
+        // paid out coins, so the wallet is worth another look. The fanfare and
+        // the sheet belong to the ledger: the push that ends a game is usually
+        // the push that bankrupts somebody, and both wait for the act on
+        // stage (see finale). A table first seen already over has no act: its
+        // sheet goes straight up, and quietly — that is a position, not news.
         if new.isEnded && old?.isEnded != true {
-            showGameOver = true
-            SoundKit.shared.win()
+            if priming {
+                showGameOver = true
+                settleWallet(after: 1)
+            }
             recordMatch(new)
             // Two quiet counters, kept here because this is the one place a
             // game is certain to have actually ended with this device at the
@@ -753,34 +825,396 @@ final class GameStore: ObservableObject {
             if new.players.contains(where: { localIds.contains($0.id) }) {
                 PushRegistrar.noteFinishedGame()
             }
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                // A win pays out on the server a beat after the table settles;
-                // whatever it came to, the counter catches it.
-                self?.refreshWallet()
-            }
+            // The wallet is read once the sheet is up (see finale): coins
+            // flying into the counter before the fanfare would give the win
+            // away while the last piece is still walking.
         }
         if !new.isEnded { showGameOver = false }
+        // The log's own sounds — buy, jail, build, trade, the bankruptcy —
+        // ride the ledger's entries now (see voice), so they land with the
+        // money they describe; only the dice are said on arrival, above.
+    }
 
-        // sounds + haptics on fresh log lines (mirrors the web client's mapping)
-        if let last = new.log.last, last.at > lastLogAt {
-            lastLogAt = last.at
-            if old != nil {
-                switch last.kind {
-                // "money" and "rent" are covered by the per-player delta
-                // sounds above — mapping them here would double-fire.
-                case "dice": SoundKit.shared.dice()
-                case "buy": SoundKit.shared.buy(); Haptics.tap()
-                case "bankrupt": SoundKit.shared.bankrupt(); Haptics.warn()
-                case "jail": SoundKit.shared.jail()
-                case "build": SoundKit.shared.build()
-                case "trade": SoundKit.shared.trade()
-                // "auction" lines are handled by the state diff above — the
-                // log kind covers both openings and bids and would double-fire.
-                default: break
-                }
+    // MARK: - acts and paydays
+
+    /// A fresh leg stamp opens an act: the walk's timeline, the curtain that
+    /// holds the decision UI it causes, and the journey its money will wait
+    /// for. Returns the new journey's key when one opened.
+    ///
+    /// The curtain is cosmetic — the shot clock runs on the server — so it
+    /// is never allowed to eat more than 4 s of the act; the money may wait
+    /// up to Choreography.moneyCap.
+    private func noteJourney(_ old: GameState?, _ new: GameState, priming: Bool) -> Double? {
+        guard let legs = new.moves, let newest = legs.last?.at, newest != heldActionAt else { return nil }
+        heldActionAt = newest
+        holdTask?.cancel()
+        auctionUnderHold = false
+        guard !priming, let old, old.isPlaying, new.isPlaying || new.isEnded,
+              let mover = legs.first?.playerId else {
+            heldMover = nil
+            holdUntil = nil
+            return nil
+        }
+
+        let now = Date()
+        let size = new.map.size
+        let hasCard = new.lastCard.map { abs($0.at - newest) < 2500 } ?? false
+        // A bot's doubles re-roll lands while its first walk is still going.
+        // Cutting that walk short to start the next one threw its landing —
+        // and the rent it carried — away, so the second act waits its turn,
+        // unless the queue has grown so long the table would be watching a
+        // replay; then the older act is shown at once and cut, as before.
+        var startAt = now
+        var queued = false
+        if let ahead = journeys.last(where: { $0.mover == mover && $0.landAt > now }) {
+            if ahead.landAt.timeIntervalSince(now) > 6 {
+                for key in journeys.filter({ $0.mover == mover }).map(\.key) { flush(key) }
+            } else {
+                startAt = ahead.landAt
+                queued = true
             }
         }
+        let lead = queued ? Choreography.settle : Choreography.diceLead
+        let landAt = startAt.addingTimeInterval(
+            Choreography.payday(legs, boardSize: size, hasCard: hasCard, lead: lead))
+
+        var cast: Set<String> = [mover]
+        for p in new.players where old.player(p.id).map({ $0.money != p.money }) ?? false {
+            cast.insert(p.id)
+        }
+        // …and anybody this push put out of the game. A collect-from-everyone
+        // card bankrupts through forcePay, and a seat that already stood at $0
+        // moves no money at all — its bust is still this act's doing, and must
+        // not be heard while the dice are still in the air.
+        for p in new.players where p.isBankrupt && old.player(p.id)?.isBankrupt == false {
+            cast.insert(p.id)
+        }
+        if let debt = new.turn?.debt {
+            if let creditor = debt.creditor { cast.insert(creditor) }
+            cast.formUnion(debt.owedTo ?? [])
+        }
+
+        if new.isPlaying {
+            // A small beat after the landing thump, capped hard.
+            let run = min(Choreography.curtain(legs, boardSize: size, hasCard: hasCard, lead: lead) + 0.3, 4.0)
+            let until = startAt.addingTimeInterval(run)
+            heldMover = mover
+            holdUntil = until
+            holdTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, until.timeIntervalSinceNow)))
+                guard let self, !Task.isCancelled else { return }
+                withAnimation { self.holdUntil = nil }
+                // The gavel waited behind the curtain with its auction.
+                if self.auctionUnderHold, self.state?.auction != nil {
+                    SoundKit.shared.auction()
+                }
+                self.auctionUnderHold = false
+            }
+        } else {
+            heldMover = nil
+            holdUntil = nil
+        }
+
+        var act = Journey(key: newest, mover: mover, cast: cast, startAt: startAt, landAt: landAt,
+                          lead: lead, queued: queued, hasCard: hasCard)
+        act.task = stage(newest, landAt: landAt)
+        journeys.append(act)
+        return newest
+    }
+
+    /// Splits one push's money between what its act holds and what shows now.
+    private func ledger(_ old: GameState, _ new: GameState, opened: Double?, lines: [LogLine]) {
+        guard old.isPlaying, new.isPlaying || new.isEnded else { return }
+
+        var moved: [String: Int] = [:]
+        for p in new.players {
+            guard let was = old.player(p.id)?.money, was != p.money else { continue }
+            moved[p.id] = p.money - was
+        }
+        // Beaten, not removed: a seat the clock took or that walked out has
+        // its own story (the timeout overlay, "left"), not a bankruptcy.
+        let busts = new.players
+            .filter { $0.isBankrupt && !$0.wasRemoved && old.player($0.id)?.isBankrupt == false }
+            .map(\.id)
+        let ended = new.isEnded && !old.isEnded
+        var kinds: [String] = []
+        for line in lines where line.kind != "dice" && line.kind != "auction" && !kinds.contains(line.kind) {
+            kinds.append(line.kind)
+        }
+        guard !moved.isEmpty || !busts.isEmpty || !kinds.isEmpty || ended else { return }
+
+        var creditors: [String: [String]] = [:]
+        for b in busts {
+            guard let debt = old.turn?.debt, debt.debtor == b else { continue }
+            creditors[b] = debt.creditor.map { [$0] } ?? (debt.owedTo ?? [])
+        }
+
+        // Trades and auctions settle in front of everybody — escrow moves on
+        // every bid — so they are never held, unless the auction itself is
+        // still behind the curtain of the landing that opened it.
+        let exempt = opened == nil
+            && (kinds.contains("trade") || ((old.auction != nil || new.auction != nil) && !auctionCurtained))
+
+        var target: Int?
+        if let opened {
+            target = journeys.lastIndex { $0.key == opened }
+        } else if !exempt {
+            let touched = Set(moved.keys).union(busts)
+            target = journeys.lastIndex { $0.mover == old.turn?.playerId }
+                ?? journeys.lastIndex { !$0.cast.isDisjoint(with: touched) }
+        }
+        // An act that has already landed four entries is done taking more.
+        if let t = target, journeys[t].landed >= 4, journeys[t].entries.isEmpty { target = nil }
+
+        guard let t = target else {
+            voice(Entry(delta: moved, kinds: kinds, busts: busts, creditors: creditors, ended: ended))
+            return
+        }
+
+        let act = journeys[t]
+        var onStage = Entry(), atOnce = Entry()
+        for (pid, d) in moved {
+            if act.cast.contains(pid) { onStage.delta[pid] = d } else { atOnce.delta[pid] = d }
+        }
+        for b in busts {
+            // A collect-from-everyone card bankrupts somebody through forcePay,
+            // with no debt ever opened: the card's drawer is who took them out.
+            var by = creditors[b]
+            if by == nil, b != act.mover, act.hasCard { by = [act.mover] }
+            if act.cast.contains(b) {
+                onStage.busts.append(b)
+                if let by { onStage.creditors[b] = by }
+            } else {
+                atOnce.busts.append(b)
+                if let by { atOnce.creditors[b] = by }
+            }
+        }
+        // The log lines describe the money: they go where it goes. A fresh act
+        // keeps its lines even when nobody paid anything (a walked jailing
+        // clanks when the piece reaches the cell, not as it sets off).
+        if opened != nil || !onStage.delta.isEmpty || !onStage.busts.isEmpty {
+            onStage.kinds = kinds
+        } else {
+            atOnce.kinds = kinds
+        }
+        // The finale waits for the act on stage, unless the bust that ended
+        // the game is being voiced right now — then it follows that.
+        if atOnce.busts.isEmpty { onStage.ended = ended } else { atOnce.ended = ended }
+
+        if !onStage.isEmpty {
+            if journeys[t].landed + journeys[t].entries.count >= 4, !journeys[t].entries.isEmpty {
+                journeys[t].entries[journeys[t].entries.count - 1].merge(onStage)
+            } else {
+                journeys[t].entries.append(onStage)
+            }
+            for (pid, d) in onStage.delta { held[pid, default: 0] += d }
+            heldBusts.formUnion(onStage.busts)
+            if onStage.ended { endOnStage = true }
+        }
+        if !atOnce.isEmpty { voice(atOnce) }
+    }
+
+    /// The act's release: its first entry lands on payday, each later one a
+    /// beat after the last — rent, then a bot's scramble to raise it, then the
+    /// bust. An entry arriving while the act is still releasing takes the next
+    /// beat, and the act lingers one beat after its last entry for exactly
+    /// that reason, so a late bust never lands on top of the rent.
+    private func stage(_ key: Double, landAt: Date) -> Task<Void, Never> {
+        Task { [weak self] in
+            let wait = landAt.timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            while !Task.isCancelled {
+                guard let self, let i = self.journeys.firstIndex(where: { $0.key == key }) else { return }
+                guard !self.journeys[i].entries.isEmpty else {
+                    self.journeys.remove(at: i)
+                    return
+                }
+                let entry = self.journeys[i].entries.removeFirst()
+                self.journeys[i].landed += 1
+                self.land(entry)
+                try? await Task.sleep(for: .seconds(Choreography.entryGap))
+            }
+        }
+    }
+
+    /// Everything an act was still holding, shown now and in one breath —
+    /// the act is being cut short.
+    private func flush(_ key: Double) {
+        guard let i = journeys.firstIndex(where: { $0.key == key }) else { return }
+        let act = journeys.remove(at: i)
+        act.task?.cancel()
+        guard var all = act.entries.first else { return }
+        for e in act.entries.dropFirst() { all.merge(e) }
+        land(all)
+    }
+
+    /// An entry's money comes out of the held purse and says its piece.
+    private func land(_ e: Entry) {
+        for (pid, d) in e.delta {
+            let left = (held[pid] ?? 0) - d
+            if left == 0 { held.removeValue(forKey: pid) } else { held[pid] = left }
+        }
+        if !e.busts.isEmpty { heldBusts.subtract(e.busts) }
+        voice(e)
+    }
+
+    /// One change, one event: the badge, the coins, the count, its sound and
+    /// its haptic — whether it shows on arrival or at its payday.
+    private func voice(_ e: Entry) {
+        let sound = SoundKit.shared
+        // The bust's own "+$X" — its debt written off to zero — is not a
+        // payment anybody made, and its bankruptcy says everything already.
+        for (pid, d) in e.delta where d != 0 && !e.busts.contains(pid) {
+            flashDelta(pid, d)
+        }
+
+        var bustVoice: Double = 0
+        if !e.busts.isEmpty {
+            // Whose bankruptcy it is decides how it sounds on this phone. A
+            // pass & play phone holding both sides hears the fall.
+            let creditors = Set(e.busts.flatMap { e.creditors[$0] ?? [] })
+            if e.busts.contains(where: { isLocal($0) }) {
+                sound.bankruptFall()
+                Haptics.warn()
+                bustVoice = 2.1
+            } else if creditors.contains(where: { isLocal($0) }) {
+                sound.bankruptKaching()
+                after(0.12) { Haptics.turn() }
+                bustVoice = 1.2
+            } else {
+                sound.bankruptCrash()
+                bustVoice = 1.2
+            }
+        } else {
+            var localGain = false, localLoss = false, remote = false
+            for (pid, d) in e.delta where d != 0 {
+                if isLocal(pid) {
+                    if d < 0 { localLoss = true } else { localGain = true }
+                } else {
+                    remote = true
+                }
+            }
+            // Your own purse gets its own voice — losing money makes that
+            // little "ishh", gaining rings as the payee's first coin lands and
+            // its count starts. Everybody else's is the room's sound.
+            if localLoss {
+                sound.lose()
+                Haptics.warn()
+            } else if localGain {
+                after(0.25) { SoundKit.shared.gain(); Haptics.tap() }
+            } else if remote {
+                if e.kinds.contains("rent") { sound.rent() } else { sound.cash() }
+            }
+            if e.kinds.contains("buy") { sound.buy(); Haptics.tap() }
+            else if e.kinds.contains("jail") { sound.jail() }
+            else if e.kinds.contains("build") { sound.build() }
+            else if e.kinds.contains("trade") { sound.trade() }
+        }
+
+        if e.ended { finale(after: bustVoice) }
+    }
+
+    /// The game is over and its last act has landed: the fanfare once the
+    /// bust has had its say, then the result sheet 0.7 s later.
+    private func finale(after delay: Double) {
+        finaleTask?.cancel()
+        finalePending = true
+        endOnStage = true
+        finaleTask = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            guard let self, !Task.isCancelled else { return }
+            guard let over = self.state, over.isEnded else {
+                // The table moved on before the fanfare's turn came.
+                self.finalePending = false
+                self.endOnStage = false
+                return
+            }
+            let mine = self.localSeatWon(over)
+            SoundKit.shared.win(mine: mine)
+            // The trophy goes up in the well as the fanfare starts.
+            withAnimation { self.endOnStage = false }
+            try? await Task.sleep(for: .seconds(0.32))
+            guard !Task.isCancelled else { return }
+            // The chord lands at 0.32 — the phone of the seat that won feels it.
+            if mine { Haptics.turn() }
+            try? await Task.sleep(for: .seconds(0.38))
+            guard !Task.isCancelled, self.state?.isEnded == true else { return }
+            self.finalePending = false
+            self.showGameOver = true
+            self.settleWallet(after: 0.3)
+        }
+    }
+
+    /// A win pays out on the server a beat after the table settles; whatever
+    /// it came to, the counter catches it — landing on the result sheet, as
+    /// the coin counter was made to.
+    private func settleWallet(after seconds: Double) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            self?.refreshWallet()
+        }
+    }
+
+    /// Puts every figure back on what the server says, silently: nothing on
+    /// stage survives a position. A result sheet the dropped act still owed
+    /// goes up anyway — the game is over whether or not its fanfare played.
+    private func resetLedger() {
+        let owedSheet = finalePending || journeys.contains { $0.entries.contains(where: \.ended) }
+        journeys.forEach { $0.task?.cancel() }
+        journeys = []
+        if !held.isEmpty { held = [:] }
+        if !heldBusts.isEmpty { heldBusts = [] }
+        finaleTask?.cancel()
+        finaleTask = nil
+        finalePending = false
+        if endOnStage { endOnStage = false }
+        if owedSheet, state?.isEnded == true {
+            showGameOver = true
+            settleWallet(after: 0.3)
+        }
+    }
+
+    /// The floating "+$200 / −$150" for one seat, cleared after a beat unless
+    /// a newer one has replaced it.
+    private func flashDelta(_ pid: String, _ amount: Int) {
+        let delta = MoneyDelta(amount: amount)
+        moneyDeltas[pid] = delta
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            if self?.moneyDeltas[pid]?.id == delta.id {
+                _ = withAnimation { self?.moneyDeltas.removeValue(forKey: pid) }
+            }
+        }
+    }
+
+    private func after(_ seconds: Double, _ run: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            run()
+        }
+    }
+
+    /// A player as the table should see them right now: the money their act
+    /// is still holding not yet spent or received, and a bust that has not
+    /// landed not yet out. Seats, pods, ranks and pieces read this; every
+    /// decision reads the raw state.
+    func shown(_ p: PlayerState) -> PlayerState {
+        let pending = held[p.id] ?? 0
+        let bustHeld = heldBusts.contains(p.id)
+        guard pending != 0 || bustHeld else { return p }
+        var q = p
+        q.money -= pending
+        if let worth = q.netWorth { q.netWorth = worth - pending }
+        if bustHeld { q.bankrupt = false }
+        return q
+    }
+
+    var shownPlayers: [PlayerState] { (state?.players ?? []).map(shown) }
+
+    /// The act a leg stamp belongs to, while it is still on stage. The walker
+    /// plays only these, on their clock — anything else is a position.
+    func journey(for stamp: Double) -> Journey? {
+        journeys.first { $0.key == stamp }
     }
 
     /// A walk is on stage right now. The date check is belt and braces — the
@@ -882,6 +1316,10 @@ final class GameStore: ObservableObject {
         // reads the old count before calling in, so it keeps its guests.
         lastGuests = 0
         state = nil
+        // The old table's acts end here; the new table's first state is a
+        // position.
+        resetLedger()
+        primed = false
         // Versions count per room, so the copy we hold of the old table must
         // not be left lying around for a patch from it to line up against.
         mirror.forget()
@@ -1059,6 +1497,10 @@ final class GameStore: ObservableObject {
         heldMover = nil
         auctionUnderHold = false
         heldActionAt = 0
+        // Nothing held at a table this device has left is owed to anybody.
+        resetLedger()
+        primed = false
+        positionVersion = nil
         logFloor = 0
         lastRoom = ""
         lastGuests = 0
@@ -1234,11 +1676,12 @@ final class GameStore: ObservableObject {
     var currentPlayer: PlayerState? { state?.player(state?.turn?.playerId) }
 
     /// Live standings by net worth, player id -> position. Recomputed from
-    /// whatever the last push said; ties fall back to seat order so two equal
-    /// fortunes don't swap badges on every tick.
+    /// the presented players, so the crown does not change hands before the
+    /// rent that moves it has landed; ties fall back to seat order so two
+    /// equal fortunes don't swap badges on every tick.
     var liveRanks: [String: Int] {
         guard let state, state.isPlaying else { return [:] }
-        let ordered = state.players.enumerated()
+        let ordered = shownPlayers.enumerated()
             .filter { !$0.element.isBankrupt }
             .sorted { a, b in
                 let wa = a.element.netWorth ?? 0

@@ -3,6 +3,7 @@
 import {
   renderBoard, patchBoard, resetBoard, highlightTiles,
   syncTokens, repositionTokens, deedMarkup, syncUndealt, dealBoardIn,
+  reseed, walkingTo, DICE_LEAD, SETTLE,
 } from './board.js';
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
@@ -827,6 +828,7 @@ function boot() {
     roomId = null;
     lastStatus = null;
     resetBoard();
+    resetLedger();
     showLanding();
     // After the landing is up, so the six cards open over something that
     // already looks like a game rather than over an empty page.
@@ -846,6 +848,7 @@ function boot() {
   $('#app').classList.remove('hidden');
   $('#shareLink').value = `${location.origin}/?room=${roomId}`;
   resetBoard();
+  resetLedger();
   lastTurnId = null;
   lastStatus = null;
   winnerShown = false;
@@ -858,9 +861,21 @@ function boot() {
   // and asks for patches instead of a fresh 13.5 KB board per action. A server
   // that has never heard of it ignores the field and keeps sending whole
   // states, which is what onState is handed either way.
-  socket.on('connect', () => socket.emit('join', {
-    roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO,
-  }));
+  //
+  // Every connect, the first one included, makes the next state a position
+  // rather than news: whatever happened while the socket was down is not
+  // walked, counted or voiced — the board and the purses snap to it.
+  socket.on('connect', () => {
+    // Dropped here rather than when the next state arrives: an entry landing
+    // in between would repaint the old state and spend the board's one
+    // "this is a position" on it.
+    primed = false;
+    dropJourneys();
+    reseed();
+    socket.emit('join', {
+      roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO,
+    });
+  });
   socket.on('you', (d) => { meId = d.playerId; });
   onState(socket, (s) => {
     // First state after a (re)join is history, not news: seed the one-shot
@@ -869,7 +884,6 @@ function boot() {
     if (!state) {
       lastCardAt = s.lastCard?.at ?? 0;
       lastLogAt = s.log?.[s.log.length - 1]?.at ?? 0;
-      lastMyMoney = null;
       hadAuction = !!s.auction;
       lastAuctionBid = s.auction?.bid || 0;
       if (resuming) {
@@ -886,7 +900,9 @@ function boot() {
         }
       }
     }
+    const prev = state;
     state = s;
+    ledger(prev, s);
     render();
   });
   socket.on('toast', (t) => toast(t.message, t.type));
@@ -911,6 +927,12 @@ function safe(label, fn) {
 
 function render() {
   if (!state) return;
+  // What the table is shown, as opposed to what the server has decided: the
+  // purses without the money still riding on a walking piece. Read once per
+  // paint, and only by what is painted — the buttons and limits below read
+  // the server's own numbers, because a decision is made with real money.
+  const shown = presented();
+  snapNext = false;
 
   const rebuilt = safe('board', () => renderBoard(state, $('#board')));
   safe('ownership', () => patchBoard(state));
@@ -923,6 +945,9 @@ function render() {
     // it waits for the piece to be set down inside.
     onJailed: () => sfx.jail(),
     onSettle: settleLeg,
+    // The board has always taken a piece off at bankruptcy; a bankruptcy
+    // still being held keeps it on until the rent that caused it is shown.
+    isOut: (p) => !!p.bankrupt && !heldBusts.has(p.id),
   }));
   if (rebuilt) requestAnimationFrame(() => safe('reposition', () => repositionTokens(state)));
 
@@ -938,9 +963,13 @@ function render() {
   });
 
   safe('awaiting', () => renderAwaiting(state, meId, $('#awaitingWell'), actions));
-  safe('players', () => renderPlayers(state, meId, $('#playerList'), actions));
-  safe('panel', () => renderRightPanel(state, meId, $('#rightPanel'), actions));
-  safe('center', () => renderCenter(state, meId, actions));
+  safe('players', () => renderPlayers(state, meId, $('#playerList'), actions, shown));
+  // The well and the panel are where a finished game says so. While the
+  // ending is held (see "the purse ledger") they go on showing the game as
+  // it was, so the winner is not named before the rent that decided it.
+  const table = endHeld || state;
+  safe('panel', () => renderRightPanel(table, meId, $('#rightPanel'), actions));
+  safe('center', () => renderCenter(table, meId, actions));
   safe('dice', () => renderDice(state));
   safe('clock', () => syncTurnClock(state, meId));
   safe('modals', () => syncOpenModals(state));
@@ -994,17 +1023,11 @@ function render() {
   // game over
   if (state.status === 'ended') {
     // Nothing left to come back to, so the shelf must stop offering it —
-    // though the ending itself is worth keeping.
+    // though the ending itself is worth keeping. The fanfare, the confetti
+    // and the result sheet are not here: they belong to the moment the last
+    // payment is shown, and the purse ledger plays them then (announceWinner).
     forgetGame(roomId);
     recordMatch(state);
-  }
-  if (state.status === 'ended' && !winnerShown) {
-    winnerShown = true;
-    sfx.win();
-    confetti();
-    setTimeout(() => showGameOver(state, meId, actions), 700);
-    // did the win pay out? the wallet knows
-    setTimeout(refreshWallet, 1200);
   }
   if (state.status !== 'ended') { winnerShown = false; matchSavedFor = null; }
 }
@@ -1050,21 +1073,29 @@ function revealHeldCard() {
 /**
  * The pause between two legs of one journey — and the only place a card is
  * allowed to turn over while the board still has moving left to do.
+ *
+ * After the last leg it is the landing, and the landing is payday: the money
+ * this journey carried is let go (see `landed`). A card that turned over just
+ * now, on the last tile, is a card that pays without moving you — it is read
+ * before the money moves.
  */
-function settleLeg(who, _leg, next) {
+function settleLeg(who, leg, next) {
   highlightTiles(state);
   const mine = !heldCard?.playerId || heldCard.playerId === who?.id;
   const shown = mine ? revealHeldCard() : false;
-  if (!next) return null;
+  if (!next) { landed(leg?.seq, shown); return null; }
   return new Promise((done) => setTimeout(done, shown ? CARD_BEAT : 240));
 }
 
-/** Long enough for the piece to have finished walking to the card's tile. */
+/**
+ * Long enough for the piece to have finished walking to the card's tile —
+ * which it now only starts doing once the dice have landed.
+ */
 function cardFloor(at) {
   const steps = (state?.moves || [])
     .filter((m) => Math.abs(m.at - at) < 2500)
     .reduce((n, m) => n + Math.abs(m.steps || 0), 0);
-  return steps * 150 + 1200;
+  return DICE_LEAD + steps * 150 + 1200;
 }
 
 // ─────────────────────────────────────────────────────── deadlock rule ──
@@ -1100,58 +1131,431 @@ function showReliefCardOnce() {
   }, cardFloor(rc.at));
 }
 
-/** Turns fresh log lines into sound effects. */
-let lastMyMoney = null;
+// ═══════════════════════════════════════════════════════ the purse ledger ══
+// One rule, the same on the iPhone and on Android: MONEY IS SHOWN WHEN ITS
+// CAUSE IS.
+//
+// The server settles a whole roll at once — the walk, the rent at the end of
+// it, the card that tile drew and whatever the card did — and pushes all of it
+// before the piece has taken its first step. Painted as it arrived, the purses
+// told the story first: the rent came off while the piece was still three
+// tiles short of the hotel, and the landing was news nobody could be
+// surprised by any more. So money that belongs to a journey still on the
+// board is held here, with everything it would say — the number, the ± badge,
+// the coins, the count, its sound, any bankruptcy it caused and any game-over
+// that caused — and all of it is let go together when the piece lands.
+//
+// Everything else shows the moment it arrives: trades, auction bids and their
+// settlement (escrow moves money on every bid), changes to players the
+// journey has nothing to do with, and anything at all while nothing walks.
+//
+// A journey is keyed by the newest move `seq` it carries. Its cast is the
+// mover, everyone whose money moved in the push that started it, anyone that
+// push bankrupted, and the parties to a debt it left open — a debtor who paid
+// $0 still owes the rent to somebody. A later push that belongs to it adds an
+// entry, and at the landing the entries land half a second apart: the rent,
+// then a bot's scramble to raise cash, then the bust.
+
+/** A card that pays without moving you is read before the money moves. */
+const CARD_READ = 450;
+/** The thump of the landing, then the ka-ching. */
+const LAND_BEAT = 150;
+/** Between the entries of one landing: rent, the scramble, the bust. */
+const ENTRY_GAP = 500;
+const MAX_ENTRIES = 4;
+/** No journey holds its money longer than this, whatever the board is doing. */
+const MONEY_CAP = 6000;
+
+/** key → { key, seqs, mover, cast, card, entries, floorAt, timer, landing, done } */
+const journeys = new Map();
+/** Player id → the part of their purse that has not been shown yet. */
+const held = new Map();
+/** Players whose bankruptcy has not been shown yet. */
+const heldBusts = new Set();
+/** Entries due to land, so walking away from the table can cancel them. */
+const beats = new Set();
+/** False until the first state after a connect has been taken as a position. */
+let primed = false;
+/** The newest move `seq` a journey has been opened for. */
+let seenSeq = 0;
+/** The next paint puts every number in place instead of counting to it. */
+let snapNext = false;
+let winTimer = 0;
+/**
+ * True while a push is being read. Anything the ledger lets go in that time
+ * — an older walk cut short by a new one — is painted by the render that
+ * follows the push, not by one of its own: a paint from inside would show
+ * the new push's money before it had been held.
+ */
+let ledgerBusy = false;
+/**
+ * The last state of a game whose ending is still riding on a walking piece.
+ * The centre well and the side panel keep showing it — whose turn, what they
+ * are doing — until that ending is shown, instead of announcing a winner
+ * while the rent that made them one is still three tiles away.
+ */
+let endHeld = null;
+
+// A removed player is out whatever the money says (see ui.js).
+const isOut = (p) => !!(p.bankrupt || p.timedOut);
+
+/** The table as it is shown: raw state, less whatever is still held. */
+function presented() {
+  return {
+    money: (p) => (p.money || 0) - (held.get(p.id) || 0),
+    worth: (p) => (p.netWorth || 0) - (held.get(p.id) || 0),
+    out: (p) => isOut(p) && !heldBusts.has(p.id),
+    snap: snapNext,
+  };
+}
+
+/**
+ * The latest a journey's money waits for the board to say the piece has
+ * landed — a tab in the background, a piece that never got on screen.
+ * Modelled on cardFloor: 150ms a tile against the 78–128 a step takes, 1.1s
+ * for a carried leg against the 1.01 a flight takes, the 1.5s a card is on
+ * screen, and the dice's tumble in front of it all.
+ */
+function landingFloor(legs, hasCard, lead) {
+  const travel = legs.reduce((ms, m) => ms + (m.steps ? Math.abs(m.steps) * 150 : 1100), 0);
+  return Math.min(MONEY_CAP, lead + travel + 1200 + (hasCard ? 1500 : 0));
+}
+
+/** Nothing held, nothing due: every purse is its raw number again. */
+function dropJourneys() {
+  for (const j of journeys.values()) { j.done = true; clearTimeout(j.timer); }
+  journeys.clear();
+  beats.forEach(clearTimeout);
+  beats.clear();
+  held.clear();
+  heldBusts.clear();
+  endHeld = null;
+}
+
+/** A table left, or a new one sat at: nothing of the last one may land here. */
+function resetLedger() {
+  primed = false;
+  dropJourneys();
+  clearTimeout(winTimer);
+}
+
+/**
+ * The first paint, and the first state after any (re)connect, is a position
+ * and not news. Numbers snap into place, nothing sounds and nothing walks —
+ * the one-shot trackers are brought up to date so none of what happened
+ * while nobody was watching plays late.
+ */
+function prime(s) {
+  primed = true;
+  snapNext = true;
+  dropJourneys();
+  seenSeq = (s.moves || []).reduce((n, m) => Math.max(n, m.seq || 0), 0);
+  lastLogAt = s.log?.[s.log.length - 1]?.at ?? 0;
+  const jailing = (s.moves || []).filter((m) => m.cause === 'jail').pop();
+  if (jailing) lastJailMoveAt = Math.max(lastJailMoveAt, jailing.at);
+  hadAuction = !!s.auction;
+  lastAuctionBid = s.auction?.bid || 0;
+  lastCardAt = s.lastCard?.at ?? 0;
+  // A finished table walked into still gets its result sheet — just not the
+  // fanfare of a game somebody else watched end.
+  if (s.status === 'ended' && !winnerShown) {
+    winnerShown = true;
+    setTimeout(() => { if (state?.status === 'ended') showGameOver(state, meId, actions); }, 700);
+    setTimeout(refreshWallet, 1200);
+  }
+}
+
+/**
+ * Every push, before it is painted: what is news, and when it may be shown.
+ * Whatever goes wrong in here, the purses must end up telling the truth — a
+ * ledger that failed half-way through a push drops what it holds and lets
+ * the table show the server's numbers, rather than leave a purse short.
+ */
+function ledger(prev, s) {
+  ledgerBusy = true;
+  try {
+    tally(prev, s);
+  } catch (err) {
+    console.error('ledger', err);
+    dropJourneys();
+    // Nor may it swallow the end of the game: nothing is held any more, so
+    // the ending is shown now.
+    if (s?.status === 'ended') announceWinner(0);
+  } finally {
+    ledgerBusy = false;
+  }
+}
+
+/** The reading itself: one push against the one before it. */
+function tally(prev, s) {
+  if (!prev || !primed) return prime(s);
+  // A finished table keeps talking — chat, a rematch vote. None of that is
+  // money, and none of it may cut short the journey still paying out the
+  // last rent of the game.
+  if (prev.status === 'ended' && s.status === 'ended') {
+    lastLogAt = s.log?.[s.log.length - 1]?.at ?? lastLogAt;
+    return undefined;
+  }
+  if (prev.status !== 'playing' || (s.status !== 'playing' && s.status !== 'ended')) return prime(s);
+
+  const legs = (s.moves || []).filter((m) => (m.seq || 0) > seenSeq);
+  if (legs.length) seenSeq = legs[legs.length - 1].seq || seenSeq;
+  const fresh = legs.length > 0;
+
+  const lines = (s.log || []).filter((l) => l.at > lastLogAt);
+  if (lines.length) lastLogAt = lines[lines.length - 1].at;
+  // The dice and the auction speak for themselves, on arrival, never held.
+  const kinds = new Set(lines.map((l) => l.kind).filter((k) => k !== 'dice' && k !== 'auction'));
+  // Is a piece on its way to prison right now? The server marks that move
+  // 'jail'; nothing else does. That door is voiced by the board on landing.
+  const jailMove = (s.moves || []).filter((m) => m.cause === 'jail').pop();
+  const jailFlight = !!jailMove && jailMove.at > lastJailMoveAt;
+  if (jailFlight) lastJailMoveAt = jailMove.at;
+
+  const was = new Map(prev.players.map((p) => [p.id, p]));
+  const delta = {};
+  const busts = [];
+  for (const p of s.players) {
+    const o = was.get(p.id);
+    if (!o) continue;
+    const d = (p.money || 0) - (o.money || 0);
+    if (d) delta[p.id] = d;
+    if (p.bankrupt && !o.bankrupt) busts.push(p.id);
+  }
+  const ended = s.status === 'ended';
+  // A trade and an auction are their own moment, whoever happens to be walking.
+  const exempt = !fresh && (kinds.has('trade') || !!prev.auction || !!s.auction);
+
+  let target = null;
+  if (fresh) target = openJourney(prev, s, legs, delta, busts);
+  else if (!exempt) target = journeyFor(prev.turn?.playerId, delta, busts);
+
+  if (target) {
+    const inside = {};
+    const outside = {};
+    for (const [id, d] of Object.entries(delta)) (target.cast.has(id) ? inside : outside)[id] = d;
+    const inBusts = busts.filter((id) => target.cast.has(id));
+    const outBusts = busts.filter((id) => !target.cast.has(id));
+    if (fresh || ended || inBusts.length || Object.keys(inside).length) {
+      target.entries.push(entry(inside, kinds, inBusts, prev, s, target, ended, jailFlight));
+      for (const [id, d] of Object.entries(inside)) held.set(id, (held.get(id) || 0) + d);
+      inBusts.forEach((id) => heldBusts.add(id));
+      if (ended && !endHeld) endHeld = prev;
+      // Somebody the journey never touched is not kept waiting on it.
+      if (Object.keys(outside).length || outBusts.length) {
+        voice(entry(outside, new Set(), outBusts, prev, s, null, false, false));
+      }
+      return undefined;
+    }
+  }
+  if (Object.keys(delta).length || busts.length || kinds.size || ended) {
+    voice(entry(delta, kinds, busts, prev, s, target, ended, jailFlight));
+  }
+  return undefined;
+}
+
+/**
+ * A new walk on the board. Doubles queue rather than cut: the board plays a
+ * second roll behind the first when it starts where the first one ends —
+ * the very test it is about to make — so each walk lands with its own
+ * money. When it will not, it is about to take the piece off the first walk,
+ * and the money that walk carried is shown now, as it is cut.
+ */
+function openJourney(prev, s, legs, delta, busts) {
+  const now = Date.now();
+  const last = legs[legs.length - 1];
+  const mover = last.playerId;
+  const first = legs.find((m) => m.playerId === mover) || legs[0];
+  const behind = [...journeys.values()].filter((j) => j.mover === mover && !j.landing && !j.done);
+  const queued = walkingTo(mover) === first.from;
+  if (!queued) behind.forEach(release);
+
+  const card = !!s.lastCard && s.lastCard.at !== prev.lastCard?.at
+    && Math.abs(s.lastCard.at - last.at) < 2500;
+  const lead = queued ? SETTLE : first.cause === 'card' ? 0 : DICE_LEAD;
+  const start = queued ? Math.max(now, ...behind.map((j) => j.floorAt)) : now;
+  const floorAt = start + landingFloor(legs, card, lead);
+
+  const cast = new Set([...legs.map((m) => m.playerId), ...Object.keys(delta), ...busts]);
+  const debt = s.turn?.debt;
+  if (debt?.creditor) cast.add(debt.creditor);
+  (debt?.owedTo || []).forEach((id) => cast.add(id));
+
+  const j = {
+    key: last.seq, seqs: new Set(legs.map((m) => m.seq)), mover, cast, card,
+    entries: [], floorAt, timer: 0, landing: false, done: false,
+  };
+  j.timer = setTimeout(() => release(j), floorAt - now);
+  journeys.set(j.key, j);
+  return j;
+}
+
+/**
+ * Which journey a later push belongs to: the one the player whose turn it
+ * was is walking, else the newest one whose cast this push touches.
+ */
+function journeyFor(turnId, delta, busts) {
+  const live = [...journeys.values()].filter((j) => !j.done);
+  const touched = [...Object.keys(delta), ...busts];
+  return live.filter((j) => j.mover === turnId).pop()
+    || live.filter((j) => touched.some((id) => j.cast.has(id))).pop()
+    || null;
+}
+
+/**
+ * One change, as one event: its money, its log, its busts and who they were
+ * owed to — a debt names its creditor or the players it is owed to; a bust
+ * with no debt behind it came from a card, and the mover collected.
+ */
+function entry(delta, kinds, busts, prev, s, j, ended, jailFlight) {
+  const creditors = {};
+  for (const b of busts) {
+    const debt = [prev.turn?.debt, s.turn?.debt].find((d) => d?.debtor === b);
+    if (debt) creditors[b] = debt.creditor ? [debt.creditor] : [...(debt.owedTo || [])];
+    else creditors[b] = j?.card && j.mover !== b ? [j.mover] : [];
+  }
+  return { delta, kinds, busts, creditors, ended, jailFlight };
+}
+
+/** Past the fourth, a landing's entries are folded into one: it has said enough. */
+function mergeEntries(a, b) {
+  const delta = { ...a.delta };
+  for (const [id, d] of Object.entries(b.delta)) delta[id] = (delta[id] || 0) + d;
+  return {
+    delta,
+    kinds: new Set([...a.kinds, ...b.kinds]),
+    busts: [...a.busts, ...b.busts],
+    creditors: { ...a.creditors, ...b.creditors },
+    ended: a.ended || b.ended,
+    jailFlight: a.jailFlight || b.jailFlight,
+  };
+}
+
+/**
+ * The board saying a journey's last leg is done. Its money follows a beat
+ * later — or once the card that just turned over has been read. Idempotent:
+ * the floor may already have let it go.
+ */
+function landed(seq, cardJustTurned) {
+  const j = [...journeys.values()].find((x) => x.seqs.has(seq));
+  if (!j || j.landing || j.done) return;
+  j.landing = true;
+  clearTimeout(j.timer);
+  j.timer = setTimeout(() => release(j), cardJustTurned ? CARD_READ : LAND_BEAT);
+}
+
+/** Payday: the journey's entries land, the first now and the rest half a second apart. */
+function release(j) {
+  if (j.done) return;
+  j.done = true;
+  clearTimeout(j.timer);
+  journeys.delete(j.key);
+  // A piece's earlier walk cannot pay out after its later one.
+  for (const o of [...journeys.values()]) if (o.mover === j.mover && o.key < j.key) release(o);
+  const due = j.entries.slice(0, MAX_ENTRIES);
+  if (j.entries.length > MAX_ENTRIES) {
+    due[MAX_ENTRIES - 1] = j.entries.slice(MAX_ENTRIES - 1).reduce(mergeEntries);
+  }
+  // The later beats are booked before the first one lands, so nothing the
+  // first one does can leave the rest of the money held.
+  due.slice(1).forEach((e, i) => {
+    const t = setTimeout(() => { beats.delete(t); settle(e); }, (i + 1) * ENTRY_GAP);
+    beats.add(t);
+  });
+  if (due.length) settle(due[0]);
+}
+
+/** One entry lands: out of the held purses, into the voice, onto the table. */
+function settle(e) {
+  for (const [id, d] of Object.entries(e.delta)) {
+    const left = (held.get(id) || 0) - d;
+    if (left) held.set(id, left); else held.delete(id);
+  }
+  e.busts.forEach((id) => heldBusts.delete(id));
+  if (e.ended) endHeld = null;
+  // A sound that fails is a sound missed; the money is shown regardless.
+  try { voice(e); } catch (err) { console.error('voice', err); }
+  if (!ledgerBusy) render();
+}
+
+/**
+ * What one change sounds like from this chair. My own wallet has its own
+ * voice — a coin ring as money lands (a quarter second on, as the first coin
+ * reaches the purse and the number starts to climb), an "ishh…" as it
+ * leaves — and the room's generic sounds are for everybody else's. A
+ * bankruptcy speaks over all of it, differently for the one it happened to,
+ * the one who did it, and the rest of the table; and the game's end waits
+ * for the bust that ended it to finish being heard.
+ */
+function voice(e) {
+  let after = 0;
+  if (e.busts.length) {
+    if (e.busts.includes(meId)) { sfx.bankruptFall(); after = 2100; }
+    else if (e.busts.some((b) => e.creditors[b]?.includes(meId))) { sfx.bankruptKaching(); after = 1200; }
+    else { sfx.bankruptCrash(); after = 1200; }
+  } else {
+    const mine = e.delta[meId] || 0;
+    const k = e.kinds;
+    // Anybody else's money is the room's sound — the rent line's own, or the
+    // till — whatever moved it: a card, a fine, a mortgage, a street bought.
+    // The same rule the iPhone and Android follow; the line's sound follows.
+    const remote = Object.entries(e.delta).some(([id, d]) => d && id !== meId);
+    if (mine < 0) sfx.lose();
+    else if (mine > 0) setTimeout(sfx.gain, 250);
+    else if (remote) (k.has('rent') ? sfx.rent : sfx.cash)();
+    if (k.has('buy')) sfx.buy();
+    // A jailing is voiced on landing (see onJailed), so the line announcing
+    // it stays quiet — otherwise the door slams a second before the piece is
+    // anywhere near it. Every other jail line — paying the fine, spending a
+    // card — moves nobody, and keeps its sound here.
+    else if (k.has('jail') && !e.jailFlight) sfx.jail();
+    else if (k.has('build')) sfx.build();
+    else if (k.has('trade')) sfx.trade();
+  }
+  if (e.ended) announceWinner(after);
+}
+
+/**
+ * The end of the game, heard once: the winner's fanfare pours coins and
+ * throws confetti; everyone else hears the table cheer. The result sheet
+ * follows the fanfare, as it does on the iPhone and Android.
+ */
+function announceWinner(after) {
+  clearTimeout(winTimer);
+  winTimer = setTimeout(() => {
+    if (winnerShown || state?.status !== 'ended') return;
+    winnerShown = true;
+    const me = state.players.find((p) => p.id === meId);
+    const mine = state.winningTeam != null
+      ? me?.team != null && me.team === state.winningTeam
+      : !!state.winner && state.winner.id === meId;
+    sfx.win(mine);
+    if (mine) confetti();
+    setTimeout(() => { if (state?.status === 'ended') showGameOver(state, meId, actions); }, 700);
+    // did the win pay out? the wallet knows
+    setTimeout(refreshWallet, 1200);
+  }, after);
+}
+
+// ──────────────────────────────────────────────────────── the auction ──
 let hadAuction = false;
 let lastAuctionBid = 0;
 // The newest jailing this client has already handed to the flight, so a
 // re-render of the same state does not queue a second door.
 let lastJailMoveAt = 0;
 
+/**
+ * The gavel when an auction opens, and a rising paddle-tick for every new bid
+ * (pitched by how high the bid is). Never held: a bid is its own moment, and
+ * the money it moves is shown with it. Everything else this used to voice
+ * from the log now speaks through the ledger, when its money is shown.
+ */
 function playSoundsForNewEvents() {
-  // My own wallet gets its own voice: a coin ring when money lands, an
-  // "ishh…" when it leaves — the generic room sounds stay for everyone else.
-  const meNow = state.players.find((p) => p.id === meId);
-  let myDelta = 0;
-  if (state.status === 'playing' && meNow && !meNow.bankrupt) {
-    if (lastMyMoney != null) myDelta = meNow.money - lastMyMoney;
-    lastMyMoney = meNow.money;
-  } else {
-    lastMyMoney = null;
-  }
-  if (myDelta > 0) sfx.gain();
-  else if (myDelta < 0) sfx.lose();
-
-  // Auction: the gavel when it opens, a rising paddle-tick for every new bid
-  // (pitched by how high the bid is).
   const a = state.auction;
   if (a && !hadAuction) sfx.auction();
   else if (a && hadAuction && a.bid > lastAuctionBid) sfx.bid(a.bid);
   hadAuction = !!a;
   lastAuctionBid = a?.bid || 0;
-
-  // Is a piece on its way to prison right now? The server marks that move
-  // 'jail'; nothing else does.
-  const jailMove = (state.moves || []).filter((m) => m.cause === 'jail').pop();
-  const jailFlight = !!jailMove && jailMove.at > lastJailMoveAt;
-  if (jailFlight) lastJailMoveAt = jailMove.at;
-
-  const fresh = state.log.filter((l) => l.at > lastLogAt);
-  if (!fresh.length) return;
-  lastLogAt = state.log[state.log.length - 1].at;
-  const kinds = new Set(fresh.map((l) => l.kind));
-  if (kinds.has('bankrupt')) return sfx.bankrupt();
-  if (!myDelta && kinds.has('rent')) return sfx.rent();
-  if (kinds.has('buy')) return sfx.buy();
-  // A jailing is voiced on landing (see onJailed above), so the line that
-  // announces it stays quiet — otherwise the door slams a second before the
-  // piece is anywhere near it. Every other jail line — paying the fine,
-  // spending a card — moves nobody, and keeps its sound here.
-  if (kinds.has('jail') && !jailFlight) return sfx.jail();
-  if (kinds.has('build')) return sfx.build();
-  if (kinds.has('trade')) return sfx.trade();
-  // auction openings + bids are voiced by the state diff below, not the log
-  if (!myDelta && kinds.has('money')) return sfx.cash();
 }
 
 // ───────────────────────────────────────────────────────────────── inputs ──
@@ -1422,6 +1826,7 @@ function goHome() {
   chatSeen = 0;
   heardChatId = null;
   resetBoard();
+  resetLedger();
   showLanding();
 }
 
@@ -2143,7 +2548,16 @@ soundBtn.addEventListener('click', () => {
   paintSoundBtn();
   if (isEnabled()) sfx.click();
 });
-document.addEventListener('pointerdown', unlock, { once: true });
+// The first touch is the earliest a browser lets a page make any sound, so it
+// is where the web hears the app open — the launch the iPhone and Android play
+// under their splash, which the web does not have. Only on the landing: a room
+// link opens straight onto a table, and a jingle over somebody's turn is
+// noise. Not on the sound button either, whose first touch may be to mute.
+document.addEventListener('pointerdown', (e) => {
+  unlock();
+  if ($('#landing').classList.contains('hidden') || e.target?.closest?.('#soundBtn')) return;
+  sfx.launch();
+}, { once: true });
 
 // tile hover tooltip + click for the full deed
 const tip = $('#tooltip');

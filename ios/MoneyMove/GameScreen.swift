@@ -758,7 +758,9 @@ struct PlayerStrip: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(store.state?.players ?? []) { p in
+                    // As presented: money an act on stage is still holding
+                    // is not on the seat until the piece has landed.
+                    ForEach(store.shownPlayers) { p in
                         seat(p, ranks: ranks, nextUp: nextUp, glass: glass, P: P)
                     }
                 }
@@ -843,14 +845,18 @@ struct PlayerStrip: View {
                     // In the red the number wears the bad
                     // colour and breathes — the balance itself
                     // is the debt, climbing back toward zero.
-                    Text(standingLabel(p))
-                        .font(.system(size: 13, weight: .heavy, design: .rounded))
-                        .foregroundStyle(p.isBankrupt ? second
-                                         : (p.inDebt ? glass.bad(increaseContrast: ic)
-                                                     : glass.good(increaseContrast: ic)))
-                        .contentTransition(.numericText())
-                        .animation(.snappy(duration: 0.4), value: p.money)
-                        .debtPulse(p.inDebt)
+                    Group {
+                        if p.isBankrupt {
+                            Text(standingLabel(p))
+                        } else {
+                            CountingMoney(amount: p.money, snap: store.isPosition)
+                        }
+                    }
+                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                    .foregroundStyle(p.isBankrupt ? second
+                                     : (p.inDebt ? glass.bad(increaseContrast: ic)
+                                                 : glass.good(increaseContrast: ic)))
+                    .debtPulse(p.inDebt)
                     let owned = store.state?.ownership.values.filter { $0.owner == p.id }.count ?? 0
                     if owned > 0, !p.isBankrupt {
                         Text("·  \(owned)")
@@ -1159,7 +1165,9 @@ struct CenterWell: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(P.ink3)
                     }
-                } else if state.isEnded {
+                } else if state.isEnded, !store.endOnStage {
+                    // Not while the act that ended the game is still on stage:
+                    // until the fanfare, the well keeps the dice and the log.
                     VStack(spacing: 6) {
                         Art.icon(.trophy, size: 36)
                         Text("\(store.state?.winner?.name ?? "Nobody") wins!")
@@ -1391,11 +1399,18 @@ struct MoneyDeltaBadge: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let glass = BackdropKind.page.settledGlass(Palette.current(scheme))
         let ic = contrast == .increased
         ZStack {
+            if let d = store.moneyDeltas[playerId], !reduceMotion {
+                // Behind the badge, so the coins seem to leave it and land in it.
+                CoinSpill(leaving: d.amount < 0)
+                    .id(d.id)
+                    .transition(.identity)
+            }
             if let d = store.moneyDeltas[playerId] {
                 // Grouped like every other figure on screen: a rent bill reads
                 // "−$1,450", never "−$1450".
@@ -1422,6 +1437,91 @@ struct MoneyDeltaBadge: View {
     }
 }
 
+/// Three coins that go with a payment: lifting off the payer's badge, or
+/// dropping into the payee's a beat later, as the payee's count starts. The
+/// colours are the coin glyph's own. The badge leaves them out under Reduce
+/// Motion.
+private struct CoinSpill: View {
+    /// Money leaving this seat: the coins lift off. Otherwise they drop in.
+    let leaving: Bool
+    @State private var moved = false
+    @State private var gone = false
+
+    private static let spread: [CGFloat] = [-10, 0, 10]
+
+    var body: some View {
+        ZStack {
+            ForEach(Self.spread.indices, id: \.self) { i in
+                let stagger = Double(i) * 0.05
+                Art.icon(.coin, size: 12)
+                    .scaleEffect(leaving ? (moved ? 0.6 : 1) : (moved ? 1 : 0.6))
+                    .offset(x: Self.spread[i], y: leaving ? (moved ? -22 : 0) : (moved ? 0 : -22))
+                    .opacity(leaving ? (moved ? 0 : 1) : (moved && !gone ? 1 : 0))
+                    .animation(leaving ? .easeOut(duration: 0.55).delay(stagger)
+                                       : .easeOut(duration: 0.3).delay(0.2 + stagger),
+                               value: moved)
+                    .animation(.easeIn(duration: 0.2).delay(stagger), value: gone)
+            }
+        }
+        .allowsHitTesting(false)
+        .task {
+            // A frame on the start pose first, or the coins would animate from
+            // wherever SwiftUI first drew them.
+            try? await Task.sleep(for: .milliseconds(16))
+            moved = true
+            guard !leaving else { return }
+            // Landed in the payee's badge; they sink into it.
+            try? await Task.sleep(for: .milliseconds(500))
+            gone = true
+        }
+    }
+}
+
+/// A balance that counts its way to a new figure instead of jumping there.
+///
+/// It is the payment's last beat: the payer's figure starts falling as its
+/// coins lift off, the payee's climbs a quarter-second later as its coins
+/// land, both over the same 0.6 s ease-out the coin counter uses (at most 18
+/// steps, so a $2,000 rent and a $10 tax take the same time). Under Reduce
+/// Motion the number simply changes, and so does a position — the first
+/// state after a (re)connect is where things stand, not a payment.
+struct CountingMoney: View {
+    let amount: Int
+    /// The figure is a position, not news (GameStore.isPosition): it snaps.
+    var snap = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The figure mid-count; nil whenever the balance is at rest.
+    @State private var counting: Int?
+    @State private var run: Task<Void, Never>?
+
+    var body: some View {
+        Text(money(counting ?? amount))
+            .monospacedDigit()
+            .onChange(of: amount) { was, now in count(from: counting ?? was, to: now) }
+            .onDisappear { run?.cancel(); counting = nil }
+    }
+
+    private func count(from: Int, to: Int) {
+        run?.cancel()
+        guard !reduceMotion, !snap, from != to else { counting = nil; return }
+        counting = from
+        run = Task { @MainActor in
+            if to > from { try? await Task.sleep(for: .milliseconds(250)) }
+            let steps = min(18, abs(to - from))
+            for i in 1...steps {
+                guard !Task.isCancelled else { return }
+                let t = Double(i) / Double(steps)
+                let eased = 1 - pow(1 - t, 3)
+                counting = from + Int((Double(to - from) * eased).rounded())
+                try? await Task.sleep(for: .milliseconds(600 / steps))
+            }
+            guard !Task.isCancelled else { return }
+            counting = nil
+        }
+    }
+}
+
 // MARK: - corner player pods (iPad tabletop)
 
 /// Every player seated at THIS device gets their own little dashboard pinned
@@ -1438,7 +1538,7 @@ struct CornerPods: View {
     /// the iPad never finds their own pod printed upside down — the server is
     /// free to shuffle turn order, and it does.
     private var seats: [PlayerState] {
-        let mine = (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
+        let mine = store.shownPlayers.filter { store.isLocal($0.id) && !$0.isBankrupt }
         guard let i = mine.firstIndex(where: { $0.id == store.meId }) else { return mine }
         var ordered = mine
         ordered.insert(ordered.remove(at: i), at: 0)
@@ -1557,12 +1657,10 @@ private struct PlayerPod: View {
                         .foregroundStyle(glass.ink)
                         .lineLimit(1)
                     HStack(spacing: 5) {
-                        Text(money(player.money))
+                        CountingMoney(amount: player.money, snap: store.isPosition)
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
                             .foregroundStyle(player.inDebt ? glass.bad(increaseContrast: ic)
                                                            : glass.good(increaseContrast: ic))
-                            .contentTransition(.numericText())
-                            .animation(.snappy(duration: 0.4), value: player.money)
                             .debtPulse(player.inDebt)
                         if player.lapsBlocked > 0, !player.isBankrupt {
                             DeadlockLaps(left: player.lapsToRelief)
