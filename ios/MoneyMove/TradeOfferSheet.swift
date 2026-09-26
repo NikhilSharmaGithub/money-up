@@ -73,7 +73,7 @@ struct TradeOfferSheet: View {
             }
             actions(P)
         }
-        .background(P.sheet.ignoresSafeArea())
+        .sheetPaper(P.sheet)
         // Sized for the deal rather than the screen: two piles, the meter and
         // the answers, with no gap under them and nothing cut off. A deal with
         // half a colour group in it can be dragged up to the full screen.

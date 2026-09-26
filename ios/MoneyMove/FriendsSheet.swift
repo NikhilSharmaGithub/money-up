@@ -41,7 +41,6 @@ struct FriendsSheet: View {
                 }
                 .padding(16)
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle("Friends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -49,6 +48,7 @@ struct FriendsSheet: View {
             }
             .scrollDismissesKeyboard(.interactively)
         }
+        .sheetPaper(P.page)
         .sheet(item: $dmFriend) { friend in
             DMSheet(friend: friend).environmentObject(store)
         }

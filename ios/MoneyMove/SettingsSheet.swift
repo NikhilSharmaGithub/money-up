@@ -36,7 +36,6 @@ struct SettingsSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Game settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -47,6 +46,7 @@ struct SettingsSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
@@ -71,8 +71,8 @@ struct SettingsSheet: View {
     }
 
     /// The same three boxes the lobby shows, so there is exactly one board
-    /// picker in the app. This used to be a second, independent list of all
-    /// nineteen — which meant the lobby could hide a locked board and this
+    /// picker in the app. This used to be a second, independent list of every
+    /// board — which meant the lobby could hide a locked board and this
     /// sheet would offer it one tap away.
     private func boardSection(_ P: Palette) -> some View {
         MMCard { BoardBoxes(canEdit: canEdit) }

@@ -98,9 +98,9 @@ struct DeedSheet: View {
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(P.sheet.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -443,7 +443,6 @@ struct PropertiesSheet: View {
                     .padding(14)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Your properties")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -463,6 +462,7 @@ struct PropertiesSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDragIndicator(.visible)
     }
 

@@ -61,7 +61,6 @@ struct TradeSheet: View {
                     missingTarget(P)
                 }
             }
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle(counterOf == nil ? "Trade" : "Negotiate")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -75,6 +74,7 @@ struct TradeSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .onAppear {
@@ -537,7 +537,6 @@ struct TradePickerSheet: View {
                 .padding(14)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Trade with…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -546,6 +545,7 @@ struct TradePickerSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

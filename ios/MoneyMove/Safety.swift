@@ -317,13 +317,13 @@ struct BlockedPlayersSheet: View {
                 }
                 .padding(16)
             }
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("Blocked players")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
     }
 }

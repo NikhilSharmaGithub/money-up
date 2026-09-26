@@ -49,13 +49,13 @@ struct CupDetailSheet: View {
                 }
                 .padding(16)
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle(live.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+        .sheetPaper(P.page)
         .sheet(isPresented: $showChart) { CupChartSheet(cupId: cup.id).environmentObject(store) }
     }
 

@@ -100,7 +100,7 @@ struct BoardShelfFeed: Codable {
     /// Server-local midnight, in milliseconds — when the two free ones change.
     var until: Double = 0
     var perDay: Int = 2
-    var cycleDays: Int = 9
+    var cycleDays: Int = 12
     var house: String = "classic"
     var rent: BoardRentInfo?
     var coins: Int = 0
@@ -438,14 +438,13 @@ struct BoardPickerSheet: View {
                             .padding(.top, 2)
                     }
                     shelfOf(free, "Playable now",
-                            "Classic is free forever. Two more rotate every day — every board comes round once every \(shelf.feed?.cycleDays ?? 9) days.", P)
+                            "Classic is free forever. Two more rotate every day — every board comes round once every \(shelf.feed?.cycleDays ?? 12) days.", P)
                     shelfOf(mine, "Yours", "Bought and kept. Play them whenever you like.", P)
                     shelfOf(locked, "In the store",
                             "Buy one and it is yours for good — or pay \(shelf.feed?.rent?.price ?? 1) coin to play it once at this table. Only the host needs it; everyone plays it with you.", P)
                 }
                 .padding(16)
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle("Boards")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -460,6 +459,7 @@ struct BoardPickerSheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+        .sheetPaper(P.page)
         .task { await shelf.load(store, force: true) }
         .sheet(item: $shopping) { pick in
             if let b = shelf.board(pick.id) {
@@ -777,7 +777,6 @@ struct BoardBuySheet: View {
                 .padding(18)
                 .frame(maxWidth: .infinity)
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle("Unlock a board")
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -789,6 +788,7 @@ struct BoardBuySheet: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
             }
         }
+        .sheetPaper(P.page)
     }
 
     private func stat(_ n: String, _ label: String, _ P: Palette) -> some View {

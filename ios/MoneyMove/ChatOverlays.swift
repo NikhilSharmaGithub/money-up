@@ -98,7 +98,6 @@ struct ChatLogSheet: View {
                     logTab(P)
                 }
             }
-            .background(P.sheet)
             .navigationTitle(tab == 0 ? "Chat" : "Game log")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -127,6 +126,7 @@ struct ChatLogSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         // Open on the chat and it is read; open on the log and it is not, so
@@ -720,10 +720,10 @@ struct GameOverSheet: View {
                 }
                 .padding(16)
             }
-            .background(P.sheet)
             .navigationTitle("Game over")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task { await askForSomething() }

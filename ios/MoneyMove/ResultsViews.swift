@@ -246,11 +246,11 @@ struct MatchDetailSheet: View {
                     .padding(16)
                 }
             }
-            .background(P.sheet)
             .navigationTitle("Result")
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) { pager(P) }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.large, .medium])
         .presentationDragIndicator(.visible)
         .onAppear {

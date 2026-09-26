@@ -45,7 +45,7 @@ let INTRO_PAGES: [IntroPage] = [
         line: "Buy streets. Build hotels. Bankrupt your friends.",
         points: [
             (.people, "Two to eight players, on one phone or across the world"),
-            (.map, "Nineteen boards — a world tour, single countries, and a few odd ones"),
+            (.map, "Twenty-five boards — a world tour, six continents, single countries, and a few odd ones"),
             (.dice, "A game runs about half an hour"),
         ]),
     IntroPage(

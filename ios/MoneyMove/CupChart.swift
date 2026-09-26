@@ -96,7 +96,6 @@ struct CupChartSheet: View {
                     ProgressView().tint(P.gold).padding(60)
                 }
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle(bracket?.name ?? "The chart")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -105,6 +104,7 @@ struct CupChartSheet: View {
                 }
             }
         }
+        .sheetPaper(P.page)
         .task { await load() }
     }
 
@@ -394,13 +394,13 @@ struct CupPosterSheet: View {
                 }
                 .padding(18)
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle("The cup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+        .sheetPaper(P.page)
     }
 
     /// What this cup commits its players to, in dates and hours.

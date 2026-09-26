@@ -142,7 +142,6 @@ struct LeaderboardSheet: View {
                     proxy.scrollTo(entries[i].id, anchor: .center)
                 }
             }
-            .background(P.sheet)
             .navigationTitle("Leaderboard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -151,6 +150,7 @@ struct LeaderboardSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.large, .medium])
         .presentationDragIndicator(.visible)
     }

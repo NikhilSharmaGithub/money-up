@@ -95,7 +95,6 @@ struct DMSheet: View {
                 .disabled(!rulesAgreed)
                 .opacity(rulesAgreed ? 1 : 0.45)
             }
-            .background(P.sheet.ignoresSafeArea())
             .navigationTitle("\(friend.flag?.isEmpty == false ? "\(friend.flag!) " : "")\(friend.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -125,6 +124,7 @@ struct DMSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task {

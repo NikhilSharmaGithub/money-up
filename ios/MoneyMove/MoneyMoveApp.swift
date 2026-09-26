@@ -97,6 +97,11 @@ private struct ToastLayer: View {
             .foregroundStyle(.white)
             .padding(.vertical, 11)
             .padding(.horizontal, 17)
+            // The fill is load-bearing, not decoration: the label is white, so
+            // in light mode the pill has to be the dark one and an error has to
+            // stay red. Drop it to let the material show and a light-mode toast
+            // is white on near-white — which is why it is opaque there and only
+            // a veil in the dark, where the material can be seen through it.
             .background(toast.isError ? P.redDeep : P.ink.opacity(scheme == .light ? 1 : 0.25), in: Capsule())
             .background(.ultraThinMaterial, in: Capsule())
             // The hub's floating tab bar sits about 45pt above the safe area,
@@ -347,6 +352,19 @@ struct RootView: View {
 }
 
 extension View {
+    /// Where a presented sheet gets its paper from.
+    ///
+    /// iOS 26 gives a sheet the system's own glass for nothing — but only a
+    /// sheet that has not already painted over it, and until now every sheet
+    /// here did, with a flat `P.sheet` or `P.page` fill inside its own body.
+    /// So the fill moves out to the one place the system asks for it: below 26
+    /// this lays the same colour on the sheet's platter, which is pixel for
+    /// pixel what the fill used to draw, and on 26 it stands back and lets the
+    /// glass through. The sheet's body paints nothing either way.
+    func sheetPaper(_ paper: Color) -> some View {
+        modifier(SheetPaper(paper: paper))
+    }
+
     /// Animates the standard overlay transitions driven by the store.
     func animateOverlays(_ store: GameStore) -> some View {
         self
@@ -355,6 +373,18 @@ extension View {
             .animation(.spring(duration: 0.4), value: store.reliefPopup)
             .animation(.spring(duration: 0.4), value: store.turnBanner)
             .animation(.spring(duration: 0.45, bounce: 0.3), value: store.reveal)
+    }
+}
+
+private struct SheetPaper: ViewModifier {
+    let paper: Color
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+        } else {
+            content.presentationBackground(paper)
+        }
     }
 }
 

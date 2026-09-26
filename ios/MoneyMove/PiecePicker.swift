@@ -397,7 +397,6 @@ struct PieceShopSheet: View {
                 .onChange(of: focus.id) { _, _ in
                     withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo("hero", anchor: .top) }
                 }
-                .background(P.sheet)
                 .navigationTitle("Pick your piece")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -407,6 +406,7 @@ struct PieceShopSheet: View {
                 }
             }
         }
+        .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

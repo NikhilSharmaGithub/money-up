@@ -31,8 +31,8 @@ struct DailyState: Decodable, Equatable {
 
 /// Coins arriving, on the Play tab.
 ///
-/// Three faces, in this order of loudness: a gold button while there is
-/// something to collect, a short celebration the moment it lands, and a single
+/// Three faces, in this order of loudness: a button in the table's own colour
+/// while there is something to collect, a short celebration the moment it lands, and a single
 /// muted line for the rest of the day. Nothing at all until the server has
 /// answered — a reward you may not even be owed shouldn't flash a spinner at
 /// the top of the screen.
@@ -118,7 +118,7 @@ struct DailyRewardCard: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(MMButtonStyle(kind: .gold, big: true))
+                .buttonStyle(MMButtonStyle(kind: .primary, big: true))
                 .disabled(signingIn || onSignIn == nil)
 
                 Text("Signing in unlocks the daily reward.")
@@ -166,7 +166,7 @@ struct DailyRewardCard: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(MMButtonStyle(kind: .gold, big: true))
+                .buttonStyle(MMButtonStyle(kind: .primary, big: true))
                 .disabled(claiming)
 
                 Text(day >= Self.ladder
@@ -178,8 +178,15 @@ struct DailyRewardCard: View {
         }
     }
 
-    /// The few seconds the coins actually land in: the card goes gold, the
-    /// number runs up from nothing, and the streak pip for today lights.
+    /// The few seconds the coins actually land in: the card takes the table's
+    /// colour, the number runs up from nothing, and the streak pip for today
+    /// lights.
+    ///
+    /// The table's colour, not gold. The card used to be the one gold thing on
+    /// a crimson or royal page — the wordmark, Play now and every other call to
+    /// action follow the style a player picked, and a reward that ignored it
+    /// read as a piece of some other app. The coin itself stays gold: it is a
+    /// coin.
     private func celebration(_ amount: Int, _ d: DailyState, _ P: Palette) -> some View {
         let day = d.streak ?? 1
         return MMCard(padding: 16) {
@@ -192,11 +199,11 @@ struct DailyRewardCard: View {
                     Text("+\(counted)")
                         .font(.system(size: 34, weight: .black, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(P.gold)
+                        .foregroundStyle(P.red)
                         .contentTransition(.numericText())
                     Text(counted == 1 ? "coin" : "coins")
                         .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(P.gold.opacity(0.85))
+                        .foregroundStyle(P.red.opacity(0.85))
                 }
 
                 Text(day > 1 ? "Day \(day) in a row" : "Day one — see you tomorrow")
@@ -209,9 +216,9 @@ struct DailyRewardCard: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
         }
-        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(P.redSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .stroke(P.gold.opacity(0.7), lineWidth: 1.5))
+            .stroke(P.red.opacity(0.7), lineWidth: 1.5))
         .transition(.scale(scale: 0.94).combined(with: .opacity))
     }
 
@@ -254,7 +261,7 @@ struct DailyRewardCard: View {
         return HStack(spacing: 5) {
             ForEach(0..<Self.ladder, id: \.self) { i in
                 Capsule()
-                    .fill(i < lit ? AnyShapeStyle(P.gold) : AnyShapeStyle(P.sunken))
+                    .fill(i < lit ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken))
                     .frame(height: 5)
                     .overlay(Capsule().stroke(P.rule, lineWidth: i < lit ? 0 : 1))
             }

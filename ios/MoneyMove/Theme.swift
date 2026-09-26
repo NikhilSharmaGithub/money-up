@@ -3,6 +3,17 @@
 
 import SwiftUI
 
+/// The raw slot numbers a table style was built from, kept alongside the
+/// `Color`s made from them. The glass tokens are mixes, composites and
+/// luminances of these slots, and none of that arithmetic can be done on a
+/// `Color` — so rather than restate eighteen hexes in a second table and watch
+/// the two drift, the palette carries the numbers it already had.
+struct PaletteHex {
+    let page, page2, card, sheet, sunken, boardBG, tileCorner: UInt32
+    let ink, ink2, ink3, rule, rule2: UInt32
+    let red, redDeep, redSoft, accentInk, gold, goldSoft: UInt32
+}
+
 struct Palette {
     // surfaces
     let page: Color        // screen background
@@ -45,6 +56,9 @@ struct Palette {
     let tileJail: Color
     let tileCorner: Color
 
+    /// The slots above as the numbers they were authored as — see `PaletteHex`.
+    let hex: PaletteHex
+
     /// Builds a full palette from the ~17 slots a table style actually swaps;
     /// the semantic greens/reds and special tile faces are shared per mode.
     static func themed(
@@ -75,7 +89,13 @@ struct Palette {
             tileGoto: dark ? Color(hex: 0x331B21) : Color(hex: 0xF6E3E7),
             tileVacation: dark ? Color(hex: 0x122C2A) : Color(hex: 0xE0F0EE),
             tileJail: dark ? Color(hex: 0x1C2433) : Color(hex: 0xE8EBF4),
-            tileCorner: Color(hex: tileCorner)
+            tileCorner: Color(hex: tileCorner),
+            hex: PaletteHex(
+                page: page, page2: page2, card: card, sheet: sheet, sunken: sunken,
+                boardBG: boardBG, tileCorner: tileCorner,
+                ink: ink, ink2: ink2, ink3: ink3, rule: rule, rule2: rule2,
+                red: red, redDeep: redDeep, redSoft: redSoft, accentInk: accentInk,
+                gold: gold, goldSoft: goldSoft)
         )
     }
 
@@ -84,9 +104,14 @@ struct Palette {
     static var themeID: String = UserDefaults.standard.string(forKey: "mm.theme") ?? "felt"
 
     static func current(_ scheme: ColorScheme) -> Palette {
-        let theme = MMTheme(rawValue: themeID) ?? .felt
-        return scheme == .light ? theme.light : theme.dark
+        currentTheme.palette(scheme)
     }
+
+    /// The table style itself. The glass tokens need it rather than a single
+    /// `Palette`, because a piece of glass picks its appearance from what is
+    /// behind it and may land on the *other* half of the pair — a bar over a
+    /// dimmed video frame wears the light palette's ink while the app is dark.
+    static var currentTheme: MMTheme { MMTheme(rawValue: themeID) ?? .felt }
 }
 
 /// The seven table styles — every one has its own light AND dark.
@@ -116,6 +141,10 @@ enum MMTheme: String, CaseIterable {
         case .sands: Color(hex: 0xF59E0B)
         case .noir: Color(hex: 0xC9A86A)
         }
+    }
+
+    func palette(_ scheme: ColorScheme) -> Palette {
+        scheme == .light ? light : dark
     }
 
     var dark: Palette {
@@ -210,6 +239,231 @@ enum MMTheme: String, CaseIterable {
             red: 0x8A6A2F, redDeep: 0x6D5325, redSoft: 0xF2EAD9, accentInk: 0xFFFFFF,
             gold: 0x8A6A2F, goldSoft: 0xF2EAD9)
         }
+    }
+}
+
+// MARK: - Glass tokens
+//
+// Nine glass colours per palette across fourteen palettes would be 126
+// hand-authored hexes, and they would drift apart within a month. So none of
+// them are authored: every value below is arithmetic on slots the table styles
+// already carry. Android and the web run the same formulas on the same slots,
+// which is the only reason the three clients cannot fall out of step.
+
+/// Which way a piece of glass has resolved itself. It follows the luminance of
+/// the backdrop we *placed* behind it, so it is not the same thing as the
+/// colour scheme: a bar over a dimmed video frame goes light while the rest of
+/// the app stays dark. That per-surface flip is what separates glass from a
+/// blur — a frost looks the same over cream paper and over the night felt.
+enum GlassAppearance: Hashable { case light, dark }
+
+/// Regular is the material. Clear is the thin one, for chrome that must not
+/// bury what it floats over — and it is banned over media, because it does not
+/// adapt and measures 2.85:1 pinned dark over a dimmed bright frame. Opaque is
+/// what Reduce Transparency collapses to, and what a caller asks for outright
+/// when a surface has to be solid whatever the phone's settings say.
+enum GlassVariant { case regular, clear, opaque }
+
+/// Byte arithmetic on the palette slots. A `Color` cannot be taken apart again
+/// without a trip through UIKit, so `Palette` keeps the hexes it was built from
+/// and the mixes below run on those instead.
+enum MMHex {
+    typealias RGB = (r: Double, g: Double, b: Double)
+
+    static func rgb(_ hex: UInt32) -> RGB {
+        (Double((hex >> 16) & 0xFF), Double((hex >> 8) & 0xFF), Double(hex & 0xFF))
+    }
+
+    /// `a` moved `t` of the way to `b`, in sRGB byte space. Deliberately the
+    /// naive mix and not a linear-light one, because it is the mix the Kotlin
+    /// and CSS token files run and the three clients have to land on the same
+    /// hex. Nothing is rounded until it becomes a `Color`.
+    static func mix(_ a: RGB, _ b: RGB, _ t: Double) -> RGB {
+        (a.r + t * (b.r - a.r), a.g + t * (b.g - a.g), a.b + t * (b.b - a.b))
+    }
+
+    static func color(_ c: RGB) -> Color {
+        Color(.sRGB, red: c.r / 255, green: c.g / 255, blue: c.b / 255, opacity: 1)
+    }
+
+    /// WCAG relative luminance — the real one, linearised per channel. The
+    /// adaptive flip compares this against 0.07, and the sweep that produced
+    /// that threshold measured contrast, so a perceptual lightness here would
+    /// quietly move every flip in the app.
+    static func luminance(_ hex: UInt32) -> Double {
+        func lin(_ v: Double) -> Double {
+            let c = v / 255
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        let c = rgb(hex)
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+}
+
+/// The five derived colours, for one table style in one appearance.
+struct GlassTokens {
+    /// On a light table, white pulled 8% toward the palette's gold. On a dark
+    /// one, the card lifted 14% toward the ink and then pulled the same 8% to
+    /// the gold. That brass pull is the one deliberate deviation from Apple's
+    /// model — their glass adapts purely to its backdrop, ours adapts *and*
+    /// carries a fixed warm bias — and it is one constant in one formula, so
+    /// it is also the first thing to cut if anyone disagrees.
+    let film: Color
+    /// What the film composites to over the page at the Regular alpha. This is
+    /// the colour Reduce Transparency paints, so the surface keeps the hue it
+    /// was designed to be instead of a translucency nudged up to 0.80.
+    let solid: Color
+    /// The appearance's own ink. It flips with the APPEARANCE, not the scheme,
+    /// which is the whole point: a light-appearance bar in a dark app needs the
+    /// light palette's ink or the label disappears.
+    let ink: Color
+    /// ink2 lifted 62% toward ink. Raw ink2 on glass floors at 4.95:1 across
+    /// the sweep; this floors at 5.82:1. There is no `glassInk3` on purpose —
+    /// ink3 on glass measures 1.53:1, so every use of it on a glass surface
+    /// promotes to this one.
+    let ink2: Color
+    /// The specular rim, always the palette's gold, which sits between 35.5°
+    /// and 43.3° on all fourteen palettes. The tint changes with the table; the
+    /// brass does not, because it is the light in the room and not a property
+    /// of the surface.
+    let rimWarm: Color
+
+    /// The ink a label sitting ON this glass should be drawn in. There are two
+    /// levels and there is no third: Increase Contrast promotes the secondary
+    /// one to the primary, and the slot below it does not exist here at all.
+    func label(secondary: Bool = false, increaseContrast: Bool = false) -> Color {
+        secondary && !increaseContrast ? ink2 : ink
+    }
+}
+
+extension MMTheme {
+    /// The glass colours for this table in a given appearance. Fourteen sets in
+    /// total, built once on first use, because the material asks for them on
+    /// every frame of a scroll.
+    func glass(_ appearance: GlassAppearance) -> GlassTokens {
+        MMTheme.glassTable[rawValue]?[appearance] ?? buildGlass(appearance)
+    }
+
+    private static let glassTable: [String: [GlassAppearance: GlassTokens]] =
+        Dictionary(uniqueKeysWithValues: MMTheme.allCases.map {
+            ($0.rawValue, [.light: $0.buildGlass(.light), .dark: $0.buildGlass(.dark)])
+        })
+
+    private func buildGlass(_ a: GlassAppearance) -> GlassTokens {
+        let p = (a == .light ? light : dark).hex
+        let gold = MMHex.rgb(p.gold)
+        let film: MMHex.RGB = a == .light
+            ? MMHex.mix(MMHex.rgb(0xFFFFFF), gold, 0.08)
+            : MMHex.mix(MMHex.mix(MMHex.rgb(p.card), MMHex.rgb(p.ink), 0.14), gold, 0.08)
+        // The solid is the film composited over the page at the Regular alpha —
+        // literally what the eye sees through the glass with nothing else
+        // underneath, which is why it is the right colour to fall back to.
+        let solid = MMHex.mix(MMHex.rgb(p.page), film, a == .light ? 0.62 : 0.60)
+        return GlassTokens(
+            film: MMHex.color(film),
+            solid: MMHex.color(solid),
+            ink: Color(hex: p.ink),
+            ink2: MMHex.color(MMHex.mix(MMHex.rgb(p.ink2), MMHex.rgb(p.ink), 0.62)),
+            rimWarm: Color(hex: p.gold)
+        )
+    }
+}
+
+/// The four optical scalars. Geometry, rim, radii, ink and layout are identical
+/// at every quality level and in every variant — only these change — so nothing
+/// ever reflows when the governor steps the material down.
+struct GlassScalars {
+    let alpha: Double
+    /// Gaussian radius for the backdrop, in points. Drops to 12 over the live
+    /// board: a heavier blur there turns forty tiles into featureless mush,
+    /// which is one of the ways a hand-built glass gives itself away.
+    let blur: CGFloat
+    let saturation: Double
+    /// Stated as CSS states it, a multiplier, so the number can be read against
+    /// the web client's token. See `brightnessShift` for what SwiftUI is handed.
+    let brightness: Double
+
+    /// SwiftUI's `.brightness` *adds* where CSS multiplies, and there is no
+    /// multiplicative equivalent that can exceed 1. Additive is also the
+    /// reading that matches the intent: on the night tables the backdrop is
+    /// near black, where a 1.12 multiply is invisible and a +0.12 lift is
+    /// exactly the amount of glow that makes the material read as a surface.
+    var brightnessShift: Double { brightness - 1 }
+
+    static func of(_ variant: GlassVariant,
+                   _ appearance: GlassAppearance,
+                   increaseContrast: Bool = false,
+                   overLiveBoard: Bool = false) -> GlassScalars {
+        let light = appearance == .light
+        switch variant {
+        case .opaque:
+            return GlassScalars(alpha: 1, blur: 0, saturation: 1, brightness: 1)
+        case .regular:
+            return GlassScalars(
+                alpha: increaseContrast ? (light ? 0.82 : 0.80) : (light ? 0.62 : 0.60),
+                blur: overLiveBoard ? 12 : 20,
+                saturation: light ? 1.80 : 1.70,
+                brightness: light ? 1.04 : 1.12)
+        case .clear:
+            return GlassScalars(
+                alpha: increaseContrast ? (light ? 0.82 : 0.80) : (light ? 0.30 : 0.26),
+                blur: 10,
+                saturation: light ? 1.45 : 1.40,
+                brightness: light ? 1.02 : 1.06)
+        }
+    }
+}
+
+/// The radius ladder: arithmetic, step 4, with every padding a multiple of 4 so
+/// concentricity falls out instead of having to be remembered. A 22 pt dock
+/// with 8 pt padding holds 14 pt chips, and the gap does not pinch at the
+/// corners. `pill` is a `Capsule`, which has no number.
+enum MMRadius {
+    static let xs: CGFloat = 6
+    static let sm: CGFloat = 10
+    static let md: CGFloat = 14
+    static let lg: CGFloat = 18
+    static let xl: CGFloat = 22
+    static let xxl: CGFloat = 26
+
+    /// The radius a child gets when it sits `inset` points inside `outer`.
+    /// Floors at 4, below which a rounded corner reads as a square one anyway.
+    static func inner(_ outer: CGFloat, inset: CGFloat) -> CGFloat {
+        max(outer - inset, 4)
+    }
+}
+
+/// The shadow under a glass surface, which has two states and must move between
+/// them. A shadow that never deepens as content scrolls under the bar is one of
+/// the twelve tells — it says the bar is pasted on rather than floating.
+struct GlassShadow {
+    let y: CGFloat
+    /// Stated as CSS states a shadow blur, so the number matches the web token
+    /// `--shadow` one for one. SwiftUI wants roughly half of it.
+    let blur: CGFloat
+    let alpha: Double
+
+    /// SwiftUI's shadow radius is about a standard deviation where CSS's blur
+    /// is about two of them, so a literal 32 here would be twice the shadow the
+    /// other two clients cast.
+    var radius: CGFloat { blur / 2 }
+
+    /// The web's `--shadow` colour: a warm near-black, so the shadow under the
+    /// brass reads as the same light source on all three clients.
+    static let colour = Color(hex: 0x1E1C0E)
+
+    var color: Color { GlassShadow.colour.opacity(alpha) }
+
+    static func relaxed(height h: CGFloat, _ a: GlassAppearance) -> GlassShadow {
+        GlassShadow(y: min(max(0.22 * h, 4), 12),
+                    blur: min(max(1.9 * h, 12), 32),
+                    alpha: a == .light ? 0.10 : 0.30)
+    }
+
+    static func busy(height h: CGFloat, _ a: GlassAppearance) -> GlassShadow {
+        GlassShadow(y: min(max(0.30 * h, 6), 16),
+                    blur: min(max(2.2 * h, 16), 44),
+                    alpha: a == .light ? 0.22 : 0.52)
     }
 }
 

@@ -8,6 +8,10 @@ import AuthenticationServices
 struct LandingView: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    /// Read for one number: how many boards the hero says there are. It was a
+    /// "19" typed into the view, and the day six continents joined the shelf
+    /// the hero went on saying nineteen to everybody who opened the app.
+    @ObservedObject private var shelf = BoardShelf.shared
 
     @State private var joinCode = ""
     @State private var addCode = ""
@@ -728,7 +732,7 @@ struct LandingView: View {
 
             // the numbers that sell the table
             HStack(spacing: 26) {
-                stat("19", "BOARDS", P)
+                stat(shelf.boards.isEmpty ? "25" : "\(shelf.boards.count)", "BOARDS", P)
                 stat("8", "PLAYERS", P)
                 stat("∞", "BANKRUPTCIES", P)
             }

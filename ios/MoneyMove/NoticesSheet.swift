@@ -132,13 +132,13 @@ struct NoticesSheet: View {
                     .padding(16)
                 }
             }
-            .background(P.page.ignoresSafeArea())
             .navigationTitle("Notes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
+        .sheetPaper(P.page)
         .task {
             await watch.load()
             // Reading it is reading it — but leave the dots up for a beat so
