@@ -8,6 +8,25 @@ plugins {
 }
 
 /**
+ * Push, only where it can work.
+ *
+ * google-services.json names the Firebase project this app's notifications
+ * come through. It is not a key, but this repo is public and the file is the
+ * owner's, so it is gitignored and lives on his machine alone. The
+ * google-services plugin does not degrade without it — it fails the build
+ * outright — so it is applied only when the file is here. A clone without it
+ * builds and runs as before: firebase-messaging is still linked, FirebaseApp
+ * simply never initialises, and every call into Firebase asks whether it did
+ * before it goes near it (see PushRegistration), so the whole of push is a
+ * quiet no-op rather than a crash.
+ */
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.warn("MoneyMove: no app/google-services.json — this build runs without push.")
+}
+
+/**
  * The AdMob application id this build carries in its manifest.
  *
  * Not a secret — it ships inside every app that serves AdMob — but the Google
@@ -172,6 +191,17 @@ dependencies {
     // only because the manifest's APPLICATION_ID can never be missing or
     // malformed — see admobAppId at the top of this file.
     implementation("com.google.android.gms:play-services-ads:24.8.0")
+
+    // Firebase Cloud Messaging: the Android end of what push.js sends, which
+    // Apple's end has been doing for the iPhone. Messaging alone — no
+    // analytics, because the app measures nothing it does not have to (see
+    // DELAY_APP_MEASUREMENT_INIT in the manifest). The BoM pins messaging at
+    // 25.1.3, which is built on Kotlin 2.0.21, the compiler this project
+    // uses, so it does not run into the metadata wall the ads SDK did. It is
+    // linked whether or not google-services.json is here; see the top of
+    // this file for why that is safe.
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+    implementation("com.google.firebase:firebase-messaging")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
 

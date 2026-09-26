@@ -2,8 +2,6 @@ package com.moneymove.game
 
 import android.Manifest
 import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -23,25 +21,32 @@ import kotlinx.serialization.Serializable
 import kotlin.math.roundToInt
 
 /**
- * The cup's reminders, Android half — what the server's cup pushes do for an
- * iPhone, done on the phone.
+ * The cup's reminders, Android half — what the server's cup pushes do, done
+ * on the phone for as long as the server cannot do it itself.
  *
- * The server tells an iPhone when its draw is out, fifteen minutes before its
- * door opens, when its table is made, three minutes before the door shuts,
- * and how the cup ended for it (tournament.js remindersDue, index.js
- * seatCupMatches and sweepCupNoShows). Every one of those goes through
- * sendTurnPush, which sends to iOS devices only, and Android has no FCM sender
- * yet (see PushRegistration). A cup is "turn up inside your window or you are
- * out", so without this an Android entrant with the app closed was the player
- * most likely to be walked over.
+ * The server tells a player when their draw is out, fifteen minutes before
+ * their door opens, when their table is made, three minutes before the door
+ * shuts, and how the cup ended for them (tournament.js remindersDue, index.js
+ * seatCupMatches and sweepCupNoShows). Those go through sendTurnPush, which
+ * reaches an Android phone only once the server holds a Firebase credential,
+ * and says so when this phone registers (PushRegistration.serverSends). A cup
+ * is "turn up inside your window or you are out", so without either an
+ * Android entrant with the app closed was the player most likely to be
+ * walked over.
  *
- * So the card's own poll, which already knows when this player's next door
- * opens and shuts, sets alarms for those moments. When one goes off it asks
- * the server once more, if it can, before saying anything: a player knocked
- * out in the meantime must not be told their next match is starting. It then
- * says what the server would have said, in the server's words, and sets the
- * next alarms from that answer. If the server cannot be reached, a reminder
- * that is still true by the clock (the door has not shut) is sent anyway.
+ * So, while the server cannot send, the card's own poll, which already knows
+ * when this player's next door opens and shuts, sets alarms for those
+ * moments. When one goes off it asks the server once more, if it can, before
+ * saying anything: a player knocked out in the meantime must not be told
+ * their next match is starting. It then says what the server would have
+ * said, in the server's words, and sets the next alarms from that answer. If
+ * the server cannot be reached, a reminder that is still true by the clock
+ * (the door has not shut) is sent anyway.
+ *
+ * The moment the server says it can send, all of this stands down and the
+ * alarms already set are cancelled ([standDown]): the pushes say the same
+ * things at the same moments, and nobody should hear every one twice. If the
+ * server ever says it cannot again, the card's next poll sets them afresh.
  *
  * Limits, said plainly: nothing here is a server push. The draw and the
  * result are learnt only when one of these alarms goes off or the app is
@@ -63,7 +68,7 @@ object CupReminders {
     /** On the intent a tapped reminder opens the app with, so the cup is asked about at once. */
     const val EXTRA_OPEN = "mm.cup.open"
 
-    private const val CHANNEL = "cup"
+    private const val CHANNEL = PushChannels.CUP
     private const val NOTE_ID = 7301
     private const val KEY_SEEN = "mm.cup.seen"
 
@@ -128,6 +133,12 @@ object CupReminders {
      */
     fun sync(ctx: Context, feed: CupFeed) {
         val seen = read(ctx)
+        if (PushRegistration.serverSends(ctx)) {
+            // The server is saying all of this itself. Anything still set was
+            // set before it said so; see [standDown].
+            if (seen != Seen()) forget(ctx, seen)
+            return
+        }
         if (!feed.enabled) {
             if (seen.cup.isNotEmpty()) forget(ctx, seen)
             return
@@ -175,6 +186,15 @@ object CupReminders {
         NotificationManagerCompat.from(ctx).cancel(NOTE_ID)
     }
 
+    /**
+     * The server has just said it can push to this phone: every alarm off and
+     * the baseline dropped, because from here the server's pushes carry the
+     * cup. Kept apart from [sync] because it is heard at registration, which
+     * need not be anywhere near a card poll, and an alarm left set until the
+     * next one could go off beside the push saying the same thing.
+     */
+    fun standDown(ctx: Context) = forget(ctx, read(ctx))
+
     // ── from an alarm ───────────────────────────────────────────────────────
 
     /** Only the receiver's own coroutine asks: nine seconds, then the clock decides. */
@@ -183,6 +203,9 @@ object CupReminders {
     internal suspend fun fire(ctx: Context, intent: Intent) {
         val kind = intent.getIntExtra(X_KIND, -1)
         val cupId = intent.getStringExtra(X_CUP) ?: return
+        // Set before the server said it could send, and missed by the stand
+        // down: the push has said, or is about to say, the same thing.
+        if (PushRegistration.serverSends(ctx)) return
         val seen = read(ctx)
         // An alarm for a cup this phone has moved on from: a leave, or a
         // later cup, got here first.
@@ -518,7 +541,9 @@ object CupReminders {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) return
-        channel(ctx)
+        // The same channel the server's cup pushes arrive on, so one switch
+        // in Settings turns the cup off whichever of the two is speaking.
+        PushChannels.ensure(ctx)
         val open = PendingIntent.getActivity(
             ctx, NOTE_ID,
             Intent(ctx, MainActivity::class.java)
@@ -528,6 +553,7 @@ object CupReminders {
         )
         val note = NotificationCompat.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_cup)
+            .setColor(ContextCompat.getColor(ctx, R.color.gold))
             .setContentTitle("MoneyMove")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -544,17 +570,6 @@ object CupReminders {
         } catch (e: SecurityException) {
             // The permission was taken away between the check and the post.
         }
-    }
-
-    private fun channel(ctx: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = ctx.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL) != null) return
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Cup matches", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Your cup match opening, the last call before its door shuts, and how you got on."
-            },
-        )
     }
 
     // ── the baseline ────────────────────────────────────────────────────────

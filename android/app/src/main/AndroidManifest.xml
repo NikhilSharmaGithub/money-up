@@ -51,6 +51,23 @@
             android:name="com.google.android.gms.ads.DELAY_APP_MEASUREMENT_INIT"
             android:value="true" />
 
+        <!-- What a push from the server looks like when the app is not on
+             screen and Android draws it without asking the app. The server
+             names the channel in every push; these are the rest, and the
+             channel for one that names none. "turns" because a turn is what
+             push is for, the die because it is the app's own face, and gold
+             because that is the accent all three clients share. The three
+             channels themselves are made at launch (PushChannels). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="turns" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_turn" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/gold" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -81,11 +98,25 @@
         </activity>
 
         <!-- The cup's reminders: the fifteen-minute warning, the door
-             opening and the last call, set by the app itself because the
-             server's cup pushes reach iPhones only. Nothing outside the app
-             has any business sending it one. See CupReminders. -->
+             opening and the last call, set by the app itself for as long as
+             the server cannot push to this phone — they stand down the moment
+             it says it can. Nothing outside the app has any business sending
+             it one. See CupReminders. -->
         <receiver
             android:name=".CupReminderReceiver"
             android:exported="false" />
+
+        <!-- Where FCM hands a push that arrives while the app is on screen,
+             and a rotated token. Not exported: Google Play services reaches
+             it through firebase-messaging's own receiver, which is. Declared
+             in every build — without google-services.json there is no token,
+             so nothing is ever delivered to it. -->
+        <service
+            android:name=".MoneyMoveMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

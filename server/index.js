@@ -6,7 +6,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { GameRoom, COLORS, rollQuickSettings } from './game.js';
 import { diff, snapshot, feedTail, RESYNC } from './delta.js';
-import { sendTurnPush } from './push.js';
+import { sendTurnPush, pushSends } from './push.js';
 import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
@@ -223,7 +223,9 @@ app.post('/api/friends/remove', (req, res) => {
 /**
  * Ask a friend to your table. They get it on their next poll wherever they
  * are — landing screen or mid-game — and a push if their phone is registered
- * and APNs is configured.
+ * and its platform's sender is configured. The push names the table it is
+ * about; a tap on Android puts the invite banner up at once, and the banner
+ * is still where it is answered.
  */
 app.post('/api/invite', (req, res) => {
   const result = inviteFriend(String(req.body?.token || '').slice(0, 64),
@@ -231,7 +233,7 @@ app.post('/api/invite', (req, res) => {
   if (result.error) return res.status(400).json(result);
   const { token: theirToken, ...safe } = result;
   sendTurnPush(theirToken, `${safe.to?.name ? '' : ''}You have been invited to a game on MoneyMove`,
-    { collapseId: 'invite' });
+    { collapseId: 'invite', roomId: inviteFor(theirToken)?.roomId });
   res.json(safe);
 });
 
@@ -493,14 +495,17 @@ app.post('/api/cup/leave', (req, res) => {
   res.json(result);
 });
 
-// ---- push (scaffolding) --------------------------------------------------
-// Registration is live so shipped clients can start handing over device
-// tokens; nothing sends until APNs credentials exist — see server/push.js.
+// ---- push -----------------------------------------------------------------
+// Clients hand over a device token on every launch. The answer says whether
+// anything will actually be sent to that kind of phone — `sends`, true only
+// when its platform's credential is in (APNs for iOS, a Firebase service
+// account for Android; see server/push.js). The Android app keeps setting its
+// own cup alarms until it reads true. Older apps ignore the extra field.
 app.post('/api/push/register', (req, res) => {
   const { token, deviceToken, platform } = req.body || {};
   const result = registerPushDevice(String(token || '').slice(0, 64), deviceToken, platform);
   if (result.error) return res.status(400).json(result);
-  res.json(result);
+  res.json({ ...result, sends: pushSends(platform) });
 });
 
 app.post('/api/store/buy', (req, res) => {
@@ -1634,9 +1639,9 @@ function getRoom(id) {
   // at the board does not need to be told whose turn it is, and a buzz for
   // something already on screen is the fastest way to have notifications
   // switched off for good. Bots and seats a bot is covering are nobody to
-  // notify. The sender is dark until APNs credentials exist — until then it
-  // says what it would have sent, in the log, which is how this call site can
-  // be watched working long before Apple is involved.
+  // notify. Each platform's sender is dark until its credentials exist —
+  // until then it says what it would have sent, in the log, which is how this
+  // call site can be watched working long before Apple or Google is involved.
   room.hooks.turn = (playerId, live) => {
     const p = live.player(playerId);
     // Not a house player, and not somebody who is out of the game. Being
@@ -1648,7 +1653,10 @@ function getRoom(id) {
     if (seatsOf.get(id)?.get(playerId)?.size) return;
     // Collapsed per table: three turns come round while a phone is in a
     // pocket and it should find one notification waiting, not three.
-    sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`, { collapseId: id });
+    // Said to be a turn rather than left to be read off the id: a room can be
+    // called anything, "invite" and "notice" included.
+    sendTurnPush(playerId, `Your turn in ${live.map?.name || 'MoneyMove'} — room ${id}`,
+      { collapseId: id, kind: 'turn', roomId: id });
   };
   // A cup table is only a normal room with a label and a locked lid, and both
   // live in memory. A restart — every deploy is one — would hand the next

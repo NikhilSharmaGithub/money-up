@@ -936,9 +936,9 @@ export const profilesByToken = (token) => (token ? profiles.get(token) : null) |
 export const pushDevicesOf = (token) => profiles.get(token)?.push || [];
 
 /**
- * Apple says a device token is dead — the app was deleted, or the token was
- * reissued. Keeping it means one more doomed request on every future turn for
- * the rest of that player's life, so it goes.
+ * Apple or Google says a device token is dead — the app was deleted, or the
+ * token was reissued. Keeping it means one more doomed request on every future
+ * turn for the rest of that player's life, so it goes.
  */
 export function forgetPushDevice(token, device) {
   const p = profiles.get(token);

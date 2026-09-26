@@ -28,3 +28,7 @@ android/app/build/
 android/.gradle/
 android/.kotlin/
 android/local.properties
+
+# Firebase config for this machine only: the repo is public, and the file
+# carries an Android API key. The build applies the plugin only when it exists.
+android/app/google-services.json
