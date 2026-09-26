@@ -11,6 +11,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -35,8 +36,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,12 +54,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,17 +73,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -94,6 +105,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlin.math.PI
 
 /**
  * The handful of pieces every screen is built out of.
@@ -109,23 +123,325 @@ import androidx.compose.ui.window.DialogProperties
  * count, your flag, an "are you sure", a link sent somewhere. Each is iOS's
  * version of that thing, so a screen that uses it is already at parity on
  * that detail instead of being one more place to get it slightly wrong.
+ *
+ * The controls here wear the glass (Glass.kt) and the content does not. A
+ * button, a field and a dialog are the layer that floats; a panel and a chip
+ * are the paper it floats over, and stay paper. Where a control is put
+ * decides how it draws, and the place says so rather than every call site:
+ * [Panel] says paper, a glass bar says [GlassHost], and a control reads
+ * [LocalControlBackdrop] and [LocalGlassHost] for itself.
  */
+
+// ── what a control is sitting on ───────────────────────────────────────────
+
+/**
+ * What the controls in this subtree have behind them.
+ *
+ * The material chooses its face from the backdrop it is told about and never
+ * from pixels, so a control has to be told, and a button never knows where
+ * it has been put while the surface around it always does. So the surface
+ * says it once: [Panel] provides paper, a sheet provides sheet, the ad
+ * overlay provides media. Nothing said is the page.
+ */
+val LocalControlBackdrop: ProvidableCompositionLocal<BackdropKind> =
+    compositionLocalOf { BackdropKind.Page }
+
+/**
+ * The glass these controls are sitting on, when they are sitting on glass.
+ *
+ * Glass cannot sit on glass. A second film over the first is just a muddier
+ * film, and at API 31+ a glass button on a glass bar samples a copy of the
+ * page that has no bar in it and comes out as a hole cut through the bar. So
+ * a bar that holds controls hands its surface down here, and every control
+ * below it stops being a pane of its own: the coloured kinds become the solid
+ * chip the tab bar already uses for its selection, the rest a quiet well in
+ * the bar's own ink, and all of it takes its ink from the bar so the two
+ * crossfade together when the bar flips. Null — which [Panel] puts back —
+ * means paper.
+ */
+val LocalGlassHost: ProvidableCompositionLocal<GlassSurface?> = compositionLocalOf { null }
+
+/**
+ * Everything in [content] sits on [surface], a piece of glass the caller has
+ * already drawn. See [LocalGlassHost]. The surface is the one the caller got
+ * from [rememberGlassSurface] with the same backdrop it gave `mmGlass`, so
+ * the ink on the controls and the film under them are one state machine's
+ * answer, not two.
+ */
+@Composable
+fun GlassHost(surface: GlassSurface, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalGlassHost provides surface, content = content)
+}
+
+/**
+ * Ink for a label on this glass, crossfading with the film under it.
+ *
+ * Two ranks and no third: the palette's quietest ink measures 1.53:1 on the
+ * material, so [quiet] is ink2 lifted 62% of the way to ink (5.82:1 at
+ * worst), and under Increase Contrast it promotes again, to ink. Under
+ * Reduce Transparency the glass is painted in the app's own solid, so its ink
+ * comes from the app's own face rather than the backdrop's — the two only
+ * part company over media, but there it is the difference between reading
+ * the label and dark ink on a dark slab.
+ */
+@Composable
+fun GlassSurface.labelInk(quiet: Boolean = false): Color {
+    val secondary = quiet && !LocalIncreaseContrast.current
+    if (LocalGlassLevel.current == GlassLevel.Opaque) {
+        val own = LocalTheme.current.glass(
+            if (LocalAppearanceDark.current) GlassAppearance.Dark else GlassAppearance.Light,
+        )
+        return if (secondary) own.ink2 else own.ink
+    }
+    return if (secondary) ink2 else ink
+}
+
+/**
+ * A recess drawn on glass: the glass's own ink at a tenth, as iOS fills a
+ * ghost on a bar. The palette's `sunken` is a paper colour and only matches a
+ * glass that happens to be wearing the app's own face; the ink flips with the
+ * glass, so this is a shade darker than a daylight bar and a shade lighter
+ * than a night one on every table. Increase Contrast deepens it to the
+ * strength iOS gives it there, the way it deepens the material's tint.
+ */
+@Composable
+private fun GlassSurface.well(): Color =
+    labelInk().copy(alpha = if (LocalIncreaseContrast.current) WELL_ALPHA_CONTRAST else WELL_ALPHA)
+
+private const val WELL_ALPHA = 0.10f
+private const val WELL_ALPHA_CONTRAST = 0.18f
+
+/**
+ * The glass's own contour, as a divider: its ink at the strength of the
+ * material's hairline, black at 10% by day and white at 8% by night, which is
+ * what the rim draws round every pane for the same job — and 30% under
+ * Increase Contrast, where the material's own hairline goes to 30% too.
+ */
+@Composable
+private fun GlassSurface.hairline(): Color {
+    if (LocalIncreaseContrast.current) return labelInk().copy(alpha = HAIRLINE_ALPHA_CONTRAST)
+    val day = GlassSpec.hairline(GlassAppearance.Light).alpha
+    val night = GlassSpec.hairline(GlassAppearance.Dark).alpha
+    return labelInk().copy(alpha = day + (night - day) * flip)
+}
+
+private const val HAIRLINE_ALPHA_CONTRAST = 0.30f
+
+/** The quietest ink the spot allows: ink3 on paper, the lifted ink2 on glass. */
+@Composable
+private fun quietInk(): Color = LocalGlassHost.current?.labelInk(quiet = true) ?: P.current.ink3
+
+/**
+ * The semantic tint, for a mark drawn ON glass rather than a pane of it: the
+ * strength `mmGlass` gives its own tint, and the 0.26 Increase Contrast asks
+ * for.
+ */
+@Composable
+private fun tintAlpha(): Float = if (LocalIncreaseContrast.current) 0.26f else 0.14f
+
+/**
+ * A control lives inside whatever it was put in — a card, a sheet, a row on
+ * a bar — so nothing ever slides underneath one. What is behind it is a flat
+ * colour we painted ourselves, and that is the spec's own case for the flat
+ * level: film, rim, glow and shadow, no blur, no lens. On a flat colour it is
+ * not an approximation, because a blur of one colour is that colour.
+ *
+ * It matters more than it looks. The page's blurred copy is recorded from
+ * the content the glass floats over, which is exactly where a button lives,
+ * so a button that sampled it would be sampling last frame's picture of
+ * itself; and a sheet or a dialog is a window of its own, where the copy is
+ * somewhere else entirely. Reduce Transparency passes straight through.
+ */
+@Composable
+private fun Embedded(lightAngle: Float, content: @Composable () -> Unit) {
+    val level = LocalGlassLevel.current
+    CompositionLocalProvider(
+        LocalGlassLevel provides (if (level == GlassLevel.Opaque) level else GlassLevel.Flat),
+        LocalGlassLightAngle provides lightAngle,
+        content = content,
+    )
+}
+
+// ── the press ──────────────────────────────────────────────────────────────
+
+/**
+ * One control's press, as a gel rather than a dim: 0 at rest, 1 held all the
+ * way down, and a little below 0 for a moment on the way back, where it
+ * springs out past where it started before it settles.
+ */
+@Stable
+class GlassPress internal constructor(internal val reduceMotion: Boolean) {
+    internal val progress = Animatable(0f)
+
+    /** How far down it is, for the things that must not overshoot — the light, the bloom. */
+    val held: Float get() = progress.value.coerceIn(0f, 1f)
+
+    /** Where the finger came down, in the pressed node's own coordinates. */
+    var touch: Offset by mutableStateOf(Offset.Unspecified)
+        internal set
+
+    internal val down: AnimationSpec<Float> =
+        if (reduceMotion) {
+            tween(REDUCED_PRESS_MS)
+        } else {
+            tween(GlassMotion.PRESS_DOWN_MS, easing = EASE_OUT)
+        }
+
+    internal val up: AnimationSpec<Float> =
+        if (reduceMotion) {
+            tween(REDUCED_PRESS_MS)
+        } else {
+            spring(dampingRatio = GEL_DAMPING, stiffness = GEL_STIFFNESS)
+        }
+}
+
+/**
+ * The press on [touches], animated. Pair it with [glassPress] on the same
+ * node; a glass control also reads [GlassPress.held] to swing its light.
+ *
+ * A tap is over long before its squash would be, so a release waits for the
+ * way down to land before it starts back up — otherwise a quick tap, which
+ * is most of them, would be a flinch rather than a press.
+ */
+@Composable
+fun rememberGlassPress(touches: MutableInteractionSource): GlassPress {
+    val reduceMotion = rememberReduceMotion()
+    val press = remember(reduceMotion) { GlassPress(reduceMotion) }
+    LaunchedEffect(touches, press) {
+        var moving: Job? = null
+        touches.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    press.touch = interaction.pressPosition
+                    moving?.cancel()
+                    moving = launch { press.progress.animateTo(1f, press.down) }
+                }
+                is PressInteraction.Release, is PressInteraction.Cancel -> {
+                    val landing = moving
+                    moving = launch {
+                        landing?.join()
+                        press.progress.animateTo(0f, press.up)
+                    }
+                }
+            }
+        }
+    }
+    return press
+}
+
+/**
+ * The gel itself: down to 0.965 with the squash, and back out past 1.0 on
+ * the rebound. A layer transform, so a press never recomposes or redraws
+ * anything under it. Under Reduce Motion the squash and the overshoot go and
+ * a plain scale is what is left.
+ */
+fun Modifier.glassPress(press: GlassPress): Modifier = graphicsLayer {
+    val t = press.progress.value
+    val s = 1f - (1f - GlassMotion.PRESS_SCALE) * t
+    if (press.reduceMotion) {
+        scaleX = s
+        scaleY = s
+    } else {
+        scaleX = s * (1f + (GlassMotion.PRESS_SQUASH_X - 1f) * t)
+        scaleY = s * (1f + (GlassMotion.PRESS_SQUASH_Y - 1f) * t)
+    }
+}
+
+/**
+ * Where the finger landed, lit: a small bloom in the rim's hot colour —
+ * white by day, brass by night — added rather than painted, inside the
+ * shape and under the label. Only when [lit]; Reduce Motion and an opaque
+ * slab have no light in them to bloom.
+ */
+private fun Modifier.pressBloom(
+    press: GlassPress,
+    glass: GlassSurface,
+    shape: Shape,
+    lit: Boolean,
+): Modifier =
+    if (!lit) this else drawWithCache {
+        val clip = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+        val reach = BLOOM_RADIUS.toPx()
+        onDrawWithContent {
+            val t = press.held
+            val at = press.touch
+            if (t > 0f && at.isSpecified) {
+                val hot = mixSrgb(Color.White, glass.rimWarm, glass.flip)
+                clipPath(clip) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0f to hot.copy(alpha = BLOOM_ALPHA * t),
+                            1f to hot.copy(alpha = 0f),
+                            center = at,
+                            radius = reach,
+                        ),
+                        radius = reach,
+                        center = at,
+                        blendMode = BlendMode.Plus,
+                    )
+                }
+            }
+            drawContent()
+        }
+    }
+
+/** Under Reduce Motion a press is a plain scale, this long each way. */
+private const val REDUCED_PRESS_MS = 100
+
+/**
+ * The rebound, and it is iOS's own `.spring(duration: 0.26, bounce: 0.38)`:
+ * a bounce of b is a damping ratio of 1 − b, and a duration of T a stiffness
+ * of (2π / T)². At that damping a spring overshoots by e^(−πζ/√(1−ζ²)), about
+ * 8% of its travel, and it is the axis that travels furthest that has to
+ * crest at 1.008 — the one the squash pulls in, down at 0.965 × 0.94, which
+ * comes back out past 1.0 to about 1.008 while the other barely crosses it.
+ * A looser spring tuned so that a plain 0.965 crests at 1.008 overshoots by
+ * 23%, and carries the squashed axis out to 1.022: a wobble, not a gel.
+ */
+private const val GEL_DAMPING = 0.62f
+private val GEL_STIFFNESS: Float =
+    (2f * PI.toFloat() / (GlassMotion.PRESS_UP_MS / 1000f)).let { it * it }
+
+private val EASE_OUT = CubicBezierEasing(0f, 0f, 0.58f, 1f)
+
+private val BLOOM_RADIUS: Dp = 40.dp
+private const val BLOOM_ALPHA = 0.10f
+
+// ── the controls ───────────────────────────────────────────────────────────
 
 enum class BtnKind { PRIMARY, GOLD, GHOST, GOOD, DANGER, PLAIN }
 
 /**
  * iOS's MMButtonStyle, point for point: seventeen bold on a big button and
- * fourteen on a small one, fourteen- and ten-point corners, 14/22 and 9/14
- * padding, and a faint white rim on every coloured kind. GHOST is iOS's ghost
- * — a filled well in the sunken colour, no outline — so it and PLAIN draw the
- * same; both names stay because both are called.
+ * fourteen on a small one, 14/22 and 9/14 padding, and fourteen- and
+ * ten-point corners — the ladder's r14 and r10, drawn as the squircle iOS
+ * draws every rounded rectangle as.
+ *
+ * GHOST and PLAIN are the glass button — Regular, its label in the glass's own
+ * ink — and both names stay because both are called. The four coloured kinds
+ * are the prominent ones, and a prominent glass button is its colour: the
+ * system's own is a plate of the accent with the light on it, not a pale pane
+ * with a wash across it. Put through the material's fourteen-percent tint,
+ * Accept, Negotiate and Decline come out as three creams beside the ghost —
+ * a row with no primary in it, and a Bankrupt that reads like Raise cash. So
+ * they keep their plate and the ink each palette designed for it, as iOS's
+ * MMButtonStyle does, and take from the glass everything that is not the
+ * film: the shadow it casts, so a plate and the ghost beside it float the
+ * same distance off the card, the gel of the press, and the light that
+ * blooms under the thumb.
+ *
+ * On a glass bar ([LocalGlassHost]) it is not glass at all. The coloured
+ * kinds are the same plate without a shadow of their own, as the tab bar's
+ * selection is, and GHOST becomes a well in the bar's own ink.
  *
  * Disabled changes nothing about how it looks. iOS's style never reads the
  * disabled state and its labels carry explicit colours, so a disabled iPhone
  * button stays solid and simply stops answering; the one place iOS wants it
  * faded (the trade dock's Accept) adds its own opacity, and a caller here does
- * the same with Modifier.alpha. Pressing dims and shrinks it a touch, as the
- * iPhone's does, instead of a ripple.
+ * the same with Modifier.alpha.
+ *
+ * Pressing is the gel ([glassPress]) instead of a ripple, and on glass the
+ * rim's light swings 40° with it and blooms where the finger landed.
  *
  * [iconSize] overrides the glyph's size where iOS sets the symbol's own font
  * (a 15-point share arrow on a big button). [fitScale] keeps the label on one
@@ -148,88 +464,130 @@ fun MMButton(
     enabled: Boolean = true,
     iconSize: Dp? = null,
     fitScale: Float? = null,
+    // Something in front of the label that is not one glyph — a spinner while
+    // a request is out, a coin, a die — handed the ink the label is drawn in,
+    // so it matches the words on a plate and flips with them on glass. It
+    // takes the icon's place. This is the slot the landing screens kept their own button for
+    // (PlayTab.kt's LandingButton), so with it they can wear this one.
+    lead: (@Composable (ink: Color) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val p = P.current
+    val host = LocalGlassHost.current
     // GOLD is its own colour, not a second name for the accent. In Felt the
     // two happen to sit close, but in Crimson and the violet, pink and blue
     // themes p.red is a true red, and Negotiate painted with it read as a
-    // second Decline right beside the real one. The ink stays accentInk for
-    // both, as iOS's MMButtonStyle has it.
-    val bg = when (kind) {
+    // second Decline right beside the real one.
+    val plate = when (kind) {
         BtnKind.PRIMARY -> p.red
         BtnKind.GOLD -> p.gold
         BtnKind.GOOD -> p.good
         BtnKind.DANGER -> p.bad
-        BtnKind.GHOST, BtnKind.PLAIN -> p.sunken
+        BtnKind.GHOST, BtnKind.PLAIN -> null
     }
-    val fg = when (kind) {
+    // The ink stays accentInk on both the accent and the brass, as iOS's
+    // MMButtonStyle has it: it is the one pairing each palette designed for
+    // its own accent, so it never has to be re-measured per table.
+    val plateInk = when (kind) {
         BtnKind.PRIMARY, BtnKind.GOLD -> p.accentInk
         BtnKind.GOOD, BtnKind.DANGER -> Color.White
-        else -> p.ink
+        BtnKind.GHOST, BtnKind.PLAIN -> null
     }
-    val plain = kind == BtnKind.GHOST || kind == BtnKind.PLAIN
-    val shape = RoundedCornerShape(if (big) 14.dp else 10.dp)
+    val shape = if (big) MMShapes.r14 else MMShapes.r10
     val touches = remember { MutableInteractionSource() }
-    val pressed by touches.collectIsPressedAsState()
-    val press by animateFloatAsState(
-        if (pressed) 1f else 0f,
-        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
-        label = "press",
-    )
-    Row(
-        modifier
-            .graphicsLayer {
-                val s = 1f - 0.02f * press
-                scaleX = s
-                scaleY = s
-                alpha = 1f - 0.18f * press
-            }
-            .clip(shape)
-            .background(bg)
-            .then(if (plain) Modifier else Modifier.border(1.dp, Color.White.copy(alpha = 0.18f), shape))
-            .clickable(
-                interactionSource = touches,
-                indication = null,
-                enabled = enabled,
-                role = Role.Button,
-            ) { onClick() }
-            .padding(horizontal = if (big) 22.dp else 14.dp, vertical = if (big) 14.dp else 9.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Icon(icon, size = iconSize ?: if (big) 19.dp else 15.dp, tint = fg)
-            Spacer(Modifier.width(8.dp))
-        }
-        if (was != null) {
-            Text(
-                "$was",
-                color = fg.copy(alpha = 0.55f),
-                fontSize = if (big) 14.sp else 13.sp,
-                fontWeight = FontWeight.Bold,
-                textDecoration = TextDecoration.LineThrough,
-            )
-            Spacer(Modifier.width(7.dp))
-        }
-        if (fitScale != null) {
-            FitText(
-                label,
-                Modifier.weight(1f, fill = false),
-                color = fg,
-                fontSize = if (big) 17.sp else 14.sp,
-                fontWeight = FontWeight.Bold,
-                minScale = fitScale,
-                textAlign = TextAlign.Center,
-            )
+    val press = rememberGlassPress(touches)
+    val light = LocalGlassLightAngle.current
+
+    val face: Modifier
+    val fg: Color
+    val quiet: Color
+    val angle: Float
+    if (host == null) {
+        val backdrop = LocalControlBackdrop.current
+        val glass = rememberGlassSurface(backdrop)
+        angle = light + GlassSpec.LIGHT_ANGLE_PRESS * press.held
+        // Relaxed and staying relaxed: nothing ever moves under a button, so
+        // there is nothing for its shadow to answer to. Lens off, as for
+        // anything that is neither navigation nor the focus.
+        val pane = Modifier.mmGlass(
+            backdrop = backdrop,
+            shape = shape,
+            lens = false,
+            shadow = GlassShadow.Relaxed,
+        )
+        val lit = !press.reduceMotion && LocalGlassLevel.current != GlassLevel.Opaque
+        if (plate == null || plateInk == null) {
+            fg = glass.labelInk()
+            quiet = glass.labelInk(quiet = true)
+            face = pane.pressBloom(press, glass, shape, lit)
         } else {
-            Text(
-                label,
-                color = fg,
-                fontSize = if (big) 17.sp else 14.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            )
+            // The plate is laid over the pane rather than instead of it, so
+            // that its shadow is the pane's own, off the same tokens at the
+            // same height as the ghost beside it. It covers the film, the
+            // glow and the inner half of the rim; the outer half is left on
+            // the plate's edge, the light catching it.
+            fg = plateInk
+            quiet = fg.copy(alpha = 0.55f)
+            face = pane.background(plate, shape).pressBloom(press, glass, shape, lit)
+        }
+    } else {
+        fg = plateInk ?: host.labelInk()
+        quiet = if (plateInk == null) host.labelInk(quiet = true) else fg.copy(alpha = 0.55f)
+        angle = light
+        face = Modifier.background(plate ?: host.well(), shape)
+    }
+
+    Embedded(angle) {
+        Row(
+            modifier
+                .glassPress(press)
+                .then(face)
+                .clickable(
+                    interactionSource = touches,
+                    indication = null,
+                    enabled = enabled,
+                    role = Role.Button,
+                ) { onClick() }
+                .padding(horizontal = if (big) 22.dp else 14.dp, vertical = if (big) 14.dp else 9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (lead != null) {
+                lead(fg)
+                Spacer(Modifier.width(8.dp))
+            } else if (icon != null) {
+                Icon(icon, size = iconSize ?: if (big) 19.dp else 15.dp, tint = fg)
+                Spacer(Modifier.width(8.dp))
+            }
+            if (was != null) {
+                Text(
+                    "$was",
+                    color = quiet,
+                    fontSize = if (big) 14.sp else 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textDecoration = TextDecoration.LineThrough,
+                )
+                Spacer(Modifier.width(7.dp))
+            }
+            if (fitScale != null) {
+                FitText(
+                    label,
+                    Modifier.weight(1f, fill = false),
+                    color = fg,
+                    fontSize = if (big) 17.sp else 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    minScale = fitScale,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Text(
+                    label,
+                    color = fg,
+                    fontSize = if (big) 17.sp else 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
@@ -240,6 +598,15 @@ fun MMButton(
  * off the page. The shadow is the platform's default black at the landing
  * cards' elevation: Android multiplies a shadow colour's own alpha by the
  * theme's, so iOS's 0.10 black handed over as a colour would all but vanish.
+ *
+ * It is paper, and it stays paper. A panel is what people came to read, and
+ * glass is for the layer that floats over what they came to read; iOS left
+ * MMCard alone for the same reason, which is also why the corner stays at
+ * sixteen rather than moving to the ladder — the two clients' cards have to
+ * be the same card. What changes is that the corner is now the squircle
+ * iOS's continuous rectangle is, and that everything inside knows it is on
+ * paper: a button in here declares a card behind it, and a panel that sits
+ * on a glass bar puts paper back between the bar and what it holds.
  */
 @Composable
 fun Panel(
@@ -248,46 +615,67 @@ fun Panel(
     content: @Composable ColumnScopeAlias.() -> Unit,
 ) {
     val p = P.current
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .shadow(6.dp, shape, clip = false)
-            .clip(shape)
-            .background(p.card)
-            .border(1.dp, p.rule, shape)
-            .padding(padding),
-        content = content,
-    )
+    CompositionLocalProvider(
+        LocalGlassHost provides null,
+        LocalControlBackdrop provides BackdropKind.Paper,
+    ) {
+        Column(
+            modifier
+                .fillMaxWidth()
+                .shadow(6.dp, PANEL_SHAPE, clip = false)
+                .background(p.card, PANEL_SHAPE)
+                .border(1.dp, p.rule, PANEL_SHAPE)
+                .padding(padding),
+            content = content,
+        )
+    }
 }
+
+/**
+ * MMCard's corner, continuous. Off the ladder on purpose; see [Panel]. It
+ * paints the card in its shape rather than clipping to it: a squircle is a
+ * path, and a path clip is not anti-aliased on every phone this runs on,
+ * while a path fill always is — and nothing in a panel reaches its corners
+ * past the padding anyway.
+ */
+private val PANEL_SHAPE: Shape = MMShapes.continuous(16.dp)
 
 typealias ColumnScopeAlias = androidx.compose.foundation.layout.ColumnScope
 
-/** The one-line note under a control, in the quietest ink the table has. */
+/**
+ * The one-line note under a control, in the quietest ink the place allows:
+ * the palette's ink3 on paper, and on glass the lifted ink2, because ink3 on
+ * the material measures 1.53:1 and is not quiet there but gone.
+ */
 @Composable
 fun Hint(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier = modifier,
-        color = P.current.ink3,
+        color = quietInk(),
         fontSize = 12.5.sp,
         lineHeight = 17.sp,
         fontWeight = FontWeight.Medium,
     )
 }
 
-/** A section label: small, wide-tracked, the same one the web client uses. */
+/**
+ * A section label: small, wide-tracked, the same one the web client uses.
+ * On glass the glyph gives up the accent for the glass's own ink, as every
+ * drawn glyph on the material does, so it flips when the glass does.
+ */
 @Composable
 fun SectionLabel(text: String, icon: String? = null, modifier: Modifier = Modifier) {
     val p = P.current
+    val host = LocalGlassHost.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
-            Icon(icon, size = 14.dp, tint = p.red)
+            Icon(icon, size = 14.dp, tint = host?.labelInk(quiet = true) ?: p.red)
             Spacer(Modifier.width(6.dp))
         }
         Text(
             text.uppercase(),
-            color = p.ink3,
+            color = quietInk(),
             fontSize = 11.sp,
             // iOS's PanelTitle kerns a single point.
             letterSpacing = 1.sp,
@@ -296,7 +684,16 @@ fun SectionLabel(text: String, icon: String? = null, modifier: Modifier = Modifi
     }
 }
 
-/** A small rounded chip — a tag, a count, a state. */
+/**
+ * A small rounded chip — a tag, a count, a state.
+ *
+ * Content, not glass: a chip says something about the thing beside it, so on
+ * paper it is the sunken capsule it always was. On a glass bar it is a mark
+ * drawn on the material rather than a pane of it — a well in the bar's own
+ * ink, or the chip's colour at the material's tint strength — and its words
+ * take the bar's ink so they flip with the bar. The colour stays on the
+ * glyph, where 3:1 is the bar a mark has to clear.
+ */
 @Composable
 fun Chip(
     label: String,
@@ -305,28 +702,46 @@ fun Chip(
     tint: Color? = null,
 ) {
     val p = P.current
-    val c = tint ?: p.ink2
+    val host = LocalGlassHost.current
+    val fill: Color
+    val words: Color
+    val glyph: Color
+    if (host == null) {
+        fill = p.sunken
+        words = tint ?: p.ink2
+        glyph = words
+    } else {
+        fill = tint?.copy(alpha = tintAlpha()) ?: host.well()
+        words = host.labelInk(quiet = tint == null)
+        glyph = tint ?: words
+    }
     Row(
         modifier
-            .clip(RoundedCornerShape(99.dp))
-            .background(p.sunken)
+            .clip(MMShapes.pill)
+            .background(fill)
             .padding(horizontal = 9.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, size = 12.dp, tint = c)
+            Icon(icon, size = 12.dp, tint = glyph)
             if (label.isNotEmpty()) Spacer(Modifier.width(5.dp))
         }
         if (label.isNotEmpty()) {
-            Text(label, color = c, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = words, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
-/** A hairline the width of its parent. */
+/**
+ * A hairline the width of its parent. On glass a paper rule would stop
+ * matching the moment the glass flipped, so there it is the glass's own
+ * contour instead.
+ */
 @Composable
 fun Rule(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().height(1.dp).background(P.current.rule))
+    val host = LocalGlassHost.current
+    val colour = host?.hairline() ?: P.current.rule
+    Box(modifier.fillMaxWidth().height(1.dp).background(colour))
 }
 
 /**
@@ -477,9 +892,11 @@ val PagePadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
  * Positive money is the good green (or whatever `positive` a row prefers —
  * a lobby seat's cash, a muted list line); below zero it wears the danger
  * colour and breathes ([debtPulse]); a bankrupt seat's number goes quiet in
- * the faintest ink. iOS does these three cases at every balance it prints
- * (GameScreen.swift seat chips, TradeSheet.swift partners, ResultsViews.swift
- * standings), and a seat in the red has to read as one thing everywhere.
+ * the faintest ink the spot allows — ink3 on paper, the lifted ink2 on glass,
+ * where ink3 cannot be read. iOS does these three cases at every balance it
+ * prints (GameScreen.swift seat chips, TradeSheet.swift partners,
+ * ResultsViews.swift standings), and a seat in the red has to read as one
+ * thing everywhere.
  *
  * The change itself rolls, up for a gain and down for a loss, which is the
  * nearest Compose has to iOS's `.contentTransition(.numericText())`.
@@ -501,7 +918,7 @@ fun MoneyText(
     val p = P.current
     val inDebt = amount < 0 && !bankrupt
     val colour = when {
-        bankrupt -> p.ink3
+        bankrupt -> quietInk()
         inDebt -> p.bad
         else -> positive
     }
@@ -570,8 +987,9 @@ fun SeatTag(text: String, colour: Color, modifier: Modifier = Modifier, fontSize
 }
 
 /**
- * The tags a seat wears, in iOS's order: HOST in gold, BOT in the faint ink,
- * YOU in the accent (LobbyPanel.swift). Emits them side by side, so call it
+ * The tags a seat wears, in iOS's order: HOST in gold, BOT in the faint ink
+ * (the lifted ink2 when the seat is drawn on glass), YOU in the accent
+ * (LobbyPanel.swift). Emits them side by side, so call it
  * inside the Row that holds the name and let that Row's spacing part them.
  *
  * The lobby shows all three at 8sp. The seat chip at the table shows HOST and
@@ -588,7 +1006,7 @@ fun SeatTags(
 ) {
     val p = P.current
     if (hostId != null && player.id == hostId) SeatTag("HOST", p.gold, fontSize = fontSize)
-    if (player.isBot == true) SeatTag("BOT", p.ink3, fontSize = fontSize)
+    if (player.isBot == true) SeatTag("BOT", quietInk(), fontSize = fontSize)
     if (showYou && meId != null && player.id == meId) SeatTag("YOU", p.red, fontSize = fontSize)
 }
 
@@ -617,7 +1035,7 @@ fun MiniPill(
 ) {
     Row(
         modifier
-            .clip(RoundedCornerShape(99.dp))
+            .clip(MMShapes.pill)
             .background(background)
             .padding(horizontal = 5.dp, vertical = 1.5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -672,9 +1090,9 @@ fun UnreadBadge(count: Int, modifier: Modifier = Modifier) {
             Modifier
                 .graphicsLayer { scaleX = bump.value; scaleY = bump.value }
                 .defaultMinSize(minWidth = 19.dp, minHeight = 19.dp)
-                .clip(RoundedCornerShape(99.dp))
+                .clip(MMShapes.pill)
                 .background(p.red)
-                .border(2.dp, p.page, RoundedCornerShape(99.dp))
+                .border(2.dp, p.page, MMShapes.pill)
                 .padding(horizontal = if (n > 9) 5.dp else 0.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -736,85 +1154,113 @@ fun Modifier.dashedBorder(
  * row shows iOS's white flag, which is the answer to "which flag" rather than
  * a piece of chrome. The up-down mark and the menu's tick and struck flag are
  * iOS's own symbols (SafetySheets.kt's SfMark).
+ *
+ * The row is a field, and fields are glass: the well you tap is a control
+ * floating on the card, not part of what the card says. Its words take the
+ * glass's ink — the caption and the mark the lifted ink2, since ink3 cannot
+ * be read on the material — and on a glass bar it is a well in the bar's own
+ * ink instead, as every control is there.
+ *
+ * The menu it opens stays paper. It is a popup, its own window, where the
+ * page's blurred copy cannot reach; a film with nothing blurred behind it
+ * would lay a list of fifty countries over the words of the card beneath at
+ * 38%, and a list is content anyway.
  */
 @Composable
 fun FlagPicker(selected: String, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
-    val p = P.current
     val density = LocalDensity.current
     var open by remember { mutableStateOf(false) }
     val current = countryName(selected)
-    val shape = RoundedCornerShape(13.dp)
+    val shape = MMShapes.r14
+    val host = LocalGlassHost.current
+    val backdrop = LocalControlBackdrop.current
+    val glass = host ?: rememberGlassSurface(backdrop)
+    val face = if (host == null) {
+        Modifier.mmGlass(backdrop = backdrop, shape = shape, lens = false, shadow = GlassShadow.Relaxed)
+    } else {
+        Modifier.background(host.well(), shape)
+    }
     Box(modifier.fillMaxWidth()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 46.dp)
-                .clip(shape)
-                .background(p.sunken)
-                .border(1.dp, p.rule, shape)
-                .clickable { open = true }
-                .padding(horizontal = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                selected.ifBlank { "\uD83C\uDFF3\uFE0F" },
-                fontSize = with(density) { 19.dp.toSp() }, maxLines = 1, softWrap = false,
-            )
-            Text(
-                "Country flag",
-                color = p.ink2,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                softWrap = false,
-            )
-            // The name takes whatever width is left and sits flush right in
-            // it, so a long one ("United Arab Emirates") ellipsizes instead of
-            // pushing the up-down mark off the row.
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+        Embedded(LocalGlassLightAngle.current) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 46.dp)
+                    .then(face)
+                    .clip(shape)
+                    .clickable { open = true }
+                    .padding(horizontal = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
-                    current ?: "None",
-                    color = p.ink,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    selected.ifBlank { "\uD83C\uDFF3\uFE0F" },
+                    fontSize = with(density) { 19.dp.toSp() }, maxLines = 1, softWrap = false,
                 )
-            }
-            // iOS's chevron.up.chevron.down at eleven bold: two small stacked
-            // chevrons, no stems.
-            SfMark("chevron.up.chevron.down", 20.dp, p.ink3)
-        }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            modifier = Modifier.heightIn(max = 440.dp),
-            shape = RoundedCornerShape(14.dp),
-            containerColor = p.card,
-            border = BorderStroke(1.dp, p.rule),
-        ) {
-            // iOS's Label: the words, then a tick when it is the choice and a
-            // struck-through flag when it is not.
-            DropdownMenuItem(
-                text = {
-                    Text("No flag", color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Normal, maxLines = 1)
-                },
-                trailingIcon = {
-                    SfMark(if (selected.isBlank()) "checkmark" else "flag.slash", 18.dp, p.ink)
-                },
-                onClick = {
-                    open = false
-                    if (selected.isNotBlank()) onPick("")
-                },
-            )
-            Rule(Modifier.padding(vertical = 4.dp))
-            MMStatic.countries.forEach { (flag, name) ->
-                FlagMenuItem("$flag  $name", ticked = flag == selected) {
-                    open = false
-                    SoundKit.click()
-                    onPick(flag)
+                Text(
+                    "Country flag",
+                    color = glass.labelInk(quiet = true),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                // The name takes whatever width is left and sits flush right in
+                // it, so a long one ("United Arab Emirates") ellipsizes instead of
+                // pushing the up-down mark off the row.
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    Text(
+                        current ?: "None",
+                        color = glass.labelInk(),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                // iOS's chevron.up.chevron.down at eleven bold: two small stacked
+                // chevrons, no stems.
+                SfMark("chevron.up.chevron.down", 20.dp, glass.labelInk(quiet = true))
+            }
+        }
+        CompositionLocalProvider(LocalGlassHost provides null) {
+            FlagMenu(open, selected, onClose = { open = false }, onPick = onPick)
+        }
+    }
+}
+
+/** The named list [FlagPicker] opens: "No flag", a rule, then every country. */
+@Composable
+private fun FlagMenu(open: Boolean, selected: String, onClose: () -> Unit, onPick: (String) -> Unit) {
+    val p = P.current
+    DropdownMenu(
+        expanded = open,
+        onDismissRequest = onClose,
+        modifier = Modifier.heightIn(max = 440.dp),
+        shape = MMShapes.r14,
+        containerColor = p.card,
+        border = BorderStroke(1.dp, p.rule),
+    ) {
+        // iOS's Label: the words, then a tick when it is the choice and a
+        // struck-through flag when it is not.
+        DropdownMenuItem(
+            text = {
+                Text("No flag", color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Normal, maxLines = 1)
+            },
+            trailingIcon = {
+                SfMark(if (selected.isBlank()) "checkmark" else "flag.slash", 18.dp, p.ink)
+            },
+            onClick = {
+                onClose()
+                if (selected.isNotBlank()) onPick("")
+            },
+        )
+        Rule(Modifier.padding(vertical = 4.dp))
+        MMStatic.countries.forEach { (flag, name) ->
+            FlagMenuItem("$flag  $name", ticked = flag == selected) {
+                onClose()
+                SoundKit.click()
+                onPick(flag)
             }
         }
     }
@@ -861,6 +1307,17 @@ class ConfirmAction(
  * Only from a screen, never from inside a ModalBottomSheet: a dialog raised
  * there fights the sheet for the window (see SafetySheets.kt). Inside a sheet
  * use [ConfirmRow].
+ *
+ * It is glass, as iOS's is — an alert floats over the table, it is not part
+ * of it — and it is the one piece of glass here drawn over a colour it puts
+ * down itself. A dialog is a window of its own, so there is no blurred copy
+ * of the table for it to sample, and a film with nothing blurred behind it
+ * would show the table's own words through the question at 38%. So it lays
+ * the sheet colour down first and declares exactly that: the material over a
+ * flat backdrop, which is the flat level's own case. The answers sit on it
+ * as a glass bar's controls do ([GlassHost]) — glass cannot sit on glass —
+ * and at twelve in from a 22 corner they are the ladder's r10, concentric.
+ * The words keep their twenty.
  */
 @Composable
 fun ConfirmDialog(
@@ -872,40 +1329,57 @@ fun ConfirmDialog(
     cancelLabel: String? = "Cancel",
 ) {
     val p = P.current
-    val shape = RoundedCornerShape(22.dp)
+    val shape = MMShapes.r22
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(
-            Modifier
-                .padding(horizontal = 24.dp)
-                .widthIn(max = 420.dp)
-                .fillMaxWidth()
-                .clip(shape)
-                .background(p.sheet)
-                .border(1.dp, p.rule, shape)
-                .padding(20.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (icon != null) {
-                    val danger = actions.any { it.kind == BtnKind.DANGER }
-                    Icon(icon, size = 18.dp, tint = if (danger) p.bad else p.red)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(title, color = p.ink, fontSize = 17.sp, fontWeight = FontWeight.Black)
-            }
-            if (message != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(message, color = p.ink2, fontSize = 13.5.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(16.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (a in actions) {
-                    MMButton(a.label, Modifier.fillMaxWidth(), kind = a.kind, icon = a.icon) {
-                        onDismiss()
-                        a.onClick()
+        val glass = rememberGlassSurface(BackdropKind.Sheet)
+        Embedded(LocalGlassLightAngle.current) {
+            Column(
+                Modifier
+                    .padding(horizontal = 24.dp)
+                    .widthIn(max = 420.dp)
+                    .fillMaxWidth()
+                    .background(p.sheet, shape)
+                    .mmGlass(
+                        backdrop = BackdropKind.Sheet,
+                        shape = shape,
+                        lens = false,
+                        shadow = GlassShadow.Relaxed,
+                    )
+                    .padding(12.dp),
+            ) {
+                GlassHost(glass) {
+                    Column(Modifier.padding(start = 8.dp, top = 8.dp, end = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (icon != null) {
+                                val danger = actions.any { it.kind == BtnKind.DANGER }
+                                Icon(icon, size = 18.dp, tint = if (danger) p.bad else p.red)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(title, color = glass.labelInk(), fontSize = 17.sp, fontWeight = FontWeight.Black)
+                        }
+                        if (message != null) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                message,
+                                color = glass.labelInk(quiet = true),
+                                fontSize = 13.5.sp,
+                                lineHeight = 19.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
                     }
-                }
-                if (cancelLabel != null) {
-                    MMButton(cancelLabel, Modifier.fillMaxWidth(), kind = BtnKind.GHOST) { onDismiss() }
+                    Spacer(Modifier.height(16.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (a in actions) {
+                            MMButton(a.label, Modifier.fillMaxWidth(), kind = a.kind, icon = a.icon) {
+                                onDismiss()
+                                a.onClick()
+                            }
+                        }
+                        if (cancelLabel != null) {
+                            MMButton(cancelLabel, Modifier.fillMaxWidth(), kind = BtnKind.GHOST) { onDismiss() }
+                        }
+                    }
                 }
             }
         }
@@ -921,6 +1395,11 @@ fun ConfirmDialog(
  *
  * `busy` greys both answers and swaps in `busyLabel` while the request is out,
  * so a second tap cannot send it twice.
+ *
+ * The soft panel is paper — a notice drawn on whatever it is in, the way the
+ * iPhone's dock carries its deadlock strip — so the answers on it are glass
+ * over paper. Its corner is 22 at twelve in so that their r10 is concentric
+ * with it; the old 14 at fourteen in asked for a corner of 4.
  */
 @Composable
 fun ConfirmRow(
@@ -937,36 +1416,40 @@ fun ConfirmRow(
     destructive: Boolean = true,
 ) {
     val p = P.current
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (destructive) p.badSoft else p.goldSoft)
-            .padding(14.dp),
+    CompositionLocalProvider(
+        LocalGlassHost provides null,
+        LocalControlBackdrop provides BackdropKind.Paper,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, size = 16.dp, tint = if (destructive) p.bad else p.gold)
-            Spacer(Modifier.width(7.dp))
-            Text(title, color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Black)
-        }
-        Spacer(Modifier.height(6.dp))
-        Hint(message)
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // MMButton keeps its colours when disabled, as iOS's style does, so
-            // the wait is shown here the way iOS shows one: by fading the pair.
-            MMButton(
-                if (busy && busyLabel != null) busyLabel else confirmLabel,
-                kind = if (destructive) BtnKind.DANGER else BtnKind.PRIMARY,
-                modifier = Modifier.weight(1f).alpha(if (busy) 0.45f else 1f),
-                enabled = !busy,
-            ) { onConfirm() }
-            MMButton(
-                cancelLabel,
-                kind = BtnKind.GHOST,
-                modifier = Modifier.weight(1f).alpha(if (busy) 0.45f else 1f),
-                enabled = !busy,
-            ) { onCancel() }
+        Column(
+            modifier
+                .fillMaxWidth()
+                .background(if (destructive) p.badSoft else p.goldSoft, MMShapes.r22)
+                .padding(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, size = 16.dp, tint = if (destructive) p.bad else p.gold)
+                Spacer(Modifier.width(7.dp))
+                Text(title, color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Black)
+            }
+            Spacer(Modifier.height(6.dp))
+            Hint(message)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // MMButton keeps its colours when disabled, as iOS's style does, so
+                // the wait is shown here the way iOS shows one: by fading the pair.
+                MMButton(
+                    if (busy && busyLabel != null) busyLabel else confirmLabel,
+                    kind = if (destructive) BtnKind.DANGER else BtnKind.PRIMARY,
+                    modifier = Modifier.weight(1f).alpha(if (busy) 0.45f else 1f),
+                    enabled = !busy,
+                ) { onConfirm() }
+                MMButton(
+                    cancelLabel,
+                    kind = BtnKind.GHOST,
+                    modifier = Modifier.weight(1f).alpha(if (busy) 0.45f else 1f),
+                    enabled = !busy,
+                ) { onCancel() }
+            }
         }
     }
 }

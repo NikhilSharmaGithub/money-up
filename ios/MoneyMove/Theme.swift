@@ -576,6 +576,12 @@ struct MMCard<Content: View>: View {
             .background(P.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(P.rule, lineWidth: 1))
             .shadow(color: .black.opacity(scheme == .light ? 0.10 : 0.35), radius: 8, y: 3)
+            // Whatever the card is sitting in, what is under its buttons is the
+            // card. A sheet or the dock declares `.chrome` for the controls on
+            // its own glass, and without this the cards in its body would hear
+            // it too — and draw their buttons as wells in a material that is
+            // not there, casting no shadow off solid paper.
+            .mmControls(on: .paper)
     }
 }
 
@@ -592,41 +598,74 @@ struct PanelTitle: View {
     }
 }
 
+// MARK: - Controls
+//
+// Nearly every button in the app is one of the two below, so this is the one
+// edit that moves them onto the material — the thumb feels the difference
+// before a single bar has changed.
+//
+// A control is glass that floats, and how much of the material it needs is
+// decided by what it floats over. Most sit on a card or a sheet, and what is
+// under them there travels with them: scroll the card and the button goes
+// too, so nothing ever slides beneath it. A blur of a flat colour is the same
+// flat colour, so over paper the glass runs at `flat` — film, rim, glow and
+// shadow, no blur — which is not a saving passed off as a look, it is the
+// exact picture. It is also what lets glass sit inside a scrolling card
+// without paying for a backdrop pass per row.
+//
+// No control ever runs our lens. Three lensing surfaces is the whole budget
+// on the oldest phone we support, and it belongs to the dock, the bars and
+// the sheets; a small button skips the lens anyway, and a big one would spend
+// a bar's allowance on a button. On iOS 26 a control over the page, the board
+// or media is the system's own glass, which bends what is behind it by
+// itself — that lens is the system's to pay for, not ours.
+
+private struct ControlBackdropKey: EnvironmentKey {
+    static let defaultValue: BackdropKind = .paper
+}
+
+extension EnvironmentValues {
+    /// What the controls in this subtree are sitting on. A button can no more
+    /// see its own backdrop than a bar can, so it is declared — once, by the
+    /// surface, for everything inside it, rather than at every call site.
+    /// Paper unless told otherwise, because paper is where most of them are.
+    ///
+    /// `.chrome` is the one that changes what a control *is*. Glass never
+    /// stacks on glass — a pane on a pane is refracting the bar it sits on —
+    /// so a button on the dock, or on a sheet's pinned bar, is drawn on that
+    /// material instead of being a piece of glass of its own.
+    var mmControlBackdrop: BackdropKind {
+        get { self[ControlBackdropKey.self] } set { self[ControlBackdropKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Declares what every control inside this view is sitting on.
+    func mmControls(on backdrop: BackdropKind) -> some View {
+        environment(\.mmControlBackdrop, backdrop)
+    }
+}
+
 /// The brand's primary/secondary buttons.
+///
+/// Ghost is the glass button: Regular, and interactive, so the light on its
+/// rim moves when it is pressed. The four coloured kinds are the prominent
+/// ones, and a prominent glass button *is* its tint — the system's own draws
+/// a plate of the accent with the light on it, not a pale pane with a wash
+/// across it. The material's tint is a fourteen-percent wash on purpose, the
+/// one semantic hint a bar is allowed, and every Roll and Buy in the app put
+/// through it comes out the same cream as the ghost beside it: the tell where
+/// nothing is primary. So those keep their plate, and take from the glass
+/// everything that is not the film — the shadow it casts, the gel of the
+/// press, the light that blooms under the thumb.
 struct MMButtonStyle: ButtonStyle {
-    @Environment(\.colorScheme) private var scheme
     enum Kind { case primary, good, bad, gold, ghost }
     var kind: Kind = .primary
     var big = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let P = Palette.current(scheme)
-        let bg: Color = switch kind {
-        case .primary: P.red
-        case .good: P.good
-        case .bad: P.bad
-        case .gold: P.gold
-        case .ghost: P.sunken
-        }
-        let fg: Color = switch kind {
-        case .ghost: P.ink
-        case .primary, .gold: P.accentInk
-        case .good, .bad: .white
-        }
-        configuration.label
-            .font(.system(size: big ? 17 : 14, weight: .bold, design: .rounded))
-            .foregroundStyle(fg)
-            .padding(.vertical, big ? 14 : 9)
-            .padding(.horizontal, big ? 22 : 14)
-            .frame(maxWidth: big ? .infinity : nil)
-            .background(bg, in: RoundedRectangle(cornerRadius: big ? 14 : 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: big ? 14 : 10, style: .continuous)
-                    .stroke(.white.opacity(kind == .ghost ? 0 : 0.18), lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.82 : 1)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.spring(duration: 0.2), value: configuration.isPressed)
+        MMButtonFace(label: configuration.label, pressed: configuration.isPressed,
+                     kind: kind, big: big)
     }
 }
 
@@ -634,19 +673,217 @@ extension MMButtonStyle.Kind {
     /// The colour a label on this button is drawn in. Drawn glyphs paint
     /// themselves rather than inheriting the style's foregroundStyle, so they
     /// have to be handed the same ink the text gets.
-    func ink(_ P: Palette) -> Color {
+    func ink(_ P: Palette) -> Color { ink(P, on: .paper) }
+
+    /// The same, for a button on a given backdrop. A ghost is glass, so its
+    /// label wears the glass's own ink for whichever way that glass has
+    /// leaned. That is the palette's ink whenever the lean matches the scheme,
+    /// which over paper it always does — but a ghost over a video frame leans
+    /// light in a dark app, and the palette's ink there would be pale on
+    /// cream. The coloured kinds stand on their own plate and take its ink.
+    func ink(_ P: Palette, on backdrop: BackdropKind) -> Color {
         switch self {
-        case .ghost: P.ink
+        case .ghost: MMButtonFace.glass(P, on: backdrop).ink
         case .primary, .gold: P.accentInk
         case .good, .bad: .white
+        }
+    }
+
+    /// The plate a coloured kind stands on. A ghost has none — it is glass.
+    fileprivate func plate(_ P: Palette) -> Color? {
+        switch self {
+        case .primary: P.red
+        case .good: P.good
+        case .bad: P.bad
+        case .gold: P.gold
+        case .ghost: nil
+        }
+    }
+}
+
+/// One button, at rest or held. A view of its own because the gel and the
+/// shadow need things a style is never handed: what the button is sitting on,
+/// how tall it came out, and whether the phone has asked for less motion.
+private struct MMButtonFace: View {
+    let label: ButtonStyleConfiguration.Label
+    let pressed: Bool
+    let kind: MMButtonStyle.Kind
+    let big: Bool
+
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.mmControlBackdrop) private var backdrop
+    @Environment(\.mmGlassQuality) private var quality
+    @Environment(\.mmBoardBusy) private var boardBusy
+    @Environment(\.mmScrollOffset) private var scrollOffset
+
+    /// Measured, because a plate's shadow scales with the height of what
+    /// casts it exactly as a pane's does. Until the first layout, the height
+    /// a one-line label comes out at.
+    @State private var height: CGFloat?
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        // 14 and 10 off the ladder: what a 22 pt shell holds at 8 and at 12 pt
+        // of padding, so a button hugging the corner of a dock sits concentric
+        // with it instead of pinching the gap.
+        let shape = RoundedRectangle(cornerRadius: big ? MMRadius.md : MMRadius.sm,
+                                     style: .continuous)
+        let face = label
+            .font(.system(size: big ? 17 : 14, weight: .bold, design: .rounded))
+            .foregroundStyle(kind.ink(P, on: backdrop))
+            .padding(.vertical, big ? 14 : 9)
+            .padding(.horizontal, big ? 22 : 14)
+            .frame(maxWidth: big ? .infinity : nil)
+            .background { bloom(P, shape) }
+        surface(face, P, shape)
+            .scaleEffect(x: squash.width, y: squash.height)
+            .animation(pressCurve, value: pressed)
+    }
+
+    @ViewBuilder
+    private func surface(_ face: some View, _ P: Palette, _ shape: RoundedRectangle) -> some View {
+        if kind == .ghost && backdrop != .chrome {
+            face
+                .mmGlass(.regular, backdrop: backdrop, in: shape, interactive: true)
+                // Environment flows inward, so these reach the `mmGlass` just
+                // above them and nothing outside the button.
+                .environment(\.mmGlassQuality, level)
+                .environment(\.mmGlassPressed, pressed)
+                // A bar deepens its shadow as content scrolls under it. Nothing
+                // scrolls under a button on a card — the card scrolls, and takes
+                // the button with it — so an offset from further up the tree
+                // must not tell it otherwise.
+                .environment(\.mmScrollOffset, travels ? 0 : scrollOffset)
+        } else {
+            face
+                .background {
+                    let sh = shadow(P)
+                    shape.fill(fill(P))
+                        .shadow(color: sh?.color ?? .clear, radius: sh?.radius ?? 0, y: sh?.y ?? 0)
+                        // Information, not decoration, so it survives Reduce
+                        // Motion — only slower.
+                        .animation(.linear(duration: reduceMotion ? 0.3 : 0.2), value: busy)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in height = h }
+        }
+    }
+
+    // MARK: what it is sitting on
+
+    /// The glass colours for a control on this backdrop, resolved the way the
+    /// material resolves its own. A control cannot change backdrops while it
+    /// is on screen, so the cold-start answer is the one the glass settles on.
+    ///
+    /// Nonisolated, because `Kind.ink` asks for it from outside any view, and
+    /// a view's statics belong to the main actor: it is palette arithmetic and
+    /// touches nothing a view owns.
+    nonisolated static func glass(_ P: Palette, on backdrop: BackdropKind) -> GlassTokens {
+        Palette.currentTheme.glass(appearance(P, on: backdrop))
+    }
+
+    private nonisolated static func appearance(_ P: Palette, on backdrop: BackdropKind) -> GlassAppearance {
+        GlassAppearance.resolve(luminance: backdrop.luminance(P), previous: nil)
+    }
+
+    /// Whether what is under this control moves with it. Paper and a sheet
+    /// do; the page, the live board and a video frame move on their own.
+    private var travels: Bool { backdrop == .paper || backdrop == .sheet }
+
+    /// The most the material may spend on a control — see the note above the
+    /// controls. Never higher than the governor has settled on.
+    private var level: GlassLevel { min(quality, travels ? .flat : .frost) }
+
+    /// Whether the material is about to hand this button to the system's own
+    /// glass, on exactly the terms `MMGlass` routes by. That glass is
+    /// interactive and does its own press — a scale, a bounce, a shimmer —
+    /// and a gel on top of it would be two presses fighting over one button.
+    private var systemGlass: Bool {
+        guard kind == .ghost, backdrop != .chrome, !reduceTransparency, !boardBusy,
+              level >= .frost else { return false }
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+
+    // MARK: the plate
+
+    private func fill(_ P: Palette) -> Color {
+        if let plate = kind.plate(P) { return plate }
+        // A ghost on another piece of glass. It cannot be a pane, so it is a
+        // well in the material instead: the glass's own ink at a tenth, which
+        // is how iOS fills a grouped control on a bar. The ink and not a paper
+        // colour, because it has to flip when the glass under it does.
+        return Self.glass(P, on: backdrop).ink.opacity(contrast == .increased ? 0.18 : 0.10)
+    }
+
+    /// The shadow a plate casts: the same two states, off the same tokens, as
+    /// a pane of the same height, so a coloured button and the ghost beside it
+    /// float the same distance off the card. Nothing drawn on another piece of
+    /// glass casts one — a chip on the dock is part of the dock.
+    private func shadow(_ P: Palette) -> GlassShadow? {
+        guard backdrop != .chrome else { return nil }
+        let h = height ?? (big ? 48 : 35)
+        let a = Self.appearance(P, on: backdrop)
+        return busy ? .busy(height: h, a) : .relaxed(height: h, a)
+    }
+
+    /// Deepened while the board performs, and — for a control floating over
+    /// something that moves on its own — once that something has moved.
+    private var busy: Bool { boardBusy || (!travels && abs(scrollOffset) > 8) }
+
+    // MARK: the press
+
+    /// The gel. Down fast and flattening, the way a drop gives under a finger;
+    /// back up on a spring that carries it just past its own size before it
+    /// settles, which is the difference between a button that yields and one
+    /// that merely shrinks. Reduce Motion keeps the press — it is how you know
+    /// the tap landed — and loses the squash and the overshoot.
+    private var squash: CGSize {
+        guard pressed, !systemGlass else { return CGSize(width: 1, height: 1) }
+        if reduceMotion { return CGSize(width: 0.965, height: 0.965) }
+        return CGSize(width: 0.965 * 1.03, height: 0.965 * 0.94)
+    }
+
+    /// 110 ms down; 260 ms back, sprung so the axis that travels furthest
+    /// crests at about 1.008. A flat 100 ms each way under Reduce Motion.
+    private var pressCurve: Animation {
+        if reduceMotion { return .easeOut(duration: 0.10) }
+        return pressed ? .easeOut(duration: 0.11) : .spring(duration: 0.26, bounce: 0.38)
+    }
+
+    /// The light a press lets into the glass. It lives here rather than in
+    /// the material because the style is what owns the touch — but a style is
+    /// never told where the touch landed, and the one gesture that would say,
+    /// a drag from zero distance, steals the scroll from the card the button
+    /// sits in. So it blooms where a thumb lands on a button, which is the
+    /// middle. Additive like the rim, and in the rim's hot colour: white by
+    /// day, brass at night. Off under Reduce Motion.
+    @ViewBuilder
+    private func bloom(_ P: Palette, _ shape: RoundedRectangle) -> some View {
+        if !reduceMotion && !systemGlass {
+            let hot: Color = Self.appearance(P, on: backdrop) == .dark
+                ? Self.glass(P, on: backdrop).rimWarm
+                : .white
+            RadialGradient(colors: [hot.opacity(0.10), hot.opacity(0)],
+                           center: .center, startRadius: 0, endRadius: 40)
+                .clipShape(shape)
+                .blendMode(.plusLighter)
+                .opacity(pressed ? 1 : 0)
         }
     }
 }
 
 /// A button that leads with a drawn glyph — the shape emoji used to make.
-/// Wrapping it keeps the glyph's ink and the button's kind from drifting apart.
+/// Wrapping it keeps the glyph's ink and the button's kind from drifting apart,
+/// and — now that a ghost takes its ink from the glass — from what the button
+/// is sitting on as well.
 struct MMIconButton: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.mmControlBackdrop) private var backdrop
     let glyph: Glyph
     let title: String
     var kind: MMButtonStyle.Kind = .primary
@@ -666,7 +903,7 @@ struct MMIconButton: View {
         let P = Palette.current(scheme)
         Button(action: action) {
             HStack(spacing: 8) {
-                Art.icon(glyph, size: big ? 19 : 15, tint: kind.ink(P))
+                Art.icon(glyph, size: big ? 19 : 15, tint: kind.ink(P, on: backdrop))
                 Text(title)
             }
         }
