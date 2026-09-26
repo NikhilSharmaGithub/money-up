@@ -21,6 +21,60 @@ export const GROUPS = {
   RO: { name: 'Romania', color: '#3f5fd6', flag: '🇷🇴' },
   IE: { name: 'Ireland', color: '#35a76a', flag: '🇮🇪' },
 
+  // The countries the continent boards add. A country's colour is the same
+  // on every board it appears on, so these were chosen for the one board each
+  // of them lives on: the classic ladder where it fits — browns and light
+  // blues at the cheap end, greens and dark blues at the dear end — bent
+  // wherever a country already on that board owns the colour (India's orange
+  // on Asia, Italy's red on Europe). Keys are ISO 3166 codes, except that a
+  // code the Indian regions below already hold (TN, KA, ME, EA) is off
+  // limits: this is one flat object, and a Tunisia keyed 'TN' would quietly
+  // rename and repaint Tamil Nadu on the Bharat board.
+  // Africa
+  ET: { name: 'Ethiopia', color: '#a0703f', flag: '🇪🇹' },
+  GH: { name: 'Ghana', color: '#4fb3d9', flag: '🇬🇭' },
+  TZ: { name: 'Tanzania', color: '#d1699e', flag: '🇹🇿' },
+  KE: { name: 'Kenya', color: '#e5883a', flag: '🇰🇪' },
+  MA: { name: 'Morocco', color: '#d64545', flag: '🇲🇦' },
+  NG: { name: 'Nigeria', color: '#d2ac2a', flag: '🇳🇬' },
+  EG: { name: 'Egypt', color: '#3f9e63', flag: '🇪🇬' },
+  ZA: { name: 'South Africa', color: '#4a6fd4', flag: '🇿🇦' },
+  // Asia (India, China and Japan are above)
+  VN: { name: 'Vietnam', color: '#a9744a', flag: '🇻🇳' },
+  ID: { name: 'Indonesia', color: '#52b0d6', flag: '🇮🇩' },
+  TH: { name: 'Thailand', color: '#8e6fd0', flag: '🇹🇭' },
+  KR: { name: 'South Korea', color: '#3d63c9', flag: '🇰🇷' },
+  AE: { name: 'United Arab Emirates', color: '#3a9a5c', flag: '🇦🇪' },
+  // Europe (Italy, Germany, France and the UK are above)
+  PT: { name: 'Portugal', color: '#9e6b45', flag: '🇵🇹' },
+  GR: { name: 'Greece', color: '#4aa8dc', flag: '🇬🇷' },
+  NL: { name: 'Netherlands', color: '#f07a2e', flag: '🇳🇱' },
+  ES: { name: 'Spain', color: '#cf5f95', flag: '🇪🇸' },
+  // North America (Canada and the United States are above)
+  JM: { name: 'Jamaica', color: '#a47a4c', flag: '🇯🇲' },
+  CU: { name: 'Cuba', color: '#56b6d8', flag: '🇨🇺' },
+  DO: { name: 'Dominican Republic', color: '#cc6aa6', flag: '🇩🇴' },
+  CR: { name: 'Costa Rica', color: '#e08a3c', flag: '🇨🇷' },
+  PA: { name: 'Panama', color: '#c9a227', flag: '🇵🇦' },
+  MX: { name: 'Mexico', color: '#2f9a5a', flag: '🇲🇽' },
+  // South America (Brazil is above)
+  BO: { name: 'Bolivia', color: '#a3764c', flag: '🇧🇴' },
+  EC: { name: 'Ecuador', color: '#d4ad2b', flag: '🇪🇨' },
+  UY: { name: 'Uruguay', color: '#62b6e0', flag: '🇺🇾' },
+  PE: { name: 'Peru', color: '#d2443f', flag: '🇵🇪' },
+  CO: { name: 'Colombia', color: '#e8883a', flag: '🇨🇴' },
+  CL: { name: 'Chile', color: '#d0628f', flag: '🇨🇱' },
+  AR: { name: 'Argentina', color: '#8a6ccf', flag: '🇦🇷' },
+  // Oceania
+  WS: { name: 'Samoa', color: '#a0724a', flag: '🇼🇸' },
+  TO: { name: 'Tonga', color: '#cd5f93', flag: '🇹🇴' },
+  SB: { name: 'Solomon Islands', color: '#cba62a', flag: '🇸🇧' },
+  VU: { name: 'Vanuatu', color: '#e3843a', flag: '🇻🇺' },
+  PG: { name: 'Papua New Guinea', color: '#d8473f', flag: '🇵🇬' },
+  FJ: { name: 'Fiji', color: '#55b4dc', flag: '🇫🇯' },
+  NZ: { name: 'New Zealand', color: '#2f8f5b', flag: '🇳🇿' },
+  AU: { name: 'Australia', color: '#2f5fc4', flag: '🇦🇺' },
+
   // regions used by the country boards live under namespaced keys, e.g.
   // IN_MH — registered below from COUNTRY_BOARDS so two countries can both
   // have a "NE" region without colliding.
@@ -185,6 +239,145 @@ const RAW_MAPS = [
       air('CDG Airport'), p('Manchester', 'UK', 300), p('London', 'UK', 320), p('San Francisco', 'US', 350), p('New York', 'US', 400),
       gotoprison(),
       treasure(), surprise(), premiumTax(), treasure(), air('JFK Airport'), surprise(), refund(50), treasure(), surprise(),
+    ],
+  },
+
+  // ---- the continent boards ---------------------------------------------------
+  // One board per inhabited continent, so a table can pick where in the world
+  // it wants to play rather than which single country. Each is the classic
+  // board exactly — same shape, same prices, same corners, taxes and chance
+  // tiles in the same places — with eight of that continent's countries on
+  // it, cheapest set first. The dearest street in every set is the city
+  // people have heard of, because that is the one a set gets remembered by.
+  //
+  // Each airport is the gateway to the country right after it, so walking
+  // the board reads like a flight plan rather than four codes picked at
+  // random. Antarctica is left out on purpose: it has no countries of its
+  // own to put on a board.
+  //
+  // Every one of them wears the folded map as its badge, not a globe. The
+  // globe is Mr. Worldwide's, and the apps already on people's phones draw
+  // it as his plane; the folded map is what every client, shipped or not,
+  // falls back to for a mark it does not know, so it is right everywhere
+  // without an update.
+  {
+    id: 'continent-africa',
+    name: 'Africa',
+    icon: '🗺️',
+    description: 'Eight countries of Africa, from Addis Ababa to Cape Town.',
+    tiles: [
+      start(),
+      p('Gondar', 'ET', 60), treasure(), p('Addis Ababa', 'ET', 60), earningsTax(),
+      air('ACC Airport'), p('Tamale', 'GH', 100), p('Kumasi', 'GH', 110), surprise(), p('Accra', 'GH', 120),
+      prison(),
+      p('Arusha', 'TZ', 130), util('Sahara Solar', '☀️'), p('Zanzibar City', 'TZ', 140), p('Dar es Salaam', 'TZ', 160),
+      air('NBO Airport'), p('Kisumu', 'KE', 180), treasure(), p('Mombasa', 'KE', 190), p('Nairobi', 'KE', 200),
+      vacation(),
+      p('Fes', 'MA', 210), surprise(), p('Marrakech', 'MA', 220), p('Casablanca', 'MA', 240),
+      air('LOS Airport'), p('Kano', 'NG', 260), util('Nile Water Co', '🚰'), p('Abuja', 'NG', 270), p('Lagos', 'NG', 280),
+      gotoprison(),
+      p('Luxor', 'EG', 290), p('Alexandria', 'EG', 300), treasure(), p('Cairo', 'EG', 320),
+      air('JNB Airport'), surprise(), p('Johannesburg', 'ZA', 360), premiumTax(), p('Cape Town', 'ZA', 400),
+    ],
+  },
+  {
+    id: 'continent-asia',
+    name: 'Asia',
+    icon: '🗺️',
+    description: 'Eight countries of Asia, from Hanoi to Tokyo.',
+    tiles: [
+      start(),
+      p('Da Nang', 'VN', 60), treasure(), p('Hanoi', 'VN', 60), earningsTax(),
+      air('CGK Airport'), p('Yogyakarta', 'ID', 100), p('Denpasar', 'ID', 110), surprise(), p('Jakarta', 'ID', 120),
+      prison(),
+      p('Chiang Mai', 'TH', 130), util('Mekong Hydro', '⚡'), p('Phuket', 'TH', 140), p('Bangkok', 'TH', 160),
+      air('DEL Airport'), p('Bengaluru', 'IN', 180), treasure(), p('New Delhi', 'IN', 190), p('Mumbai', 'IN', 200),
+      vacation(),
+      p('Incheon', 'KR', 210), surprise(), p('Busan', 'KR', 220), p('Seoul', 'KR', 240),
+      air('DXB Airport'), p('Sharjah', 'AE', 260), util('Monsoon Water Co', '💧'), p('Abu Dhabi', 'AE', 270), p('Dubai', 'AE', 280),
+      gotoprison(),
+      p('Shenzhen', 'CN', 290), p('Beijing', 'CN', 300), treasure(), p('Shanghai', 'CN', 320),
+      air('HND Airport'), surprise(), p('Osaka', 'JP', 360), premiumTax(), p('Tokyo', 'JP', 400),
+    ],
+  },
+  {
+    id: 'continent-europe',
+    name: 'Europe',
+    icon: '🗺️',
+    description: 'Eight countries of Europe, from Lisbon to London.',
+    tiles: [
+      start(),
+      p('Porto', 'PT', 60), treasure(), p('Lisbon', 'PT', 60), earningsTax(),
+      air('ATH Airport'), p('Patras', 'GR', 100), p('Thessaloniki', 'GR', 110), surprise(), p('Athens', 'GR', 120),
+      prison(),
+      p('Utrecht', 'NL', 130), util('North Sea Wind', '🌬️'), p('Rotterdam', 'NL', 140), p('Amsterdam', 'NL', 160),
+      air('MAD Airport'), p('Seville', 'ES', 180), treasure(), p('Barcelona', 'ES', 190), p('Madrid', 'ES', 200),
+      vacation(),
+      p('Venice', 'IT', 210), surprise(), p('Milan', 'IT', 220), p('Rome', 'IT', 240),
+      air('FRA Airport'), p('Frankfurt', 'DE', 260), util('Alpine Water Co', '💧'), p('Munich', 'DE', 270), p('Berlin', 'DE', 280),
+      gotoprison(),
+      p('Lyon', 'FR', 290), p('Marseille', 'FR', 300), treasure(), p('Paris', 'FR', 320),
+      air('LHR Airport'), surprise(), p('Manchester', 'UK', 360), premiumTax(), p('London', 'UK', 400),
+    ],
+  },
+  {
+    id: 'continent-north-america',
+    name: 'North America',
+    icon: '🗺️',
+    description: 'Eight countries of North America, from Kingston to New York.',
+    tiles: [
+      start(),
+      p('Montego Bay', 'JM', 60), treasure(), p('Kingston', 'JM', 60), earningsTax(),
+      air('HAV Airport'), p('Cienfuegos', 'CU', 100), p('Varadero', 'CU', 110), surprise(), p('Havana', 'CU', 120),
+      prison(),
+      p('Puerto Plata', 'DO', 130), util('Niagara Power', '⚡'), p('Punta Cana', 'DO', 140), p('Santo Domingo', 'DO', 160),
+      air('SJO Airport'), p('Limón', 'CR', 180), treasure(), p('Puntarenas', 'CR', 190), p('San José', 'CR', 200),
+      vacation(),
+      p('Bocas del Toro', 'PA', 210), surprise(), p('Colón', 'PA', 220), p('Panama City', 'PA', 240),
+      air('MEX Airport'), p('Guadalajara', 'MX', 260), util('Great Lakes Water', '🚰'), p('Cancún', 'MX', 270), p('Mexico City', 'MX', 280),
+      gotoprison(),
+      p('Vancouver', 'CA', 290), p('Montreal', 'CA', 300), treasure(), p('Toronto', 'CA', 320),
+      air('JFK Airport'), surprise(), p('Los Angeles', 'US', 360), premiumTax(), p('New York', 'US', 400),
+    ],
+  },
+  {
+    id: 'continent-south-america',
+    name: 'South America',
+    icon: '🗺️',
+    description: 'Eight countries of South America, from La Paz to Rio de Janeiro.',
+    tiles: [
+      start(),
+      p('Sucre', 'BO', 60), treasure(), p('La Paz', 'BO', 60), earningsTax(),
+      air('UIO Airport'), p('Cuenca', 'EC', 100), p('Guayaquil', 'EC', 110), surprise(), p('Quito', 'EC', 120),
+      prison(),
+      p('Salto', 'UY', 130), util('Andes Hydro', '⚡'), p('Punta del Este', 'UY', 140), p('Montevideo', 'UY', 160),
+      air('LIM Airport'), p('Arequipa', 'PE', 180), treasure(), p('Cusco', 'PE', 190), p('Lima', 'PE', 200),
+      vacation(),
+      p('Cartagena', 'CO', 210), surprise(), p('Medellín', 'CO', 220), p('Bogotá', 'CO', 240),
+      air('SCL Airport'), p('Concepción', 'CL', 260), util('Amazon Water Co', '💧'), p('Valparaíso', 'CL', 270), p('Santiago', 'CL', 280),
+      gotoprison(),
+      p('Mendoza', 'AR', 290), p('Córdoba', 'AR', 300), treasure(), p('Buenos Aires', 'AR', 320),
+      air('GRU Airport'), surprise(), p('São Paulo', 'BR', 360), premiumTax(), p('Rio de Janeiro', 'BR', 400),
+    ],
+  },
+  {
+    id: 'continent-oceania',
+    name: 'Oceania',
+    icon: '🗺️',
+    description: 'Eight countries of Oceania, from Apia to Sydney.',
+    tiles: [
+      start(),
+      p('Salelologa', 'WS', 60), treasure(), p('Apia', 'WS', 60), earningsTax(),
+      air('TBU Airport'), p('Pangai', 'TO', 100), p('Neiafu', 'TO', 110), surprise(), p("Nuku'alofa", 'TO', 120),
+      prison(),
+      p('Gizo', 'SB', 130), util('Trade Wind Power', '🌬️'), p('Auki', 'SB', 140), p('Honiara', 'SB', 160),
+      air('VLI Airport'), p('Lenakel', 'VU', 180), treasure(), p('Luganville', 'VU', 190), p('Port Vila', 'VU', 200),
+      vacation(),
+      p('Mount Hagen', 'PG', 210), surprise(), p('Lae', 'PG', 220), p('Port Moresby', 'PG', 240),
+      air('NAN Airport'), p('Lautoka', 'FJ', 260), util('Coral Sea Water', '💧'), p('Nadi', 'FJ', 270), p('Suva', 'FJ', 280),
+      gotoprison(),
+      p('Christchurch', 'NZ', 290), p('Wellington', 'NZ', 300), treasure(), p('Auckland', 'NZ', 320),
+      air('SYD Airport'), surprise(), p('Melbourne', 'AU', 360), premiumTax(), p('Sydney', 'AU', 400),
     ],
   },
 ];

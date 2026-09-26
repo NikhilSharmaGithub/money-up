@@ -587,6 +587,14 @@ struct GroupFlag: View {
                 ctx.stroke(A.rrect(1, 6, 30, 20, 2.5), with: .color(.black.opacity(0.22)), lineWidth: 1)
             }
             .frame(width: size, height: size)
+        } else if let panel = GeneratedFlagArt.panels[key] {
+            // A flag the web draws that has no hand port yet: the generated
+            // cloth brings its own white ground and outline, on the same grid.
+            Canvas { ctx, sz in
+                ctx.scaleBy(x: sz.width / 32, y: sz.height / 32)
+                panel(ctx)
+            }
+            .frame(width: size, height: size)
         } else if !mark.isEmpty {
             Text(mark).font(.system(size: size * 0.82))
         } else {
@@ -912,8 +920,9 @@ private enum CircleFlagArt {
 
 /// The round medallion a property tile pins to its inner edge — richup's
 /// look. Flags with circle-native art (CircleFlagArt, ported from the web's
-/// CIRCLE_FLAG_ART) are drawn composed for the disc — stripes to the rim,
-/// nothing cropped — with the shared enamel finish inside the clip. A flag
+/// CIRCLE_FLAG_ART, then GeneratedFlagArt.coins for the ones generated from
+/// it rather than ported) are drawn composed for the disc — stripes to the
+/// rim, nothing cropped — with the shared enamel finish inside the clip. A flag
 /// without coin art keeps the old treatment: the 30×20 GroupFlag panel blown
 /// up until its short side spans the disc, centred, overflow cropped. A thin
 /// light ring and a soft shadow lift it off the tile in both palettes.
@@ -930,7 +939,9 @@ struct GroupMedallion: View {
     var body: some View {
         let key = mark.replacingOccurrences(of: "\u{FE0F}", with: "")
         Group {
-            if let coin = CircleFlagArt.art[key] {
+            // The hand port wins; a generated coin fills in for any flag the
+            // web draws that nobody has ported, under the same clip and finish.
+            if let coin = CircleFlagArt.art[key] ?? GeneratedFlagArt.coins[key] {
                 // Circle-native: web coordinates (32×32 grid, visible world =
                 // circle (16,16) r15) scaled by size/32. The card ground shows
                 // through the 1-unit margin outside r15, exactly as the web

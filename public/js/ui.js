@@ -2173,9 +2173,15 @@ const PACK_ART = { '🪙': 'coin', '💰': 'cash', '🏦': 'bank' };
  * had it for nothing this afternoon.
  */
 function boardSection(items, wallet, coins, shelf) {
-  const boards = items.filter((i) => i.kind === 'board');
-  if (!boards.length) return '';
   const byMap = new Map((shelf?.boards || []).map((b) => [b.id, b]));
+  // In today's shelf order, the one the pickers and both apps' stores use.
+  // The catalogue's own order is fixed, so laid out as it comes it would park
+  // the same boards at the front for ever under a line promising a redeal
+  // every morning. With no shelf to hand the sort is stable and changes
+  // nothing.
+  const at = (i) => byMap.get(i.mapId)?.shelf ?? 1e9;
+  const boards = items.filter((i) => i.kind === 'board').sort((a, b) => at(a) - at(b));
+  if (!boards.length) return '';
   const card = (i) => {
     const owned = wallet.owned?.includes(i.id);
     const m = byMap.get(i.mapId);
@@ -2705,9 +2711,12 @@ const MAP_ART = {
   blitz: 'bolt', luckywheel: 'sparkle', random: 'dice',
 };
 // The house boards have a glyph of their own; a country board flies its flag.
-const mapArt = (m) => (MAP_ART[m.id]
-  ? icon(MAP_ART[m.id], 17)
-  : groupFlag(m.icon, m.preview?.colors?.[1], 17));
+// A continent has no one flag to fly, and its mark is an emoji nothing here
+// draws, so it wears the folded map — the same badge the iOS and Android
+// pickers give it, and not the globe, which is Classic's.
+const mapArt = (m) => (MAP_ART[m.id] ? icon(MAP_ART[m.id], 17)
+  : String(m.id).startsWith('continent-') ? icon('map', 17)
+    : groupFlag(m.icon, m.preview?.colors?.[1], 17));
 
 /**
  * A cup prize, written the way the reader reads money.
@@ -3208,7 +3217,7 @@ const INTRO_PAGES = [
     line: 'Buy streets. Build hotels. Bankrupt your friends.',
     points: [
       ['people', 'Two to eight players, on one screen or across the world'],
-      ['map', 'Nineteen boards — a world tour, single countries, and a few odd ones'],
+      ['map', 'Twenty-five boards — a world tour, six continents, single countries, and a few odd ones'],
       ['dice', 'A game runs about half an hour'],
     ],
   },

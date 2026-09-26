@@ -6,16 +6,19 @@
 // must still be able to sit down and play. So there is always a door open, and
 // it is the door the game was built around.
 //
-// The other eighteen are borrowed or owned. Two of them are free every day —
+// Every other board is borrowed or owned. Two of them are free every day —
 // the same two for everybody, worked out from the calendar so the server and
 // every client reach the same answer without a word passing between them — and
 // the rest are bought with coins in the same shop that sells pieces.
 //
-// The rotation is a shuffled cycle, not a dice roll. Eighteen boards, two a
-// day, so every board comes free exactly once in nine days and the order is
-// redealt each time round. Nobody waits forever for the one they want, nobody
-// can memorise the timetable, and nothing has to be written down: the same
-// date always deals the same hand, on any process, after any restart.
+// The rotation is a shuffled cycle, not a dice roll. Two boards a day, so
+// every board comes free exactly once per pass over the shelf and the order is
+// redealt each time round. How long a pass takes is counted off the shelf
+// itself (CYCLE_DAYS, below) and never written down: it was nine days with
+// eighteen boards and it is twelve with the six continents on, and the next
+// board added moves it again without anybody having to remember to. Nobody
+// waits forever for the one they want, nobody can memorise the timetable, and
+// the same date always deals the same hand, on any process, after any restart.
 //
 // One deliberate looseness. Entitlement is checked when a board is CHOSEN, not
 // when the game starts. A lobby that sits open across midnight keeps the board
@@ -56,6 +59,13 @@ export const RENT_PRICE = 1;
 // of this where India is dearer than Spain, and any spread invented to make
 // the shelf look livelier would be exactly that — invented.
 //
+// The six continent boards count like Bharat, not like a country: eight
+// sets, twenty-two streets, the classic shape to the tile, and no deck of
+// their own — their Treasure and Surprise piles are the shared templates
+// filled in with their own streets. So they sell at Bharat's price, for
+// Bharat's reason. Write them a deck in cards.js and they move up to the
+// country price with it, not before.
+//
 // The shelf gets its life somewhere honest instead: three boards go on sale
 // every day, and the order is redealt every day. Over a cycle every board has
 // its turn at the front and its turn at a discount, so the list is never the
@@ -75,7 +85,10 @@ const PRICES = {
   random: 1200,
 };
 // Eight sets, twenty-two streets, and twenty-eight cards nobody else has.
+// Every country board falls through to this.
 const COUNTRY_PRICE = 500;
+// Forty tiles and no deck of their own, the same as Bharat, so the same price.
+const CONTINENT_PRICE = PRICES.bharat;
 
 /** How many boards are discounted on any given day, and by how much. */
 export const SALE_PER_DAY = 3;
@@ -89,21 +102,31 @@ export const mapIdOfItem = (itemId) =>
   (String(itemId || '').startsWith('brd-') ? String(itemId).slice(4) : null);
 
 /**
- * Every board that can be bought, in shelf order: the house specials first,
- * then the countries alphabetically, then Shuffle alone at the end.
+ * Every board that can be bought, in catalogue order: the house specials
+ * first, then the continents, then the single countries, each of those two
+ * alphabetically, then Shuffle alone at the end.
+ *
+ * Nobody browses in this order. What a player sees is the day's shelf
+ * (shelfOrderOn, below), redealt every morning, and every picker and every
+ * shop sorts by that. This order only has two jobs: it is the deck the daily
+ * deal shuffles, and it is the order of the store catalogue's rows. Adding a
+ * board here therefore redeals the free pair and the sale on the next start
+ * — deploy one around midnight and the redeal lands on a rollover everyone
+ * is already expecting.
  *
  * `random` is not in MAPS — it is generated fresh on every call — so it is
  * named here rather than discovered.
  */
 const SELLABLE = (() => {
   const ids = Object.keys(MAPS).filter((id) => id !== HOUSE_BOARD);
-  const house = ids.filter((id) => !id.startsWith('country-'));
-  const countries = ids.filter((id) => id.startsWith('country-'))
-    .sort((a, b) => (MAPS[a].name || a).localeCompare(MAPS[b].name || b));
-  return [...house, ...countries, 'random'];
+  const byName = (a, b) => (MAPS[a].name || a).localeCompare(MAPS[b].name || b);
+  const shelf = (prefix) => ids.filter((id) => id.startsWith(prefix)).sort(byName);
+  const house = ids.filter((id) => !id.startsWith('country-') && !id.startsWith('continent-'));
+  return [...house, ...shelf('continent-'), ...shelf('country-'), 'random'];
 })();
 
-export const priceOf = (mapId) => PRICES[mapId] ?? COUNTRY_PRICE;
+export const priceOf = (mapId) => PRICES[mapId]
+  ?? (String(mapId).startsWith('continent-') ? CONTINENT_PRICE : COUNTRY_PRICE);
 
 /** Catalogue rows, shaped exactly like a piece so buyItem needs no new code. */
 export const BOARD_ITEMS = SELLABLE.map((id) => ({

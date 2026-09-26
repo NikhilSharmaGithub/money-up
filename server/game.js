@@ -91,8 +91,8 @@ export function rollQuickSettings(boards = [], rnd = Math.random) {
   //
   // Shuffle is the exception that proves the rule: it is in the rotation like
   // any other board, but it has no entry in MAPS because getMap builds it
-  // fresh every game. Testing for MAPS alone quietly threw it out on the two
-  // days in nine it is free — which meant the one board that is a different
+  // fresh every game. Testing for MAPS alone quietly threw it out on the day
+  // in each pass it is free — which meant the one board that is a different
   // board every single game was the one board quick play would never deal.
   const playable = boards.filter((id) => id === 'random' || Object.hasOwn(MAPS, id));
   if (playable.length) rolled.mapId = pick(playable);

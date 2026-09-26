@@ -3,112 +3,14 @@
 // and re-run this, rather than redrawing sixty-two icons by eye.
 import { ART, ICON_NAMES, INHERENT_COLOUR, circleFlag } from '../public/js/icons.js';
 import { GROUPS } from '../server/maps.js';
+// The SVG reading itself lives in svg-shapes.mjs, shared with the iOS flag
+// generator, so both apps see the same shapes in the same paint order.
+import { shapesOf } from './svg-shapes.mjs';
 
-const num = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
 const f = (v) => {
   const s = String(Number(v.toFixed(3)));
   return s.includes('.') ? `${s}f` : `${s}f`;
 };
-
-/** A circle as path data — two arcs, the same shape icons.js writes by hand. */
-const circlePath = (cx, cy, r) =>
-  `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${r * 2} 0a${r} ${r} 0 1 0 ${-r * 2} 0Z`;
-
-/** An ellipse as path data — two arcs, same shape as the circle helper. */
-const ellipsePath = (cx, cy, rx, ry) =>
-  `M${cx - rx} ${cy}a${rx} ${ry} 0 1 0 ${rx * 2} 0a${rx} ${ry} 0 1 0 ${-rx * 2} 0Z`;
-
-/** A line. Nothing fills it; it exists to be stroked. */
-const linePath = (x1, y1, x2, y2) => `M${x1} ${y1}L${x2} ${y2}`;
-
-const rectPath = (x, y, w, h, r) => {
-  if (!r) return `M${x} ${y}h${w}v${h}h${-w}Z`;
-  const rr = Math.min(r, w / 2, h / 2);
-  return `M${x + rr} ${y}h${w - 2 * rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}` +
-    `v${h - 2 * rr}a${rr} ${rr} 0 0 1 ${-rr} ${rr}h${-(w - 2 * rr)}` +
-    `a${rr} ${rr} 0 0 1 ${-rr} ${-rr}v${-(h - 2 * rr)}a${rr} ${rr} 0 0 1 ${rr} ${-rr}Z`;
-};
-
-const attrs = (tag) => {
-  const out = {};
-  for (const m of tag.matchAll(/([a-zA-Z-]+)="([^"]*)"/g)) out[m[1]] = m[2];
-  return out;
-};
-
-const colour = (v) => {
-  if (!v || v === 'none') return null;
-  if (v === 'currentColor') return 'INK';
-  const hex = v.replace('#', '');
-  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
-  return `0xFF${full.toUpperCase()}`;
-};
-
-// SVG presentation attributes inherit. A <g stroke="currentColor"
-// stroke-width="2"> around three shapes is how half this set is drawn, and a
-// reader that ignores the group produces three invisible shapes — which is
-// exactly what the globe, the key and the door came out as.
-const INHERITED = [
-  'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
-  'stroke-dasharray', 'fill', 'fill-rule',
-];
-
-function shapesOf(svg) {
-  const body = svg.replace(/^[\s\S]*?<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '');
-  const out = [];
-  // The root <svg> carries fill="none", which is the default every shape
-  // without a fill of its own inherits.
-  const stack = [{ opacity: 1, fill: 'none' }];
-  const tokens = body.match(/<\/?[a-zA-Z]+[^>]*>/g) || [];
-  for (const tok of tokens) {
-    const name = tok.match(/^<\/?([a-zA-Z]+)/)[1];
-    if (tok.startsWith('</')) { if (name === 'g' || name === 'clipPath') stack.pop(); continue; }
-    const raw = attrs(tok);
-    const parent = stack[stack.length - 1];
-    // What this element ends up with: its own attributes over its parents'.
-    const a = { ...raw };
-    for (const key of INHERITED) if (a[key] === undefined && parent[key] !== undefined) a[key] = parent[key];
-
-    // The clip is a circle the renderer applies itself, so the element that
-    // declares it — and the shape inside it — are not drawings.
-    if (name === 'clipPath') { stack.push({ ...parent, skip: true }); continue; }
-    if (parent.skip) continue;
-
-    if (name === 'g') {
-      const next = { opacity: parent.opacity * (raw.opacity ? num(raw.opacity) : 1) };
-      for (const key of INHERITED) {
-        const v = raw[key] !== undefined ? raw[key] : parent[key];
-        if (v !== undefined) next[key] = v;
-      }
-      stack.push(next);
-      continue;
-    }
-    let d = null;
-    if (name === 'path') d = a.d;
-    else if (name === 'circle') d = circlePath(num(a.cx), num(a.cy), num(a.r));
-    else if (name === 'rect') d = rectPath(num(a.x), num(a.y), num(a.width), num(a.height), num(a.rx));
-    else if (name === 'ellipse') d = ellipsePath(num(a.cx), num(a.cy), num(a.rx), num(a.ry));
-    else if (name === 'line') d = linePath(num(a.x1), num(a.y1), num(a.x2), num(a.y2));
-    if (!d) continue;
-    const group = parent.opacity;
-    out.push({
-      d: d.replace(/\s+/g, ' ').trim(),
-      fill: colour(a.fill),
-      stroke: colour(a.stroke),
-      strokeWidth: a['stroke-width'] ? num(a['stroke-width']) : 1,
-      cap: a['stroke-linecap'] || 'butt',
-      join: a['stroke-linejoin'] || 'miter',
-      dash: a['stroke-dasharray']
-        ? a['stroke-dasharray'].split(/[\s,]+/).filter(Boolean).map(num) : null,
-      alpha: group * (a.opacity ? num(a.opacity) : 1)
-        * (a['stroke-opacity'] && !a.fill ? num(a['stroke-opacity']) : 1),
-      evenOdd: a['fill-rule'] === 'evenodd',
-    });
-  }
-  return out;
-}
 
 const lines = [];
 lines.push(`package com.moneymove.game`);
