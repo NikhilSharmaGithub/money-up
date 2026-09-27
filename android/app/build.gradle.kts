@@ -86,7 +86,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.3"
         // Read by the manifest's APPLICATION_ID line. Always a well-formed id
         // by the time it gets here — see admobAppId above for why that matters.
         manifestPlaceholders["admobAppId"] = admobAppId

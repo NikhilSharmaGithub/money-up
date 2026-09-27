@@ -349,7 +349,7 @@ private fun FriendsSheet(
         containerColor = p.page,
         dragHandle = null,
     ) {
-        Box(Modifier.fillMaxWidth().fillMaxHeight()) {
+        Box(Modifier.fillMaxWidth().fillMaxHeight().clearOfStatusBar()) {
             Column(Modifier.fillMaxSize()) {
                 SheetBar("Friends") { close() }
                 Column(

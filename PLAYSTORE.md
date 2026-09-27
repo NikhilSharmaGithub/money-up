@@ -1,9 +1,10 @@
 # MoneyMove — Google Play submission kit
 
 Everything a Play listing asks for, written out and ready to paste. The build
-itself is done: `./gradlew bundleRelease` produces the AAB the moment a
-keystore exists, R8 is on, and a minified release has been run end to end on a
-device against the live server.
+itself is done: `android/release.sh` makes the upload key if there is none,
+builds the signed AAB and copies it to `~/Downloads/moneymove-play/`. R8 is on,
+and a minified release has been run end to end on a device against the live
+server. The version going up first is **1.0.3** (versionCode 1).
 
 What is left is five console jobs, and every one of them needs your account,
 your card, or a file only you can download. They are listed first, in the
@@ -18,45 +19,57 @@ order they unblock things.
 needs; the server, the domain and the web app are already paid for. Nothing
 below can start until this exists.
 
-### b. The signing keystore — five minutes, and never lose it
-Play signs every release with a key that cannot be replaced. Losing it means
-never updating the app again.
+### b. The upload key and the build — one command, and never lose the key
+In your own Terminal:
 
 ```bash
-keytool -genkey -v -keystore moneymove-release.jks \
-  -keyalg RSA -keysize 2048 -validity 10000 -alias moneymove
+cd ~/"Downloads/Monopoly nikhil/android" && ./release.sh
 ```
 
-Keep it and its passwords out of this repo — `.gitignore` already blocks
-`*.jks` and `*.keystore`. The build reads them from the environment:
+The first run makes `~/moneymove-keys/moneymove-release.jks` (alias
+`moneymove`, RSA 2048, valid 10,000 days). keytool asks for the password and
+the name fields itself; the script never sees them. It then asks for the
+password once, hidden, hands it only to the Gradle build, and wipes it when it
+finishes. It refuses to build without `android/app/google-services.json`
+(push would be silently off), checks the bundle is signed, carries
+`AD_ID` and a real AdMob app id, copies it to
+`~/Downloads/moneymove-play/app-release.aab`, and prints the key's SHA-1 and
+SHA-256. Those two are public fingerprints: they go into *c* below.
 
-```bash
-MM_KEYSTORE=/absolute/path/moneymove-release.jks \
-MM_KEYSTORE_PASSWORD=… MM_KEY_ALIAS=moneymove MM_KEY_PASSWORD=… \
-  ./gradlew bundleRelease
-```
+**Back up `~/moneymove-keys` and the password the day it is made.** This is
+the *upload* key. Google holds the app signing key under Play App Signing, so
+a lost upload key is not quite the end of the app, but getting a new one
+registered is a support request and days of waiting with no updates. Treat
+losing it as never updating the app again. It lives outside the repo, and
+`.gitignore` blocks `*.jks` and `*.keystore` anyway.
 
-Unset, the release still builds — unsigned — rather than failing in a way
-that looks like a broken build.
+Built by hand, the variables are the ones `build.gradle.kts` reads (see
+section 3). Unset, the release still builds, unsigned, rather than failing in
+a way that looks like a broken build; `release.sh` catches that.
 
-### c. Google Sign-In — an Android OAuth client
-The code is written and wired; Google refuses to mint a token until this app
-is registered in the Cloud project (number **968669711294**) as an Android
-OAuth client.
+### c. Google Sign-In — two more Android OAuth clients
+Google mints a sign-in token only for a package *and* signing certificate it
+has been told about, and an Android OAuth client holds exactly one SHA-1. The
+first one exists: **"MoneyMove Android (debug)"**, in the Cloud project
+`gen-lang-client-0491634890` (number **968669711294**, the one the web and
+iOS clients live in), which is why sign-in works on debug builds today.
+Release builds carry different certificates, so two more clients are needed,
+same project, same package:
 
 <https://console.cloud.google.com/apis/credentials> → Create credentials →
 OAuth client ID → Android
 
-| Field | Value |
-| --- | --- |
-| Package name | `com.moneymove.game` |
-| SHA-1 (debug) | `21:26:1B:59:47:54:DA:23:E9:DF:D4:54:43:11:23:BE:DF:40:A4:DC` |
-| SHA-1 (release) | from your keystore — `keytool -list -v -keystore moneymove-release.jks` |
-| SHA-1 (Play signing) | Play Console → Setup → App integrity, after the first upload |
+| Client | Package name | SHA-1 | Status |
+| --- | --- | --- | --- |
+| MoneyMove Android (debug) | `com.moneymove.game` | `21:26:1B:59:47:54:DA:23:E9:DF:D4:54:43:11:23:BE:DF:40:A4:DC` | Done |
+| MoneyMove Android (upload) | `com.moneymove.game` | printed by `release.sh` at the end of a build | To add |
+| MoneyMove Android (Play) | `com.moneymove.game` | Play Console → App integrity → App signing → *App signing key certificate* (type "App signing" in the console's search), after the first upload | To add |
 
-All three fingerprints go in. The app asks for a token audienced to the *web*
-client id, which is what the server already accepts from the browser and from
-iOS — so nothing on the server changes.
+The Play one is the one that matters most: every copy installed from the
+store is signed with Google's key, not the upload key, so without it sign-in
+fails for every player while working on every test build. The app asks for a
+token audienced to the *web* client id, which is what the server already
+accepts from the browser and from iOS, so nothing on the server changes.
 
 ### d. Play Billing — products, and a way to check a purchase
 Two halves, and the app is blocked on neither but the money is blocked on both.
@@ -82,29 +95,26 @@ Until that lands, `/api/store/redeem/play` refuses every purchase and says so
 in those words — a verifier that cannot verify must never say yes. The boot
 log tells you which of the two states the server is in.
 
-### e. AdMob — an Android app in the account; push — optional
-- **AdMob**: the SDK is in the build now, the same ads the iPhone serves —
-  the two rewarded placements and the pre-game interstitial, all npa=1. What
-  it is waiting for is an Android app in the AdMob account: Google treats the
-  iPhone app and the Android app as two apps with two sets of ids, and will
-  not fill an Android request from the iPhone's. `ADMOB-ANDROID.md` is the
-  five-minute console walk-through — the app, its three units, the
-  verification URL, and where each id goes afterwards.
+### e. AdMob — link the store listing; push — already live
+- **AdMob**: done except for one link. The Android app exists in AdMob
+  (`ca-app-pub-1179201999959612~9068269365`, in `android/gradle.properties`
+  as `ADMOB_APP_ID`), with its three units (Free coins and Double win
+  rewarded, the Pre-game interstitial) served from `server/ads.js`, all
+  npa=1, and Android already serves real AdMob ads. AdMob marks the app
+  *Requires review / Limited ad serving* until it is tied to a store listing:
+  once the Play listing is live, AdMob → Apps → MoneyMove (Android) → App
+  settings → *Add app store* and pick it. `ADMOB-ANDROID.md` has the rest of
+  the walk-through.
 
-  Nothing about the wait is a crash or a dead button. The app id comes from
-  the `ADMOB_APP_ID` build property, not from source, and a build without a
-  well-formed one still launches; the unit ids come from the server's config,
-  and a missing one is answered with the house ad. The whole rewarded path —
-  offer, ticket, view, server-verified reward, daily caps — stays live and
-  carried by the house until the ids arrive, exactly as it is today.
-
-  The store answers change with the first build that carries the SDK, not
-  with the day Android starts serving AdMob. That switch is on the admin desk
-  and needs no new build, so the form cannot wait for it. See *App content*
-  and *Data safety* below.
-- **Push**: needs `google-services.json` from Firebase and the
-  firebase-messaging dependency. Without them `PushRegistration` is a
-  deliberate, quiet no-op.
+  The store answers below describe the build, which carries the SDK, not the
+  admin desk's switch, which needs no new build. See *App content* and *Data
+  safety* below.
+- **Push**: live through Firebase Cloud Messaging and verified against
+  production (a turn push arrived, and tapping it opened the table). The
+  server's service account is on Render as `firebase-sa.json`;
+  `android/app/google-services.json` is on this Mac only, because the repo is
+  public. A build without that file is a quiet no-op for push, which is
+  exactly why `release.sh` refuses to build without it.
 
 ---
 
@@ -125,8 +135,9 @@ Buy streets, build hotels, bankrupt your friends. Online property board game.
 Roll, buy, build, and bankrupt everyone at the table.
 
 MoneyMove is a fast online property trading board game for two to eight
-players. Play with friends in a private room, or tap once and land at a table
-with whoever else is playing right now. A game runs about half an hour.
+players. Play with friends in a private room, or tap Play now: a lobby fills
+with whoever else is playing right now, and the host starts the game once the
+table is ready. A game runs about half an hour.
 
 TWENTY-FIVE BOARDS
 A world tour, a board for each of six continents, single-country boards from
@@ -137,8 +148,9 @@ rented for a single coin.
 PLAY YOUR WAY
 Every table sets its own house rules before the dice: starting cash,
 auctions, even build, mortgages, double rent on a full country, vacation
-payouts, and the shot clock. Quick tables roll their own rules, so two games
-in a row are never the same game twice.
+payouts, and the shot clock. Play-now tables roll their own rules, and the
+host can change them, the starting cash and the board in the lobby, where
+everyone sees what changed. Two games in a row are never the same game twice.
 
 REAL OPPONENTS, OR HOUSE PLAYERS
 Short a player? The house sits in, trades with the other bots, talks in the
@@ -160,21 +172,29 @@ Every table has a chat, and the house players answer. Any message can be
 reported or its author blocked, from the line itself.
 
 ONE GAME, THREE SCREENS
-The same game runs in a browser and on iPhone. A phone, a tablet and a laptop
-can sit at one table.
+The same game runs in a browser, on iPhone and on Android. A phone, a tablet
+and a laptop can sit at one table.
 
-MoneyMove is not affiliated with, endorsed by, or connected to Hasbro or the
-MONOPOLY board game.
+MoneyMove is an original game and is not affiliated with or endorsed by any
+board game publisher.
 ```
+
+The last line used to name Hasbro and MONOPOLY. A trademark named in a
+listing, even inside a disclaimer, is exactly what Play's intellectual
+property and metadata checks look for, and a keyword match is enough to hold
+a review, so the listing names nobody. The privacy page names nobody either.
 
 ### Category and tags
 - **Category**: Games → Board
 - **Tags**: board game, multiplayer, property trading, dice, strategy
 - **Contains ads**: **Yes** — rewarded videos the player chooses to watch,
-  and one interstitial while a quick match is being found. This used to say
-  "opt-in only", which stopped being true the day the pre-game break was
-  added. Answer Yes from the first build with the SDK in it, even while the
-  desk still has Android on house ads.
+  and a full-screen interstitial before every new table the player opens by
+  their own tap: Play now, a new private game, a code, a public room, an
+  invite, a friend's table, a quick Play again. Never before a cup match, a
+  rematch, a game being resumed, or one opened from a push, and never more
+  often than the gap set on the admin desk. It shows at the tap and never
+  delays the table. This used to say "opt-in only", and before that "while a
+  quick match is being found"; neither is true now.
 - **In-app purchases**: yes — $4.99 to $19.99 per item
 
 ### Content rating questionnaire — the answers
@@ -232,9 +252,10 @@ IDs* row below. The app set ID stays in it either way.
   covers the iPhone too, which is the point — one game, one ceiling.
 
 ### Data safety form
-The form covers the Google Mobile Ads SDK as well as the game's own code.
-Play counts anything that leaves the phone as collected, whoever's code
-sends it, and an SDK compiled in is ours to declare. The row this replaces
+The form covers the Google Mobile Ads SDK and Firebase Cloud Messaging as
+well as the game's own code. Play counts anything that leaves the phone as
+collected, whoever's code sends it, and an SDK compiled in is ours to
+declare. The row this replaces
 said "only once AdMob is switched on"; that was right while the SDK was not
 in the binary and is wrong now, because the switch is server-side and the
 form has to describe the build.
@@ -267,54 +288,130 @@ offer, so the SDK rows say *required*.
 | Messages — in-app | Collected, not shared. Chat and direct messages. Purpose: app functionality. |
 | App activity — app interactions *(Ads SDK)* | Collected and shared. Required. Advertising or marketing, analytics, fraud prevention/security/compliance. Launches, taps and video views, as Google lists them. |
 | App info and performance — diagnostics *(Ads SDK)* | Collected and shared. Required. Advertising or marketing, analytics, fraud prevention/security/compliance. Launch time, hang rate, energy use. The game itself sends no crash reports. |
-| Device or other IDs | Collected and shared. Required. Two sources, one row: the game's own random device token, which a wallet hangs on and which goes nowhere but our server (collected, app functionality); and, from the *Ads SDK*, the Android advertising ID and app set ID (collected and shared with Google — advertising or marketing, analytics, fraud prevention/security/compliance). |
+| Device or other IDs | Collected and shared. Required. Three sources, one row: the game's own random device token, which a wallet hangs on and which goes nowhere but our server (collected, app functionality); the **FCM registration token** (and the Firebase installation ID it is issued against), which the Firebase library fetches from Google at launch and the app sends to our server once the player allows notifications, so a turn, an invite or a cup can reach the phone (collected, not shared: Google handles it as Firebase, our processor; app functionality); and, from the *Ads SDK*, the Android advertising ID and app set ID (collected and shared with Google — advertising or marketing, analytics, fraud prevention/security/compliance). |
 | Purchase history | Collected, not shared. Purpose: app functionality. |
-| Is data encrypted in transit? | Yes — ours over HTTPS, the SDK's over TLS, per Google's page. |
-| Can users request deletion? | Yes — Settings → delete account, and at <https://www.moneymove.live/privacy.html>. The advertising ID is the player's to reset or delete in Android Settings; that control is Google's, and the form asks nothing more of it. |
+| Is data encrypted in transit? | Yes — ours over HTTPS, the Ads SDK's over TLS and Firebase's over HTTPS, per Google's pages. |
+| Can users request deletion? | Yes — Settings → Account & help → Delete account (which also drops the phone's FCM token), and at <https://www.moneymove.live/privacy#delete-account>. The advertising ID is the player's to reset or delete in Android Settings; that control is Google's, and the form asks nothing more of it. |
+| Delete account URL (the form's *Account deletion* step) | `https://www.moneymove.live/privacy#delete-account`. Play wants a web page, reachable without the app, that names the app, gives the steps, and says what is deleted and what is kept; that section does all four, and the email route works for someone who has uninstalled. |
 
-**The privacy policy has to agree with the form.** `public/privacy.html`
-→ *Advertising* still begins "The iOS app includes the Google Mobile Ads
-SDK". It must name the Android app too before the first build with the SDK
-is submitted — Play reviewers read the policy against these answers.
+**The privacy policy has to agree with the form**, because Play reviewers
+read one against the other. As of 26 September 2026 it does:
+`public/privacy.html` → *Advertising* names the iOS and the Android app as
+carrying the Google Mobile Ads SDK, and the Android advertising ID;
+*Notifications* says Android push is a Firebase Cloud Messaging token sent to
+our server and to Google; *Coin purchases* names Google Play. It also says
+what the form's *(Ads SDK)* rows say: Google may estimate a general area from
+the IP address, and gets basic diagnostics. Its old line "No collection of ...
+photos" is gone, because the form declares the Google profile photo; it now
+says the app never touches the camera or the photo library, and that the Google
+photo is the only picture kept. The deletion heading carries the
+`#delete-account` anchor the form's URL points at. The page is on Vercel, so it
+is live once that change is pushed; check the live URL says "Last updated: 26
+September 2026" before submitting.
 
 ### URLs
-- Privacy policy: `https://www.moneymove.live/privacy.html`
-- Support: `https://www.moneymove.live/support.html`
+- Privacy policy: `https://www.moneymove.live/privacy`
+- Support: `https://www.moneymove.live/support`
 - Website: `https://www.moneymove.live`
 
+Vercel serves these without `.html` (`cleanUrls`); the `.html` forms answer
+with a 308 redirect to them, so give Play the short ones.
+
 ### Graphics
-- **Screenshots**: `~/Downloads/moneymove-play/screenshots/` — seven 1080×2400
-  phone shots taken from the minified release build against the live server.
-  Play wants between two and eight; all seven are usable.
-- **Feature graphic** (1024×500): not made yet. The OG image at
-  `public/og.png` is the right artwork to crop from.
-- **App icon** (512×512): export from `android/app/src/main/res/mipmap-*`, or
-  re-render from the iOS icon the launcher icon was derived from.
+All in `~/Downloads/moneymove-play/`, checked against Play's asset rules on
+26 September 2026.
+
+- **Phone screenshots: upload `screenshots-play/1-board.png` to
+  `6-styles.png`, in that order.** Six shots, 1080×1920 (9:16), 24-bit PNG,
+  no alpha, each about 1 MB. The emulator captures in `screenshots/` are
+  1080×2400, and Play refuses those: a screenshot's long side may be at most
+  twice its short side, and 2400/1080 is 2.22. 1080×1920 also meets the size
+  Play asks of a game (three or more 9:16 shots of at least 1080×1920) before
+  it will feature it in its large-format game rows.
+  Each shot sits on the felt of the feature graphic under a two-line caption
+  that takes 15% of the image (Play's ceiling is 20%). None has a call to
+  action, a price, a ranking or anything that dates, and none has a device
+  frame; Play asks for all of that. The app's own pixels are untouched: the
+  gesture bar is cropped off, and the two board shots lose part of the empty
+  lavender band between the board and the player strip, which is what the
+  table looks like on a 16:9 phone anyway. `screenshots-play/plain/` has the
+  same six without captions if you prefer those. `screenshots-play/source/make.py`
+  rebuilds both sets from `screenshots/`.
+  Left out: `7-store.png` (every skin is greyed out because the capture
+  account had 7 coins, so the store looks broken) and `6-boards.png` (the
+  sheet's coin pill and Done button sit under the status bar clock and
+  battery, a real bug). Retake both once that inset is fixed and the account
+  can afford a skin. `screenshots-old/` is the pre-glass UI; do not use it.
+- **Feature graphic**: `graphics/feature-graphic.png`, 1024×500, 24-bit, no
+  alpha (the felt version; `feature-graphic-crimson.png` is the alternative).
+- **App icon**: `graphics/icon-512.png`, 512×512, 32-bit PNG, fully opaque,
+  a full square with no rounded corners or shadow of its own; Play adds
+  those.
 
 ---
 
 ## 3. Build and upload
 
 ```bash
-cd android
-MM_KEYSTORE=/absolute/path/moneymove-release.jks \
-MM_KEYSTORE_PASSWORD=… MM_KEY_ALIAS=moneymove MM_KEY_PASSWORD=… \
-ADMOB_APP_ID=ca-app-pub-1179201999959612~… \
-JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-ANDROID_HOME="$HOME/Library/Android/sdk" \
-  ./gradlew bundleRelease
+cd ~/"Downloads/Monopoly nikhil/android" && ./release.sh
 ```
 
+That is the whole build (section 1b says what it does). It prints where the
+AAB is, copies it to `~/Downloads/moneymove-play/app-release.aab`, prints the
+upload key's SHA-1 and SHA-256, and says whether `AD_ID` is in the bundle.
+
+By hand, if the script is ever in the way, the same thing is:
+
+```bash
+cd android
+MM_KEYSTORE="$HOME/moneymove-keys/moneymove-release.jks" \
+MM_KEYSTORE_PASSWORD=… MM_KEY_ALIAS=moneymove MM_KEY_PASSWORD=… \
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+ANDROID_HOME="$HOME/Library/Android/sdk" \
+  ./gradlew --no-daemon -Pkotlin.compiler.execution.strategy=out-of-process bundleRelease
+```
+
+The Kotlin flag stops the build leaving a Kotlin compile daemon behind that
+would hold the password in its environment for a couple of hours; it prints
+compiler warnings with an "exception:" prefix, which are still only warnings.
+
+Android Studio is not on this Mac at the moment; `release.sh` falls back to
+`$HOME/.antigravity/extensions/redhat.java-1.52.0-darwin-arm64/jre/21.0.9-macosx-aarch64`,
+and so should a hand-built JAVA_HOME. Typing the password into a command line
+leaves it in the shell history, which is one more reason to use the script.
+
 `ADMOB_APP_ID` is the *Android* app's id from AdMob — a tilde in it, not a
-slash — and can live in `android/local.properties` instead of the
-environment. It is the one ad id baked in at build time; the unit ids come
-from the server. Left out, the build still launches and every ad is the
-house's, so a release built without it is not broken, only unpaid.
+slash — and is already in `android/gradle.properties`
+(`ca-app-pub-1179201999959612~9068269365`). It is the one ad id baked in at
+build time; the unit ids come from the server. Left out, the build still
+launches and every ad is a test ad or the house's, so a release built without
+it is not broken, only unpaid; `release.sh` warns if that happens.
 
 The AAB lands at `app/build/outputs/bundle/release/app-release.aab`. Upload it
-to a **Closed testing** track first — Play now requires a period of closed
-testing before a new personal developer account can go to production, and
-that clock only starts once something is uploaded.
+to a **Closed testing** track first. A personal developer account made after
+13 November 2023 can apply for production only after a closed test with at
+least **12 testers opted in for the 14 days in a row before you apply**; a
+tester who opts out and back in restarts their own count. The application
+then asks how they tested, what you changed because of it, and who the game
+is for. So the clock really starts when the twelfth tester opts in, not at
+the upload: line up twelve Gmail addresses (friends who will play a game or
+two that fortnight) before creating the track. An organisation account (it
+needs a D-U-N-S number) skips this.
+
+### Release notes for 1.0.3 (Play)
+Paste into *Release notes* when creating the release (437 of 500 characters).
+
+```
+<en-US>
+MoneyMove arrives on Android.
+• Play now opens a lobby: the host starts the game, everyone else taps Ready, and the host can change the rules first
+• 25 boards, including one for each of six continents
+• A new glass look on every button and sheet
+• Notifications for your turn, invites and cups
+• Sign in with Google, coin packs, tournaments, chat and friends
+• Money moves when your piece lands, with new win, bankrupt and launch sounds
+</en-US>
+```
 
 ## 4. Version numbers
 
@@ -322,3 +419,9 @@ that clock only starts once something is uploaded.
 see. Both live in `android/app/build.gradle.kts`. They are independent of the
 iOS build numbers — the two stores do not have to agree, and trying to keep
 them in step only creates gaps.
+
+The first upload is **versionName 1.0.3, versionCode 1**. 1.0.3 matches what
+the iPhone is on, so the two stores describe the same game; versionCode starts
+at 1 because this is Play's first build. The next upload to any track, even a
+rebuild of the same 1.0.3, needs versionCode 2: Play refuses a code it has
+already seen, including one from a release that was never rolled out.

@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -15,6 +17,10 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +30,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.dismiss
 import androidx.compose.ui.semantics.expand
@@ -137,7 +146,8 @@ fun MMSheet(
                     // curve. Only the content: the glass is drawn outside
                     // this clip, so its own edge stays anti-aliased.
                     .clip(SheetPlatter)
-                    .windowInsetsPadding(insets),
+                    .windowInsetsPadding(insets)
+                    .clearOfStatusBar(),
             ) {
                 if (dragHandle != null) {
                     Box(
@@ -214,4 +224,31 @@ private object SheetPlatter : Shape {
     }
 
     override fun toString(): String = "MMSheet.platter"
+}
+
+/**
+ * Keeps a sheet's content out from under the status bar — by exactly as much
+ * as the sheet has actually climbed into it, and not a pixel more.
+ *
+ * Material 1.3 draws a modal sheet edge to edge and pads it for the system
+ * bars only at the bottom, so a sheet that opens at full height put its title
+ * and its Done under the clock and the battery, where Done could not be
+ * tapped at all (Friends, the board picker, the trade offer). Padding every
+ * sheet by the status bar's height would fix the tall ones and push a short
+ * sheet's content down by a bar it is nowhere near. So this measures where
+ * the content's top really is on screen and pads it by the overlap: nothing
+ * while a sheet sits low or slides up, the whole bar once it is at the top.
+ * The glass is drawn outside this, so it still runs up behind the bar.
+ */
+@Composable
+fun Modifier.clearOfStatusBar(): Modifier {
+    val density = LocalDensity.current
+    val barTop = WindowInsets.statusBars.getTop(density)
+    var overlap by remember { mutableIntStateOf(0) }
+    return this
+        .onGloballyPositioned { at ->
+            val next = (barTop - at.positionInWindow().y.toInt()).coerceIn(0, barTop)
+            if (next != overlap) overlap = next
+        }
+        .padding(top = with(density) { overlap.toDp() })
 }

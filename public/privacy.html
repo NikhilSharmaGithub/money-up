@@ -106,7 +106,7 @@
 <body>
 <main>
   <h1><svg class="ico" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" opacity=".3" d="M16.4 3.2h9a3.4 3.4 0 0 1 3.4 3.4v9a3.4 3.4 0 0 1 -3.4 3.4h-9a3.4 3.4 0 0 1 -3.4 -3.4v-9a3.4 3.4 0 0 1 3.4 -3.4ZM16.1 7.8a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0ZM22.7 14.4a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0Z"/><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M6.6 13h9a3.4 3.4 0 0 1 3.4 3.4v9a3.4 3.4 0 0 1 -3.4 3.4h-9a3.4 3.4 0 0 1 -3.4 -3.4v-9a3.4 3.4 0 0 1 3.4 -3.4ZM6.2 17.6a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM12.8 17.6a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM6.2 24.2a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0ZM12.8 24.2a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0 -3.2 0Z"/></svg> MoneyMove — Privacy Policy</h1>
-  <p class="updated">Last updated: 16 September 2026</p>
+  <p class="updated">Last updated: 26 September 2026</p>
 
   <p>MoneyMove is a multiplayer property-trading board game. We built it to be played,
   not to harvest data. This page explains exactly what the game stores and why.</p>
@@ -127,23 +127,34 @@
     If you choose Google, we store Google's user identifier, your email address and
     your profile photo, which are shown only to you on your own profile card. We never store or
     display your real name. Signing in is never required to play.</li>
-    <li><b>Coin purchases.</b> Coin packs are charged entirely by the App Store. We receive and keep
-    the transaction identifier from Apple's signed receipt, the pack and the amount, which is what
-    stops the same purchase being credited twice. We never see card, bank or billing details.</li>
+    <li><b>Coin purchases.</b> Coin packs are charged entirely by the App Store on iPhone and iPad,
+    and by Google Play on Android. We receive and keep the transaction identifier from Apple's
+    signed receipt, or the order identifier Google confirms to us, with the pack and the amount,
+    which is what stops the same purchase being credited twice. We never see card, bank or billing
+    details.</li>
     <li><b>Notifications.</b> If you allow notifications, your device's push token, so we can tell
-    you when it is your turn or your tournament match is ready.</li>
+    you when it is your turn or your tournament match is ready. On iPhone that token comes from
+    Apple's push service. On Android it is a Firebase Cloud Messaging registration token issued by
+    Google: the Firebase library in the app obtains it from Google when the app starts, and it is
+    sent to our server only once you have allowed notifications. Each notification, meaning that
+    token and a short line such as whose turn it is, is handed to Apple or Google to deliver. The
+    Android app uses Firebase for messaging only, with no Firebase Analytics.</li>
     <li><b>Reports and blocks.</b> If you report a player or block one, we keep the report (who,
     the reason, and the message you reported) and your block list, so we can act on abuse and
     keep blocked players away from you.</li>
   </ul>
 
   <h2>Advertising</h2>
-  <p>The iOS app includes the Google Mobile Ads SDK (AdMob). Ads are only ever shown when you
-  choose to watch one for a reward, or occasionally before a game starts, and we may switch them
-  off entirely from our side. We request <b>non-personalised ads only</b>: your activity is not used to target ads
+  <p>The iOS app and the Android app both include the Google Mobile Ads SDK (AdMob). Ads are only
+  ever shown when you choose to watch one for a reward, or as a short break when you sit down at a
+  new table yourself (never before a tournament match, a rematch or a game you are returning to),
+  and we may switch them off entirely from our side. We request <b>non-personalised ads only</b>: your activity is not used to target ads
   and we do not track you across other companies' apps or websites. Google may still process your
-  device's identifiers and how you interact with an ad, to deliver it, measure it and prevent
-  fraud — see <a href="https://policies.google.com/technologies/partner-sites">how Google uses information from apps that use its services</a>.</p>
+  device's identifiers, your IP address (from which it may estimate a general area, never a precise
+  location), how you interact with an ad, and basic diagnostics such as how long the app took to
+  start, to deliver ads, measure them and prevent fraud. On Android that includes the device's advertising ID, which you can reset or
+  delete at any time in your phone's settings (Settings → Privacy → Ads, or Google → Ads on some
+  phones). See <a href="https://policies.google.com/technologies/partner-sites">how Google uses information from apps that use its services</a>.</p>
 
   <h2>What stays on your device only</h2>
   <ul>
@@ -154,10 +165,11 @@
   <ul>
     <li>No selling or renting of your data, and no personalised advertising.</li>
     <li>No tracking across other companies' apps or websites.</li>
-    <li>No payment details on our side — in the iOS app coin packs are charged by the App Store,
-    and on the website card payments are handled by Stripe; we never receive card details. Coins
+    <li>No payment details on our side — in the apps coin packs are charged by the App Store or
+    Google Play, and on the website card payments are handled by Stripe; we never receive card details. Coins
     only ever buy cosmetics and boards.</li>
-    <li>No collection of contacts, precise location, photos, or microphone.</li>
+    <li>No access to your contacts, precise location, camera, photo library or microphone. The only
+    picture we keep is the Google profile photo described above, and only if you sign in with Google.</li>
   </ul>
 
   <h2>Community rules</h2>
@@ -165,7 +177,7 @@
   chat, messages or names. Long-press any message in the app to report or block the person who
   wrote it. We review every report and remove players who abuse others.</p>
 
-  <h2>Deleting your account</h2>
+  <h2 id="delete-account">Deleting your account</h2>
   <p>In the app, open <b>Settings → Account &amp; help → Delete account</b>. This permanently
   deletes your profile, nickname, coins, purchases, friends, friend requests, messages and
   notification token, and your name comes off any tournament you entered. A few things are kept:
