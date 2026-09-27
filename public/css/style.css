@@ -1699,10 +1699,10 @@ select { cursor: pointer; }
 .logo.xl { font-size: clamp(42px, 9vw, 64px); line-height: 1.02; }
 .tagline { color: var(--page-ink-2); margin: 12px 0 28px; font-size: 15.5px; }
 
-/* The App Store offer, under the wordmark.
-   A row rather than a plain button: the line that matters ("Download for
-   iPhone") reads first, and the price — free — sits under it where a doubt
-   would otherwise sit. It wears the table's own accent so it belongs to the
+/* The store offers, under the wordmark.
+   Rows rather than plain buttons: the line that matters ("Download for
+   iPhone", "Android beta") reads first, and the answer to the doubt — free,
+   or who the beta is for — sits under it where the doubt would otherwise sit. It wears the table's own accent so it belongs to the
    page instead of arriving from Apple, and it stays a link, so a long press
    still offers copy and share the way a link should.
    It is one of the few controls that hangs straight over the page, with the
@@ -1710,11 +1710,21 @@ select { cursor: pointer; }
    (see "The controls"). Its small print was --page-ink-3 on a white card,
    which on crimson by day is a translucent white on white; on the glass it
    takes the glass's own second rank like everything else. */
-.app-cta {
+/* Two stores, one shelf: the rows stack and share the width of the wider
+   one, so their chevrons line up instead of two pills of different lengths
+   sitting one over the other. */
+.app-ctas {
   display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  max-width: 100%;
+  margin: -12px 0 26px;
+}
+.app-cta {
+  display: flex;
   align-items: center;
   gap: 12px;
-  margin: -12px 0 26px;
   padding: 11px 17px 11px 14px;
   border-radius: var(--r-pill);
   text-decoration: none;
@@ -1725,17 +1735,23 @@ select { cursor: pointer; }
 .app-cta-text strong { font-size: 15px; font-weight: 800; letter-spacing: .01em; }
 .app-cta-text small { font-size: 12.5px; color: var(--ink-3); font-weight: 600; }
 .app-cta:hover .app-cta-text small { color: inherit; }
-.app-cta-go { font-size: 22px; line-height: 1; color: var(--ink-3); margin-left: 2px; }
+.app-cta-go { font-size: 22px; line-height: 1; color: var(--ink-3); margin-left: auto; padding-left: 2px; }
+
+/* A phone is offered only the store it can install from; a computer, both.
+   data-os is set by the script in the head, before paint. */
+html[data-os="ios"] .app-cta.android,
+html[data-os="android"] .app-cta.ios { display: none; }
 
 /* Safari is already offering the app at the top of the page — see the script
-   in the head that sets this. One offer is enough. */
-html[data-smart-banner="yes"] .app-cta { display: none; }
+   in the head that sets this. One offer is enough, and on an iPhone the
+   Android row is gone too, so the shelf goes with its margins. */
+html[data-smart-banner="yes"] .app-ctas { display: none; }
 
 /* On a phone the row is the widest thing on the screen, so it stops being a
    pill that floats and becomes a full-width shelf like every other control. */
 @media (max-width: 480px) {
-  .app-cta { display: flex; width: min(100%, 340px); border-radius: var(--r-10); justify-content: flex-start; }
-  .app-cta-go { margin-left: auto; }
+  .app-ctas { display: flex; width: min(100%, 340px); margin-left: auto; margin-right: auto; }
+  .app-cta { border-radius: var(--r-10); }
 }
 
 .landing-card {

@@ -104,6 +104,7 @@
          font-weight: 800; text-decoration: none; }
   .btn:not(.primary) { font-weight: 600; }
   .fine { color: var(--doc-quiet); font-size: 12.5px; margin-top: 22px; }
+  .fine a { color: var(--doc-accent); }
   .foot { margin-top: 34px; font-size: 13px; color: var(--doc-quiet); }
   .foot a { color: var(--doc-quiet); }
   .foot a.home { color: var(--doc-accent); }
@@ -121,7 +122,7 @@
   <p id="line">Opening the App Store…</p>
   <a class="btn primary on-page" id="primary" href="https://apps.apple.com/app/id6806881798">Get the iPhone app</a>
   <a class="btn" id="secondary" href="/">Play in the browser instead</a>
-  <p class="fine" id="fine">The Android build isn’t out yet — on Android the browser version plays the same.</p>
+  <p class="fine" id="fine">On Android? The app is in beta on Google Play for invited testers — <a href="https://play.google.com/apps/testing/com.moneymove.game">join the beta</a>.</p>
   <p class="foot">
     <a class="home" href="/">Play MoneyMove</a> ·
     <a href="/how-to-play">How to play</a> ·
@@ -142,12 +143,14 @@
   if (isIOS) {
     location.replace('https://apps.apple.com/app/id6806881798');
   } else if (/Android/.test(ua)) {
-    line.textContent = 'The Android app is on the way. Play in your browser for now — same game, same tables.';
-    primary.textContent = 'Play in the browser';
-    primary.href = '/';
-    // The fallback button now says exactly what the main one says, and the
-    // fine print repeats the paragraph above it — drop both.
-    secondary.remove();
+    // A closed test on Google Play: only testers on the Play Console list can
+    // join, so the page says so, and the browser stays one tap away for
+    // everybody else.
+    line.textContent = 'MoneyMove for Android is in beta on Google Play. Invited testers can join now — everyone else, the browser plays the same.';
+    primary.textContent = 'Join the Android beta';
+    primary.href = 'https://play.google.com/apps/testing/com.moneymove.game';
+    secondary.textContent = 'Play in the browser';
+    // The fine print is the same offer again — drop it.
     document.getElementById('fine').remove();
   } else {
     line.textContent = 'Play right here in the browser, or grab the iPhone app.';
