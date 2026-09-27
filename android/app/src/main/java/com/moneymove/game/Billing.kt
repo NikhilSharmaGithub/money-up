@@ -1,13 +1,15 @@
 // Google Play Billing arrives through one line in android/app/build.gradle.kts:
 //
-//     implementation("com.android.billingclient:billing:7.1.1")
+//     implementation("com.android.billingclient:billing:8.3.0")
 //
 // It is in place. Written down here because no other file in the app names a
 // billing type, so from anywhere but this one that line looks unused — and an
-// unused-looking dependency is what a tidy-up deletes. Pinned to 7.x on
-// purpose: Billing 8.0 changed queryProductDetailsAsync's callback from a
-// MutableList<ProductDetails> to a QueryProductDetailsResult, so raising the
-// number is a rewrite of catalogue() rather than a version bump. The
+// unused-looking dependency is what a tidy-up deletes. Play refuses a release
+// built on anything under 8.0 (the first upload, on 7.1.1, was turned away
+// for exactly that). 8.0 hands queryProductDetailsAsync a
+// QueryProductDetailsResult rather than a bare list — see catalogue() — and
+// removed the queries this file never used. 9.x is out; moving to it is a
+// read of its release notes, not a version bump. The
 // <uses-permission com.android.vending.BILLING> the Play Store wants comes
 // from the library's own manifest; it does not need adding.
 
@@ -302,7 +304,11 @@ class Billing(app: Application) : AndroidViewModel(app) {
                 },
             )
             .build()
-        c.queryProductDetailsAsync(params) { result, found ->
+        c.queryProductDetailsAsync(params) { result, answer ->
+            // Only what Play found. Ids it could not fetch come back in
+            // unfetchedProductList, which is the "no products on this build"
+            // case below by another name.
+            val found = answer.productDetailsList
             viewModelScope.launch {
                 if (result.responseCode != BillingClient.BillingResponseCode.OK) {
                     Log.w(TAG, "catalogue failed: ${result.responseCode} ${result.debugMessage}")

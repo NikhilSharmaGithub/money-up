@@ -85,7 +85,7 @@ android {
         // a recent phone, and Android's long tail is where its players are.
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0.3"
         // Read by the manifest's APPLICATION_ID line. Always a well-formed id
         // by the time it gets here — see admobAppId above for why that matters.
@@ -120,6 +120,11 @@ android {
             // and Play's download size is a real number people look at.
             isMinifyEnabled = true
             isShrinkResources = true
+            // Play warns when a bundle carries native code and no symbols.
+            // The .so files are the libraries' own (androidx graphics,
+            // datastore); their symbol tables are small and are what turns a
+            // native crash in the Play Console into a readable stack.
+            ndk { debugSymbolLevel = "SYMBOL_TABLE" }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (keystore != null) signingConfig = signingConfigs.getByName("release")
         }
@@ -177,7 +182,7 @@ dependencies {
 
     // Google Play Billing. The coin packs are the only thing in this app that
     // costs real money, and Play is the only way to take it on Android.
-    implementation("com.android.billingclient:billing:7.1.1")
+    implementation("com.android.billingclient:billing:8.3.0")
 
     // Google Mobile Ads, the same network the iOS app sells its breaks on.
     // Its own minSdk is 23, under this app's 24, so nothing about who can
