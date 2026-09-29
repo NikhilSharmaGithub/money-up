@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["HAK23MQ4FD.com.moneymove.game"],
+        "components": [
+          { "/": "/", "?": { "room": "?*" }, "comment": "An invite link: /?room=CODE opens that table in the app." },
+          { "/": "/room/*", "comment": "The older /room/CODE invite links." }
+        ]
+      }
+    ]
+  }
+}

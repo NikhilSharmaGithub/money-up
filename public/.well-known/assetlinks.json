@@ -1,0 +1,14 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.moneymove.game",
+      "sha256_cert_fingerprints": [
+        "E1:3D:BF:59:0D:D3:96:C3:E9:A5:5D:33:39:44:B7:B6:E4:3B:05:01:C3:60:11:09:3D:C7:44:24:13:62:DD:1E",
+        "AE:B5:08:8F:BF:48:C8:33:5B:B1:98:E3:71:7C:50:45:FB:8F:4B:5F:6E:09:11:15:DE:48:49:D4:C5:B4:26:BA",
+        "DB:45:99:B9:8B:56:18:52:C6:01:4E:14:6E:D2:6F:11:9D:42:E0:34:48:93:EE:76:8C:4E:57:EF:DC:BA:8F:59"
+      ]
+    }
+  }
+]
