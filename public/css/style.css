@@ -3753,6 +3753,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .deed-row b.dim { color: var(--ink-3); }
 .deed-row.hl, .deed-row.hl b { color: var(--red); }
 .deed-row.sep { margin-top: 4px; border-top: 1px solid var(--rule); padding-top: 6px; }
+/* Somebody else's deed: "Ask for it" sits on the Owner line, after the name. */
+.deed-row.owner { align-items: center; }
+.deed-owner { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* A long name, or one with "(mortgaged)" after it, wraps against the button
+   rather than away from it, so it still reads as one line of the card. */
+.deed-owner b { text-align: right; }
+.deed-owner .btn { flex: none; }
 
 .map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .map-card {

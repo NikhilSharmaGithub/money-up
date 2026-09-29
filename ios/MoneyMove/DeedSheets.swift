@@ -62,6 +62,11 @@ struct DeedSheet: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     let tileIndex: Int
+    /// Opens the composer at whoever holds this street, already asking for
+    /// it — the properties list's "Ask for it", from the deed itself. A
+    /// street you want is one you have just tapped on the board far more
+    /// often than one you found in your own list.
+    var askFor: ((String, Set<Int>) -> Void)? = nil
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -239,7 +244,7 @@ struct DeedSheet: View {
     private func ownerCard(_ tile: TileData, _ P: Palette) -> some View {
         let own = store.state?.owner(of: tileIndex)
         let player = store.state?.player(own?.owner)
-        return HStack {
+        return HStack(spacing: 10) {
             Text("Owner")
                 .font(.system(size: 13.5, weight: .medium, design: .rounded))
                 .foregroundStyle(P.ink2)
@@ -248,6 +253,15 @@ struct DeedSheet: View {
                 Text(player.name + (own.isMortgaged ? " (mortgaged)" : ""))
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(css: player.color))
+                    .multilineTextAlignment(.trailing)
+                // Beside the name of the player it would ask, on the same rule
+                // as the properties list's button and in the same gold.
+                if let askFor, store.canAskFor(tileIndex) {
+                    Button("Ask for it") { askFor(player.id, [tileIndex]) }
+                        .buttonStyle(MMButtonStyle(kind: .gold))
+                        // A long name wraps; the button never drops to "Ask…".
+                        .fixedSize()
+                }
             } else {
                 Text("Bank")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -258,6 +272,9 @@ struct DeedSheet: View {
         .padding(.vertical, 12)
         .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+        // A card of paper, so its button is on paper — not on the sheet the
+        // rest of the deed declares.
+        .mmControls(on: .paper)
     }
 
     /// The quick build bar. Raising a hotel is four taps in a row, so the
@@ -742,7 +759,7 @@ struct PropertiesSheet: View {
                     .foregroundStyle(P.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 6)
-                if let askFor, let holder, holder != store.activeId {
+                if let askFor, let holder, store.canAskFor(missing) {
                     Button("Ask for it") { askFor(holder, [missing]) }
                         .buttonStyle(MMButtonStyle(kind: .gold))
                 }

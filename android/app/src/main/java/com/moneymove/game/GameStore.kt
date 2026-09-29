@@ -2431,12 +2431,20 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         return idxs.filter { s.owner(it)?.owner != seat }.singleOrNull()
     }
 
-    /** Whether "Ask for it" can go to whoever holds `tile`: somebody still in the game, and not `seat` itself. */
+    /**
+     * Whether "Ask for it" can go to whoever holds `tile`: somebody still in
+     * the game, and not `seat` itself — and a street free to change hands,
+     * by the rule [canOfferInTrade] keeps for the other direction. The
+     * properties list only ever asks for the last street of a country
+     * nobody has finished, which nothing can be built on; a deed can be any
+     * street at all, and a composer opened asking for a built one would
+     * only drop it again on the way out.
+     */
     fun canAskFor(tile: Int, seat: String = activeId): Boolean {
         val s = state ?: return false
         if (!s.isPlaying || s.player(seat)?.isBankrupt != false) return false
         val holder = s.player(s.owner(tile)?.owner) ?: return false
-        return holder.id != seat && !holder.isBankrupt
+        return holder.id != seat && !holder.isBankrupt && !tradeLocked(tile)
     }
 
     /** "Ask for it": the composer, aimed at whoever holds `tile` and already asking for it. */

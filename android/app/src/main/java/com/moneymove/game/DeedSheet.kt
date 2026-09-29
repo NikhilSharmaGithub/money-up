@@ -90,6 +90,10 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
     val tile = store.tile(index)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val half = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
+    // Step aside, then open the next thing, as the properties sheet does: the
+    // deed closes first, so the composer the store opens next is the one
+    // left standing.
+    val handOff: (() -> Unit) -> Unit = { next -> onDismiss(); next() }
 
     MMSheet(
         onDismissRequest = onDismiss,
@@ -125,7 +129,7 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
                     val rows = detailRows(state, tile, own)
                     if (rows.isNotEmpty()) DeedRowsCard(rows)
 
-                    if (tile.isOwnable) OwnerCard(state, own)
+                    if (tile.isOwnable) OwnerCard(store, state, index, own, handOff)
                 }
             }
             DeedsGrabber(Modifier.align(Alignment.TopCenter))
@@ -467,11 +471,26 @@ private fun DeedRowsCard(rows: List<DeedRow>) {
     }
 }
 
-/** Who holds it, in their own colour — or the bank. */
+/**
+ * Who holds it, in their own colour — or the bank.
+ *
+ * When somebody else holds it and the street could change hands, "Ask for it"
+ * sits right after their name: the properties list's button, by the same
+ * rule, doing the same thing — the deed steps aside for the composer, aimed
+ * at the holder and already asking for this street — so nobody has to go
+ * and find out who has it before they can ask.
+ */
 @Composable
-private fun OwnerCard(state: GameState, own: TileOwnership?) {
+private fun OwnerCard(
+    store: GameStore,
+    state: GameState,
+    index: Int,
+    own: TileOwnership?,
+    handOff: (() -> Unit) -> Unit,
+) {
     val p = P.current
     val player = own?.let { state.player(it.owner) }
+    val asking = player != null && store.canAskFor(index)
     val shape = RoundedCornerShape(14.dp)
     Row(
         Modifier
@@ -479,19 +498,31 @@ private fun OwnerCard(state: GameState, own: TileOwnership?) {
             .clip(shape)
             .background(p.card)
             .border(1.dp, p.rule, shape)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            // The button brings its own nine above and below, so the row
+            // gives back some of its own rather than growing by all of it.
+            .padding(horizontal = 14.dp, vertical = if (asking) 8.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Owner", color = p.ink2, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
         if (own != null && player != null) {
+            // The name takes the room that is left and keeps to the right of
+            // it, so a long one wraps rather than pushing the button off the
+            // card.
             Text(
                 player.name + if (own.isMortgaged) " (mortgaged)" else "",
+                modifier = Modifier.weight(1f),
                 color = cssColor(player.color, p.ink),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.End,
             )
+            if (asking) {
+                Spacer(Modifier.width(10.dp))
+                MMButton("Ask for it", kind = BtnKind.GOLD) { handOff { store.askFor(index) } }
+            }
         } else {
+            Spacer(Modifier.weight(1f))
             Text("Bank", color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }

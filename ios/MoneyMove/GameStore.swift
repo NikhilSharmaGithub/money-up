@@ -1328,7 +1328,10 @@ final class GameStore: ObservableObject {
         socket.connect(to: url)
         socket.emit("quickplay", [[String: String]()]) { [weak self] args in
             Task { @MainActor in
-                guard let self else { return }
+                // A search already over — given up on, or overtaken by an
+                // invite link that took the player to a table of its own —
+                // has no business moving them when its answer turns up late.
+                guard let self, self.quickSearching else { return }
                 self.quickTask?.cancel()
                 self.quickSearching = false
                 if let dict = args.first as? [String: Any], let id = dict["roomId"] as? String {
@@ -1352,6 +1355,57 @@ final class GameStore: ObservableObject {
         }
     }
 
+    /// What people actually put in the code box: the code, or the whole invite
+    /// link they were sent. A pasted link used to go through as typed, minus
+    /// its spaces, and the server — which keeps the first twelve characters of
+    /// any name — sat the player alone at a brand-new table called
+    /// "https://www.". The same rule as roomCodeFrom() in public/js/app.js,
+    /// so a code means the same table on every client.
+    nonisolated static func roomCode(from raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let picked = linkedRoom(in: text) ?? text
+        // Scalars, not characters: an accent typed on a letter is a mark of
+        // its own to the web's filter, and dropping it has to leave the
+        // letter behind here too.
+        let kept = picked.lowercased().unicodeScalars.filter {
+            ("a"..."z").contains($0) || ("0"..."9").contains($0)
+        }
+        return String(String(kept).prefix(12))
+    }
+
+    /// The code an invite link carries — /?room=CODE, or the older /room/CODE
+    /// — and nil for text that is not a link at all.
+    nonisolated static func linkedRoom(in text: String) -> String? {
+        let query = #/[?&]room=([a-z0-9]+)/#.ignoresCase()
+        let path = #/\/room\/([a-z0-9]+)/#.ignoresCase()
+        guard let match = text.firstMatch(of: query) ?? text.firstMatch(of: path) else { return nil }
+        return String(match.1)
+    }
+
+    /// An invite link opened on a phone with the app, which iOS now hands to
+    /// the app instead of Safari. The same act as a room link on Android:
+    /// straight to the table, and no break first — the player tapped a link a
+    /// friend sent, they did not ask for a new game.
+    ///
+    /// Only a link that names a room counts: anything else under the domain
+    /// would otherwise become a code made of its own address. And a link to
+    /// the table this device is already at does nothing, because join()
+    /// clears the board it is standing on — a link delivered twice, or tapped
+    /// again from the chat, must not reset a game in progress. A dropped
+    /// connection to that table is already coming back on its own.
+    func openInvite(_ url: URL) {
+        guard let linked = Self.linkedRoom(in: url.absoluteString) else { return }
+        let code = Self.roomCode(from: linked)
+        guard !code.isEmpty, code != roomId else { return }
+        // A link can arrive while this device sits at another table, which
+        // join() alone never walks out of: the server would keep the socket in
+        // both rooms and push both tables' states down it, the guests would
+        // stay seated there, and the game would never be written up as left.
+        // So the old table is left properly first, as the Leave button does.
+        if roomId != nil { leaveRoom() }
+        join(roomId: code)
+    }
+
     func join(roomId id: String) {
         SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
@@ -1373,7 +1427,11 @@ final class GameStore: ObservableObject {
         mirror.forget()
         guestTeamChat = []
         lastTurnPlayer = nil
-        if connection == .connected {
+        // The socket's own status, not `connection`: that copy catches up a
+        // Task hop later, so straight after leaveRoom() closed the socket it
+        // still reads connected, and the join would be queued on a socket
+        // that is never opening again.
+        if socket.status == .connected {
             onSocketStatus(.connected) // emit join now
         } else {
             socket.connect(to: url)
@@ -1914,6 +1972,35 @@ final class GameStore: ObservableObject {
             if idxs.contains(where: { (state.owner(of: $0)?.houseCount ?? 0) > 0 }) { return false }
         }
         return true
+    }
+
+    /// A deed that cannot change hands — tradeBlocked() in server/game.js:
+    /// buildings on it, or anywhere in its colour. The server refuses any
+    /// offer carrying one with "Sell the buildings first".
+    func tradeLocked(_ i: Int) -> Bool {
+        guard let state, let own = state.owner(of: i) else { return false }
+        if own.houseCount > 0 { return true }
+        guard let t = tile(i), t.type == "property", let group = t.group else { return false }
+        return (state.map.groups?[group] ?? []).contains { (state.owner(of: $0)?.houseCount ?? 0) > 0 }
+    }
+
+    /// Whether "Ask for it" can go to whoever holds `i`, from the seat that
+    /// would send the offer: a game under way, that seat still in it, and a
+    /// holder who is somebody else and still in it too — canAskFor() on
+    /// Android, and the web's one-away row. The properties list and the deed
+    /// both ask here, so the button cannot turn up on one and not the other.
+    ///
+    /// A deed the server would refuse to move is left out as well. On the
+    /// properties list that never happens — the street that finishes your set
+    /// cannot be built on by someone who does not hold the rest of it — but a
+    /// deed can be opened on any street, and a button that leads to an offer
+    /// the server bounces is worse than no button.
+    func canAskFor(_ i: Int) -> Bool {
+        guard let state, state.isPlaying,
+              let asking = state.player(activeId), !asking.isBankrupt,
+              let holder = state.player(state.owner(of: i)?.owner),
+              holder.id != asking.id, !holder.isBankrupt else { return false }
+        return !tradeLocked(i)
     }
 
     // MARK: - friends (REST)

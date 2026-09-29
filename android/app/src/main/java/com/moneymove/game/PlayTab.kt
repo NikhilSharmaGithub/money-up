@@ -857,7 +857,10 @@ private fun PrivateTableCard(store: GameStore, account: AccountStore) {
     var rollingName by remember { mutableStateOf(false) }
 
     fun join() {
-        val room = code.trim().lowercase()
+        // The field is tidied as it is typed, but read through the same
+        // function again here, so whatever is in it is joined as the web
+        // would join it.
+        val room = roomCodeFrom(code)
         if (room.isEmpty() || creating) return
         // A code is a new table as much as Play now is, so it gets the same
         // break at the same moment — the join runs on behind it.
@@ -1283,8 +1286,10 @@ private fun CodeField(value: String, onChange: (String) -> Unit, onGo: () -> Uni
     )
     BasicTextField(
         value = value,
-        // iOS's tidy: lower case, no spaces, and nothing else taken away.
-        onValueChange = { onChange(it.lowercase().filter { c -> !c.isWhitespace() }) },
+        // The web's tidy, as it is typed: a pasted invite link, or a message
+        // with the code in it, collapses to the code, so what the box shows
+        // is what Join will sit down at.
+        onValueChange = { onChange(roomCodeFrom(it)) },
         singleLine = true,
         textStyle = style,
         cursorBrush = SolidColor(p.red),

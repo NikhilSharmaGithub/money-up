@@ -278,7 +278,13 @@ struct GameScreen: View {
         .sheet(item: $sheet) { which in
             Group {
                 switch which {
-                case .deed(let i): DeedSheet(tileIndex: i)
+                // Asking from the deed swaps the deed for the composer, the
+                // same hand-over the properties list's button makes.
+                case .deed(let i): DeedSheet(
+                    tileIndex: i,
+                    askFor: { target, want in
+                        open(.trade(from: store.activeId, to: target, give: [], want: want))
+                    })
                 case .properties: PropertiesSheet(
                     openTrade: { give in
                         open(.tradePicker(from: store.activeId, give: give))
@@ -325,6 +331,10 @@ struct GameScreen: View {
                 sheet = nil
             }
         }
+        // An invite link moves the device from one table straight to another,
+        // and the screen stays up across it. Nothing opened at the old table —
+        // a deed, the composer, its result — belongs over the new one.
+        .onChange(of: store.roomId) { _, _ in sheet = nil }
         .onChange(of: store.timedOut) { _, out in
             // The overlay lives under presented sheets, so a deed sheet left
             // open would bury the only two buttons it offers.

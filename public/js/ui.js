@@ -156,6 +156,21 @@ export function canMortgage(state, meId, i) {
   return true;
 }
 
+/**
+ * A deed that cannot change hands — tradeBlocked() in server/game.js. A street
+ * is locked while any street of its colour carries a building, not only while
+ * it does itself: trading the bare one away would leave houses standing on a
+ * colour its owner no longer holds whole, and the server refuses the offer.
+ */
+function tradeLocked(state, i) {
+  const o = state.ownership[i];
+  if (!o) return false;
+  if ((o.houses || 0) > 0) return true;
+  const t = state.map.tiles[i];
+  if (t?.type !== 'property') return false;
+  return (state.map.groups[t.group] || []).some((g) => (state.ownership[g]?.houses || 0) > 0);
+}
+
 // ────────────────────────────────────────────────────────────── log/chat ──
 // One drawn mark per kind of thing that happened. Most of these paint with
 // currentColor, so each mark takes the colour its own line is already printed
@@ -1445,6 +1460,21 @@ function renderSettings(state, meId, el, actions) {
 }
 
 /**
+ * Whether "Ask for it" can go out for deed `i`: the game is on, this seat is
+ * still in it, and the deed sits with somebody else who is still in it too and
+ * is free to change hands. The "1 away" row and the deed card both ask here,
+ * so the one-tap trade turns up in exactly the same situations from either —
+ * and never for a deed the server would only answer with a refusal.
+ */
+function canAskFor(state, meId, i) {
+  if (state.status !== 'playing') return false;
+  const me = state.players.find((p) => p.id === meId);
+  const holder = state.players.find((p) => p.id === state.ownership[i]?.owner);
+  if (!me || isOut(me) || !holder || holder.id === meId || isOut(holder)) return false;
+  return !tradeLocked(state, i);
+}
+
+/**
  * "1 away — Venice is with Ravi". A set you nearly hold is the most valuable
  * thing on your board, so the missing street is named next to the group it
  * belongs to, with the trade that would finish it one tap away.
@@ -1461,10 +1491,9 @@ function oneAwayRow(state, meId, key) {
   if (!holder) {
     return `<div class="one-away"><span>1 away — <b>${name}</b> is still with the bank</span></div>`;
   }
-  const dealable = state.status === 'playing' && !holder.bankrupt && holder.id !== meId;
   return `<div class="one-away">
       <span>1 away — <b>${name}</b> is with ${escapeHtml(holder.name)}</span>
-      ${dealable ? `<button class="btn tiny gold" data-ask="${i}" data-ask-to="${escapeHtml(holder.id)}">Ask for it</button>` : ''}
+      ${canAskFor(state, meId, i) ? `<button class="btn tiny gold" data-ask="${i}" data-ask-to="${escapeHtml(holder.id)}">Ask for it</button>` : ''}
     </div>`;
 }
 
@@ -3044,9 +3073,24 @@ export function openDeedModal(state, i, meId, actions) {
     const own = s.ownership[i];
     const me = s.players.find((p) => p.id === meId);
     const isMine = own?.owner === meId && !isOut(me || {}) && s.status === 'playing';
-    sheet.innerHTML = `${deedMarkup(s, i, { actions: isMine ? quickBuildBar(s, meId, i) : '' })}
+    // Somebody else's deed carries the same "Ask for it" as the "1 away" row,
+    // under the same rule, so nobody has to go looking for who holds it.
+    const ask = canAskFor(s, meId, i)
+      ? '<button class="btn tiny gold" data-deed-ask>Ask for it</button>' : '';
+    sheet.innerHTML = `${deedMarkup(s, i, { actions: isMine ? quickBuildBar(s, meId, i) : '', ask })}
       <div class="modal-actions"><button class="btn ghost" data-deed-close>Close</button></div>`;
     sheet.querySelector('[data-deed-close]').onclick = closeModal;
+    // The composer opens with this deed already on their side, aimed at
+    // whoever holds it now — the state of this paint, not the one that
+    // first opened the sheet, since the deed may have moved since.
+    const askBtn = sheet.querySelector('[data-deed-ask]');
+    if (askBtn) {
+      askBtn.onclick = () => {
+        sfx.click();
+        closeModal();
+        openTradeModal(s, meId, own.owner, actions, { get: { tiles: [i] } });
+      };
+    }
     const tap = (attr, fn, sound) => {
       const b = sheet.querySelector(`[${attr}]`);
       if (b && !b.disabled) b.onclick = () => { (sound || sfx.click)(); fn(i); };

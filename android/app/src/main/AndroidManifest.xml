@@ -81,19 +81,33 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Invite links open the table straight in the app. -->
+            <!-- Invite links open the table straight in the app. Only the
+                 hosts that answer /.well-known/assetlinks.json themselves are
+                 named, here or in any other https filter of this app: the
+                 verifier does not follow redirects, and on Android 11 and
+                 below it checks every such host the app names and a single
+                 one that fails takes all of them down with it. That is why
+                 the bare moneymove.live, which redirects even the
+                 association file to www, is left out — a link to it opens
+                 in the browser, which lands on www. Add it back only once
+                 it serves the file itself, with no redirect. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="www.moneymove.live" />
-                <data android:scheme="https" android:host="moneymove.live" />
                 <!-- Links sent before the custom domain still open in the app. -->
                 <data android:scheme="https" android:host="money-up-nine.vercel.app" />
                 <!-- A room link carries its code in the query, which an intent
-                     filter cannot match on, so the path is what is matched and
-                     MainActivity reads the code off the data URI. -->
-                <data android:pathPattern="/.*" />
+                     filter cannot match on, so the two paths an invite has
+                     ever had are matched — / for /?room=CODE, and the older
+                     /room/CODE — and MainActivity reads the code off the data
+                     URI. Nothing wider: once the host is verified, every
+                     matched path opens the app, and the privacy and support
+                     pages Settings opens would come straight back here
+                     instead of reaching a browser. -->
+                <data android:path="/" />
+                <data android:pathPrefix="/room/" />
             </intent-filter>
         </activity>
 

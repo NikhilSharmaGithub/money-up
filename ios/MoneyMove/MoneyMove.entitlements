@@ -8,5 +8,11 @@
 	</array>
 	<key>aps-environment</key>
 	<string>development</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:www.moneymove.live</string>
+		<string>applinks:moneymove.live</string>
+		<string>applinks:money-up-nine.vercel.app</string>
+	</array>
 </dict>
 </plist>

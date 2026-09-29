@@ -72,12 +72,19 @@ class MainActivity : ComponentActivity() {
      * reads the code off the URI. `singleTask` means a second link while the
      * app is already open arrives at onNewIntent rather than starting a
      * second copy of the game, which is why both doors lead here.
+     *
+     * Only the two shapes an invite has ever had are read — the query, and
+     * the older /room/CODE — and the code is then tidied by [roomCodeFrom],
+     * the same function the code box uses, so a link and a pasted code can
+     * never land at two different tables. Any other page of the site that
+     * reaches the app simply opens it.
      */
     private fun roomFrom(intent: android.content.Intent?): String? {
         val data = intent?.data ?: return null
+        val path = data.pathSegments.orEmpty()
         val room = data.getQueryParameter("room")
-            ?: data.pathSegments?.lastOrNull()?.takeIf { it.length in 4..12 }
-        return room?.lowercase()?.filter(Char::isLetterOrDigit)?.takeIf { it.isNotBlank() }
+            ?: path.getOrNull(1)?.takeIf { path.size == 2 && path[0] == "room" }
+        return room?.let(::roomCodeFrom)?.ifEmpty { null }
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -139,14 +146,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        roomFrom(intent)?.let { store.connect(it) }
-        // A push tapped with the app closed. Only on a fresh start: an
-        // activity rebuilt, or reopened from Recents after the process died,
-        // carries the intent that first started it, and nobody should be
-        // walked back into a table because of a push from an hour ago.
+        // A link or a push tapped with the app closed. Only on a fresh start:
+        // an activity rebuilt, or reopened from Recents after the process
+        // died, carries the intent that first started it, and nobody should
+        // be walked back into a table because of a link or a push from an
+        // hour ago — out of the one they have sat down at since. A link that
+        // arrives while the app is running is onNewIntent's.
         if (savedInstanceState == null &&
             (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
         ) {
+            roomFrom(intent)?.let { store.connect(it) }
             followPush(intent)
         }
         enableEdgeToEdge()

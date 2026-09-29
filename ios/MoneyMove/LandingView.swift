@@ -894,12 +894,30 @@ struct LandingView: View {
                     // onChange matters: writing the field back a frame later
                     // swallows whatever was typed in between, so a pasted or
                     // quickly typed code used to arrive with letters missing.
+                    // It is the web's tidy, so a pasted invite link collapses
+                    // to its code and what you see is what joins.
+                    //
+                    // A tidy that changes the text is written back one turn of
+                    // the run loop later, though. A value rewritten inside the
+                    // very edit that produced it never reaches the field on
+                    // screen — a pasted link stayed on show whole, although
+                    // Join already read the code out of it. Only that edit's
+                    // own text is replaced, so a key pressed in between is
+                    // never swallowed, and plain typing, which the tidy leaves
+                    // as it is, still goes straight through.
                     // The placeholder is spelled out as a prompt so it can wear
                     // the glass's second ink: the system's own placeholder grey
                     // is a third rank, and a third rank on glass is 1.53:1.
                     TextField("room code", text: Binding(
                         get: { joinCode },
-                        set: { joinCode = $0.lowercased().filter { !$0.isWhitespace } }
+                        set: { raw in
+                            let tidy = GameStore.roomCode(from: raw)
+                            joinCode = raw
+                            guard tidy != raw else { return }
+                            DispatchQueue.main.async {
+                                if joinCode == raw { joinCode = tidy }
+                            }
+                        }
                     ), prompt: Text("room code").foregroundStyle(glassInk(on: .paper, secondary: true, P)))
                         .font(.system(size: 16, weight: .bold, design: .monospaced))
                         .textInputAutocapitalization(.never)
@@ -1020,7 +1038,7 @@ struct LandingView: View {
     }
 
     private func joinTapped() {
-        let code = joinCode.trimmingCharacters(in: .whitespaces).lowercased()
+        let code = GameStore.roomCode(from: joinCode)
         guard !code.isEmpty else { return }
         // The code of a game this device still has a seat in is the way back
         // to it — Continue's door, typed out — and that door shows no break.

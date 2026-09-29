@@ -788,8 +788,10 @@ const RENT_LABELS = ['Base rent', 'With 1 house', 'With 2 houses', 'With 3 house
  * The deed card. `actions` is a slot for the owner's Build / Sell / Mortgage
  * row: it renders straight under the price, because those are the buttons
  * people opened the card for — behind the rent table they may as well not exist.
+ * `ask` is the same idea for somebody else's deed: an "Ask for it" printed on
+ * the Owner line, beside the name it would be asked of.
  */
-export function deedMarkup(state, i, { compact = false, actions = '' } = {}) {
+export function deedMarkup(state, i, { compact = false, actions = '', ask = '' } = {}) {
   const tile = state.map.tiles[i];
   if (!tile || !['property', 'airport', 'utility', 'tax'].includes(tile.type)) return null;
 
@@ -816,9 +818,12 @@ export function deedMarkup(state, i, { compact = false, actions = '' } = {}) {
   }
 
   const mort = tile.price ? `<div class="deed-row"><span>Mortgage value</span><b>$${Math.floor(tile.price / 2)}</b></div>` : '';
-  const ownerRow = tile.price ? `<div class="deed-row"><span>Owner</span>${owner
+  const ownerName = owner
     ? `<b style="color:${owner.color}">${escapeHtml(owner.name)}${own.mortgaged ? ' (mortgaged)' : ''}</b>`
-    : '<b class="dim">Bank</b>'}</div>` : '';
+    : '<b class="dim">Bank</b>';
+  const ownerRow = !tile.price ? ''
+    : owner && ask ? `<div class="deed-row owner"><span>Owner</span><span class="deed-owner">${ownerName}${ask}</span></div>`
+    : `<div class="deed-row"><span>Owner</span>${ownerName}</div>`;
 
   return `<div class="deed${compact ? ' compact' : ''}">
     <div class="deed-head" style="background:${headColor}">

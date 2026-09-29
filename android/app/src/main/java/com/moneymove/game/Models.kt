@@ -887,3 +887,28 @@ fun friendCode(token: String): String {
     }
     return out.toString()
 }
+
+/**
+ * Mirrors roomCodeFrom() in public/js/app.js: what people actually put in the
+ * code box is the code, or the whole invite link they were sent, pasted with
+ * whatever the message wrapped round it. A link used to be taken literally —
+ * lower-cased, its spaces dropped, and cut to twelve characters — which
+ * seated the player alone in a brand-new empty room named after the front of
+ * the link. So the code is pulled out of either link shape, /?room=CODE or
+ * the older /room/CODE, and whatever is left is kept to the letters and
+ * digits a room id is made of, at the length the server keeps.
+ *
+ * The same function tidies the field as it is typed, so what the box shows
+ * is what will be joined, and reads the code off a link that opens the app.
+ */
+fun roomCodeFrom(raw: String?): String {
+    val text = raw.orEmpty().trim()
+    val linked = QUERY_ROOM.find(text) ?: PATH_ROOM.find(text)
+    return (linked?.groupValues?.get(1) ?: text)
+        .lowercase()
+        .filter { it in 'a'..'z' || it in '0'..'9' }
+        .take(12)
+}
+
+private val QUERY_ROOM = Regex("[?&]room=([a-z0-9]+)", RegexOption.IGNORE_CASE)
+private val PATH_ROOM = Regex("/room/([a-z0-9]+)", RegexOption.IGNORE_CASE)

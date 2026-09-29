@@ -12,6 +12,13 @@ struct MoneyMoveApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                // An invite link tapped on a phone with the app: the
+                // associated domains hand it here rather than to Safari, on a
+                // cold start as much as a warm one. The landing never resumes
+                // a game by itself, and its one walk-in — a cup table coming
+                // ready — stands back for a player already at a table, so
+                // the table the link names is the one they end up at.
+                .onOpenURL { store.openInvite($0) }
         }
     }
 }
