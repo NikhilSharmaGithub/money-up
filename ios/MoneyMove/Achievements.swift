@@ -59,10 +59,10 @@ struct AchievementsShelf: View {
                 // Lifetime, and kept by the server — the four numbers behind
                 // every title below.
                 HStack(alignment: .top, spacing: 0) {
-                    tally("\(info.wins ?? 0)", "WINS", P)
-                    tally("\(gamesPlayed(info))", "GAMES", P)
-                    tally(compact(info.winnings ?? 0), "WON", P)
-                    tally("\(info.turnsPlayed ?? 0)", "TURNS", P)
+                    TallyCell(value: "\(info.wins ?? 0)", label: "WINS")
+                    TallyCell(value: "\(gamesPlayed(info))", label: "GAMES")
+                    TallyCell(value: compact(info.winnings ?? 0), label: "WON")
+                    TallyCell(value: "\(info.turnsPlayed ?? 0)", label: "TURNS")
                 }
 
                 if shelf.isEmpty {
@@ -74,40 +74,12 @@ struct AchievementsShelf: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)],
                               alignment: .leading, spacing: 8) {
                         ForEach(shelf, id: \.title) { badge in
-                            titleChip(badge.title, badge.count, P)
+                            TitleChip(title: badge.title, count: badge.count)
                         }
                     }
                 }
             }
         }
-    }
-
-    /// The report card's title styling, worn again: gold, heavy, rounded — a
-    /// badge should read the same on the shelf as it did the night it landed.
-    private func titleChip(_ title: String, _ count: Int, _ P: Palette) -> some View {
-        HStack(spacing: 6) {
-            Art.icon(.trophy, size: 13)
-            Text(title)
-                .font(.system(size: 13.5, weight: .heavy, design: .rounded))
-                .foregroundStyle(P.gold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Spacer(minLength: 2)
-            if count > 1 {
-                Text("×\(count)")
-                    .font(.system(size: 11, weight: .black, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(P.accentInk)
-                    .padding(.vertical, 2)
-                    .padding(.horizontal, 6)
-                    .background(P.gold, in: Capsule())
-            }
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(P.gold.opacity(0.55), lineWidth: 1))
     }
 
     /// The server counts wins, not games — only this phone remembers the games
@@ -116,22 +88,6 @@ struct AchievementsShelf: View {
     /// they didn't play.
     private func gamesPlayed(_ info: AchievementsInfo) -> Int {
         max(store.matchHistory.count, info.wins ?? 0)
-    }
-
-    private func tally(_ value: String, _ label: String, _ P: Palette) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.system(size: 19, weight: .heavy, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(P.gold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-            Text(label)
-                .font(.system(size: 8.5, weight: .bold))
-                .kerning(0.9)
-                .foregroundStyle(P.ink3)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     /// A lifetime of winnings runs to seven figures — four columns have room
@@ -156,5 +112,66 @@ struct AchievementsShelf: View {
             if Task.isCancelled { return }
             try? await Task.sleep(for: .seconds(Double(attempt) * 5))
         }
+    }
+}
+
+/// One lifetime number over its label — a column of the shelf, and of the
+/// profile a player opens on somebody else from the result.
+struct TallyCell: View {
+    @Environment(\.colorScheme) private var scheme
+    let value: String
+    let label: String
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 19, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(P.gold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(label)
+                .font(.system(size: 8.5, weight: .bold))
+                .kerning(0.9)
+                .foregroundStyle(P.ink3)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// The report card's title styling, worn again: gold, heavy, rounded — a
+/// badge should read the same on the shelf, and on a profile, as it did the
+/// night it landed.
+struct TitleChip: View {
+    @Environment(\.colorScheme) private var scheme
+    let title: String
+    let count: Int
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        HStack(spacing: 6) {
+            Art.icon(.trophy, size: 13)
+            Text(title)
+                .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.gold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 2)
+            if count > 1 {
+                Text("×\(count)")
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(P.accentInk)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 6)
+                    .background(P.gold, in: Capsule())
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(P.gold.opacity(0.55), lineWidth: 1))
     }
 }

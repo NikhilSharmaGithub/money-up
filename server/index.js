@@ -16,7 +16,7 @@ import {
 } from './boards.js';
 import {
   profileFor, addFriend, removeFriend, friendsOf, socialOf, acceptFriend, declineFriend,
-  inviteFriend, inviteFor, clearInvite, setPresence, clearPresence,
+  inviteFriend, inviteFor, clearInvite, setPresence, clearPresence, playerView, noteBotCard,
   sendNotice, noticesFor, markNoticesRead, allNotices, dropNotice,
   allProfiles, attachLogin, detachLogin, meView, walletOf, awardWin, buyItem, equipItem, sendDM, dmsWith,
   rentBoard, rentalOf, hasLiveRental, consumeRental, rentalSpent,
@@ -221,19 +221,38 @@ app.post('/api/friends/remove', (req, res) => {
 });
 
 /**
+ * One player's public card — wins, games, titles, and where the caller
+ * stands with them — opened from the results screen. By code, because a
+ * code is all a client ever holds for anybody else; the caller's own token
+ * is optional and only decides which button the card offers. See playerView
+ * for what is never in it.
+ */
+app.get('/api/player', (req, res) => {
+  const result = playerView(req.query.code, String(req.query.token || '').slice(0, 64));
+  if (result.error) return res.status(404).json(result);
+  res.json(result);
+});
+
+/**
  * Ask a friend to your table. They get it on their next poll wherever they
  * are — landing screen or mid-game — and a push if their phone is registered
- * and its platform's sender is configured. The push names the table it is
- * about; a tap on Android puts the invite banner up at once, and the banner
- * is still where it is answered.
+ * and its platform's sender is configured. The push says who is asking and
+ * carries the table it is about; a tap puts the invite banner up at once,
+ * and the banner is still where it is answered.
+ *
+ * Pressing it again within twenty seconds updates the invite but does not
+ * ring their phone twice (`throttled` in the reply).
  */
 app.post('/api/invite', (req, res) => {
   const result = inviteFriend(String(req.body?.token || '').slice(0, 64),
     req.body?.code, req.body?.roomId);
   if (result.error) return res.status(400).json(result);
   const { token: theirToken, ...safe } = result;
-  sendTurnPush(theirToken, `${safe.to?.name ? '' : ''}You have been invited to a game on MoneyMove`,
-    { collapseId: 'invite', roomId: inviteFor(theirToken)?.roomId });
+  if (!safe.throttled) {
+    const invite = inviteFor(theirToken);
+    sendTurnPush(theirToken, `${invite?.name || 'A friend'} invited you to a game — tap to join`,
+      { collapseId: 'invite', kind: 'invite', roomId: invite?.roomId });
+  }
   res.json(safe);
 });
 
@@ -1592,6 +1611,10 @@ function getRoom(id) {
   // A chat line carries its sender's public friend code, so the person
   // reading it can report or block them. The code, never the token.
   room.hooks.codeOf = (token) => codeForToken(token);
+  // A house seat's stand-in code means nothing without the name behind it.
+  // The room says who it was whenever it hands the code out, so a profile
+  // opened from the results screen can still answer once the table is gone.
+  room.hooks.botCard = (code, card) => noteBotCard(code, card);
   // Boards are stock. The wallet is read at the moment of the tap rather than
   // cached on the room, because a board bought mid-lobby has to be usable in
   // the same breath — the shop closes and the board is right there.

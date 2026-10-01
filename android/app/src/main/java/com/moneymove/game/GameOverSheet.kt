@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -127,6 +128,11 @@ fun GameOverSheet(
     // can be drawn at the screen's: at half height most of the sheet is still
     // off the bottom of the screen, and a toast pinned to it would be too.
     var toastShift by remember { mutableIntStateOf(0) }
+    // The seat whose profile is open over the standings, if one is.
+    var profileOf by remember { mutableStateOf<PlayerResult?>(null) }
+    // Seats asked to be friends this sitting — from a standings row or from
+    // a profile — so the row's button settles into its tick either way.
+    var added by remember { mutableStateOf(emptySet<String>()) }
 
     MMSheet(
         onDismissRequest = onDismiss,
@@ -166,7 +172,12 @@ fun GameOverSheet(
                         modifier = Modifier.fillMaxWidth(),
                     ) { shareText(context, store.shareText) { store.showToast("Invite copied") } }
                     WorthChart(state)
-                    StandingsCard(store, account, results)
+                    StandingsCard(
+                        store, account, results,
+                        added = added,
+                        onAdded = { added = added + it },
+                        onOpen = { profileOf = it },
+                    )
                     TitlesCard(results)
                     StatsCard(results)
                     MMButton(
@@ -187,6 +198,18 @@ fun GameOverSheet(
                     .offset { IntOffset(0, toastShift) },
             )
             flight?.let { CoinFlightLayer(it) }
+        }
+    }
+
+    // Raised beside the result sheet rather than inside it, as the DM sheet
+    // is beside Friends: a sheet is a window of its own, so this one opens
+    // over the standings and closes back onto them.
+    profileOf?.let { seat ->
+        key(seat.id) {
+            PlayerProfileSheet(
+                store, account, seat,
+                onAsked = { added = added + seat.id },
+            ) { profileOf = null }
         }
     }
 }
@@ -615,34 +638,58 @@ private suspend fun redeemAd(api: Api, ticket: String): AdReward? {
 
 // ── standings ───────────────────────────────────────────────────────────────
 
+/**
+ * The final table, a row a seat. A row with somebody behind it — any seat
+ * but this device's own that came with a code — opens their profile, and
+ * carries the chevron that says so; the add-friend disc on it is the same
+ * request without the detour.
+ *
+ * [added] is held by the sheet rather than here, because the profile can ask
+ * as well, and the row's disc should settle into its tick whichever did.
+ */
 @Composable
-private fun StandingsCard(store: GameStore, account: AccountStore, results: List<PlayerResult>) {
+private fun StandingsCard(
+    store: GameStore,
+    account: AccountStore,
+    results: List<PlayerResult>,
+    added: Set<String>,
+    onAdded: (String) -> Unit,
+    onOpen: (PlayerResult) -> Unit,
+) {
     val p = P.current
-    // Seats already added this sitting, so the button can settle into a tick;
-    // and the ones on their way, so a second tap cannot send a second request.
-    var added by remember { mutableStateOf(emptySet<String>()) }
+    // The ones on their way, so a second tap cannot send a second request.
     var asking by remember { mutableStateOf(emptySet<String>()) }
+
+    // This device's own seats — the main one and every pass & play seat,
+    // which share its token — are never somebody to look up or to ask.
+    fun mine(r: PlayerResult) = r.id.startsWith(store.token) || store.isLocal(r.id)
+    fun opens(r: PlayerResult) = r.code.isNotBlank() && !mine(r)
+    // Drawn only when some row has one, so a table of nobody to look up —
+    // pass & play on one phone — keeps its worth column where it was.
+    val chevrons = results.any(::opens)
 
     fun befriend(r: PlayerResult) {
         Haptics.tap()
-        // Everybody else at a table reaches this phone under a room-scoped
-        // alias, so a code worked out from their id names nobody. The one
-        // honest source is a line they said here, which carries their real
-        // code — somebody who never spoke has no code this device can know.
-        val code = store.friendCodeOf(r.id, r.name)
+        // The code the seat came with, which the server now sends for every
+        // seat with somebody behind it. A server too old to send one leaves
+        // the old way: everybody else reaches this phone under a room-scoped
+        // alias, so the one honest source is a line they said here, which
+        // carries their real code — somebody who never spoke has no code
+        // this device can know.
+        val code = r.code.ifBlank { null } ?: store.friendCodeOf(r.id, r.name)
         if (code == null) {
             store.showToast("Ask ${r.name} for their friend code — it never reached this table", isError = true)
             return
         }
-        // Adding somebody who has already asked you is an acceptance; anyone
-        // else gets a request, and "now friends" would be a promise.
-        val accepting = account.social?.requests.orEmpty().any { it.code == code }
         asking = asking + r.id
-        account.addFriend(code, quiet = true) { error ->
+        // Adding somebody who has already asked you is an acceptance; anyone
+        // else gets a request, and "now friends" would be a promise — so the
+        // server's own word on which it was decides the toast.
+        account.befriend(code, quiet = true) { error, accepted ->
             asking = asking - r.id
             if (error == null) {
-                added = added + r.id
-                store.showToast(if (accepting) "You and ${r.name} are now friends" else "Request sent")
+                onAdded(r.id)
+                store.showToast(if (accepted) "You and ${r.name} are now friends" else "Request sent")
             } else {
                 store.showToast(error, isError = true)
             }
@@ -654,8 +701,19 @@ private fun StandingsCard(store: GameStore, account: AccountStore, results: List
         Spacer(Modifier.height(10.dp))
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             for ((rank, r) in results.withIndex()) key(r.id) {
+                val opensProfile = opens(r)
+                // No clip for a rounded ripple: the row is only as tall as its
+                // 30dp disc, and the disc's flag and shadow hang past it, so a
+                // clip would shave every seat's flag. The ripple is bounded to
+                // the row as it is.
                 Row(
-                    Modifier.fillMaxWidth().alpha(if (r.bankrupt) 0.6f else 1f),
+                    Modifier
+                        .fillMaxWidth()
+                        .alpha(if (r.bankrupt) 0.6f else 1f)
+                        .clickable(enabled = opensProfile, onClickLabel = "Open ${r.name}'s profile") {
+                            Haptics.tap()
+                            onOpen(r)
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) { Medal(rank) }
@@ -669,9 +727,12 @@ private fun StandingsCard(store: GameStore, account: AccountStore, results: List
                             color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                        // Humans only, and never a seat this device played
-                        // itself — pass & play seats share its token.
-                        if (!r.isBot && !r.id.startsWith(store.token) && !store.isLocal(r.id)) {
+                        // Never a seat this device played itself. A house
+                        // player with a code can be asked like anybody else
+                        // — the server simply never answers — and only a
+                        // house seat without one, from an older server, is
+                        // left without the disc.
+                        if (!mine(r) && (r.code.isNotBlank() || !r.isBot)) {
                             Spacer(Modifier.width(10.dp))
                             AddFriendButton(r.name, done = r.id in added, busy = r.id in asking) { befriend(r) }
                         }
@@ -689,6 +750,11 @@ private fun StandingsCard(store: GameStore, account: AccountStore, results: List
                         },
                         fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold,
                     )
+                    if (chevrons) {
+                        Box(Modifier.width(16.dp), contentAlignment = Alignment.CenterEnd) {
+                            if (opensProfile) RowChevron(p.ink3, 10.dp)
+                        }
+                    }
                 }
             }
         }
@@ -769,6 +835,235 @@ private fun PersonPlusMark(tint: Color) {
         val bar = 1.6f * u
         drawLine(tint, Offset(11.6f * u, 1.4f * u), Offset(11.6f * u, 6.2f * u), bar, StrokeCap.Round)
         drawLine(tint, Offset(9.2f * u, 3.8f * u), Offset(14f * u, 3.8f * u), bar, StrokeCap.Round)
+    }
+}
+
+// ── somebody's profile ──────────────────────────────────────────────────────
+
+/**
+ * Somebody you just played, beyond tonight's numbers: their record, the
+ * titles that keep landing on their seat, and the one thing worth doing about
+ * them — asking to be friends, or saying yes to them having asked.
+ *
+ * The card is read afresh every time it opens, by the code the seat carried,
+ * as this player — the standings can be minutes old, and a "Request sent"
+ * from before they answered would be wrong the moment it showed. A house
+ * player answers like anybody else: the server keeps their numbers steady
+ * and their requests unanswered, and nothing here treats them differently.
+ *
+ * Its own short sheet, opened at its full height: there is nothing below the
+ * button to drag up to.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerProfileSheet(
+    store: GameStore,
+    account: AccountStore,
+    seat: PlayerResult,
+    onAsked: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val p = P.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var card by remember { mutableStateOf<PlayerProfile?>(null) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    // What a tap has since made true, over what the card said as it loaded.
+    var relation by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(seat.code) {
+        val got = account.player(seat.code)
+        card = got.profile
+        failed = got.error
+    }
+
+    val name = card?.name?.ifBlank { null } ?: seat.name
+    val flag = card?.flag?.ifBlank { null } ?: seat.flag
+    val code = card?.code?.ifBlank { null } ?: seat.code
+
+    fun ask() {
+        if (busy) return
+        Haptics.tap()
+        busy = true
+        account.befriend(code, quiet = true) { error, accepted ->
+            busy = false
+            if (error != null) {
+                store.showToast(error, isError = true)
+            } else {
+                // They had already asked, so the add made the friendship.
+                relation = if (accepted) "friend" else "sent"
+                onAsked()
+                if (accepted) Haptics.turn()
+                store.showToast(if (accepted) "You and $name are now friends" else "Request sent")
+            }
+        }
+    }
+
+    fun accept() {
+        if (busy) return
+        Haptics.tap()
+        busy = true
+        account.answerFriend(code, accept = true) { error ->
+            busy = false
+            if (error != null) {
+                store.showToast(error, isError = true)
+            } else {
+                relation = "friend"
+                onAsked()
+                Haptics.turn()
+                store.showToast("You and $name are now friends")
+            }
+        }
+    }
+
+    MMSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Box(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Grabber(Modifier.padding(top = 5.dp, bottom = 6.dp))
+                // Their face if they wear one, else their initial in the
+                // colour they played in tonight — the disc the standings drew.
+                AvatarDisc(name, seat.color, size = 72.dp, avatar = card?.avatar?.ifBlank { null } ?: seat.avatar)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        name,
+                        modifier = Modifier.weight(1f, fill = false),
+                        color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    // The flag they chose, theirs to show as it is.
+                    flag?.takeIf { it.isNotBlank() }?.let {
+                        Spacer(Modifier.width(8.dp))
+                        Text(it, fontSize = 20.sp, maxLines = 1, softWrap = false)
+                    }
+                }
+                val shown = card
+                when {
+                    shown != null -> ProfileRecord(
+                        shown,
+                        relation = relation ?: shown.relation,
+                        busy = busy,
+                        onAsk = ::ask,
+                        onAccept = ::accept,
+                    )
+                    failed != null -> Box(
+                        Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            failed.orEmpty(),
+                            color = p.bad, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    // Held at about the height the record will take, so the
+                    // sheet does not leap when it lands.
+                    else -> Box(
+                        Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        LandingSpinner(quietInk(), 22.dp)
+                    }
+                }
+            }
+            // A sheet is a window of its own, so the answer to Add friend is
+            // drawn in this one or it would land under it — as the result
+            // sheet draws its own.
+            ToastPill(store, Modifier.align(Alignment.BottomCenter))
+        }
+    }
+}
+
+/**
+ * The record itself: four numbers on a card, how long they have been at it,
+ * up to three titles, and the button where the two of you stand.
+ */
+@Composable
+private fun ProfileRecord(
+    card: PlayerProfile,
+    relation: String,
+    busy: Boolean,
+    onAsk: () -> Unit,
+    onAccept: () -> Unit,
+) {
+    val p = P.current
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Panel(padding = 14.dp) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Tally(grouped(card.wins), "WINS", Modifier.weight(1f))
+                Tally(grouped(card.played), "GAMES", Modifier.weight(1f))
+                Tally("${card.winRate}%", "WIN RATE", Modifier.weight(1f))
+                // Coins, not dollars: these are what the wins paid into the
+                // wallet, so they wear no dollar sign.
+                Tally(grouped(card.winnings), "COINS WON", Modifier.weight(1f))
+            }
+        }
+        if (card.since > 0) Caption("Playing since ${clockText(card.since, "MMMyyyy", twentyFour = false)}")
+
+        val titles = card.titles.filter { it.title.isNotBlank() }.take(3)
+        if (titles.isNotEmpty()) {
+            // The shelf's columns: as many 132dp-or-wider as fit, each an
+            // equal share, so a long title is not squeezed to its first word.
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columns = ((maxWidth + 8.dp) / (132.dp + 8.dp)).toInt().coerceIn(1, titles.size)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (row in titles.chunked(columns)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (t in row) TitleChip(t.title, t.count, Modifier.weight(1f))
+                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
+
+        val wide = Modifier.fillMaxWidth()
+        when (relation) {
+            // Your own card asks nothing of you.
+            "self" -> Unit
+            "friend" -> MMButton(
+                "Friends", modifier = wide, kind = BtnKind.PLAIN, big = true, enabled = false,
+                lead = { CheckMark(p.good) },
+            ) {}
+            // Settled until they answer, and faded so it reads as a state
+            // rather than a button; MMButton itself looks the same disabled.
+            "sent" -> Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                MMButton(
+                    "Request sent", modifier = wide.alpha(0.7f), kind = BtnKind.PLAIN, big = true, enabled = false,
+                    lead = { ink -> CheckMark(ink) },
+                ) {}
+                Caption("Waiting for them to say yes.")
+            }
+            "asked" -> Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                MMButton(
+                    "Accept request", modifier = wide, kind = BtnKind.GOLD, big = true, enabled = !busy,
+                    lead = { ink -> if (busy) LandingSpinner(ink, 18.dp) else PersonPlusMark(ink) },
+                ) { onAccept() }
+                Caption("They asked to be your friend.")
+            }
+            else -> MMButton(
+                "Add friend", modifier = wide, kind = BtnKind.PRIMARY, big = true, enabled = !busy,
+                lead = { ink -> if (busy) LandingSpinner(ink, 18.dp) else PersonPlusMark(ink) },
+            ) { onAsk() }
+        }
     }
 }
 

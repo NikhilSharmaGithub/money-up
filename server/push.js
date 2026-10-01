@@ -128,13 +128,20 @@ function post(deviceToken, payload) {
 /**
  * Apple's half of sendTurnPush, exactly as it was when Apple was the only
  * half: the same dark line, the same request, the same pruning.
+ *
+ * With one addition, for an invite: its kind and its table ride beside `aps`
+ * as custom keys, which is where an iPhone app reads a tapped notification's
+ * extras from. A tap then puts the invite banner up at once instead of
+ * waiting for the next poll. Everything else is sent exactly as before.
  */
-function sendToApple(profileToken, devices, text, collapseId) {
+function sendToApple(profileToken, devices, text, opts = {}) {
   if (!pushReady) {
     console.log(`push (dark): would send "${String(text || '').slice(0, 80)}" to ${devices.length} device(s)`);
     return { sent: 0, reason: 'push not configured' };
   }
 
+  const { collapseId } = opts;
+  const about = describe(opts);
   const payload = {
     collapseId,
     aps: {
@@ -143,6 +150,9 @@ function sendToApple(profileToken, devices, text, collapseId) {
         sound: 'default',
         'interruption-level': 'active',
       },
+      ...(about.kind === 'invite'
+        ? { kind: 'invite', ...(about.roomId ? { roomId: about.roomId } : {}) }
+        : {}),
     },
   };
 
@@ -654,7 +664,8 @@ function sendToGoogle(profileToken, devices, text, opts) {
  * `collapseId` is what a newer notification replaces an older one by, on
  * both kinds of phone. `kind`, `roomId` and `cupId` are for Android, which is
  * told what a message is about (see describe); a call site that leaves them
- * out has them read off the collapse id.
+ * out has them read off the collapse id. An iPhone hears them only for an
+ * invite (see sendToApple).
  */
 export function sendTurnPush(profileToken, text, { collapseId, kind, roomId, cupId } = {}) {
   const devices = pushDevicesOf(profileToken);
@@ -665,7 +676,7 @@ export function sendTurnPush(profileToken, text, { collapseId, kind, roomId, cup
   let sent = 0;
   const reasons = [];
   if (apple.length) {
-    const r = sendToApple(profileToken, apple, text, collapseId);
+    const r = sendToApple(profileToken, apple, text, { collapseId, kind, roomId, cupId });
     sent += r.sent;
     reasons.push(r.reason);
   }

@@ -351,6 +351,15 @@ data class PlayerState(
     /** Store cosmetics: the piece on the board / the face in the chip. */
     val tokenSkin: String? = null,
     val avatar: String? = null,
+    /**
+     * The seat's public friend code — the one its chat lines already carry —
+     * which is what a profile is looked up by. A house player has the table's
+     * own code for it, and a pass & play guest an empty one: there is nobody
+     * behind that seat to look up. Its own key on the wire, so a patch that
+     * never mentions it leaves the decoded copy exactly as the last full
+     * state had it.
+     */
+    val code: String? = null,
     val money: Int = 0,
     val pos: Int = 0,
     val jail: Boolean? = null,
@@ -673,6 +682,13 @@ data class PlayerResult(
     val title: String? = null,
     val titleReason: String? = null,
     val stats: PlayerStats? = null,
+    /**
+     * The seat's public code, for opening their profile from the standings.
+     * Empty for a seat with nobody to look up, and for every result History
+     * filed before codes were sent — which is why it defaults rather than
+     * being required.
+     */
+    val code: String = "",
 ) {
     /**
      * What the standings column says for this seat. A removed seat was never
@@ -706,6 +722,7 @@ data class PlayerResult(
                     title = state.titles?.get(p.id)?.title,
                     titleReason = state.titles?.get(p.id)?.reason,
                     stats = state.stats?.get(p.id),
+                    code = p.code.orEmpty(),
                 )
             }
         }

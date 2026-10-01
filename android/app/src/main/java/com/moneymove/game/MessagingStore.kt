@@ -179,11 +179,14 @@ class MessagingStore(app: Application) : AndroidViewModel(app) {
      * [sittingAt] answers which table this device is at — GameStore.roomId —
      * and a second call only updates it.
      *
-     * The poll skips its turn while the app is off screen. iOS gets the same
-     * thing for free, by being suspended, and wakes to the invite by push;
-     * Android has no push to wake to (see PushRegistration), so the next poll
-     * after the app comes back — within ten seconds — is what finds it. The
-     * server keeps an invite for five minutes, which covers that easily.
+     * The poll skips its turn while the app is off screen. Away from the
+     * screen the invite is the server's push — on the social channel, naming
+     * whoever sent it — and tapping it opens the app and asks at once
+     * ([refreshInvite], from MainActivity.followPush), so the banner is up by
+     * the time the app is. A phone that cannot be pushed to (no permission, a
+     * build without Firebase) finds it at the next poll after the app comes
+     * back, within ten seconds; the server keeps an invite for five minutes,
+     * which covers that easily.
      */
     fun watchInvites(sittingAt: () -> String?) {
         this.sittingAt = sittingAt

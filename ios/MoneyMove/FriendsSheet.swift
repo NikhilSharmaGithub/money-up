@@ -345,6 +345,9 @@ struct FriendsSheet: View {
         // Their game is already under way, so the seats are shut: promising a
         // seat and delivering a spectator's view reads as a broken button.
         let started = entry.status != "lobby"
+        // Opened from this device's own lobby, a friend may already be
+        // sitting at it: there is nothing to join and nobody to ask.
+        let here = entry.roomId != nil && entry.roomId == store.roomId
 
         return VStack(spacing: 9) {
             HStack(spacing: 11) {
@@ -418,38 +421,42 @@ struct FriendsSheet: View {
                 }
                 .buttonStyle(MMButtonStyle(kind: .ghost))
 
-                if let roomId = entry.roomId {
-                    Button {
-                        Haptics.tap()
-                        dismiss()
-                        store.join(roomId: roomId)
-                        // Sitting down in their lobby is a new table; watching
-                        // a game already running is not, and gets no break.
-                        // The break waits for this sheet to finish closing —
-                        // see InterstitialAd.presentWhenSettled.
-                        if !started { InterstitialAd.beforeGame() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Art.icon(started ? .eye : .dice, size: 14)
-                            Text(started ? "Watch" : "Join their table")
-                        }
-                        .frame(maxWidth: .infinity)
+                // The other direction: ask them to come to you. Every friend
+                // gets it, whatever they are doing — the notification finds
+                // them in a game as readily as on their home screen.
+                Button {
+                    invite(entry)
+                } label: {
+                    HStack(spacing: 6) {
+                        Art.icon(.people, size: 14)
+                        Text(inviting.contains(entry.code) ? "Invited" : "Invite")
                     }
-                    .buttonStyle(MMButtonStyle(kind: started ? .ghost : .primary))
-                } else if store.roomId != nil {
-                    // The other direction: ask them to come to yours.
-                    Button {
-                        Task { await invite(entry) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Art.icon(.people, size: 14)
-                            Text(inviting.contains(entry.code) ? "Invited" : "Invite")
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-                    .disabled(inviting.contains(entry.code))
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(MMButtonStyle(kind: .ghost))
+                .disabled(inviting.contains(entry.code) || here)
+            }
+
+            // Their table, on a line of its own: next to two other buttons
+            // "Join their table" has no room to say what it does.
+            if let roomId = entry.roomId, !here {
+                Button {
+                    Haptics.tap()
+                    dismiss()
+                    store.join(roomId: roomId)
+                    // Sitting down in their lobby is a new table; watching
+                    // a game already running is not, and gets no break.
+                    // The break waits for this sheet to finish closing —
+                    // see InterstitialAd.presentWhenSettled.
+                    if !started { InterstitialAd.beforeGame() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Art.icon(started ? .eye : .dice, size: 14)
+                        Text(started ? "Watch" : "Join their table")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(MMButtonStyle(kind: started ? .ghost : .primary))
             }
         }
         .padding(11)
@@ -494,18 +501,26 @@ struct FriendsSheet: View {
         await loadFriends()
     }
 
-    private func invite(_ entry: FriendEntry) async {
-        guard let room = store.roomId else { return }
-        struct Reply: Decodable { var ok: Bool?; var error: String? }
-        let reply: Reply? = try? await store.fetchJSON(
-            "/api/invite", method: "POST",
-            body: ["token": store.token, "code": entry.code, "roomId": room])
-        if reply?.ok == true {
-            inviting.insert(entry.code)
-            Haptics.tap()
-            store.showToast("Invited \(entry.name)")
-        } else {
-            store.showToast(reply?.error ?? "Could not invite them", isError: true)
+    /// To the table this device is at, if it is at one. From the home screen
+    /// there is none yet, so the invite makes one: the same private table
+    /// "Create a private game" makes, with the same break before it — it is a
+    /// new table by this player's own tap — and the invite follows as soon as
+    /// the server has named the room. The sheet closes on the way, because the
+    /// table is where the player is going.
+    private func invite(_ entry: FriendEntry) {
+        Haptics.tap()
+        guard let room = store.roomId else {
+            dismiss()
+            store.createRoomAndInvite(code: entry.code, name: entry.name)
+            InterstitialAd.beforeGame()
+            return
+        }
+        // Held while the request is out, so a second tap cannot send it twice.
+        inviting.insert(entry.code)
+        Task {
+            if !(await store.invite(code: entry.code, name: entry.name, to: room)) {
+                inviting.remove(entry.code)
+            }
         }
     }
 

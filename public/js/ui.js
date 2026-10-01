@@ -2,7 +2,9 @@
 // chat, toasts and the celebratory bits.
 
 import { escapeHtml, deedMarkup, deckMarkup } from './board.js';
-import { icon, groupBanner, groupFlag, circleFlag } from './icons.js';
+import {
+  icon, groupBanner, groupFlag, circleFlag, utilityName,
+} from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
 import { configureAdNetwork, playNetworkAd } from './ads.js';
@@ -1792,6 +1794,18 @@ function tradeCard(state, t, meId) {
 }
 
 /**
+ * A tile's mark in a trade, the one the board wears for it: a country's flag
+ * on its medallion, the plane on an airport, a utility's own drawing. Anything
+ * with none of those keeps its colour as a dot.
+ */
+function tileMark(tile, g, size) {
+  if (g?.flag) return circleFlag(g.flag, g.color, size);
+  if (tile.type === 'airport') return icon('airport', size);
+  if (tile.type === 'utility') return icon(utilityName(tile.icon), size);
+  return `<span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>`;
+}
+
+/**
  * An offer, put in front of you instead of down the page.
  *
  * The rail card below the board says all of this too, and on a desktop that is
@@ -1823,8 +1837,8 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
       const tile = state.map.tiles[i];
       if (!tile) return;
       const g = tile.group ? state.groups[tile.group] : null;
-      const mark = g?.flag
-        ? `<span class="dc-flag">${circleFlag(g.flag, g.color, 16)}</span>`
+      const mark = g?.flag || tile.type === 'airport' || tile.type === 'utility'
+        ? `<span class="dc-flag">${tileMark(tile, g, 16)}</span>`
         : `<i class="dc-dot" style="background:${g?.color || 'var(--ink-3)'}"></i>`;
       out.push(`<span class="deal-chip street" style="--c:${g?.color || 'var(--ink-3)'}">
         ${mark}<b>${escapeHtml(tile.name)}</b><em>$${tile.price}</em></span>`);
@@ -3884,9 +3898,7 @@ export function openTradeModal(state, meId, targetId, actions, prefill = null) {
           const t = state.map.tiles[m.i];
           const g = t.group ? state.groups[t.group] : null;
           const blocked = (m.houses || 0) > 0;
-          const mark = g?.flag
-            ? `<span class="cr-flag">${circleFlag(g.flag, g.color, 16)}</span>`
-            : `<span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>`;
+          const mark = `<span class="cr-flag">${tileMark(t, g, 18)}</span>`;
           return `<label class="check-row ${blocked ? 'blocked' : ''}" title="${blocked ? 'Sell the buildings first' : ''}">
             <input type="checkbox" data-side="${prefix}" value="${m.i}" ${blocked ? 'disabled' : ''} />
             ${mark}
@@ -4126,9 +4138,15 @@ export function reportCardHTML(state, meId) {
   const rank = [...(state.players || [])].sort((a, b) =>
     Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
   const medals = ['medalGold', 'medalSilver', 'medalBronze'];
+  // Once any row carries the chevron, every row keeps its slot, so the money
+  // column still lines up down the card.
+  const here = deviceCodes();
+  const chevrons = rank.some((p) => opensProfile(p, meId, here));
   const rows = rank.map((p, k) => {
     const t = state.titles?.[p.id];
-    return `<div class="rank-row ${p.id === meId ? 'me' : ''}">
+    const opens = opensProfile(p, meId, here);
+    return `<div class="rank-row ${p.id === meId ? 'me' : ''}${opens ? ' tap' : ''}"${opens
+      ? ` data-pid="${escapeHtml(p.id)}" role="button" tabindex="0" title="See ${escapeHtml(p.name)}'s profile"` : ''}>
       <span class="rank-pos">${medals[k] ? icon(medals[k]) : k + 1}</span>
       <span class="avatar sm" style="background:${p.color}">${escapeHtml((p.name[0] || '?').toUpperCase())}</span>
       <span class="rank-main">
@@ -4137,6 +4155,7 @@ export function reportCardHTML(state, meId) {
       </span>
       <span class="rank-worth">${p.bankrupt ? '<span class="dim">bankrupt</span>'
         : p.netWorth < 0 ? `<span class="neg-money">${money(p.netWorth)}</span>` : money(p.netWorth)}</span>
+      ${chevrons ? `<span class="rank-chev" aria-hidden="true">${opens ? '›' : ''}</span>` : ''}
     </div>`;
   }).join('');
   return `<p class="sub">Final standings</p>${rows}${statsTableHTML(state, rank)}`;
@@ -4152,7 +4171,215 @@ export function openReportCard(record) {
     <p class="sub">${escapeHtml(when)}${record?.winner ? ` · ${escapeHtml(record.winner)} won` : ''}</p>
     ${reportCardHTML(s, null)}
     <div class="modal-actions"><button class="btn ghost" id="rcClose">Close</button></div>`,
-  (root) => { $('#rcClose', root).onclick = closeModal; });
+  (root) => {
+    $('#rcClose', root).onclick = closeModal;
+    wireProfileRows(root, s, () => openReportCard(record));
+  });
+}
+
+// ───────────────────────────────────────────────────────── player profile ──
+// Every seat this browser has played as, by friend code. A second player
+// added on this device sits in a #newplayer window with an identity of its
+// own, so to the server — and to the other window, which only sees its alias
+// — that seat looks like anybody else's. The windows share localStorage, so
+// each one notes its own code here and the result sheet in either of them
+// can tell who is sitting at the same keyboard.
+const DEVICE_CODES_KEY = 'moneymove:deviceCodes';
+const MAX_DEVICE_CODES = 12;
+let notedCode = '';
+
+function deviceCodes() {
+  try {
+    const list = JSON.parse(localStorage.getItem(DEVICE_CODES_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+/** The code of the seat this tab plays as; app.js hands it over on every state. */
+export function noteDeviceSeat(code) {
+  if (!code || code === notedCode) return;
+  notedCode = code;
+  const list = [code, ...deviceCodes().filter((c) => c !== code)].slice(0, MAX_DEVICE_CODES);
+  try { localStorage.setItem(DEVICE_CODES_KEY, JSON.stringify(list)); } catch { /* storage blocked */ }
+}
+
+/**
+ * Whether a standings row opens that player's profile: it needs the friend
+ * code the server put on the seat, and it is never one of this device's own
+ * seats. Pass-and-play guests carry no code, so they drop out on the first
+ * test; a shelf record has no seat id for this player, so the device's own
+ * identity is checked as well, and a player added in another window of this
+ * browser is caught by the codes those windows noted.
+ */
+function opensProfile(p, meId, here = deviceCodes()) {
+  if (!p?.code) return false;
+  const mine = walletToken();
+  return p.id !== meId && (!mine || p.id !== mine) && !here.includes(p.code);
+}
+
+/**
+ * Makes every profile row on a result sheet open its player. The profile
+ * replaces the sheet — there is one modal root — so it is handed the way
+ * back, which redraws the sheet and puts it back where it was scrolled to:
+ * the standings sit under the chart, and coming back to the top of it would
+ * lose the row that was just tapped.
+ *
+ * `meId` is the seat id, which is the identity token itself; it is handed on
+ * so a browser with site storage blocked, where app.js keeps the token in
+ * memory and walletToken() finds nothing, still reads and asks as itself.
+ */
+function wireProfileRows(root, state, reopen, meId = null) {
+  root.querySelectorAll('.rank-row.tap[data-pid]').forEach((row) => {
+    const seat = (state.players || []).find((p) => p.id === row.dataset.pid);
+    if (!seat?.code) return;
+    const open = () => {
+      sfx.click();
+      const y = $('.modal', root)?.scrollTop || 0;
+      openPlayerProfile(seat, {
+        token: meId,
+        onBack: () => {
+          reopen();
+          const sheet = $('#modalRoot .modal');
+          if (sheet) sheet.scrollTop = y;
+        },
+      });
+    };
+    row.onclick = open;
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    };
+  });
+}
+
+/** What each answer from /api/player leaves on the profile's one button. */
+const PROFILE_ACTIONS = {
+  none: { label: `${icon('people')} Add friend`, cls: 'primary', act: 'add' },
+  asked: { label: `${icon('people')} Accept request`, cls: 'primary', act: 'accept' },
+  sent: { label: 'Request sent', cls: '' },
+  friend: { label: `${TICK} Friends`, cls: 'ghost' },
+};
+
+/**
+ * Somebody you have just played, from the result sheet: who they are, what
+ * they have won, and a way to ask them to be friends.
+ *
+ * Everything on it comes from /api/player, read by the seat's friend code.
+ * The sheet goes up at once with the face the table already knows, and fills
+ * in when the server answers — a profile that waited for the network before
+ * appearing would read as a tap that did nothing. It never decides for itself
+ * who is a person: the server answers for every seat it put a code on, and
+ * the sheet draws whatever comes back.
+ */
+export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
+  const code = String(seat?.code || '');
+  if (!code) return;
+  const token = viewer || walletToken();
+  const back = onBack || closeModal;
+  const face = (avatar, name) => `<span class="avatar pp-face ${avatar ? 'has-skin' : ''}"
+      style="background:${seat.color || 'var(--red)'}">${escapeHtml(avatar || (String(name || '?')[0] || '?').toUpperCase())}</span>`;
+
+  openModal(`
+    <div class="pp-head" id="ppHead">
+      ${face(seat.avatar, seat.name)}
+      <div class="pp-who">
+        <h2><b>${escapeHtml(seat.name || 'Player')}</b>${seat.flag ? `<span class="pp-flag">${escapeHtml(seat.flag)}</span>` : ''}</h2>
+        <p class="sub">&nbsp;</p>
+      </div>
+    </div>
+    <div id="ppBody"><div class="pp-state">${icon('replay', 22, 'spin')}<p>Looking them up…</p></div></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="ppBack">${onBack ? 'Back to the results' : 'Close'}</button>
+      <span id="ppAction"></span>
+    </div>`, (root) => {
+    const sheet = $('.modal', root);
+    $('#ppBack', root).onclick = () => { sfx.click(); back(); };
+    // Over a result sheet, a tap outside goes back to it rather than taking
+    // both away at once.
+    if (onBack) root.onclick = (e) => { if (e.target === root) back(); };
+
+    const paintAction = (relation) => {
+      const slot = $('#ppAction', root);
+      const spec = PROFILE_ACTIONS[relation];
+      if (!slot) return;
+      if (!spec) { slot.innerHTML = ''; return; } // your own profile: nothing to ask
+      slot.innerHTML = `<button class="btn ${spec.cls}" id="ppGo" ${spec.act ? '' : 'disabled'}>${spec.label}</button>`;
+      const go = $('#ppGo', root);
+      if (!spec.act) return;
+      go.onclick = async () => {
+        sfx.click();
+        go.disabled = true;
+        try {
+          const res = await fetch(api(spec.act === 'add' ? '/api/friends' : '/api/friends/accept'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, code }),
+          });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            // Asking twice is not a mistake worth a red toast: they are friends.
+            if (out.already) { paintAction('friend'); return; }
+            go.disabled = false;
+            toast(out.error || 'That did not go through — try again', 'error');
+            return;
+          }
+          if (out.accepted) {
+            paintAction('friend');
+            toast(`You and ${seat.name || 'they'} are friends now`);
+          } else {
+            paintAction('sent');
+            toast(`Request sent to ${seat.name || 'them'}`);
+          }
+        } catch {
+          go.disabled = false;
+          toast('Could not reach the server — try again in a moment', 'error');
+        }
+      };
+    };
+
+    const query = `code=${encodeURIComponent(code)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    fetch(api(`/api/player?${query}`))
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Could not load this profile');
+        return d;
+      })
+      .then((d) => {
+        if (!sheet?.isConnected) return; // closed, or replaced, while it loaded
+        const wins = Number(d.wins) || 0;
+        const games = Math.max(wins, Number(d.games) || 0);
+        const rate = games ? `${Math.round((wins / games) * 100)}%` : '—';
+        const since = Number(d.since) || 0;
+        const name = d.name || seat.name || 'Player';
+        $('#ppHead', root).innerHTML = `${face(d.avatar, name)}
+          <div class="pp-who">
+            <h2><b>${escapeHtml(name)}</b>${d.flag ? `<span class="pp-flag">${escapeHtml(d.flag)}</span>` : ''}</h2>
+            <p class="sub">${since ? `Playing since ${escapeHtml(new Date(since)
+              .toLocaleDateString(undefined, { month: 'short', year: 'numeric' }))}` : 'New to the tables'}</p>
+          </div>`;
+        const tiles = [
+          ['Wins', wins.toLocaleString('en-US')],
+          ['Games', games.toLocaleString('en-US')],
+          ['Win rate', rate],
+          ['Coins won', (Number(d.winnings) || 0).toLocaleString('en-US')],
+        ];
+        const titles = (Array.isArray(d.titles) ? d.titles : []).slice(0, 3);
+        $('#ppBody', root).innerHTML = `
+          <div class="ach-tiles four">
+            ${tiles.map(([label, value]) => `<div class="ach-tile"><b>${value}</b><span>${label}</span></div>`).join('')}
+          </div>
+          ${titles.length ? `<p class="sub">Titles they wear most</p>
+            <div class="pp-titles">${titles.map((t) => `<span class="pp-title">
+              ${icon(TITLE_ART[t.title] || 'sparkle', 14)}<b>${escapeHtml(t.title)}</b>${
+              Number(t.count) > 1 ? `<i>×${Number(t.count)}</i>` : ''}</span>`).join('')}</div>` : ''}`;
+        paintAction(d.relation);
+      })
+      .catch((err) => {
+        if (!sheet?.isConnected) return;
+        const missing = /no player/i.test(err.message || '');
+        $('#ppBody', root).innerHTML = `<div class="pp-state">${icon('warning', 22, 'solo')}
+          <p>${missing ? 'This profile is not available any more.'
+            : 'Could not load this profile — try again in a moment.'}</p></div>`;
+      });
+  }, 'player-profile');
 }
 
 // ─────────────────────────────────────────────────────────── leaderboard ──
@@ -4894,6 +5121,7 @@ export function showGameOver(state, meId, actions) {
     const share = $('#gShare', root);
     if (share) share.onclick = () => { sfx.click(); shareResult(resultLine(state, meId)); };
     wireDoubleWin(root, meId, state);
+    wireProfileRows(root, state, () => showGameOver(state, meId, actions), meId);
   });
 }
 

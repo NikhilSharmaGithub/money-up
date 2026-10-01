@@ -7,9 +7,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { randomName } from './names.js';
-import { itemById } from './store.js';
+import { itemById, emojiFor } from './store.js';
+import { TITLE_NAMES } from './game.js';
 import { RENT_PRICE } from './boards.js';
 import { cleanText, isAllMasked } from './banter.js';
 
@@ -1073,6 +1075,7 @@ export function blockPlayer(token, rawCode) {
   me.friends = me.friends.filter((c) => c !== code);
   me.wants = me.wants.filter((c) => c !== code);
   me.asked = me.asked.filter((c) => c !== code);
+  if (me.botWants?.length) me.botWants = me.botWants.filter((w) => w.code !== code);
   const them = profiles.get(byCode.get(code));
   if (them) {
     pending(them);
@@ -1240,7 +1243,7 @@ export function addFriend(token, rawCode) {
   if (code === me.code) return { error: "That's your own code" };
 
   const theirToken = byCode.get(code);
-  if (!theirToken) return { error: 'No player with that code' };
+  if (!theirToken) return isHouseCode(code) ? askHousePlayer(me, code) : { error: 'No player with that code' };
   const them = pending(profiles.get(theirToken));
   pending(me);
   // Blocked in either direction. The answer is deliberately the same one a
@@ -1288,6 +1291,8 @@ export function declineFriend(token, rawCode) {
   const them = pending(profiles.get(byCode.get(code)) || {});
   me.asked = me.asked.filter((c) => c !== code);
   me.wants = me.wants.filter((c) => c !== code);
+  // A request to a house player is only ever taken back, never answered.
+  if (me.botWants?.length) me.botWants = me.botWants.filter((w) => w.code !== code);
   if (them.code) {
     them.wants = them.wants.filter((c) => c !== me.code);
     them.asked = them.asked.filter((c) => c !== me.code);
@@ -1336,10 +1341,173 @@ export function socialOf(token) {
   return {
     friends: friendsOf(token),
     requests: me.asked.map(card).filter(Boolean),
-    sent: me.wants.map(card).filter(Boolean),
+    // Requests to house players sit here too, looking like any other that
+    // has not been answered yet — which is exactly what they are.
+    sent: [...me.wants.map(card).filter(Boolean), ...(me.botWants || []).map(houseCard)],
     // Codes rather than cards: a blocked player may since have deleted their
     // account, and the app still has to hide what they wrote.
     blocked: [...(me.blocked || [])],
+  };
+}
+
+// ----------------------------------------------------------- house players --
+//
+// After a game anyone at the table can open anyone else's profile, and the
+// house players sat at that table too. They have no profile — they never
+// touch profileFor — so what they show is made up here: the name and flag
+// they played under, and numbers drawn from their code, so the same card
+// reads the same on every visit. A friend request to one is taken and kept,
+// and simply never answered, the way a stranger might leave one hanging.
+//
+// Their code is the H0 stand-in the room signs their chat with. Real codes
+// come from an alphabet with no zero, so the two can never be confused.
+
+/** A house player's code: H0 and four hex digits, as GameRoom.chatCodeOf cuts it. */
+const isHouseCode = (c) => /^H0[0-9A-F]{4}$/.test(c);
+
+/**
+ * Who each recent house code was, newest last. The room tells us every time
+ * it serialises a house seat, so anyone still on a results screen keeps their
+ * table's names warm; past the cap the longest-unseen goes first. Memory only:
+ * a restart forgets them, and a request already sent keeps its own copy.
+ */
+const HOUSE_CARDS_MAX = 5000;
+const houseCards = new Map();   // code -> { name, flag, avatar }
+/** Pending requests to house players, per profile. Old ones make room for new. */
+const HOUSE_WANTS_MAX = 100;
+
+export function noteBotCard(rawCode, { name, flag, avatar } = {}) {
+  const code = asCode(rawCode);
+  if (!isHouseCode(code)) return;
+  const card = {
+    name: String(name || '').slice(0, 24) || 'Player',
+    flag: String(flag || '').slice(0, 8),
+    avatar: String(avatar || '').slice(0, 8),
+  };
+  // Delete then set is what moves a Map entry to the back of the line.
+  houseCards.delete(code);
+  houseCards.set(code, card);
+  if (houseCards.size > HOUSE_CARDS_MAX) houseCards.delete(houseCards.keys().next().value);
+}
+
+/** The same four fields publicView gives a person; a house player wears nothing. */
+const houseCard = (w) => ({ code: w.code, name: w.name || 'Player', flag: w.flag || '', avatar: '' });
+
+/**
+ * A friend request to a house player. It is written down on the asker's own
+ * profile — there is no other profile to write it on — and answered exactly
+ * as one to a person would be, so nothing here tells the asker who they were
+ * sitting with. A code the server has never seen is as unknown as any other.
+ */
+function askHousePlayer(me, code) {
+  if ((me.blocked || []).includes(code)) return { error: 'No player with that code' };
+  me.botWants ??= [];
+  const held = me.botWants.find((w) => w.code === code);
+  if (held) return { ok: true, sent: true, friend: houseCard(held) };
+  const seen = houseCards.get(code);
+  if (!seen) return { error: 'No player with that code' };
+  me.botWants.push({ code, name: seen.name, flag: seen.flag, at: Date.now() });
+  if (me.botWants.length > HOUSE_WANTS_MAX) me.botWants.splice(0, me.botWants.length - HOUSE_WANTS_MAX);
+  save();
+  return { ok: true, sent: true, friend: houseCard({ code, ...seen }) };
+}
+
+/** When the made-up numbers say a house player started: some day this spring or summer. */
+const HOUSE_EPOCH = Date.UTC(2026, 2, 1);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A house player's lifetime numbers, from nothing but its code. Believable
+ * rather than impressive — a few dozen wins out of rather more games, about
+ * what a win pays on top — and fixed, so a second look never catches them
+ * moving. Titles come from the real book, at most two.
+ */
+function houseStats(code) {
+  const h = createHash('sha1').update(code).digest();
+  const wins = 3 + (h.readUInt16BE(0) % 88);                // 3–90
+  const games = wins + 6 + (h.readUInt16BE(2) % 135);       // and 6–140 more played
+  const winnings = wins * 2 + (h[4] % 41);                  // two a win, and change
+  const since = HOUSE_EPOCH + (h.readUInt16BE(5) % 181) * DAY_MS + (h[7] % 24) * 60 * 60 * 1000;
+  const titles = [];
+  for (let i = 0; i < h[8] % 3; i++) {
+    const title = TITLE_NAMES[h[9 + i] % TITLE_NAMES.length];
+    if (titles.some((t) => t.title === title)) continue;
+    titles.push({ title, count: 1 + (h[11 + i] % Math.min(wins, 9)) });
+  }
+  titles.sort((a, b) => b.count - a.count);
+  return { wins, games, winnings, titles, since };
+}
+
+// --------------------------------------------------------- public profiles --
+
+/** The three titles a player has earned most, as the profile card lists them. */
+const topTitles = (counts) => Object.entries(counts || {})
+  .filter(([, n]) => n > 0)
+  .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  .slice(0, 3)
+  .map(([title, count]) => ({ title, count }));
+
+/** Where the viewer stands with a code, for the one button the card offers. */
+function relationTo(viewer, code) {
+  if (!viewer) return 'none';
+  if (viewer.code === code) return 'self';
+  if ((viewer.friends || []).includes(code)) return 'friend';
+  if ((viewer.wants || []).includes(code)) return 'sent';
+  if ((viewer.asked || []).includes(code)) return 'asked';
+  return 'none';
+}
+
+/**
+ * One player's public card, by code: who they are, what they have won, and
+ * where the viewer stands with them. The viewer's token is optional and only
+ * ever read — neither side is minted by looking.
+ *
+ * Strictly the fields any table already shows or the leaderboard already
+ * prints, plus the counts that go with them. Never an email, a photo, a
+ * login, a wallet, karma or a token. A block in either direction answers
+ * exactly as a wrong code does, for the reason addFriend gives.
+ *
+ * A house player answers in the same shape with nothing in it to say so.
+ * After a restart its name is gone from memory; a viewer who asked it to be
+ * friends kept a copy, and anyone else is told there is nobody by that code.
+ */
+export function playerView(rawCode, viewerToken) {
+  const code = asCode(rawCode);
+  const viewer = viewerToken ? profiles.get(viewerToken) || null : null;
+  const nobody = { error: 'No player with that code' };
+  if (!isCode(code)) return nobody;
+
+  const theirToken = byCode.get(code);
+  if (theirToken) {
+    const p = profiles.get(theirToken);
+    if (!p || blockedEitherWay(viewer, p)) return nobody;
+    const wins = p.wins || 0;
+    return {
+      code: p.code,
+      name: p.name || 'Player',
+      flag: p.flag || '',
+      avatar: emojiFor(p.equipped?.avatar),
+      wins,
+      // Wins from before games were counted would otherwise outnumber them.
+      games: Math.max(p.games || 0, wins),
+      winnings: p.winnings || 0,
+      titles: topTitles(p.titleCounts),
+      since: p.firstPlayed || p.created || p.seen || 0,
+      relation: relationTo(viewer, p.code),
+    };
+  }
+
+  if (!isHouseCode(code) || (viewer?.blocked || []).includes(code)) return nobody;
+  const asked = viewer?.botWants?.find((w) => w.code === code) || null;
+  const card = houseCards.get(code) || asked;
+  if (!card) return nobody;
+  return {
+    code,
+    name: card.name || 'Player',
+    flag: card.flag || '',
+    avatar: card.avatar || '',
+    ...houseStats(code),
+    relation: asked ? 'sent' : 'none',
   };
 }
 
@@ -1431,15 +1599,26 @@ export function dropNotice(id) {
 // is that other direction — a note that expires, so nobody is chasing a table
 // that filled up ten minutes ago.
 
-/** @type {Map<string, {from:string, name:string, roomId:string, at:number}>} */
+/** @type {Map<string, {from:string, name:string, flag:string, roomId:string, at:number}>} */
 const invites = new Map();     // recipient token -> the newest invite for them
 const INVITE_LIFE_MS = 5 * 60 * 1000;
+/**
+ * An invite is a buzz in somebody's pocket, and a button is easy to press
+ * twice. One pair gets one push per this long; the ones in between still
+ * update the invite, they just do not ring again.
+ */
+const INVITE_GAP_MS = 20 * 1000;
+const invitePushed = new Map();  // 'FROM>TO' -> when that pair last rang
 
 /**
  * Ask a friend to come and play. Friends only, because an invite is a
  * notification and a stranger with your code should not be able to send you
  * one. The newest replaces any older one: two invites from the same evening
  * are not two things to answer.
+ *
+ * `throttled` says this pair already rang inside the last twenty seconds.
+ * The invite is still the newest — if the inviter has moved tables since,
+ * the banner should say so — but the caller must not push it again.
  */
 export function inviteFriend(token, rawCode, roomId) {
   const me = profiles.get(token);
@@ -1451,9 +1630,19 @@ export function inviteFriend(token, rawCode, roomId) {
   const room = String(roomId || '').toLowerCase().slice(0, 12);
   if (!room) return { error: 'No table to invite them to' };
 
+  const now = Date.now();
   invites.set(them.token, {
-    from: me.code, name: me.name || 'A friend', roomId: room, at: Date.now(),
+    from: me.code, name: me.name || 'A friend', flag: me.flag || '', roomId: room, at: now,
   });
+  const pair = `${me.code}>${code}`;
+  if (now - (invitePushed.get(pair) || 0) < INVITE_GAP_MS) {
+    return { ok: true, throttled: true, to: publicView(them), token: them.token };
+  }
+  invitePushed.set(pair, now);
+  // Only the last twenty seconds matter, so anything older is dead weight.
+  if (invitePushed.size > 1000) {
+    for (const [k, at] of invitePushed) if (now - at >= INVITE_GAP_MS) invitePushed.delete(k);
+  }
   return { ok: true, to: publicView(them), token: them.token };
 }
 
@@ -1462,7 +1651,7 @@ export function inviteFor(token) {
   const inv = invites.get(token);
   if (!inv) return null;
   if (Date.now() - inv.at > INVITE_LIFE_MS) { invites.delete(token); return null; }
-  return { from: inv.from, name: inv.name, roomId: inv.roomId, at: inv.at };
+  return { from: inv.from, name: inv.name, flag: inv.flag || '', roomId: inv.roomId, at: inv.at };
 }
 
 /** Answered, ignored, or acted on — either way it is done with. */

@@ -241,8 +241,13 @@ private fun Shelf(info: Achievements?, games: Int) {
     }
 }
 
+/**
+ * One lifetime number over its label. A profile card opened from the
+ * standings wears the same cells, so another player's record reads like your
+ * own shelf.
+ */
 @Composable
-private fun Tally(value: String, label: String, modifier: Modifier = Modifier) {
+internal fun Tally(value: String, label: String, modifier: Modifier = Modifier) {
     val p = P.current
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         ShrinkText(
@@ -263,7 +268,7 @@ private fun Tally(value: String, label: String, modifier: Modifier = Modifier) {
  * should read the same on the shelf as it did the night it landed.
  */
 @Composable
-private fun TitleChip(title: String, count: Int, modifier: Modifier = Modifier) {
+internal fun TitleChip(title: String, count: Int, modifier: Modifier = Modifier) {
     val p = P.current
     val shape = RoundedCornerShape(12.dp)
     Row(
@@ -304,7 +309,7 @@ private fun TitleChip(title: String, count: Int, modifier: Modifier = Modifier) 
  * Builder" on a narrow chip reads whole on both phones.
  */
 @Composable
-private fun ShrinkText(
+internal fun ShrinkText(
     text: String,
     color: Color,
     fontSize: TextUnit,

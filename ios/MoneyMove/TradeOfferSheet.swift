@@ -203,11 +203,9 @@ struct TradeOfferSheet: View {
                     let g = t.group.flatMap { store.state?.groups[$0] }
                     chip(P: P, border: P.rule, fill: P.card,
                          leading: Color(css: g?.color ?? "#7c6bb0")) {
-                        if let g, !g.flag.isEmpty {
-                            GroupMedallion(mark: g.flag, colour: Color(css: g.color), size: 16)
-                        } else {
-                            Circle().fill(Color(css: g?.color ?? "#7c6bb0")).frame(width: 9, height: 9)
-                        }
+                        // The composer's mark, so an airport arrives with
+                        // its plane rather than an anonymous dot.
+                        TileMark(tile: t, size: 16)
                         Text(t.name)
                             .font(.system(size: 12.5, weight: .bold, design: .rounded))
                             .foregroundStyle(P.ink)

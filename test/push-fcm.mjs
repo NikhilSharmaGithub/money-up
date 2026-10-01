@@ -406,10 +406,13 @@ function checkMessage(label, sent, device, body, want) {
     && sent.path === `/v1/projects/${PROJECT}/messages:send` && /^application\/json/.test(sent.type || ''),
   label, sent ? (isDeepStrictEqual(got, exp) ? `${sent.status} ${sent.path}` : `got ${short(got)}\n        want ${short(exp)}`) : 'nothing arrived');
 }
-/** Apple's request, held to exactly what it has always been. */
-function checkApns(label, got, body, collapseId) {
+/**
+ * Apple's request, held to exactly what it has always been — plus, for an
+ * invite, the custom keys (`extra`) a tap is read by.
+ */
+function checkApns(label, got, body, collapseId, extra = {}) {
   const h = got?.headers || {};
-  const want = { aps: { alert: { title: 'MoneyMove', body }, sound: 'default', 'interruption-level': 'active' } };
+  const want = { aps: { alert: { title: 'MoneyMove', body }, sound: 'default', 'interruption-level': 'active' }, ...extra };
   const wrong = [
     h[':method'] !== 'POST' && 'method',
     h['apns-topic'] !== 'com.moneymove.game' && 'topic',
@@ -516,11 +519,13 @@ async function main() {
   {
     const r = await post(S, '/api/invite', { token: ASHA.token, code: BILAL.code, roomId: 'tbl42' });
     PASS(r.json?.ok === true, 'Asha asks Bilal to her table', r.text.slice(0, 80));
-    const body = 'You have been invited to a game on MoneyMove';
-    checkMessage('FCM gets kind invite with the table to open, on the social channel', await until(() => lastTo(B1, withText('invited'))),
+    const body = 'Asha invited you to a game — tap to join';
+    checkMessage('FCM gets kind invite, naming who asked, with the table to open, on the social channel',
+      await until(() => lastTo(B1, withText('invited'))),
       B1, body, { kind: 'invite', collapseId: 'invite', channel: 'social', roomId: 'tbl42' });
-    checkApns('APNs gets the invite as it always has', await until(() => apnsTo(BI).find((a) => a.headers['apns-collapse-id'] === 'invite')),
-      body, 'invite');
+    checkApns('APNs gets the invite naming who asked, with kind and table as custom keys',
+      await until(() => apnsTo(BI).find((a) => a.headers['apns-collapse-id'] === 'invite')),
+      body, 'invite', { kind: 'invite', roomId: 'tbl42' });
   }
 
   section('a turn comes round to somebody who has walked away');

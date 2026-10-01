@@ -2,6 +2,7 @@
 // overlays (toasts, card popups, turn banner) that float above everything.
 
 import SwiftUI
+import UserNotifications
 
 @main
 struct MoneyMoveApp: App {
@@ -24,9 +25,17 @@ struct MoneyMoveApp: App {
 }
 
 /// SwiftUI has no hook for the APNs callbacks, so the app keeps a delegate for
-/// exactly one job: catching the device token and handing it on. Nothing sends
-/// notifications yet — this only collects.
-final class AppDelegate: NSObject, UIApplicationDelegate {
+/// two jobs: catching the device token and handing it on, and hearing about a
+/// notification that was tapped — or that landed with the app already open.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Before launch finishes, or the tap that cold-started the app is
+        // handed to nobody.
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor in PushRegistrar.shared.received(deviceToken: deviceToken) }
@@ -36,6 +45,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         // Nothing is waiting on this token, so a failure is not the player's
         // problem to hear about — the next launch simply asks again.
+    }
+
+    /// A notification was tapped. A friend's invite carries `kind: "invite"`
+    /// beside the alert, and it opens on the invite banner rather than on a
+    /// table: the banner's Join is still the yes. Every other kind only ever
+    /// needed the app opened, which the tap has already done.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.content.userInfo["kind"] as? String == "invite" {
+            Task { @MainActor in InviteWatch.shared.notificationArrived() }
+        }
+        completionHandler()
+    }
+
+    /// A notification landing while the app is open. The system showed none
+    /// of these before this delegate existed, and this keeps it that way. An
+    /// invite gets the app's own banner straight away instead of at the next
+    /// poll — the system's would only drop in over the top of it.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if notification.request.content.userInfo["kind"] as? String == "invite" {
+            Task { @MainActor in InviteWatch.shared.notificationArrived() }
+        }
+        completionHandler([])
     }
 }
 
@@ -187,8 +222,10 @@ struct RootView: View {
     static var didSplash = false
     @State private var splashing = !RootView.didSplash
     /// One invite poll for the whole app: a friend's "come and play" has to
-    /// find the player in a game as readily as on the home screen.
-    @StateObject private var inviteWatch = InviteWatch()
+    /// find the player in a game as readily as on the home screen. Shared, so
+    /// a tapped notification can reach it through the app delegate. The root
+    /// only starts it: the banner it raises is drawn in `InviteWindow`.
+    private let inviteWatch = InviteWatch.shared
     /// Which version of the intro this phone has been through. Zero is a phone
     /// that has never opened the app, which is the whole point of it.
     @AppStorage("mm.intro.seen") private var introSeen = 0
@@ -249,14 +286,16 @@ struct RootView: View {
             // measurement stack.
             AdSignal.start()
         }
+        // An invite sent while the phone was in a pocket is waiting when it
+        // comes out, and the poll may be ten seconds from asking.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task { await inviteWatch.load() }
+        }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay { cardPopupOverlay }
         .overlay { reliefOverlay }
         .overlay(alignment: .top) { turnBannerOverlay }
-        .overlay(alignment: .top) {
-            InviteBanner(watch: inviteWatch).environmentObject(store)
-        }
-        .animation(.spring(duration: 0.35), value: inviteWatch.invite)
         .overlay { revealOverlay }
         // The transitions above only play if the animation lives on a view
         // that CONTAINS them — hung any deeper and they simply pop in.
@@ -268,6 +307,10 @@ struct RootView: View {
         // override underneath moves every layer, open sheets included.
         .onAppear {
             ToastWindow.shared.install(store)
+            // The invite banner floats over sheets the same way; installed
+            // before the appearance is applied, so its window is one of the
+            // windows that applying it reaches.
+            InviteWindow.shared.install(store)
             applyAppearance()
         }
         .onChange(of: appearanceID) { applyAppearance() }

@@ -1405,7 +1405,8 @@ select option {
     .board-box, .board-all, .board-sets, .lb-row, .rank-row, .stats-scroll, .go-chart, .go-doubled,
     .friend, .fm-code, .dm-msg, .cd-tiles > div, .cd-next, .cd-round, .cup-ladder li, .poster-when,
     .poster-rules li, .poster-rungs .rung, .intro-points, .leave-choice, .ach-tile, .ach-row,
-    .prop-row, .quick-seat, .rolled-chip, .flag-picker, .piece-chip, .one-away, .alert) {
+    .prop-row, .quick-seat, .rolled-chip, .flag-picker, .piece-chip, .one-away, .alert,
+    .pp-title, .fm-notify) {
   --ink-2: var(--paper-ink-2);
   --ink-3: var(--paper-ink-3);
 }
@@ -2035,6 +2036,15 @@ html[data-smart-banner="yes"] .app-ctas { display: none; }
 }
 .friend-flag.lobby { box-shadow: 0 0 0 1.5px var(--gold); }
 .friend-flag.playing { box-shadow: 0 0 0 1.5px var(--good); }
+/* The question a browser will only ask from a tap, so it waits here as a slim
+   row until it has been answered either way, and then it is gone for good. */
+.fm-notify {
+  display: flex; align-items: center; gap: 10px; margin-top: 14px;
+  padding: 10px 12px; border-radius: 14px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+}
+.fm-notify-mark { flex: none; color: var(--gold); display: grid; place-items: center; }
+.fm-notify-text { flex: 1; min-width: 0; font-size: 12px; line-height: 1.45; color: var(--ink-2); }
 
 /* ---- the tournament, opened ---- */
 .cup-detail { max-width: min(94vw, 480px); }
@@ -2518,6 +2528,38 @@ html[data-smart-banner="yes"] .app-ctas { display: none; }
   color: var(--gold); background: var(--gold-soft);
   border: 1px solid var(--gold); border-radius: 99px; padding: 2px 8px;
 }
+
+/* ---- a player's profile, opened off the result sheet ---- */
+/* Sized against the scrim's padding box rather than the viewport, so on a
+   phone the sheet keeps the scrim's margin on both sides. */
+.modal.player-profile { width: min(420px, 100%); }
+/* The shelf's tiles, four across instead of three — and two by two on a
+   phone, where four numbers in a row would each get a thumb's width. */
+.ach-tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 420px) {
+  .ach-tiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.pp-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.avatar.pp-face { width: 54px; height: 54px; font-size: 23px; }
+.avatar.pp-face.has-skin { font-size: 28px; }
+.pp-who { flex: 1; min-width: 0; }
+.pp-who h2 { margin: 0; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pp-who h2 b { font-weight: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-who .sub { margin: 3px 0 0; }
+.pp-flag { flex: none; font-size: 19px; line-height: 1; }
+.pp-titles { display: flex; flex-wrap: wrap; gap: 6px; }
+.pp-title {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 99px; font-size: 12px; color: var(--gold);
+  background: var(--gold-soft); border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.pp-title b { font-weight: 850; font-variant: small-caps; letter-spacing: .4px; }
+.pp-title i { font-style: normal; font-weight: 850; font-size: 11px; }
+.pp-state {
+  display: grid; place-items: center; gap: 8px; padding: 26px 0 10px;
+  color: var(--ink-3); text-align: center; font-size: 13px;
+}
+.pp-state p { margin: 0; }
 
 /* ─────────────────────────────────────────────────────────── app shell ── */
 .app {
@@ -3797,8 +3839,11 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
 .trade-side.good .ts-label { color: var(--good); }
 .trade-side.bad .ts-label { color: var(--bad); }
 .ts-who { display: flex; align-items: center; gap: 6px; font-weight: 750; font-size: 12.5px; color: var(--ink-2); }
-.cr-flag { display: grid; place-items: center; flex: none; }
-.cr-flag .ico { width: 16px; height: 16px; }
+/* Every row's mark sits in the same box — a flag, the board's plane or utility
+   drawing, or the colour dot of a tile with none — so the names line up
+   whichever one a row wears. */
+.cr-flag { display: grid; place-items: center; flex: none; width: 18px; height: 18px; }
+.cr-flag .ico { width: 18px; height: 18px; }
 .trade-list { display: flex; flex-direction: column; gap: 2px; max-height: 210px; overflow-y: auto; margin-bottom: 10px; }
 .check-row {
   display: flex; align-items: center; gap: 7px; font-size: 12.5px;
@@ -3835,6 +3880,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r-sm);
 }
 .rank-row.me { border-color: var(--red); }
+/* A row that opens its player's profile. It is still paper, so it answers a
+   pointer the way the rail's rows do — a step up in ground — and says it goes
+   somewhere with the same chevron the friends card wears. */
+.rank-row.tap { cursor: pointer; transition: background .13s, border-color .13s; }
+.rank-row.tap:hover { background: var(--card); border-color: var(--rule-2); }
+.rank-row.tap:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.rank-chev { flex: none; width: 8px; margin-left: -3px; color: var(--ink-3); font-size: 20px; line-height: 1; }
 .rank-pos { font-size: 15px; width: 22px; text-align: center; font-weight: 800; }
 .rank-name { flex: 1; font-weight: 750; font-size: 13.5px; }
 .rank-worth { font-weight: 800; color: var(--good); font-size: 13.5px; }

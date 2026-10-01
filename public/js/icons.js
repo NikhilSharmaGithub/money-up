@@ -386,6 +386,12 @@ const BODY = {
       d="${rr(2.4, 4.6, 27.2, 18.6, 5)}${dot(10, 13.9, 2)}${dot(16, 13.9, 2)}${dot(22, 13.9, 2)}"/>
     <path d="M9.6 21.4h6.6l-4 7.4z" fill="currentColor"/>`,
 
+  /** A notification: the bell, with its clapper hanging below the rim. */
+  bell: `
+    <circle cx="16" cy="3.4" r="2" fill="currentColor"/>
+    <path d="M16 4.8c-4.9 0-8.4 3.7-8.4 8.6v4.8l-2.9 4.6c-.7 1.1.1 2.4 1.4 2.4h19.8c1.3 0 2.1-1.3 1.4-2.4l-2.9-4.6v-4.8c0-4.9-3.5-8.6-8.4-8.6z" fill="currentColor"/>
+    <path d="M12.3 26.6a3.7 3.7 0 0 0 7.4 0z" fill="currentColor" opacity=".55"/>`,
+
   /** Two arrows passing each other: one pile goes up, the other comes down.
       The handshake glyph reads as "trading" but not as "these two swap", and
       turned on its side it read as neither. */

@@ -315,9 +315,9 @@ struct TradeSheet: View {
             Haptics.tap()
         } label: {
             HStack(spacing: 9) {
-                Circle()
-                    .fill(groupColor(for: tile, P: P))
-                    .frame(width: 10, height: 10)
+                // The coin the board wears on this street, so a deal reads
+                // in the same flags as the table it is struck on.
+                TileMark(tile: tile)
                 Text(tile?.name ?? "Tile \(i)")
                     .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink)
@@ -432,12 +432,6 @@ struct TradeSheet: View {
         return state.ownership.compactMap { key, own in
             own.owner == targetId ? Int(key) : nil
         }.sorted()
-    }
-
-    private func groupColor(for tile: TileData?, P: Palette) -> Color {
-        guard let tile else { return P.ink3 }
-        if let info = store.groupInfo(for: tile) { return Color(css: info.color) }
-        return P.ink3
     }
 
     /// Slider binding onto the Int cash amount, re-clamped on the way in as
@@ -604,5 +598,39 @@ struct TradePickerSheet: View {
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A deed's mark, as the board draws it on the tile: the country's coin on a
+/// street, the airline-blue plane on an airport, the utility's own power
+/// source. A street whose board gives its group no mark keeps the group's
+/// colour dot. Always the same square, so the names beside it line up
+/// whichever of these it turns out to be.
+struct TileMark: View {
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+    let tile: TileData?
+    var size: CGFloat = 18
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        Group {
+            switch tile?.type {
+            case "airport":
+                Art.icon(.plane, size: size * 0.8, tint: Color(hex: 0x3F6FAE))
+            case "utility":
+                Art.icon(utilityGlyph(tile?.icon), size: size * 0.8)
+            default:
+                let group = tile.flatMap { store.groupInfo(for: $0) }
+                if let group, !group.flag.isEmpty {
+                    Art.groupMedallion(group.flag, Color(css: group.color), size: size)
+                } else {
+                    Circle()
+                        .fill(group.map { Color(css: $0.color) } ?? P.ink3)
+                        .frame(width: 10, height: 10)
+                }
+            }
+        }
+        .frame(width: size, height: size)
     }
 }

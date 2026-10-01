@@ -761,8 +761,7 @@ private fun TileRow(store: GameStore, i: Int, on: Boolean, onToggle: () -> Unit)
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        val colour = tile?.let { store.groupInfo(it) }?.color
-        Box(Modifier.size(10.dp).clip(CircleShape).background(cssColor(colour, p.ink3)))
+        TileBadge(store, tile)
         // The name and its marks take whatever the row can spare and the
         // price sits at the far end, as iOS's Spacer puts it. A name weighed
         // against a spacer of its own would get half the row at most, and
@@ -795,6 +794,38 @@ private fun TileRow(store: GameStore, i: Int, on: Boolean, onToggle: () -> Unit)
             Text(money(price), color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
         }
         DealTick(on)
+    }
+}
+
+/**
+ * What leads a row in the composer: the mark the board gives the same tile.
+ * A street flies its country's medallion, the coin the board pins to its
+ * inner edge; an airport its plane and a utility its water, oil, sun or wind,
+ * drawn exactly as on the tile; and a street from a board with no countries
+ * keeps its set's colour dot. One square for all of them, so every name in
+ * the list starts at the same place whatever leads it.
+ */
+@Composable
+private fun TileBadge(store: GameStore, tile: TileData?) {
+    val p = P.current
+    val group = tile?.let { store.groupInfo(it) }
+    val colour = cssColor(group?.color, p.ink3)
+    val flag = group?.flag?.takeIf { tile?.type == "property" && it.isNotBlank() }
+    val measurer = rememberTextMeasurer()
+    val wash = p.sunken
+    val ink = p.ink
+    Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+        when {
+            // The medallion sits on a small drop shadow, as in the offer's
+            // chips, which is what lifts a pale flag off a pale row.
+            flag != null -> Canvas(Modifier.size(18.dp).shadow(1.5.dp, CircleShape, clip = false)) {
+                with(Art) { drawMedallion(flag, colour, center, size.minDimension / 2f, wash = wash, measurer = measurer) }
+            }
+            tile != null && (tile.type == "airport" || tile.type == "utility") -> Canvas(Modifier.size(15.dp)) {
+                drawTileMark(tile, center, size.minDimension, ink)
+            }
+            else -> Box(Modifier.size(10.dp).clip(CircleShape).background(colour))
+        }
     }
 }
 

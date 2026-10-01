@@ -2747,7 +2747,7 @@ private fun plain(amount: Int, currency: String): String =
  * minSdk. [readerLocale] rather than the phone's whole locale, for the reason
  * given there: the digits stay the ones the rest of the screen is written in.
  */
-private fun grouped(n: Int): String =
+internal fun grouped(n: Int): String =
     android.icu.text.NumberFormat.getIntegerInstance(readerLocale()).format(n.toLong())
 
 /**

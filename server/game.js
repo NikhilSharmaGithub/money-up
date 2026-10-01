@@ -296,6 +296,13 @@ const TITLE_BOOK = [
   { key: 'rentPaid', name: 'Star Tenant', reason: (v) => `paid out ${moneyText(v)} in rent to the competition` },
 ];
 
+/**
+ * Just the names, for the profile a house player shows after a game: the
+ * titles on its shelf are drawn from the ones a real player can earn, so a
+ * bot's card never wears a badge nobody else could.
+ */
+export const TITLE_NAMES = TITLE_BOOK.map((t) => t.name);
+
 export class GameRoom {
   constructor(id, onUpdate) {
     this.id = id;
@@ -3208,6 +3215,29 @@ export class GameRoom {
     return this.hooks.codeOf?.(p.id) || null;
   }
 
+  /**
+   * The code a seat carries in the state, which is what a profile is opened by.
+   *
+   * A person's is their friend code — already public on every chat line they
+   * write, and never anything that leads back to the token. It stays theirs
+   * while a bot covers their turns: the seat is still them, and the stand-in
+   * is only for words the server speaks on their behalf. A house player gets
+   * the same H0 stand-in its chat lines are signed with, so blocking or
+   * reporting it from either place lands on one code, and the server is told
+   * the name behind it (hooks.botCard) so a profile asked for after the game
+   * can still say who it was. A pass & play guest is a chair on somebody
+   * else's phone, not a person anyone can look up, so it has none.
+   */
+  seatCode(p) {
+    if (p.isBot) {
+      const code = this.chatCodeOf(p);
+      this.hooks.botCard?.(code, { name: p.name, flag: p.flag || '', avatar: p.avatar || '' });
+      return code;
+    }
+    if (/_p\d+$/.test(p.id)) return '';
+    return this.hooks.codeOf?.(p.id) || '';
+  }
+
   // ------------------------------------------------------------- bot replies --
   //
   // Somebody types something; one bot answers it. What gets said is decided in
@@ -4222,6 +4252,9 @@ export class GameRoom {
         jail: p.jail, jailTurns: p.jailTurns, getOutCards: p.getOutCards,
         flag: p.flag, team: p.team,
         tokenSkin: p.tokenSkin || '', avatar: p.avatar || '',
+        // Who this seat is, by public code, so the results screen can open
+        // their profile. Never the id — see seatCode.
+        code: this.seatCode(p),
         bankrupt: p.bankrupt,
         // Quick-match tables are seeded with house players so nobody waits
         // around; the lobby doesn't label who is who.

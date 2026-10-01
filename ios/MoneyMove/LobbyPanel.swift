@@ -9,6 +9,7 @@ struct LobbyPanel: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
     let openSettings: () -> Void
+    let openFriends: () -> Void
 
     @State private var nameDraft = ""
 
@@ -46,6 +47,13 @@ struct LobbyPanel: View {
                     MMIconButton(.people, "Add player on this device", kind: .ghost, big: true) {
                         store.addLocalPlayer()
                     }
+                }
+
+                // Invite from the Social tab makes a table and asks one friend
+                // to it; this is how the rest are asked to the same table. A
+                // cup match already has both its players.
+                if !isCup {
+                    MMIconButton(.people, "Invite friends", kind: .ghost, big: true) { openFriends() }
                 }
 
                 if !isCup {

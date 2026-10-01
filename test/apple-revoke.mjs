@@ -278,6 +278,10 @@ async function readEverything(srv, token) {
     await get(srv, p + q);
   }
   await post(srv, '/api/profile', { token });
+  // Their public card, the way anyone at a table can open it by code — and
+  // the way they open their own.
+  const code = (await get(srv, `/api/me${q}`)).json?.code;
+  if (code) await get(srv, `/api/player?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`);
   for (const p of ['/api/leaderboard', '/api/auth/config', '/api/rooms']) await get(srv, p);
   for (const p of ['/api/admin/data', '/api/admin/reports', '/api/admin/notices']) await get(srv, `${p}?key=${ADMIN}`);
   await post(srv, '/api/admin/cup', { key: ADMIN, action: 'read' });

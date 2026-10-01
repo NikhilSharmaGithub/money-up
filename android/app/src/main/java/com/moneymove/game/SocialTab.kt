@@ -281,9 +281,52 @@ private fun FriendsSheet(
     val scope = rememberCoroutineScope()
     var code by remember { mutableStateOf("") }
     var adding by remember { mutableStateOf(false) }
+    // The friend a table is being made for, while the server makes it, so
+    // their Invite spins and nobody else's can start a second table.
+    var making by remember { mutableStateOf<String?>(null) }
 
     fun close() {
         scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+    }
+
+    /**
+     * Ask a friend to a game. Sitting at a table, it is that table. Anywhere
+     * else it is a private one made on the spot — exactly as "Create a
+     * private game" makes one, break and all, at the tap — which this device
+     * sits down at before the invite goes, so the friend who taps Join finds
+     * somebody there. The table screen takes over the moment the seat is
+     * taken, so the toast is read there.
+     *
+     * The sheet is not closed first: closing it would cancel the very
+     * coroutine waiting on the room, and sitting down replaces the tabs, and
+     * this sheet with them, anyway.
+     */
+    fun invite(f: Friend) {
+        fun send(room: String) {
+            account.invite(f, room) { error ->
+                if (error == null) {
+                    Haptics.tap()
+                    game.showToast("Invite sent to ${f.display}")
+                } else {
+                    game.showToast(error, isError = true)
+                }
+            }
+        }
+        game.roomId?.let { send(it); return }
+        if (making != null) return
+        making = f.code
+        Haptics.tap()
+        PreGameAd.beforeGame(context, account)
+        scope.launch {
+            val room = game.createRoom()
+            making = null
+            if (room == null) {
+                game.showToast("Could not create a room", isError = true)
+                return@launch
+            }
+            if (game.roomId == null) game.connect(room)
+            send(room)
+        }
     }
 
     // Opening the room asks again, as iOS's does — the profile first, so the
@@ -391,8 +434,8 @@ private fun FriendsSheet(
                     )
                     FriendList(
                         social = social,
-                        seatedAt = game.roomId,
                         invited = { account.wasInvited(it, game.roomId) },
+                        making = making,
                         onMessage = {
                             Haptics.tap()
                             onMessage(it)
@@ -407,16 +450,7 @@ private fun FriendsSheet(
                             game.connect(room)
                         },
                         // The other direction: ask them to come to yours.
-                        onInvite = { f, room ->
-                            account.invite(f, room) { error ->
-                                if (error == null) {
-                                    Haptics.tap()
-                                    game.showToast("Invited ${f.display}")
-                                } else {
-                                    game.showToast(error, isError = true)
-                                }
-                            }
-                        },
+                        onInvite = { invite(it) },
                         // Silent, as iOS's is: the list reloading is the answer.
                         onRemove = { f ->
                             account.removeFriend(f.code) { _ -> }
@@ -668,11 +702,12 @@ private fun PendingRow(
 @Composable
 private fun FriendList(
     social: SocialView?,
-    seatedAt: String?,
     invited: (String) -> Boolean,
+    /** The friend a table is being made for, whose Invite is spinning. */
+    making: String?,
     onMessage: (Friend) -> Unit,
     onJoin: (Friend, String) -> Unit,
-    onInvite: (Friend, String) -> Unit,
+    onInvite: (Friend) -> Unit,
     onRemove: (Friend) -> Unit,
     onReport: (Friend, ReportReason) -> Unit,
     onBlock: (Friend) -> Unit,
@@ -720,11 +755,11 @@ private fun FriendList(
                 for (f in friends) {
                     FriendRow(
                         f,
-                        seatedAt = seatedAt,
                         invited = invited(f.code),
+                        making = making,
                         onMessage = { onMessage(f) },
                         onJoin = { onJoin(f, it) },
-                        onInvite = { onInvite(f, it) },
+                        onInvite = { onInvite(f) },
                     ) {
                         PersonMenu(
                             name = f.display,
@@ -741,20 +776,22 @@ private fun FriendList(
 }
 
 /**
- * A friend: what they are doing right now, and the one button that matters
- * for it. A seat in a lobby is Join; a game already under way is Watch,
- * because its seats are shut and a button that promises a seat and delivers
- * a spectator's view reads as broken. Sitting at a table of your own, a
- * friend who is not at one gets Invite instead.
+ * A friend: what they are doing right now, and what can be done about it.
+ * Message and Invite are always there — Invite to the table this device is
+ * at, or to one made for them on the spot, and the friend hears about it by
+ * push wherever they are. A friend at a table adds the way to it: a seat in
+ * a lobby is Join; a game already under way is Watch, because its seats are
+ * shut and a button that promises a seat and delivers a spectator's view
+ * reads as broken.
  */
 @Composable
 private fun FriendRow(
     f: Friend,
-    seatedAt: String?,
     invited: Boolean,
+    making: String?,
     onMessage: () -> Unit,
     onJoin: (String) -> Unit,
-    onInvite: (String) -> Unit,
+    onInvite: () -> Unit,
     menu: @Composable () -> Unit,
 ) {
     val p = P.current
@@ -810,27 +847,31 @@ private fun FriendRow(
                 // about twenty by sixteen: the drawn pair at twenty-two.
                 lead = { SfMark("bubble.left.and.bubble.right.fill", 22.dp, it) },
             ) { onMessage() }
-            val room = f.room
-            // The drawn marks on these two are iOS's Art.icon with no tint
-            // handed to it, which paints in the page's ink whatever the
-            // button underneath is — so on the red Join the dice is the
-            // page's ink, not the button's.
-            when {
-                room != null -> PlainButton(
-                    if (f.started) "Watch" else "Join their table",
-                    if (f.started) FriendsButtonKind.GHOST else FriendsButtonKind.PRIMARY,
-                    Modifier.weight(1f), gap = 6.dp,
-                    lead = {
-                        if (f.started) SfMark("eye.fill", 14.dp, p.ink) else Icon("dice", size = 14.dp, tint = p.ink)
-                    },
-                ) { onJoin(room) }
-
-                seatedAt != null -> PlainButton(
-                    if (invited) "Invited" else "Invite",
-                    FriendsButtonKind.GHOST, Modifier.weight(1f), enabled = !invited, gap = 6.dp,
-                    lead = { SfMark("person.2.fill", 14.dp, p.ink) },
-                ) { onInvite(seatedAt) }
-            }
+            // Every friend gets it, whatever they are doing, as on iOS: the
+            // push finds them in a game or offline as readily as on their
+            // home screen. While a table is being made for one friend every
+            // Invite holds still, so two taps cannot make two tables.
+            val mine = making == f.code
+            PlainButton(
+                if (invited) "Invited" else "Invite",
+                FriendsButtonKind.GHOST, Modifier.weight(1f), enabled = !invited && making == null, gap = 6.dp,
+                lead = { if (mine) SfSpinner(p.ink, 14.dp) else SfMark("person.2.fill", 14.dp, p.ink) },
+            ) { onInvite() }
+        }
+        // Their table, on a line of its own, as iOS lays it out: beside two
+        // other buttons "Join their table" has no room to say what it does.
+        // The drawn marks are iOS's Art.icon with no tint handed to it, which
+        // paints in the page's ink whatever the button underneath is — so on
+        // the red Join the dice is the page's ink, not the button's.
+        f.room?.let { room ->
+            PlainButton(
+                if (f.started) "Watch" else "Join their table",
+                if (f.started) FriendsButtonKind.GHOST else FriendsButtonKind.PRIMARY,
+                Modifier.fillMaxWidth(), gap = 6.dp,
+                lead = {
+                    if (f.started) SfMark("eye.fill", 14.dp, p.ink) else Icon("dice", size = 14.dp, tint = p.ink)
+                },
+            ) { onJoin(room) }
         }
     }
 }

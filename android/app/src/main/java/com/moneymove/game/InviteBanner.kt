@@ -139,12 +139,21 @@ private fun InviteStrip(inv: Invite, onJoin: () -> Unit, onDismiss: () -> Unit) 
         }
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            // The name exactly as the server sent it, as iOS prints it.
-            Text(
-                inv.name,
-                color = p.ink, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            // The name exactly as the server sent it, as iOS prints it, and
+            // the flag they chose beside it when the server sends one — the
+            // quickest way to tell two friends called Sam apart.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    inv.name,
+                    modifier = Modifier.weight(1f, fill = false),
+                    color = p.ink, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                if (inv.flag.isNotBlank()) {
+                    Spacer(Modifier.width(5.dp))
+                    Text(inv.flag, fontSize = 13.sp, maxLines = 1, softWrap = false)
+                }
+            }
             Text(
                 "wants you at their table",
                 color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,

@@ -138,6 +138,8 @@ class MainActivity : ComponentActivity() {
                 // nothing else would.
                 if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) cups.resume()
             }
+            // Never straight in, though the push names the table: the banner,
+            // with the friend's name on it, is where the player says yes.
             PushAbout.Kind.INVITE -> messaging.refreshInvite()
             PushAbout.Kind.NOTICE -> noticesOpen = true
         }

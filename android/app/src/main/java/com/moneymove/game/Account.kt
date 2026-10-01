@@ -2,6 +2,7 @@ package com.moneymove.game
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlin.math.roundToInt
 
 /**
  * Everything the app asks the server about a person rather than a table.
@@ -87,6 +88,51 @@ data class LeaderRow(
 
 @Serializable
 data class LeaderboardView(val top: List<LeaderRow> = emptyList())
+
+/**
+ * Somebody else's public card — GET /api/player, which a finished game's
+ * standings open by the code each seat carries.
+ *
+ * Only what the server is willing to show a stranger: the name, the flag and
+ * the face they picked, and how they have done. `relation` is where this
+ * player stands with them — "self", "friend", "sent" (asked, not yet
+ * answered), "asked" (they are waiting on us) or "none" — and decides the one
+ * button the card offers.
+ */
+@Serializable
+data class PlayerProfile(
+    val code: String = "",
+    val name: String = "",
+    val flag: String = "",
+    /** Their store face as an emoji, or blank for none. */
+    val avatar: String = "",
+    val wins: Int = 0,
+    val games: Int = 0,
+    /** Coins their wins have paid, all-time. */
+    val winnings: Int = 0,
+    /** Up to three, most earned first. */
+    val titles: List<TitleCount> = emptyList(),
+    /** Epoch ms of their first game. A Double because that is what arrives. */
+    val since: Double = 0.0,
+    val relation: String = "none",
+) {
+    /**
+     * Games played, never fewer than the wins. The server promises as much,
+     * and a card reading "12 wins, 9 games" would be the one thing on it
+     * nobody believed.
+     */
+    val played: Int get() = maxOf(games, wins)
+
+    /** Wins as a whole percentage of games, nought before the first game. */
+    val winRate: Int get() = if (played == 0) 0 else (wins * 100.0 / played).roundToInt()
+}
+
+/** One title on a profile, and how many times it has landed on that player's seat. */
+@Serializable
+data class TitleCount(val title: String = "", val count: Int = 0)
+
+/** A profile, or the sentence saying why there isn't one. */
+data class PlayerLookup(val profile: PlayerProfile? = null, val error: String? = null)
 
 /**
  * One person on the friends screen — a friend, someone who has asked, or
@@ -187,6 +233,8 @@ data class Invite(
     /** The friend code of whoever sent it. */
     val from: String = "",
     val name: String = "",
+    /** Their flag, which the banner flies beside the name. Blank from an older server. */
+    val flag: String = "",
     val roomId: String = "",
     /** Epoch ms it was sent. A Double because that is what arrives. */
     val at: Double = 0.0,

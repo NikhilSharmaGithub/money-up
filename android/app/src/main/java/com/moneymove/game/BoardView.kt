@@ -864,6 +864,35 @@ private fun DrawScope.drawMonochrome(name: String, size: Float, colour: Color) {
 }
 
 /**
+ * The mark an airport or a utility wears on its tile, centred on [centre] in
+ * a frame [box] across — the same plane, turned and in the airline's blue,
+ * and the same water, oil, sun or wind in the same colours, grown to Apple's
+ * ink as the tile grows them. For a list that names a tile and should show it
+ * as the board does (the trade composer's rows); any other kind of tile draws
+ * nothing, because a street's mark is its country's medallion instead.
+ */
+internal fun DrawScope.drawTileMark(tile: TileData, centre: Offset, box: Float, ink: Color) {
+    when (tile.type) {
+        "airport" -> {
+            val size = box * (APPLE_INK["plane"] ?: 1f)
+            rotate(90f, pivot = centre) {
+                translate(centre.x - size / 2f, centre.y - size / 2f) {
+                    with(Art) { drawGlyph("plane", size, AIRLINE_BLUE) }
+                }
+            }
+        }
+        "utility" -> {
+            val mark = utilityGlyph(tile.icon)
+            val size = box * (APPLE_INK[mark] ?: 1f)
+            val mono = SF_MONO[mark]
+            translate(centre.x - size / 2f, centre.y - size / 2f) {
+                if (mono != null) drawMonochrome(mark, size, mono) else with(Art) { drawGlyph(mark, size, ink) }
+            }
+        }
+    }
+}
+
+/**
  * One of START's triangles, filling the box at [o] of [w] by [h] and
  * pointing right, its corners rounded as the system font rounds them. The
  * triangle is drawn a corner-radius smaller all round and then stroked back

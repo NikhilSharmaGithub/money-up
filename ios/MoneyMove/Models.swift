@@ -247,6 +247,11 @@ struct PlayerState: Codable, Equatable, Identifiable {
     var name: String
     var color: String
     var flag: String?
+    /// The seat's public friend code — the one its chat lines already carry —
+    /// which is what a profile is looked up by. The id cannot be: everybody
+    /// else's id arrives as an alias for this table only. A house player has
+    /// a code of its own; a pass & play guest has none, and sends it empty.
+    var code: String?
     var team: Int?
     /// Store cosmetics: emoji piece on the board / emoji face in the chip.
     var tokenSkin: String?
@@ -434,6 +439,10 @@ struct PlayerResult: Codable, Equatable, Identifiable {
     var color: String
     var flag: String?
     var avatar: String?
+    /// Kept with the result so History can still open a player's profile long
+    /// after the table that aliased their id has gone. Nil on games saved
+    /// before codes rode the state, and empty for a seat with no profile.
+    var code: String?
     var worth: Int
     var bankrupt: Bool
     var removedFor: String?
@@ -463,7 +472,7 @@ struct PlayerResult: Codable, Equatable, Identifiable {
             + state.players.filter { $0.isBankrupt }
         return ordered.map { p in
             PlayerResult(id: p.id, name: p.name, color: p.color, flag: p.flag,
-                         avatar: p.avatar,
+                         avatar: p.avatar, code: p.code,
                          worth: p.isBankrupt ? 0 : (p.netWorth ?? 0),
                          bankrupt: p.isBankrupt, removedFor: p.removedFor,
                          // Quick tables mask isBot, but the house players still
@@ -474,31 +483,6 @@ struct PlayerResult: Codable, Equatable, Identifiable {
                          stats: state.stats?[p.id])
         }
     }
-}
-
-/// Mirrors codeFor() in server/social.js: a friend code is a pure hash of the
-/// player's token, so the code of anyone at the table can be computed from
-/// their player id and fed to the normal add-by-code flow. (The server keeps a
-/// collision salt for the vanishingly unlikely clash — if that ever fires the
-/// add simply fails with "no player with that code".)
-func friendCode(for token: String) -> String {
-    let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-    var h1: UInt32 = 0x811c9dc5
-    var h2: UInt32 = 0x01000193
-    for (i, unit) in token.utf16.enumerated() {
-        let c = UInt32(unit)
-        h1 = (h1 ^ c) &* 16777619
-        h2 = (h2 &+ c &* UInt32(i + 7)) &* 2654435761
-    }
-    var out = ""
-    for i in 0..<6 {
-        let source = i < 3 ? h1 : h2
-        out.append(alphabet[Int((source >> UInt32((i % 3) * 5)) % 32)])
-        // The server rolls h1 after the third character; the value feeds
-        // nothing afterwards, but the roll is kept so the codes stay equal.
-        if i == 2 { h1 = h1 &* 2246822519 }
-    }
-    return out
 }
 
 struct WinnerInfo: Codable, Equatable {

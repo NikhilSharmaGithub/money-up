@@ -1301,7 +1301,10 @@ final class GameStore: ObservableObject {
 
     // MARK: - room lifecycle
 
-    func createRoom() {
+    /// A private table of this device's own. `seated` hears the room's code
+    /// once the server has named it and the join is on its way — which is the
+    /// first moment anybody can be asked to it.
+    func createRoom(then seated: ((String) -> Void)? = nil) {
         SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         joinError = nil
@@ -1311,6 +1314,7 @@ final class GameStore: ObservableObject {
                 guard let self else { return }
                 if let dict = args.first as? [String: Any], let id = dict["roomId"] as? String {
                     self.join(roomId: id)
+                    seated?(self.roomId ?? id)
                 } else {
                     self.showToast("Could not create a room", isError: true)
                 }
@@ -2004,6 +2008,34 @@ final class GameStore: ObservableObject {
     }
 
     // MARK: - friends (REST)
+
+    /// Asks a friend to a table, and says how it went either way. The server
+    /// sends them the notification; this only has to name the table.
+    @discardableResult
+    func invite(code: String, name: String, to room: String) async -> Bool {
+        struct Reply: Decodable { var ok: Bool?; var error: String? }
+        let reply: Reply? = try? await fetchJSON(
+            "/api/invite", method: "POST",
+            body: ["token": token, "code": code, "roomId": room])
+        guard reply?.ok == true else {
+            showToast(reply?.error ?? "Couldn't reach the server — try again.", isError: true)
+            return false
+        }
+        Haptics.tap()
+        showToast("Invite sent to \(name)")
+        return true
+    }
+
+    /// Invite from the home screen, where there is no table yet to ask anybody
+    /// to. One is made exactly the way "Create a private game" makes it, and
+    /// the invite goes as soon as the server has named the room. It lives here
+    /// rather than on the friends list because that sheet is closed, and the
+    /// home screen gone, long before the server answers.
+    func createRoomAndInvite(code: String, name: String) {
+        createRoom { [weak self] room in
+            Task { await self?.invite(code: code, name: name, to: room) }
+        }
+    }
 
     func fetchJSON<T: Decodable>(_ path: String, method: String = "GET", body: [String: Any]? = nil,
                                  raw: Bool = false) async throws -> T {

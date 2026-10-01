@@ -812,13 +812,49 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
      * Friends or under Asked, whichever is now true.
      */
     fun addFriend(code: String, quiet: Boolean = false, onDone: (String?) -> Unit = {}) =
-        viewModelScope.launch {
-            val reply = api.postOrError("/api/friends", mapOf("code" to code.trim().uppercase()))
-            val error = reply.refusal(reply.said())
-            if (!quiet) notice = error
-            load("/api/social", SocialView.serializer()) { social = it }
-            onDone(error)
+        befriend(code, quiet) { error, _ -> onDone(error) }
+
+    /**
+     * [addFriend], for a screen that needs to know which of the two it was.
+     *
+     * `accepted` is the server's `accepted: true` — they had already asked,
+     * so the add made the friendship there and then — and false for a plain
+     * request, which a profile card shows as "Request sent" rather than
+     * "Friends". Guessing it from the requests list on screen would be wrong
+     * whenever that list is older than the tap.
+     */
+    fun befriend(
+        code: String,
+        quiet: Boolean = false,
+        onDone: (error: String?, accepted: Boolean) -> Unit,
+    ) = viewModelScope.launch {
+        val reply = api.postOrError("/api/friends", mapOf("code" to code.trim().uppercase()))
+        val said = reply.said()
+        val error = reply.refusal(said)
+        if (!quiet) notice = error
+        load("/api/social", SocialView.serializer()) { social = it }
+        onDone(error, error == null && said?.get("accepted").asBool() == true)
+    }
+
+    /**
+     * Somebody's public card by their code, as GET /api/player answers it,
+     * asked as this player so the card can say where the two of them stand.
+     *
+     * Read through [Api.getOrError], because "No player with that code" is an
+     * answer the card shows in the server's own words; only a request nothing
+     * answered gets the line about the connection.
+     */
+    suspend fun player(code: String): PlayerLookup {
+        val reply = api.getOrError("/api/player", mapOf("code" to code.trim()))
+        val card = reply.body
+            ?.takeIf { reply.ok }
+            ?.let { runCatching { MMJson.decodeFromString(PlayerProfile.serializer(), it) }.getOrNull() }
+        return when {
+            card != null -> PlayerLookup(profile = card)
+            reply.offline -> PlayerLookup(error = "Couldn't reach the server — try again.")
+            else -> PlayerLookup(error = reply.error ?: "Couldn't load this profile — try again.")
         }
+    }
 
     /**
      * Yes or no to somebody who asked.

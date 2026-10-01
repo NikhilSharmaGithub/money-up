@@ -12,14 +12,16 @@ import {
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
-  cupSettledLine,
+  cupSettledLine, noteDeviceSeat,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
 import {
   api, connect, isSplitDeploy, SERVER, useServer, forgetServer, PROTO, onState,
 } from './net.js';
-import { initSocial, stopSocial } from './social.js';
+import {
+  initSocial, stopSocial, watchInvites, openFriendsModal,
+} from './social.js';
 import { noteWallet, setCoins } from './coins.js';
 
 const $ = (s) => document.querySelector(s);
@@ -165,7 +167,12 @@ function showLanding() {
   refreshLeaderboard();
   watchPublicRooms();
   initGoogleSignIn();
-  initSocial({
+  initSocial(socialHooks());
+}
+
+/** What the friends module is told: who this is, and how to get to a table. */
+function socialHooks() {
+  return {
     token, name: nickname, flag: myFlag,
     onToast: toast,
     onJoin: (id) => go(id),
@@ -173,7 +180,15 @@ function showLanding() {
     // come to it — and so an invite to the table you are already in is not
     // announced back at you.
     currentRoom: () => roomId,
-  });
+    // Inviting a friend from the landing, where there is no table yet, opens
+    // one exactly the way "Create a private game" does, with the pressed
+    // Invite button standing in for the landing's own.
+    onCreate: (btn) => new Promise((resolve) => {
+      unlock(); sfx.click();
+      takeNickname();
+      askForRoom(btn, `<span class="btn-ico">${icon('replay', null, 'spin')}</span> Creating…`, 'createRoom', resolve);
+    }),
+  };
 }
 
 // ---- store, coins & karma ------------------------------------------------
@@ -629,8 +644,11 @@ const takeNickname = () => {
  * Both landing buttons do the same dance: a throwaway socket asks the server
  * for a room id, then boot() opens the real one. Nothing here may dead-end —
  * every way out puts the button back so the rest of the landing stays usable.
+ * A friend's Invite with no table behind it does the dance too, and `onRoom`
+ * is how it hears the end: the new id once boot() has it, null on every
+ * other way out.
  */
-function askForRoom(btn, busyLabel, event) {
+function askForRoom(btn, busyLabel, event, onRoom = () => {}) {
   // Both buttons ask the same server for the same thing, so a second press on
   // the other one only opens a table nobody ever sits at.
   const others = [$('#quickBtn'), $('#createBtn')].filter((b) => b && b !== btn);
@@ -659,6 +677,7 @@ function askForRoom(btn, busyLabel, event) {
     // unhappy — pointing at the "set your server URL" form would be a lie.
     if (reachable) toast(why, 'error');
     else serverUnreachable(why);
+    onRoom(null);
   };
 
   bail = setTimeout(() => giveUp(s.connected
@@ -671,8 +690,14 @@ function askForRoom(btn, busyLabel, event) {
     clearTimeout(bail);
     s.close();
     restore();
-    if (!id) return toast('No table came back — try again in a moment.', 'error');
-    return go(id);
+    if (!id) {
+      onRoom(null);
+      return toast('No table came back — try again in a moment.', 'error');
+    }
+    go(id);
+    // Told once the room is this browser's — whoever asked for it (an invite
+    // waiting on a table to send) can now name it.
+    return onRoom(id);
   });
 }
 
@@ -849,6 +874,8 @@ function boot() {
   clearInterval(roomsTimer);
   stopDailyClock();
   stopSocial();
+  // …all but the invites, which matter most right here at a table.
+  watchInvites(socialHooks());
   $('#landing').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#shareLink').value = `${location.origin}/?room=${roomId}`;
@@ -1019,6 +1046,9 @@ function render() {
   // removed from play — the clock ran out on this seat. A quit is the player's
   // own doing, so it never gets the "your time ran out" story.
   const meNow = state.players.find((p) => p.id === meId);
+  // Noted from the first state, not at the end, so a second window at this
+  // table has already said who it is before either result sheet draws.
+  noteDeviceSeat(meNow?.code);
   if (state.status === 'playing' && meNow?.timedOut && meNow.removedFor !== 'quit' && !removedShown) {
     removedShown = true;
     showRemovedOverlay({
@@ -1640,6 +1670,13 @@ $('#copyBtn').addEventListener('click', async () => {
   }
 });
 
+// The friends sheet from the lobby, where its Invite buttons ask people to
+// this table rather than opening a new one.
+$('#friendsInviteBtn')?.addEventListener('click', () => {
+  sfx.click();
+  openFriendsModal();
+});
+
 // The same sheet from the toolbar in game and from the landing header, where
 // someone who has never played is the one who actually needs it.
 document.querySelectorAll('#helpBtn, #helpBtnLanding').forEach((b) => {
@@ -1824,8 +1861,11 @@ function recordMatch(s) {
   if (!roomId || matchSavedFor === roomId) return;
   if (!s.players?.some((p) => p.id === meId)) return; // watching, not playing
   matchSavedFor = roomId;
+  // The friend code rides along so a report card off the shelf can still
+  // open the profiles of the people on it.
   const players = (s.players || []).map((p) => ({
     id: p.id, name: p.name, color: p.color, netWorth: p.netWorth, bankrupt: p.bankrupt,
+    code: p.code || '',
   }));
   const list = readMatches();
   // A refresh on a finished board replays the ending. The same room showing

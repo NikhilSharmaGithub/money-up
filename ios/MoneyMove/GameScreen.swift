@@ -32,6 +32,7 @@ enum ActiveSheet: Identifiable {
     case tradeOffer(TradeOffer, seat: String)             // an offer, put in front of you
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
+    case friends            // the lobby's way to ask friends to this table
     case gameOver
 
     var id: String {
@@ -44,6 +45,7 @@ enum ActiveSheet: Identifiable {
         case .tradeOffer(let t, _): "offer-\(t.id)"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
+        case .friends: "friends"
         case .gameOver: "gameover"
         }
     }
@@ -303,6 +305,7 @@ struct GameScreen: View {
                                      pick: { open(.trade(from: from, to: $0, give: give, want: [])) })
                 case .chatLog(let tab): ChatLogSheet(initialTab: tab)
                 case .settings: SettingsSheet()
+                case .friends: FriendsSheet()
                 case .gameOver: GameOverSheet()
                 }
             }
@@ -586,7 +589,8 @@ struct GameScreen: View {
                                     openChat: { open(.chatLog(0)) })
                         .frame(maxHeight: .infinity)
                 } else {
-                    LobbyPanel(openSettings: { open(.settings) })
+                    LobbyPanel(openSettings: { open(.settings) },
+                               openFriends: { open(.friends) })
                         .frame(maxHeight: .infinity)
                 }
             } else {

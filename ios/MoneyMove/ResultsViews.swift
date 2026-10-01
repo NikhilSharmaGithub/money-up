@@ -9,43 +9,69 @@ import SwiftUI
 
 struct ResultStandingsCard: View {
     let results: [PlayerResult]
-    /// Offer the add-friend action on human seats that aren't this device's.
-    var showAddFriend = true
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
-    /// Seats already added this sitting, so the button can settle into a tick.
-    @State private var added: Set<String> = []
+    /// The seat whose profile is open. Adding a friend happens there, where
+    /// there is room to say who they are and where the two of you stand.
+    @State private var profileOf: PlayerResult?
 
     var body: some View {
         let P = Palette.current(scheme)
+        // The chevron's column is kept on every row once any row has one, so
+        // the worth column stays one straight edge.
+        let anyProfile = results.contains(where: opensProfile)
         MMCard {
             VStack(alignment: .leading, spacing: 10) {
                 PanelTitle("Final standings")
                 ForEach(Array(results.enumerated()), id: \.element.id) { rank, r in
-                    HStack(spacing: 10) {
-                        medal(rank, P)
-                            .frame(width: 26)
-                        AvatarView(name: r.name, colorCSS: r.color, flag: r.flag ?? "",
-                                   size: 30, emoji: r.avatar ?? "")
-                        Text(r.name)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(P.ink)
-                            .lineLimit(1)
-                        if showAddFriend, canBefriend(r) {
-                            addFriendButton(r, P)
+                    if opensProfile(r) {
+                        Button {
+                            Haptics.tap()
+                            profileOf = r
+                        } label: {
+                            row(rank, r, chevron: true, P)
                         }
-                        Spacer()
-                        // A game can end while a seat is still in the red —
-                        // the worth prints in the danger colour, never green.
-                        Text(r.outcomeLabel ?? money(r.worth))
-                            .font(.system(size: 13.5, weight: .heavy, design: .rounded))
-                            .foregroundStyle(r.bankrupt ? P.ink3 : (r.worth < 0 ? P.bad : P.good))
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens \(r.name)'s profile")
+                    } else {
+                        row(rank, r, chevron: anyProfile ? false : nil, P)
                     }
-                    .opacity(r.bankrupt ? 0.6 : 1)
                 }
             }
         }
+        .sheet(item: $profileOf) { r in
+            PlayerProfileSheet(seat: r).environmentObject(store)
+        }
+    }
+
+    /// One line of the standings. `chevron` is nil where no row on the card
+    /// opens anything, false for a still row beside ones that do.
+    private func row(_ rank: Int, _ r: PlayerResult, chevron: Bool?, _ P: Palette) -> some View {
+        HStack(spacing: 10) {
+            medal(rank, P)
+                .frame(width: 26)
+            AvatarView(name: r.name, colorCSS: r.color, flag: r.flag ?? "",
+                       size: 30, emoji: r.avatar ?? "")
+            Text(r.name)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(P.ink)
+                .lineLimit(1)
+            Spacer()
+            // A game can end while a seat is still in the red —
+            // the worth prints in the danger colour, never green.
+            Text(r.outcomeLabel ?? money(r.worth))
+                .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                .foregroundStyle(r.bankrupt ? P.ink3 : (r.worth < 0 ? P.bad : P.good))
+            if let chevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(P.ink3)
+                    .opacity(chevron ? 1 : 0)
+            }
+        }
+        .opacity(r.bankrupt ? 0.6 : 1)
+        .contentShape(Rectangle())
     }
 
     /// Podium finishes get their metal; everyone else gets their number.
@@ -61,43 +87,13 @@ struct ResultStandingsCard: View {
         }
     }
 
-    /// Humans only, and never a seat this device itself played (guest seats
-    /// share the device's token as a prefix).
-    private func canBefriend(_ r: PlayerResult) -> Bool {
-        !r.isBot && !r.id.hasPrefix(store.token) && !store.localIds.contains(r.id)
-    }
-
-    private func addFriendButton(_ r: PlayerResult, _ P: Palette) -> some View {
-        let done = added.contains(r.id)
-        return Button {
-            guard !done else { return }
-            Task { await befriend(r) }
-        } label: {
-            Image(systemName: done ? "checkmark" : "person.badge.plus")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(done ? P.good : P.ink2)
-                .frame(width: 26, height: 26)
-                .background(done ? P.goodSoft : P.sunken, in: Circle())
-                .overlay(Circle().stroke(done ? P.good.opacity(0.5) : P.rule, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(done ? "\(r.name) added" : "Add \(r.name) as a friend")
-    }
-
-    /// A player id IS their profile token, and friend codes are a pure hash of
-    /// it — so this rides the normal add-by-code flow with a computed code.
-    private func befriend(_ r: PlayerResult) async {
-        Haptics.tap()
-        struct Reply: Decodable { var ok: Bool?; var error: String? }
-        let reply: Reply? = try? await store.fetchJSON(
-            "/api/friends", method: "POST",
-            body: ["token": store.token, "code": friendCode(for: r.id)])
-        if reply?.ok == true || (reply != nil && reply?.error == nil) {
-            added.insert(r.id)
-            store.showToast("You and \(r.name) are now friends")
-        } else {
-            store.showToast(reply?.error ?? "Couldn't reach the server — try again.", isError: true)
-        }
+    /// Anyone the server gave a code — house players included — but never a
+    /// seat this device played itself. Guest seats share the device's token as
+    /// a prefix, and in History, long after the room's ids mean anything, the
+    /// player's own code still recognises their seat.
+    private func opensProfile(_ r: PlayerResult) -> Bool {
+        guard let code = r.code, !code.isEmpty else { return false }
+        return !r.id.hasPrefix(store.token) && !store.localIds.contains(r.id) && code != store.myCode
     }
 }
 
