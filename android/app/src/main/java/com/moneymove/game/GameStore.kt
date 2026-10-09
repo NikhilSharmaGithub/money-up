@@ -413,10 +413,13 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
     /**
      * "Give up". On a phone with more than one player still in, the white
-     * flag belongs to one of them, so it asks which; otherwise it concedes.
+     * flag belongs to one of them, so it asks which; otherwise it concedes
+     * for the one still in — which in pass & play can be a guest, once the
+     * main seat has already gone bankrupt.
      */
     fun requestConcede() {
-        if (aliveLocalSeats.size > 1) confirm = TableConfirm.CONCEDE else concede()
+        val alive = aliveLocalSeats
+        if (alive.size > 1) confirm = TableConfirm.CONCEDE else concede(alive.singleOrNull()?.id)
     }
 
     // ── pass & play ────────────────────────────────────────────────────────
@@ -1148,6 +1151,28 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * "Your turn", from the phone itself, when a turn comes to a seat on it
+     * while the app is off screen.
+     *
+     * Android does not suspend a process the way iOS does: one it has not
+     * frozen keeps its socket open, and to the server an open socket is a
+     * player looking at the board, so the server's own turn push never goes.
+     * The line is not dropped to make it go: a seat with no line is played by
+     * the house the moment its turn arrives, and taken after three minutes.
+     * With the line kept, the turn stays on the normal shot clock and this
+     * says so in the server's words, under the server's collapse id — a
+     * frozen app's socket does drop, and then the server's push replaces this.
+     */
+    private fun turnNote(s: GameState) {
+        val room = roomId ?: return
+        if (CupReminders.inFront) return
+        MoneyMoveMessagingService.post(
+            getApplication(), "MoneyMove", "Your turn in ${s.map.name.ifBlank { "MoneyMove" }} — room $room",
+            PushAbout(PushAbout.Kind.TURN, room = room, tag = room), tag = room,
+        )
+    }
+
     /** Everything a table leaves on screen, back to nothing — for a new join and for leaving. */
     private fun resetTable() {
         state = null
@@ -1342,6 +1367,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
                 if (isLocal(pid)) {
                     Haptics.turn()
                     SoundKit.turn()
+                    turnNote(next)
                 }
             }
         }

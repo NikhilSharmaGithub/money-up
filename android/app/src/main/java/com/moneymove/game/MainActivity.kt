@@ -78,9 +78,13 @@ class MainActivity : ComponentActivity() {
      * the same function the code box uses, so a link and a pasted code can
      * never land at two different tables. Any other page of the site that
      * reaches the app simply opens it.
+     *
+     * This activity is exported, and an intent that names it outright skips
+     * the https filter, so the URI can be anything at all. An opaque one —
+     * mailto:x — has no query to read, and asking it for one throws.
      */
     private fun roomFrom(intent: android.content.Intent?): String? {
-        val data = intent?.data ?: return null
+        val data = intent?.data?.takeIf { it.isHierarchical } ?: return null
         val path = data.pathSegments.orEmpty()
         val room = data.getQueryParameter("room")
             ?: path.getOrNull(1)?.takeIf { path.size == 2 && path[0] == "room" }
@@ -94,7 +98,10 @@ class MainActivity : ComponentActivity() {
         // A cup reminder tapped while the app was still on screen. From the
         // background, ON_START does the asking (see watchCupInFront); here
         // nothing else would, and the player tapped because a door is open.
-        if (intent.getBooleanExtra(CupReminders.EXTRA_OPEN, false) &&
+        // Read inside a catch for the same reason PushAbout.from reads its
+        // extras in one: on Android 12 and below, the first look at a bundle
+        // carrying a class this app does not know unpacks it, and throws.
+        if (runCatching { intent.getBooleanExtra(CupReminders.EXTRA_OPEN, false) }.getOrDefault(false) &&
             lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         ) {
             CupStore.shared(store).resume()
@@ -233,6 +240,10 @@ class MainActivity : ComponentActivity() {
      * because the GameStore handed to them is this activity's own; what the
      * player picked, and where they were already walked, survive a trip to
      * the background.
+     *
+     * [CupReminders.inFront] is also what keeps the sound kit quiet over
+     * whatever app the player has gone to, and what has the table say "Your
+     * turn" with a notification of its own while it is away (GameStore.turnNote).
      */
     private fun watchCupInFront() {
         val cups = CupStore.shared(store)

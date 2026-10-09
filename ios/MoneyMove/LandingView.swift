@@ -143,9 +143,18 @@ struct LandingView: View {
             await refreshMe()
             // Who this player has blocked, before any chat line can ping them.
             await store.refreshSafety()
+            // Gone already — into a game, say — before the awaits above came
+            // back. Started now, the poll would outlive the screen.
+            guard !Task.isCancelled else { return }
             cupWatch.start(store)
             noticeWatch.start(store)
         }
+        // This screen is rebuilt for every return from a game and every
+        // change of table style, each time with a watcher of its own. The old
+        // one's loop holds it alive, so unless it is stopped here it goes on
+        // polling the cup — every few seconds while one is live — next to
+        // the new one, and both walk the player in when a table is drawn.
+        .onDisappear { cupWatch.stop() }
         // A door can close while the app sits in a pocket, and a table can be
         // drawn in that time. Coming back asks straight away rather than
         // waiting out the poll.

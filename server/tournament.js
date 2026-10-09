@@ -21,11 +21,11 @@
 // more table, at the same time as the final, so nobody is ranked by a
 // tiebreak they never agreed to.
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profilesByToken } from './social.js';
 import { localiseFor } from './fx.js';
+import { writeFileAtomic, readJsonStore } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
@@ -87,29 +87,41 @@ function nextSlot(schedule, from) {
 // ─────────────────────────────────────────────────────────────── storage ──
 
 function load() {
+  // Missing is a first run; broken is set aside rather than overwritten by
+  // the next save — see storage.js.
+  const raw = readJsonStore(FILE);
+  if (!raw) return;
   try {
-    const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     state.enabled = !!raw.enabled;
     // `current` is how a single-cup world wrote itself down; a file from one
     // still opens, as the first of many.
     state.cups = Array.isArray(raw.cups) ? raw.cups : (raw.current ? [raw.current] : []);
     state.history = Array.isArray(raw.history) ? raw.history.slice(0, 50) : [];
     for (const t of state.cups) console.log(`  tournament: restored "${t.name}" (${t.state})`);
-  } catch { /* first run */ }
+  } catch (e) { console.error('tournament: the file parsed but could not be loaded —', e.message); }
+}
+
+function writeCups() {
+  try {
+    writeFileAtomic(FILE, JSON.stringify({
+      enabled: state.enabled, cups: state.cups, history: state.history.slice(0, 50),
+    }, null, 1));
+  } catch (e) { console.warn('tournament: could not save —', e.message); }
 }
 
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(FILE, JSON.stringify({
-        enabled: state.enabled, cups: state.cups, history: state.history.slice(0, 50),
-      }, null, 1));
-    } catch (e) { console.warn('tournament: could not save —', e.message); }
-  }, 400);
+  saveTimer = setTimeout(() => { saveTimer = null; writeCups(); }, 400);
   saveTimer.unref?.();
+}
+
+/** Write a pending save now — a deploy's SIGTERM does not wait 400ms. */
+export function flushCups() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  writeCups();
 }
 load();
 

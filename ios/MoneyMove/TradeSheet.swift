@@ -304,6 +304,9 @@ struct TradeSheet: View {
         let tile = store.tile(i)
         let own = store.state?.owner(of: i)
         let hasHouses = own?.houseCount ?? 0 > 0
+        // Buildings anywhere in the colour hold the bare streets too: the
+        // server refuses the whole offer over one of them.
+        let locked = store.tradeLocked(i)
         let selected = selection.wrappedValue.contains(i)
 
         return Button {
@@ -352,8 +355,8 @@ struct TradeSheet: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(hasHouses)
-        .opacity(hasHouses ? 0.45 : 1)
+        .disabled(locked)
+        .opacity(locked ? 0.45 : 1)
     }
 
     /// A slider instead of a keypad: the track ends at the player's own cash,
@@ -464,16 +467,14 @@ struct TradeSheet: View {
         let give = TradeSide(
             money: min(max(0, giveCash), max(0, fromPlayer?.money ?? 0)),
             tiles: giveTiles.filter {
-                let own = state.owner(of: $0)
-                return own?.owner == fromId && own?.houseCount ?? 0 == 0
+                state.owner(of: $0)?.owner == fromId && !store.tradeLocked($0)
             }.sorted(),
             cards: min(max(0, giveCards), max(0, fromPlayer?.getOutCards ?? 0))
         )
         let get = TradeSide(
             money: min(max(0, getCash), max(0, target.money)),
             tiles: getTiles.filter {
-                let own = state.owner(of: $0)
-                return own?.owner == targetId && own?.houseCount ?? 0 == 0
+                state.owner(of: $0)?.owner == targetId && !store.tradeLocked($0)
             }.sorted(),
             cards: min(max(0, getCards), max(0, target.getOutCards ?? 0))
         )

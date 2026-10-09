@@ -21,14 +21,18 @@ final class SoundKit {
     /// whichever node falls quiet first, not simply the next one round.
     private var busyUntil: [TimeInterval] = []
     private var started = false
+    /// When the engine was last asked to come back, so a run of sounds while
+    /// it cannot (all through a phone call) asks once a second, not per blip.
+    private var restartTriedAt: TimeInterval = 0
     fileprivate let sampleRate: Double = 44_100
     private lazy var format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
     private init() {}
 
-    /// Idempotent; call on the first user gesture so the engine is warm.
+    /// Idempotent; call on the first user gesture so the engine is warm. Later
+    /// calls bring back an engine something has stopped since.
     func warmUp() {
-        guard !started else { return }
+        guard !started else { return restart() }
         started = true
         try? AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -44,8 +48,42 @@ final class SoundKit {
             busyUntil.append(0)
         }
         engine.mainMixerNode.outputVolume = 0.6
+        // A call, Siri or an alarm interrupts even an ambient session, and a
+        // new output route (AirPods connecting) can change the hardware format.
+        // Either one stops the engine, and nothing starts it again by itself:
+        // every sound after that went to nodes that were no longer playing.
+        let center = NotificationCenter.default
+        center.addObserver(forName: AVAudioSession.interruptionNotification,
+                           object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+            self?.restart(force: true)
+        }
+        center.addObserver(forName: .AVAudioEngineConfigurationChange,
+                           object: engine, queue: .main) { [weak self] _ in
+            self?.restart(force: true)
+        }
+        restart(force: true)
+    }
+
+    /// Starts the engine if it is not running, and only then the voices: a
+    /// player node told to play on a stopped engine raises an Objective-C
+    /// exception, which Swift cannot catch, and the app dies over a beep.
+    private func restart(force: Bool = false) {
+        guard started, !engine.isRunning else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - restartTriedAt > 1 else { return }
+        restartTriedAt = now
+        try? AVAudioSession.sharedInstance().setActive(true)
         try? engine.start()
-        players.forEach { $0.play() }
+        guard engine.isRunning else { return }
+        // Whatever was handed to a voice before the stop never played, and
+        // played now it would land all at once; the voices start empty.
+        for i in players.indices {
+            players[i].stop()
+            players[i].play()
+            busyUntil[i] = 0
+        }
     }
 
     // MARK: - synthesis
@@ -123,6 +161,11 @@ final class SoundKit {
     /// genuinely busy.
     private func enqueue(_ buffer: AVAudioPCMBuffer) {
         guard !players.isEmpty else { return }
+        // Stopped since the last sound, by an interruption whose end was never
+        // announced (it happened in the background) or a start that failed:
+        // try once to bring it back, and drop this sound if it will not come.
+        if !engine.isRunning { restart() }
+        guard engine.isRunning else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let i = busyUntil.indices.min { busyUntil[$0] < busyUntil[$1] } ?? 0
         busyUntil[i] = max(now, busyUntil[i]) + Double(buffer.frameLength) / sampleRate

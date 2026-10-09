@@ -35,10 +35,20 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
     private var pingTimeout: TimeInterval = 20
     private var lastHeard = Date()
     private var watchdog: Timer?
+    /// The one reconnect waiting to happen. A drop is reported more than once
+    /// (the read fails, the task completes with an error, the watchdog gives
+    /// up), and a timer per report used to stack up into a storm of opens
+    /// that orphaned each other's handshakes.
+    private var reconnectWork: DispatchWorkItem?
 
     override init() {
         super.init()
-        session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        // Every callback on the main queue, where emit(), connect() and the
+        // rest are called from. With a private queue the reads mutated acks,
+        // pendingEmits and status on one thread while the game mutated them
+        // on another, and a Swift dictionary written from two threads at once
+        // can crash.
+        session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
     }
 
     // MARK: - lifecycle
@@ -54,15 +64,29 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
         manuallyClosed = true
         generation += 1
         watchdog?.invalidate()
+        reconnectWork?.cancel()
+        reconnectWork = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        // Whatever was waiting for this connection was meant for this table.
+        // Left queued, it would go out on the next connect — which is usually
+        // another table's, before that table's join.
+        pendingEmits = []
         status = .disconnected
     }
 
     private func open() {
         guard let baseURL else { return }
+        reconnectWork?.cancel()
+        reconnectWork = nil
         generation += 1
         let gen = generation
+        // The task being replaced is let go of properly; overwritten, it
+        // stayed open on the server until the server timed it out.
+        task?.cancel(with: .goingAway, reason: nil)
+        // The watchdog measures silence from here, so a handshake that has
+        // only just started is not killed for the quiet before it.
+        lastHeard = Date()
         status = .connecting
 
         var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -90,8 +114,11 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
+    /// Once per connection. open() always moves to .connecting first, so the
+    /// first report of a drop gets through and the echoes of the same drop
+    /// find the status already .disconnected.
     private func dropped() {
-        guard !manuallyClosed else { return }
+        guard !manuallyClosed, status != .disconnected else { return }
         status = .disconnected
         scheduleReconnect()
     }
@@ -99,13 +126,13 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
     private func scheduleReconnect() {
         reconnectAttempt += 1
         let delay = min(10, 0.5 * pow(1.8, Double(reconnectAttempt)))
-        deliver { [weak self] in
-            guard let self, !self.manuallyClosed else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, !self.manuallyClosed, self.status != .connected else { return }
-                self.open()
-            }
+        reconnectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.manuallyClosed, self.status != .connected else { return }
+            self.open()
         }
+        reconnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // MARK: - frames
@@ -136,6 +163,10 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
         switch kind {
         case "0": // connected to namespace
             reconnectAttempt = 0
+            // The status listeners run right here, on the main queue, before
+            // the queue below is sent. That is what puts the game's "join"
+            // ahead of a roll or a buy tapped during the reconnect — sent
+            // first, those reach a socket with no room and are refused.
             status = .connected
             let queued = pendingEmits
             pendingEmits = []
@@ -190,8 +221,12 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func send(_ text: String) {
-        task?.send(.string(text)) { [weak self] error in
-            if error != nil { self?.dropped() }
+        guard let sent = task else { return }
+        sent.send(.string(text)) { [weak self] error in
+            // A frame that died with a connection already replaced says
+            // nothing about the new one, which may be mid-handshake.
+            guard let self, error != nil, sent === self.task else { return }
+            self.dropped()
         }
     }
 
@@ -219,6 +254,9 @@ final class SocketIOClient: NSObject, URLSessionWebSocketDelegate {
     // MARK: - URLSessionWebSocketDelegate
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if error != nil { dropped() }
+        // Only the connection in use. A task already replaced or closed has
+        // nothing to say about the one that took its place.
+        guard error != nil, task === self.task else { return }
+        dropped()
     }
 }

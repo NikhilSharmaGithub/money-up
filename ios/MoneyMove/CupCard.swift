@@ -308,9 +308,12 @@ final class CupWatch: ObservableObject {
         var misses = 0
         while !Task.isCancelled {
             guard await load() else {
+                // Slower and slower, but never giving up: a loop that ended
+                // here left `task` set, start() could not restart it, and a
+                // minute offline cost the player their walk to the cup table
+                // for the rest of the session.
                 misses += 1
-                guard misses <= 4 else { return }
-                try? await Task.sleep(for: .seconds(Double(misses) * 5))
+                try? await Task.sleep(for: .seconds(min(60, Double(misses) * 5)))
                 continue
             }
             misses = 0

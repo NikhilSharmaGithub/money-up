@@ -27,8 +27,9 @@ import {
   dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
   registerPushDevice, realCounts, roomOf,
   loginOf, takeAppleRefresh, appleSubjectLinkedElsewhere, forgetAppleSubject,
-  appleLoginVerified, passAppleRefreshOn, dropUnverifiedAppleLogins,
+  appleLoginVerified, passAppleRefreshOn, dropUnverifiedAppleLogins, flushSocial,
 } from './social.js';
+import { writeFileAtomic, readJsonStore } from './storage.js';
 import {
   verifyIdentityToken, exchangeCode, queueRevocation, verifyServerNotification,
   startAppleRevocationRetries, appleRevokeReady, withdrawQueuedRevocations,
@@ -1001,17 +1002,16 @@ if (!APPLE_UNVERIFIED_SIGNIN) {
 // is the memory — an operator action that isn't written down didn't happen.
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.json');
 let auditLog = [];
-try {
-  const raw = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8'));
+{
+  const raw = readJsonStore(AUDIT_FILE);   // null on a first run
   if (Array.isArray(raw)) auditLog = raw;
-} catch { /* first run */ }
+}
 
 function audit(action, target, detail) {
   auditLog.push({ at: Date.now(), action, target: String(target || ''), detail: String(detail || '').slice(0, 200) });
   if (auditLog.length > 2000) auditLog.splice(0, auditLog.length - 2000);
   try {
-    fs.mkdirSync(path.dirname(AUDIT_FILE), { recursive: true });
-    fs.writeFileSync(AUDIT_FILE, JSON.stringify(auditLog));
+    writeFileAtomic(AUDIT_FILE, JSON.stringify(auditLog));
   } catch (err) {
     console.warn('audit: could not persist —', err.message);
   }
@@ -1025,14 +1025,11 @@ const fileInfo = (file) => {
   } catch { return null; }
 };
 const stats = { gamesStarted: 0, gamesEnded: 0, recent: [] };
-try {
-  Object.assign(stats, JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')));
-} catch { /* first run */ }
+Object.assign(stats, readJsonStore(STATS_FILE) || {});   // nothing on a first run
 
 function saveStats() {
   try {
-    fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
-    fs.writeFileSync(STATS_FILE, JSON.stringify(stats));
+    writeFileAtomic(STATS_FILE, JSON.stringify(stats));
   } catch (err) {
     console.warn('stats: could not persist —', err.message);
   }
@@ -1071,7 +1068,17 @@ function recordTransitions(room) {
     const winners = room.winningTeam != null
       ? room.players.filter((p) => p.team === room.winningTeam && !p.isBot && !p.bankrupt)
       : room.players.filter((p) => p.id === room.winner?.id && !p.isBot);
-    for (const w of winners) awardWin(w.id, 2, `won ${room.id} on ${room.map.name}`);
+    // …but only for a game that was actually played. Conceding the moment the
+    // dice start, then Play again, was a loop two windows on one machine could
+    // run for coins and leaderboard wins as fast as a script could click.
+    // Every seat has to have had a couple of turns first; a walkover is a
+    // result, not a win worth paying. The daily ceiling in awardWin covers
+    // the games that do pass.
+    const playedOut = turns >= 2 * room.players.length;
+    const pay = (token, coins, note, opts = {}) => {
+      if (playedOut) awardWin(token, coins, note, { ...opts, daily: true });
+    };
+    for (const w of winners) pay(w.id, 2, `won ${room.id} on ${room.map.name}`);
     // Second place is whoever stood tallest among the beaten: solvent seats
     // by net worth first, then whoever fell last. Net worth walks the
     // ownership map, and this whole block runs inside a state broadcast —
@@ -1084,7 +1091,7 @@ function recordTransitions(room) {
       .sort((a, b) => Number(a.bankrupt) - Number(b.bankrupt) || worth(b) - worth(a))[0];
     // Second place is paid, not credited with a win: `placing` keeps the coin
     // out of the lifetime tally the leaderboard and the wins column read.
-    if (runnerUp) awardWin(runnerUp.id, 1, `runner-up in ${room.id}`, { placing: true });
+    if (runnerUp) pay(runnerUp.id, 1, `runner-up in ${room.id}`, { placing: true });
     // The same moment feeds the trophy shelf and the lifetime tallies: one
     // title per human — winners and losers alike — and the game's turn count
     // for everyone who saw it end. House players fall through both filters:
@@ -1577,6 +1584,20 @@ const rooms = new Map();
 const socketsOf = new Map();  // roomId -> Set(socketId)
 const seatsOf = new Map();    // roomId -> Map(playerId -> Set(socketId))
 
+/**
+ * Rooms live in memory, and making one costs a client a single message: a
+ * createRoom, a quickplay, a join to a code nobody holds. Unbounded, one
+ * script could mint them by the thousand a second until the box ran out of
+ * memory and took every live game on it down too. So there is a ceiling far
+ * above any real evening (MM_MAX_ROOMS moves it for a test), a limit on how
+ * many new rooms one connection may open in a minute, and rooms nobody ever
+ * sat down in are swept after a couple of minutes rather than half an hour.
+ */
+const MAX_ROOMS = Math.max(1, Math.floor(Number(process.env.MM_MAX_ROOMS)) || 5000);
+const NEW_ROOMS_PER_MINUTE = 10;
+const EMPTY_ROOM_MS = 2 * 60 * 1000;
+const ROOM_LIMIT_MESSAGE = 'Too many new tables right now — try again in a minute';
+
 /** A player is only dropped once their last tab/device goes away. */
 function claimSeat(roomId, playerId, socketId) {
   const seats = seatsOf.get(roomId) || seatsOf.set(roomId, new Map()).get(roomId);
@@ -1688,7 +1709,17 @@ function getRoom(id) {
   // cup is asked, every time a room is made, whether this id is one of its
   // own. The game inside is gone either way; the match is not.
   const match = cup.matchByRoom(id);
-  if (match) dressCupTable(room, match);
+  if (match) {
+    dressCupTable(room, match);
+    // Only a rebuilt table comes through here — a fresh one is made before
+    // the cup has written its id down — and a rebuilt table is one whose
+    // players were just thrown out by a deploy. The match's own clocks
+    // (its door, its eight minutes, its whistle) ran on while the process
+    // was down, so judged by them alone the first sweep after boot walked
+    // over or voided anybody whose phone was not back within seconds. They
+    // get a fresh eight minutes to sit back down.
+    room.cupGraceUntil = cup.clock() + CUP_NO_SHOW_MS;
+  }
   rooms.set(id, room);
   socketsOf.set(id, new Set());
   return room;
@@ -1736,13 +1767,15 @@ if (process.env.MM_QUICK_MS) {
  * the table they are waiting for, and changing it under them would make the
  * lobby a thing not worth reading.
  */
-function quickMatchRoom() {
+function quickMatchRoom({ mayCreate = () => true } = {}) {
   const waiting = pickQuickRoom(rooms.values(), Date.now());
   if (waiting) {
     // They are a round trip away; the table holds still until they land.
     waiting.expectArrival();
     return waiting;
   }
+  // Joining a table that is already there is free; making one is not.
+  if (!mayCreate()) return null;
   const room = getRoom(newRoomId());
   // A quick game should not be the same game every time. The board is drawn
   // from what everybody can actually sit down on today — the house board and
@@ -1929,6 +1962,8 @@ function seatCupMatches() {
 const CUP_NO_SHOW_MS = 8 * 60 * 1000;
 /** How long before a door shuts anybody still missing gets one last nudge. */
 const CUP_LAST_CALL_MS = 3 * 60 * 1000;
+/** The least a cup game replayed after a restart runs before its whistle. */
+const CUP_REPLAY_MS = 10 * 60 * 1000;
 
 /**
  * Tables nobody opened. A match that has started playing is left completely
@@ -1960,7 +1995,13 @@ function sweepCupNoShows() {
     // way every timed sport decides one: whoever is ahead. Net worth is this
     // game's score.
     const room = rooms.get(m.roomId);
-    if (m.decideAt && now >= m.decideAt && room?.status === 'playing') {
+    // A game replayed after a restart starts again from equal money, so a
+    // whistle that had already gone would decide it on the very next sweep —
+    // on nothing at all. It gets a real stretch of its own first.
+    const whistle = m.decideAt && room?.cupRestartedAt
+      ? Math.max(m.decideAt, room.cupRestartedAt + CUP_REPLAY_MS)
+      : m.decideAt;
+    if (whistle && now >= whistle && room?.status === 'playing') {
       const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));
       const standing = room.players.filter((p) => !p.bankrupt)
         .sort((a, b) => worth(b) - worth(a));
@@ -1996,6 +2037,8 @@ function sweepCupNoShows() {
     // eight minutes it always did.
     const due = m.deadline ? now >= m.deadline : now - (m.startedAt || 0) >= CUP_NO_SHOW_MS;
     if (!due) continue;
+    // A table rebuilt after a restart is still inside its own fresh wait.
+    if (room?.cupGraceUntil && now < room.cupGraceUntil) continue;
     if (room && room.status !== 'lobby') continue;   // being played: not our business
     const came = [m.a, m.b].filter((token) => room?.player(token));
     if (came.length >= 2) continue;                  // both there, the table will start itself
@@ -2042,11 +2085,10 @@ setInterval(() => {
  * game still marked as playing, means it has stopped.
  */
 function roomHasWork(room) {
-  if (room.auction) return true;
-  for (const t of Object.values(room.timers || {})) {
-    if (t && typeof t === 'object') return true;
-  }
-  return false;
+  // Asked of the room itself, which knows which of its handles are still
+  // pending and when a person holding the turn simply has no clock — see
+  // GameRoom.workPending.
+  return room.workPending();
 }
 
 setInterval(() => {
@@ -2072,15 +2114,27 @@ setInterval(() => {
     // nextTurn() is enough and it heals permanently — the turn landing on an
     // absent chair is exactly what marks that chair bot-covered, which is the
     // cover the seat could not be given before.
-    if (room.status === 'playing' && live > 0 && !roomHasWork(room)) {
-      const stuck = (room.stalledSince ||= Date.now());
-      if (Date.now() - stuck > 20_000) {
+    //
+    // Only a table somebody seated is watching: with nobody here the room
+    // holds still on purpose (see GameRoom.maybeBot), and that is not a stall.
+    // And only the same turn twice: a stall first seen on a turn that has
+    // since moved on says nothing about the turn that replaced it, which may
+    // have begun a second ago.
+    const turnMark = room.turn ? `${room.turn.playerId}:${room.turnCount}` : null;
+    if (room.status === 'playing' && live > 0 && room.watched && !roomHasWork(room)) {
+      if (room.stalledTurn !== turnMark) {
+        room.stalledTurn = turnMark;
+        room.stalledSince = Date.now();
+      }
+      if (Date.now() - room.stalledSince > 20_000) {
         room.stalledSince = null;
+        room.stalledTurn = null;
         console.warn(`room ${id}: nothing was due to happen — poking the turn on`);
         try { room.nextTurn(); } catch (err) { console.error(`room ${id}: poke failed:`, err); }
       }
     } else {
       room.stalledSince = null;
+      room.stalledTurn = null;
     }
     // A table nobody is watching holds still by itself now, so letting it sit
     // costs nothing but the object. Give people a real chance to come back to
@@ -2111,7 +2165,13 @@ setInterval(() => {
       room.status = 'ended';
       room.dispose();
     }
-    if (live === 0 && idleFor > 30 * 60 * 1000) {
+    // A room nobody ever sat down in — a createRoom with no join after it, a
+    // code typed and abandoned — is just an object, and making one costs a
+    // client nothing. It goes after a couple of minutes rather than half an
+    // hour, so they cannot be minted faster than they are swept. A cup table
+    // waits for its two players however long that takes.
+    const neverUsed = room.status === 'lobby' && room.players.length === 0 && !room.cupMatch;
+    if (live === 0 && (idleFor > 30 * 60 * 1000 || (neverUsed && idleFor > EMPTY_ROOM_MS))) {
       room.dispose();
       rooms.delete(id);
       socketsOf.delete(id);
@@ -2144,9 +2204,57 @@ io.on('connection', (socket) => {
   };
 
 
+  // The rooms this connection has brought into being in the last minute —
+  // see MAX_ROOMS. A real player makes one a game; ten a minute is a script.
+  let opened = [];
+  const mayMakeRoom = () => {
+    const now = Date.now();
+    opened = opened.filter((at) => now - at < 60_000);
+    if (opened.length >= NEW_ROOMS_PER_MINUTE || rooms.size >= MAX_ROOMS) return false;
+    opened.push(now);
+    return true;
+  };
+  // A refusal still answers the callback, so no client is left spinning on a
+  // "Creating…" that will never land — and one with no roomId in it is what
+  // every client already reads as "that didn't work".
+  const refuseRoom = (cb) => {
+    fail(ROOM_LIMIT_MESSAGE);
+    if (typeof cb === 'function') cb({ error: ROOM_LIMIT_MESSAGE });
+  };
+
+  /**
+   * Take this socket out of the room it is in: the same goodbye a closed
+   * socket gets, said early. Another tab or phone on the same seat keeps it.
+   */
+  const leaveRoom = () => {
+    if (!room) return;
+    const left = room;
+    const leaver = playerId;
+    room = null;
+    playerId = null;
+    socket.leave(left.id);
+    socketsOf.get(left.id)?.delete(socket.id);
+    if (releaseSeat(left.id, leaver, socket.id) > 0) return;
+    clearPresence(leaver);
+    left.removePlayer(leaver);
+    // Nobody left watching: an empty room dies, and so does a quick table —
+    // its remaining seats are house players performing to an empty theatre.
+    const deserted = (socketsOf.get(left.id)?.size || 0) === 0
+      && (left.players.length === 0 || (left.quick && left.players.every((pl) => pl.isBot)));
+    // Only if it is still the room by that name — a leave can land after the
+    // reaper has already swept it and a new table has taken the code.
+    if (deserted && rooms.get(left.id) === left) {
+      left.dispose();
+      rooms.delete(left.id);
+      socketsOf.delete(left.id);
+      seatsOf.delete(left.id);
+    }
+  };
+
   socket.on('createRoom', safely('createRoom', (payload = {}, cb) => {
     const t = String(payload?.token || '').slice(0, 64);
     if (t && isBanned(t)) return fail('You are banned from MoneyMove');
+    if (!mayMakeRoom()) return refuseRoom(cb);
     const id = newRoomId();
     getRoom(id);
     if (typeof cb === 'function') cb({ roomId: id });
@@ -2156,7 +2264,8 @@ io.on('connection', (socket) => {
   socket.on('quickplay', safely('quickplay', (payload = {}, cb) => {
     const t = String(payload?.token || '').slice(0, 64);
     if (t && isBanned(t)) return fail('You are banned from MoneyMove');
-    const room = quickMatchRoom();
+    const room = quickMatchRoom({ mayCreate: mayMakeRoom });
+    if (!room) return refuseRoom(cb);
     if (typeof cb === 'function') cb({ roomId: room.id });
     else socket.emit('roomCreated', { roomId: room.id });
   }));
@@ -2173,6 +2282,29 @@ io.on('connection', (socket) => {
       return socket.emit('joinFailed', { message: 'You are banned from MoneyMove', spectate: false });
     }
     roomId = String(roomId).toLowerCase().slice(0, 12);
+    const asked = String(token).slice(0, 64);
+    // One socket, one seat. A client that reuses its socket to go somewhere
+    // else — the iOS invite banner and "Join their table" both do, mid-game —
+    // used to stay in the old room as well: both rooms' states arrived on
+    // one socket, and the old seat was never released, so it stayed
+    // "connected" for ever with no grace and no house cover, shot-clocked
+    // out with a karma penalty, and the room behind it never reaped. The same
+    // room under the same name is a reconnect, and stays one.
+    if (room && (room.id !== roomId || playerId !== asked)) leaveRoom();
+    // A code nobody holds opens a fresh room — an invite to a table that has
+    // since closed lands somewhere — so it costs what a createRoom costs. A
+    // cup table rebuilt after a restart is the cup's, and always opens.
+    if (!rooms.has(roomId) && !cup.matchByRoom(roomId) && !mayMakeRoom()) {
+      return socket.emit('joinFailed', { message: ROOM_LIMIT_MESSAGE, spectate: false });
+    }
+    const target = getRoom(roomId);
+    // A house seat belongs to the house. Its id is in every state at a
+    // private table, and joining under it used to reconnect the caller INTO
+    // that seat — from then on they played it, and could hand its whole
+    // bankroll to themselves in a trade. No real client ever joins as a bot.
+    if (target.player(asked)?.isBot) {
+      return socket.emit('joinFailed', { message: 'That seat is taken', spectate: false });
+    }
     // The one thing a client has to say to get patches instead of whole
     // states. Said here rather than in a handshake of its own so it rides
     // every reconnect for free, and so silence keeps its old meaning.
@@ -2181,8 +2313,8 @@ io.on('connection', (socket) => {
     } else {
       deltaOf.delete(socket.id);
     }
-    room = getRoom(roomId);
-    playerId = String(token).slice(0, 64);
+    room = target;
+    playerId = asked;
     // A cup table has exactly two chairs and both have names on them. The
     // link is private, but a link can be forwarded, and a match somebody's
     // friend sat down at is not a match. Everyone else may watch, which is
@@ -2225,6 +2357,9 @@ io.on('connection', (socket) => {
     // for the other to wait, wonder, and leave.
     if (room.cupMatch && room.status === 'lobby' && room.players.length >= 2) {
       room.start(room.hostId);
+      // A table rebuilt after a restart is replaying its game from the top —
+      // see the whistle in sweepCupNoShows.
+      if (room.cupGraceUntil && room.status === 'playing') room.cupRestartedAt = cup.clock();
     }
     socket.emit('you', { playerId, roomId });
     const held = seatsHeldBy(roomId, socket.id);
@@ -2289,6 +2424,11 @@ io.on('connection', (socket) => {
     if (playerId !== room.hostId) return fail('Only the host can remove players');
     // Removing your opponent is not a way to win a cup match.
     if (room.cupMatch) return fail('Not at a cup table');
+    // Before the dice only, as every client already shows it. Mid-game
+    // removePlayer is the "lost connection" path: it marked a player who was
+    // still sitting there as gone, handed their turns to the house, and when
+    // the grace ran out took their deeds and a karma point.
+    if (room.status !== 'lobby') return fail('Players can only be removed before the game starts');
     const target = room.resolveId(String(targetId || ''));
     if (target === room.hostId) return;
     room.removePlayer(target);
@@ -2314,10 +2454,15 @@ io.on('connection', (socket) => {
   // "I'm ready", or `false` to take it back. Only a Play-now lobby has one.
   socket.on('ready', guard((on) => ok(room.setReady(playerId, on !== false))));
 
-  /** Like `guard`, but the move also resets this player's shot clock. */
+  /**
+   * Like `guard`, but a move that went through also resets this player's
+   * shot clock. One that was refused — a roll after rolling, a mortgage on a
+   * tile they do not own — is not a move, and resetting the clock for it let
+   * a player hold a table for ever by sending refused actions.
+   */
   const onTurn = (fn) => guard((...args) => {
     const res = fn(...args);
-    room.touchTurnClock(playerId);
+    if (res !== false && room) room.touchTurnClock(playerId);
     return res;
   });
 
@@ -2335,10 +2480,14 @@ io.on('connection', (socket) => {
   // exists at all.
   socket.on('buildAll', onTurn((group) => ok(room.buildAll(playerId, String(group || '')))));
   socket.on('sellHouse', onTurn((tile) => {
-    if (!room.sellHouse(playerId, Number(tile))) fail('Cannot sell that building');
+    const done = !!room.sellHouse(playerId, Number(tile));
+    if (!done) fail('Cannot sell that building');
+    return done;
   }));
   socket.on('mortgage', onTurn((tile) => {
-    if (!room.mortgage(playerId, Number(tile))) fail('Cannot mortgage that property');
+    const done = !!room.mortgage(playerId, Number(tile));
+    if (!done) fail('Cannot mortgage that property');
+    return done;
   }));
   socket.on('unmortgage', onTurn((tile) => ok(room.unmortgage(playerId, Number(tile)))));
 
@@ -2365,30 +2514,40 @@ io.on('connection', (socket) => {
     ok(room.rematch(playerId));
   }));
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', safely('disconnect', () => {
     // The remembered state goes out with the socket that was reading it.
     deltaOf.delete(socket.id);
-    if (!room) return;
-    socketsOf.get(room.id)?.delete(socket.id);
-    // Other tabs of the same player keep the seat alive.
-    if (releaseSeat(room.id, playerId, socket.id) > 0) return;
-    clearPresence(playerId);
-    room.removePlayer(playerId);
-    // Nobody left watching: an empty room dies, and so does a quick table —
-    // its remaining seats are house players performing to an empty theatre.
-    const deserted = (socketsOf.get(room.id)?.size || 0) === 0
-      && (room.players.length === 0 || (room.quick && room.players.every((pl) => pl.isBot)));
-    if (deserted) {
-      room.dispose();
-      rooms.delete(room.id);
-      socketsOf.delete(room.id);
-      seatsOf.delete(room.id);
-    }
-  });
+    // Other tabs of the same player keep the seat alive — see leaveRoom.
+    leaveRoom();
+  }));
 });
 
 server.listen(PORT, () => {
   console.log(`\n  🎲  MoneyMove running at http://localhost:${PORT}\n`);
+});
+
+// Every deploy stops this process with SIGTERM, and Node's own answer to one
+// is to exit on the spot — taking with it every wallet, ledger and cup write
+// still waiting out its debounce. Write those first, then go.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.once(signal, () => {
+    try {
+      flushSocial();
+      cup.flushCups();
+    } catch (err) {
+      console.error(`${signal}: could not flush everything —`, err);
+    } finally {
+      process.exit(0);
+    }
+  });
+}
+
+// An async route that throws — a payment provider's network blip mid-request
+// is the likely one — is a rejected promise Express 4 never sees, and Node's
+// default for one of those is to end the process: every live game on the box
+// for one failed request. Say so, loudly, and keep serving.
+process.on('unhandledRejection', (err) => {
+  console.error('unhandled rejection:', err);
 });
 
 export { app, server, io, rooms, COLORS };

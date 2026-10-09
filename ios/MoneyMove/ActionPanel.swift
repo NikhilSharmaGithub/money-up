@@ -550,8 +550,12 @@ struct ActionPanel: View {
                                 color: glass.goldInk, faces: viewerColours(trade))
                 }
                 // Accepting a deal you can't fund just bounces off the server
-                // with a toast; say so before the tap instead.
-                let short = trade.get.money - (store.state?.player(trade.to)?.money ?? 0)
+                // with a toast; say so before the tap instead. A deal that asks
+                // for no cash is always affordable, as respondTrade() has it —
+                // a debtor's negative balance must not grey out the very offer
+                // that would pay the debt off.
+                let short = trade.get.money > 0
+                    ? trade.get.money - (store.state?.player(trade.to)?.money ?? 0) : 0
                 if short > 0 {
                     Text("Short \(money(short)) — sell or mortgage first.")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))

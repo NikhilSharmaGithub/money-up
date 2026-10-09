@@ -262,6 +262,15 @@ console.log('\n▶ teams');
   if (room.status !== 'ended') fail('game should end once a whole team is bankrupt');
   if (room.winningTeam !== room.player('a').team) fail('the surviving team should be recorded as the winner');
   ok(`team game ends on the last opponent (Team ${TEAMS[room.winningTeam].name} won)`);
+
+  // The result sheets name the team from these two fields: `winner` alone is
+  // only the first survivor, and the web once crowned that one teammate.
+  const ended = room.serialize();
+  const teamName = ended.teamInfo?.[ended.winningTeam]?.name;
+  if (ended.winningTeam !== room.player('a').team || !teamName) {
+    fail('the ended state should carry the winning team and its name');
+  }
+  ok(`the ended state names Team ${teamName} for the result sheet`);
 }
 
 {
@@ -1154,8 +1163,23 @@ console.log('\n▶ cards through START');
   if (a.pos !== 1) fail(`the backwards card should land on tile 1, got ${a.pos}`);
   if (a.money !== cash2) fail(`a backwards card must not pay salary (moved $${a.money - cash2})`);
   if ((room.stats.a?.laps || 0) !== 1) fail('walking backwards is not a lap');
+
+  // "Go back 2 spaces" drawn on a Treasure two tiles past START stops dead on
+  // START — still a penalty card, so still no $300 for landing there.
+  room.turn.pending = null;
+  room.turn.phase = 'end';
+  a.pos = 2;
+  const cash3 = a.money;
+  room.applyCard(a, { kind: 'moveBy', n: -2 });
+  if (a.pos !== 0) fail(`the backwards card should land on START, got ${a.pos}`);
+  if (a.money !== cash3) fail(`a backwards card onto START must not pay the bonus (moved $${a.money - cash3})`);
+  // "Advance to START" is the card that pays, and still does.
+  a.pos = 5;
+  const cash4 = a.money;
+  room.applyCard(a, { kind: 'moveTo', tile: 'start', collect: true });
+  if (a.money <= cash4) fail('an advance-to-START card should still pay');
   room.dispose();
-  ok('moveBy cards pay the salary forward, never backwards');
+  ok('moveBy cards pay the salary forward, never backwards — onto START included');
 }
 
 console.log('\n▶ exits during a live auction');
@@ -1682,6 +1706,42 @@ console.log('\n▶ identity aliasing');
   if (JSON.stringify(endB).includes(tokA)) fail('the ended state leaked the winner\'s token');
   room.dispose();
   ok('tokens stay private: own ids real, everyone else stable aliases');
+}
+
+{
+  // The card on the table names whoever drew it. That name is a token like
+  // any other, and for a while it was the one field serializeFor forgot: every
+  // Treasure or Surprise drawn sent its drawer's wallet key to the whole table
+  // and to everyone watching.
+  const room = new GameRoom('card-leak', () => {});
+  room.map = MAPS.classic;
+  const tokA = 'secret-token-aaaa';
+  const tokB = 'secret-token-bbbb';
+  room.addPlayer({ id: tokA, name: 'Ava' });
+  room.addPlayer({ id: tokB, name: 'Bo' });
+  room.settings.randomizeOrder = false;
+  room.start(tokA);
+  // A plain money card, so the draw moves nothing else on the board.
+  room.decks.treasure = [{ text: 'Found a coin.', act: { kind: 'money', amount: 10 } }];
+  room.drawCard(room.player(tokB), 'treasure');
+  const checkCard = (where) => {
+    const viewA = room.serializeFor([tokA]);
+    const aliasB = viewA.players.find((p) => p.name === 'Bo').id;
+    if (JSON.stringify(viewA).includes(tokB)) fail(`${where}: the drawer's token leaked into another player's state`);
+    if (JSON.stringify(room.serializeFor([])).includes(tokB)) fail(`${where}: the drawer's token leaked to a spectator`);
+    if (viewA.lastCard?.playerId !== aliasB) fail(`${where}: the card should name the drawer by the roster's alias`);
+    if (room.serializeFor([tokB]).lastCard?.playerId !== tokB) fail(`${where}: the drawer should see their own card as theirs`);
+  };
+  checkCard('a Treasure card');
+
+  // The board's own deadlock card names the buyer the same way.
+  room.ownership[1] = { owner: tokA, houses: 0, mortgaged: false };
+  room.player(tokB).money = 10_000;
+  room.runRelief(room.player(tokB), [1]);
+  if (room.own(1)?.owner !== tokB) fail('setup: the deadlock rule should have moved the street');
+  checkCard('the deadlock card');
+  room.dispose();
+  ok('a drawn card names its drawer by alias, never by token');
 }
 
 {

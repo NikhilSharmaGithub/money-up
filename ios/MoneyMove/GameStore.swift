@@ -364,8 +364,14 @@ final class GameStore: ObservableObject {
 
     /// Remember the table we are sitting at, so History can offer it back.
     private func noteUnfinished(_ state: GameState) {
-        guard state.isPlaying, !state.id.isEmpty,
-              state.players.contains(where: { localIds.contains($0.id) }) else { return }
+        guard state.isPlaying, !state.id.isEmpty else { return }
+        let ours = state.players.filter { localIds.contains($0.id) }
+        guard !ours.isEmpty else { return }
+        // A seat that quit, timed out or went bankrupt stays in the list of
+        // players as a spectator, and there is no game left for it to come
+        // back to. Unless one of this device's seats is still in play, the
+        // table comes off the list instead of going back on with every push.
+        guard ours.contains(where: { !$0.isBankrupt }) else { return dropUnfinished(state.id) }
         let entry = UnfinishedGame(roomId: state.id,
                                    mapName: state.map.name,
                                    mapIcon: state.map.icon ?? "",
@@ -509,8 +515,12 @@ final class GameStore: ObservableObject {
         }
         #endif
         meId = token
+        // Heard on the spot rather than a Task hop later: the socket sends
+        // whatever was queued during a reconnect straight after this returns,
+        // and the "join" below has to be on the wire ahead of it. The socket
+        // calls back on the main queue only, so the assumption holds.
         socket.onStatus = { [weak self] s in
-            Task { @MainActor in self?.connection = s; self?.onSocketStatus(s) }
+            MainActor.assumeIsolated { self?.connection = s; self?.onSocketStatus(s) }
         }
         socket.onEvent = { [weak self] name, args in
             Task { @MainActor in self?.onSocketEvent(name, args) }
@@ -1401,22 +1411,26 @@ final class GameStore: ObservableObject {
         guard let linked = Self.linkedRoom(in: url.absoluteString) else { return }
         let code = Self.roomCode(from: linked)
         guard !code.isEmpty, code != roomId else { return }
-        // A link can arrive while this device sits at another table, which
-        // join() alone never walks out of: the server would keep the socket in
-        // both rooms and push both tables' states down it, the guests would
-        // stay seated there, and the game would never be written up as left.
-        // So the old table is left properly first, as the Leave button does.
-        if roomId != nil { leaveRoom() }
+        // A link can arrive while this device sits at another table; join()
+        // walks out of that one first.
         join(roomId: code)
     }
 
     func join(roomId id: String) {
         SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
+        let target = id.lowercased().trimmingCharacters(in: .whitespaces)
+        // Called from another table — an invite banner, a friend's Join or
+        // Watch, a cup match — the old one is left properly first, as the
+        // Leave button does. Joining on the same socket would leave it in both
+        // rooms on the server, both tables' states would come down it and the
+        // board would flip between them, the guests would stay seated at the
+        // old table, and the old game would never be written up as left.
+        if let current = roomId, current != target { leaveRoom() }
         joinError = nil
         quickSearching = false
-        roomId = id.lowercased().trimmingCharacters(in: .whitespaces)
-        lastRoom = roomId ?? ""
+        roomId = target
+        lastRoom = target
         resumeCheck = nil
         // A new table starts with only this seat on the device; continueGame()
         // reads the old count before calling in, so it keeps its guests.
@@ -1431,10 +1445,9 @@ final class GameStore: ObservableObject {
         mirror.forget()
         guestTeamChat = []
         lastTurnPlayer = nil
-        // The socket's own status, not `connection`: that copy catches up a
-        // Task hop later, so straight after leaveRoom() closed the socket it
-        // still reads connected, and the join would be queued on a socket
-        // that is never opening again.
+        // The socket's own status, not `connection`, which is only ever a
+        // copy of it: straight after leaveRoom() closed the socket, the join
+        // must not be queued on a socket that is never opening again.
         if socket.status == .connected {
             onSocketStatus(.connected) // emit join now
         } else {
@@ -1472,8 +1485,10 @@ final class GameStore: ObservableObject {
         // A guest reads nothing but the chat off its push, so its mirror keeps
         // the feeds and the version and lets the rest of every patch go by.
         let mirror = StateMirror(feedsOnly: true)
+        // Synchronous for the same reason as the main socket's: the join goes
+        // out ahead of anything this seat tapped while it was reconnecting.
         s.onStatus = { status in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 guard status == .connected else { return }
                 mirror.forget()
                 s.emit("join", [[
@@ -1503,6 +1518,28 @@ final class GameStore: ObservableObject {
         case "statePatch":
             guard let message = args.first as? NSDictionary else { return }
             if case .resync = mirror.apply(message) { s.emit("resync"); return }
+        case "toast":
+            // The server answers a refusal on the socket that asked, and a
+            // guest seat asks on its own: a refused trade, build or bid of
+            // theirs would otherwise do nothing and say nothing. Room-wide
+            // notices reach the main socket as well, so only the errors are
+            // said here, and never twice in a row.
+            guard let dict = args.first as? [String: Any], let msg = dict["message"] as? String,
+                  (dict["type"] as? String) == "error", toast?.text != msg else { return }
+            showToast(msg, isError: true)
+            return
+        case "joinFailed":
+            // No seat for this guest — the table filled up, or the game has
+            // started. A socket that can only watch the board the main seat
+            // already shows is no player at all, so it goes, and the phone
+            // says why instead of carrying a chair that is not there.
+            s.close()
+            guests.removeAll { $0.socket === s }
+            lastGuests = guests.count
+            if let dict = args.first as? [String: Any], let msg = dict["message"] as? String {
+                showToast(msg, isError: true)
+            }
+            return
         default:
             return
         }
@@ -1858,7 +1895,10 @@ final class GameStore: ObservableObject {
     /// derived identity and show up as a normal player to everyone else.
     func addLocalPlayer() {
         guard let url = serverURL, let roomId else { return }
-        let number = guests.count + 2
+        // The lowest number not in use: a guest the table refused is dropped
+        // from the list, and counting would hand the next one a number that
+        // is still taken.
+        let number = (2...).first { n in !guests.contains { $0.number == n } } ?? guests.count + 2
         let guestToken = "\(token)_p\(number)"
         let s = makeGuestSocket(token: guestToken, number: number, roomId: roomId)
         s.connect(to: url)
@@ -1976,6 +2016,16 @@ final class GameStore: ObservableObject {
             if idxs.contains(where: { (state.owner(of: $0)?.houseCount ?? 0) > 0 }) { return false }
         }
         return true
+    }
+
+    /// unmortgage() in server/game.js: a seat of ours on its own turn, with the
+    /// cash to lift it. Anything else comes straight back as an error toast.
+    func canUnmortgage(_ i: Int) -> Bool {
+        guard let state, state.settings.mortgage ?? true,
+              let price = tile(i)?.price, price > 0, let own = state.owner(of: i),
+              localIds.contains(own.owner), state.turn?.playerId == own.owner, own.isMortgaged,
+              let purse = state.player(own.owner)?.money else { return false }
+        return purse >= Int(ceil(Double(price) / 2 * 1.1))
     }
 
     /// A deed that cannot change hands — tradeBlocked() in server/game.js:

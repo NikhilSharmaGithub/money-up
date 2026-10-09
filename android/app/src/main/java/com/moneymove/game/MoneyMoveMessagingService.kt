@@ -69,44 +69,8 @@ class MoneyMoveMessagingService : FirebaseMessagingService() {
         val note = message.notification
         val body = note?.body ?: message.data["body"] ?: return
         val title = note?.title ?: message.data["title"] ?: "MoneyMove"
-        val manager = NotificationManagerCompat.from(this)
-        if (!manager.areNotificationsEnabled()) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) return
-        PushChannels.ensure(this)
-        val channel = note?.channelId?.takeIf { it in PushChannels.ALL } ?: PushChannels.of(about)
-        // The server's collapse id, as on iOS: a newer push about the same
-        // thing replaces the one before rather than stacking under it.
         val tag = about?.tag ?: message.collapseKey ?: PushChannels.TURNS
-        val open = PendingIntent.getActivity(
-            this, tag.hashCode(),
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtras(about?.extras() ?: Bundle()),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val built = NotificationCompat.Builder(this, channel)
-            .setSmallIcon(if (about?.kind == PushAbout.Kind.CUP) R.drawable.ic_stat_cup else R.drawable.ic_stat_turn)
-            .setColor(ContextCompat.getColor(this, R.color.gold))
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            // Below Android 8 there are no channels to carry this.
-            .setPriority(
-                if (channel == PushChannels.SOCIAL) NotificationCompat.PRIORITY_DEFAULT
-                else NotificationCompat.PRIORITY_HIGH,
-            )
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setAutoCancel(true)
-            .setContentIntent(open)
-            .build()
-        try {
-            manager.notify(tag, NOTE_ID, built)
-        } catch (e: SecurityException) {
-            // The permission was taken away between the check and the post.
-        }
+        post(this, title, body, about, tag, note?.channelId)
     }
 
     companion object {
@@ -118,6 +82,49 @@ class MoneyMoveMessagingService : FirebaseMessagingService() {
          * instead of the newer replacing the older.
          */
         private const val NOTE_ID = 0
+
+        /**
+         * Draws one notification, under the server's collapse id as on iOS: a
+         * newer one about the same thing replaces the one before rather than
+         * stacking under it.
+         */
+        fun post(ctx: Context, title: String, body: String, about: PushAbout?, tag: String, channelId: String? = null) {
+            val manager = NotificationManagerCompat.from(ctx)
+            if (!manager.areNotificationsEnabled()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) return
+            PushChannels.ensure(ctx)
+            val channel = channelId?.takeIf { it in PushChannels.ALL } ?: PushChannels.of(about)
+            val open = PendingIntent.getActivity(
+                ctx, tag.hashCode(),
+                Intent(ctx, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    .putExtras(about?.extras() ?: Bundle()),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val built = NotificationCompat.Builder(ctx, channel)
+                .setSmallIcon(if (about?.kind == PushAbout.Kind.CUP) R.drawable.ic_stat_cup else R.drawable.ic_stat_turn)
+                .setColor(ContextCompat.getColor(ctx, R.color.gold))
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                // Below Android 8 there are no channels to carry this.
+                .setPriority(
+                    if (channel == PushChannels.SOCIAL) NotificationCompat.PRIORITY_DEFAULT
+                    else NotificationCompat.PRIORITY_HIGH,
+                )
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setAutoCancel(true)
+                .setContentIntent(open)
+                .build()
+            try {
+                manager.notify(tag, NOTE_ID, built)
+            } catch (e: SecurityException) {
+                // The permission was taken away between the check and the post.
+            }
+        }
 
         private val seen = MutableSharedFlow<PushAbout>(
             extraBufferCapacity = 8,
@@ -185,10 +192,16 @@ data class PushAbout(
          */
         fun from(intent: Intent?): PushAbout? {
             // MainActivity is exported, so these extras can come from anybody;
-            // a bundle that will not even unpack is simply not a push.
-            val extras = runCatching { intent?.extras }.getOrNull() ?: return null
-            if (!extras.containsKey(KIND)) return null
-            return from(KEYS.associateWith { extras.getString(it) })
+            // a bundle that will not even unpack is simply not a push. The
+            // unpacking happens at the first look inside, not at the copy —
+            // on Android 12 and below that is containsKey, and a class this
+            // app does not know throws there — so every read is in the catch.
+            val about = runCatching {
+                val extras = intent?.extras ?: return null
+                if (!extras.containsKey(KIND)) return null
+                KEYS.associateWith { extras.getString(it) }
+            }.getOrNull() ?: return null
+            return from(about)
         }
 
         /**

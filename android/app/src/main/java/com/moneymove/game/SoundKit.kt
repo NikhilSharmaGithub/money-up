@@ -43,6 +43,15 @@ object SoundKit {
 
     var enabled: Boolean = true
 
+    /**
+     * Switched on, and the app on screen. The table keeps running after the
+     * player leaves it — the socket stays up, and the bots' moves still walk
+     * — and every sound here plays on the game stream, which Android lets a
+     * background app play over whatever the player has gone to. iOS is
+     * suspended by then and makes none.
+     */
+    private val audible: Boolean get() = enabled && CupReminders.inFront
+
     /** Kept for the one question only [launch] asks: is the ringer on? */
     private var audio: AudioManager? = null
 
@@ -77,7 +86,7 @@ object SoundKit {
         vol: Float = 0.22f,
         after: Double = 0.0,
     ) {
-        if (!enabled) return
+        if (!audible) return
         val frames = (dur * RATE).toInt()
         if (frames <= 0) return
         scope.launch {
@@ -109,7 +118,7 @@ object SoundKit {
         bright: Double = 0.5,
         after: Double = 0.0,
     ) {
-        if (!enabled) return
+        if (!audible) return
         val frames = (dur * RATE).toInt()
         if (frames <= 0) return
         scope.launch {
@@ -237,7 +246,7 @@ object SoundKit {
      * so at the worst instant the sum sits far under it and nothing clips.
      */
     private fun recipe(seconds: Double, build: Mix.() -> Unit) {
-        if (!enabled) return
+        if (!audible) return
         scope.launch {
             val mix = Mix(seconds).apply(build)
             val out = ShortArray(mix.data.size) { i ->

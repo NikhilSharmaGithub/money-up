@@ -41,8 +41,9 @@ const MAX_TOASTS = 3;
 export function toast(message, type = 'info') {
   const root = $('#toastRoot');
 
-  // Repeating the same message bumps a counter instead of stacking copies.
-  const twin = [...root.children].find((c) => c.dataset.msg === message);
+  // Repeating the same message bumps a counter instead of stacking copies —
+  // of one still showing, not of one already on its way out.
+  const twin = [...root.children].find((c) => c.dataset.msg === message && !c.dataset.gone);
   if (twin) {
     twin.dataset.n = String(Number(twin.dataset.n || 1) + 1);
     twin.querySelector('.toast-n').textContent = `×${twin.dataset.n}`;
@@ -58,7 +59,11 @@ export function toast(message, type = 'info') {
   el.innerHTML = `<span>${icon(type === 'error' ? 'warning' : 'bulb', null, 'solo')}</span>
     <span>${escapeHtml(message)}</span><b class="toast-n"></b>`;
   root.appendChild(el);
-  while (root.children.length > MAX_TOASTS) dismissToast(root.firstElementChild);
+  // A dismissed toast stays in the DOM for its 320 ms fade, so counting
+  // children would never drop below the cap inside one synchronous pass — a
+  // loop over them spun forever and froze the tab. Count only the live ones.
+  const live = [...root.children].filter((c) => !c.dataset.gone);
+  live.slice(0, Math.max(0, live.length - MAX_TOASTS)).forEach(dismissToast);
   if (type === 'error') sfx.error();
   el.dataset.timer = String(setTimeout(() => dismissToast(el), 2600));
 }
@@ -497,7 +502,9 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
     // buttons
     const acts = card.querySelector('.player-actions');
     const me = state.players.find((x) => x.id === meId);
-    const canTrade = state.status === 'playing' && p.id !== meId && !isOut(p) && !isOut(me || {});
+    // Someone only watching has no seat to trade from — openTradeModal
+    // would throw on the missing player rather than open.
+    const canTrade = !!me && state.status === 'playing' && p.id !== meId && !isOut(p) && !isOut(me);
     // Nobody hosts a Quick Play table, so nobody gets to throw strangers off it.
     const canKick = state.hostId === meId && state.status === 'lobby' && p.id !== meId
       && !state.quick && !state.cup;
@@ -659,9 +666,12 @@ function quickSig(state) {
 
 export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
+  // Whose turn it is decides whether the deed rows carry ＋, − and the
+  // mortgage buttons at all, so a turn passing has to repaint them even when
+  // no deed changed.
   const sig = state.status === 'lobby'
     ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${quickSig(state)}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}`;
+    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   // A lobby repaints under whoever is typing their name — somebody sat
@@ -1644,7 +1654,7 @@ function renderMyStuff(state, meId, el, actions) {
           ${live && canBuildOn(state, meId, m.i) ? `<button class="btn tiny" data-build="${m.i}" title="Build for $${t.houseCost}">＋</button>` : ''}
           ${live && canSellOn(state, meId, m.i) ? `<button class="btn tiny" data-sell="${m.i}" title="Sell a building for $${Math.floor(t.houseCost / 2)}">−</button>` : ''}
           ${m.mortgaged
-            ? (live && state.settings.mortgage ? `<button class="btn tiny gold" data-unmort="${m.i}" title="Buy back for $${Math.ceil((t.price / 2) * 1.1)}">↺</button>` : '')
+            ? (live && state.settings.mortgage && state.turn?.playerId === meId ? `<button class="btn tiny gold" data-unmort="${m.i}" title="Buy back for $${Math.ceil((t.price / 2) * 1.1)}">↺</button>` : '')
             : (live && canMortgage(state, meId, m.i) ? `<button class="btn tiny" data-mort="${m.i}" title="Mortgage for $${Math.floor(t.price / 2)}">${icon('bank', null, 'solo')}</button>` : '')}
         </span>
       </div>`;
@@ -2037,8 +2047,9 @@ export function renderCenter(state, meId, actions) {
         ? `<button class="btn primary wide wrap" id="cAgain">${icon('replay')} Play again</button>`
         : ''}
       ${state.cup ? `<div class="cup-note dim small">${icon('trophy')} A cup match is played once — the bracket has your result.</div>` : ''}`;
-    statusEl.innerHTML = state.winner
-      ? `<div class="win-line" style="color:${state.winner.color}">${icon('trophy')} ${escapeHtml(state.winner.name)} wins!</div>`
+    const won = winnerLabel(state);
+    statusEl.innerHTML = won
+      ? `<div class="win-line" style="color:${won.color}">${icon('trophy')} ${escapeHtml(won.name)} wins!</div>`
       : '<div class="win-line">Game over</div>';
     on('#cStandings', () => showGameOver(state, meId, actions));
     on('#cHome', () => actions.goHome?.());
@@ -2451,7 +2462,10 @@ let awaitTimer = null;
 
 export function renderAwaiting(state, meId, el, actions) {
   if (!el) return;
-  const seats = (state.status === 'playing' ? state.awaiting || [] : [])
+  // Only a seat at the table can hand out time; someone watching would get
+  // the server's refusal for every tap.
+  const seated = state.players.some((p) => p.id === meId);
+  const seats = (state.status === 'playing' && seated ? state.awaiting || [] : [])
     .map((a) => ({ ...a, granted: a.granted || [], player: state.players.find((p) => p.id === a.id) }))
     // Nobody is asked to wait for themselves, and a chair whose player is back
     // — or that has already gone back to the board — is nobody's problem.
@@ -2734,8 +2748,9 @@ export function openStoreModal(token, onWallet, scrollTo = 0, focusItem = '') {
             body: JSON.stringify({ token, packId: b.dataset.pack }),
           }).then((r) => r.json());
           // Stripe hosts the payment page; the webhook credits the coins, so
-          // there is nothing to await here — just go.
-          if (out.url) { location.href = out.url; return; }
+          // there is nothing to await here — just go. Only to Stripe, though:
+          // a card form anywhere else is not one this game asked for.
+          if (/^https:\/\/checkout\.stripe\.com\//.test(out.url || '')) { location.href = out.url; return; }
           toast(out.error || 'Could not start the payment', 'error');
         } catch {
           toast('Could not start the payment', 'error');
@@ -5059,9 +5074,33 @@ function roomInviteLink() {
   return m ? `${location.origin}/?room=${m[1].toLowerCase()}` : location.origin;
 }
 
+/**
+ * Who the game went to, as a heading names it. A team game is won by a team:
+ * the server's `winner` there is only the first of its survivors, and printing
+ * that one name told the teammate who won alongside them that they had lost.
+ * Null when nobody won.
+ */
+export function winnerLabel(state) {
+  const team = state?.winningTeam != null ? state.teamInfo?.[state.winningTeam] : null;
+  if (team) return { name: `Team ${team.name}`, color: team.color };
+  return state?.winner ? { name: state.winner.name, color: state.winner.color } : null;
+}
+
+/** Whether this seat is on the winning side — its team's, in a team game. */
+export function wonGame(state, meId) {
+  if (state?.winningTeam != null) {
+    const me = state.players?.find((p) => p.id === meId);
+    return me?.team != null && me.team === state.winningTeam;
+  }
+  return !!state?.winner && state.winner.id === meId;
+}
+
 /** One line worth pasting: the number, the game, and a way to come and take it. */
 function resultLine(state, meId) {
   const link = roomInviteLink();
+  const team = state.winningTeam != null ? winnerLabel(state) : null;
+  if (team && wonGame(state, meId)) return `${team.name} won on MoneyMove and I was on it — beat us: ${link}`;
+  if (team) return `${team.name} won it off us on MoneyMove — come and take it back: ${link}`;
   const winner = state.players?.find((p) => p.id === state.winner?.id);
   if (winner && winner.id === meId) return `I won ${money(winner.netWorth)} on MoneyMove — beat me: ${link}`;
   if (winner) return `${winner.name} won ${money(winner.netWorth)} off us on MoneyMove — come and take it back: ${link}`;
@@ -5091,14 +5130,19 @@ async function shareResult(text) {
 }
 
 export function showGameOver(state, meId, actions) {
+  const won = winnerLabel(state);
   openModal(`
     <div class="go-crown">${icon('trophy')}</div>
-    <h2 class="go-title" style="color:${state.winner?.color || '#fff'}">${escapeHtml(state.winner?.name || 'Nobody')} wins!</h2>
+    <h2 class="go-title" style="color:${won?.color || '#fff'}">${escapeHtml(won?.name || 'Nobody')} wins!</h2>
     ${worthChartSVG(state)}
     ${reportCardHTML(state, meId)}
     <div class="modal-actions go-actions">
       ${doubleWinHTML(state, meId)}
-      ${state.quick
+      ${state.cup
+        // A cup match is played once, and the server refuses a rematch of
+        // one — the same note the centre well gives in place of the button.
+        ? `<div class="cup-note dim small">${icon('trophy')} A cup match is played once — the bracket has your result.</div>`
+        : state.quick
         // A matchmade table doesn't reconvene — offering "the same players"
         // would tell the room the seats were never strangers.
         ? `<button class="btn primary big wrap" id="gNewTable">${icon('replay')} Play again</button>

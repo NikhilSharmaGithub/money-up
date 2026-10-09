@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { getMap, GROUPS, MAPS } from './maps.js';
 import { buildDecks, shuffled, cardTone } from './cards.js';
-import { banter, cleanText, isAllMasked } from './banter.js';
+import { banter, cleanText, cleanFlag, isAllMasked } from './banter.js';
 import {
   planReply, REPLY_DELAY_MIN, REPLY_DELAY_MAX,
   REPLY_GAP_TABLE, REPLY_GAP_BOT, REPLY_GAP_ADDRESSED, REPLY_WINDOW, REPLY_WINDOW_MAX,
@@ -241,6 +241,8 @@ const BOT_UNMORTGAGE_STEPS = 12;
  */
 const BOT_ASK_COOLDOWN = 9;
 const BOT_OFFER_GAP = 4;
+/** Trade offers one player may have waiting on answers at once — see proposeTrade. */
+const MAX_OPEN_OFFERS = 5;
 
 const AUCTION_SECONDS = 20;
 const JAIL_FINE = 50;
@@ -401,14 +403,18 @@ export class GameRoom {
       this.say(`${seat.name} left the room`, 'leave');
     }
     if (this.status !== 'lobby') return { error: 'Game already started' };
-    const clean = cleanText((name || 'Player').slice(0, 16));
+    // Whatever the join carried, as text: a number here used to throw on
+    // .slice after the socket had already been seated in the room.
+    const clean = cleanText(String(name || 'Player').slice(0, 16));
     const wantsColor = color && COLORS.includes(color)
       && !this.players.some((p) => p.color === color);
     const player = {
       id,
       name: isAllMasked(clean) ? 'Player' : clean,
       color: wantsColor ? color : this.freeColor(),
-      flag: flag || '',
+      // Straight from the join payload, so held to the same rule as
+      // everywhere else a flag is written — see cleanFlag.
+      flag: cleanFlag(flag),
       team: null,
       isBot,
       connected: true,
@@ -491,7 +497,13 @@ export class GameRoom {
       // and is always a person: handing the chair to players[0] could give it
       // to a house player, who would then never press Start.
       if (this.quick) this.syncQuickHost({ quiet: this.status !== 'lobby' });
-      else if (this.hostId === id) this.hostId = this.players[0]?.id || null;
+      // The chair goes to a person, never a bot: a bot holding it never
+      // presses Start, and every host-only door (start, add bot, settings,
+      // remove) would then be shut to everyone for the life of the room —
+      // including the host who stepped out for a moment and came back. With
+      // nobody left but bots it stays empty, and addPlayer hands it to the
+      // next person who sits down.
+      else if (this.hostId === id) this.hostId = this.players.find((x) => !x.isBot)?.id || null;
       if (this.quick && this.status === 'lobby' && this.quickLobby) {
         this.clearTimer(`quickBotReady:${id}`);
         if (!this.players.some((x) => !x.isBot)) {
@@ -521,8 +533,16 @@ export class GameRoom {
       for (const t of this.trades) {
         if (t.viewers?.includes(id)) t.viewers = t.viewers.filter((v) => v !== id);
       }
-      this.say(`${p.name} lost connection — holding their seat`, 'leave');
-      this.holdSeat(p, RECONNECT_GRACE_MS);
+      if (p.bankrupt) {
+        // Somebody already out of the game has no seat to hold. Holding one
+        // anyway left a "waiting for" card for them on everyone's screen for
+        // the rest of the game: seatRanOut, rightly, never takes a seat from
+        // a player who is already out, so it never cleared the card either.
+        this.say(`${p.name} stopped watching`, 'leave');
+      } else {
+        this.say(`${p.name} lost connection — holding their seat`, 'leave');
+        this.holdSeat(p, RECONNECT_GRACE_MS);
+      }
     }
     this.push();
   }
@@ -546,7 +566,9 @@ export class GameRoom {
   reconnect(id) {
     const p = this.player(id);
     if (!p) return false;
-    clearTimeout(this.timers[`grace:${id}`]);
+    // clearTimer, not a bare clearTimeout: the key has to go too, or the
+    // server's stall watchdog reads a dead grace handle as work still due.
+    this.clearTimer(`grace:${id}`);
     if (this.awaiting) delete this.awaiting[id];
     const wasBot = p.botControlled;
     p.connected = true;
@@ -554,11 +576,26 @@ export class GameRoom {
     p.coveredTurn = false;
     p.missedTurns = 0;
     this.say(wasBot ? `${p.name} is back and takes over from the bot` : `${p.name} reconnected`, 'join');
-    // Walking back in on your own turn puts you back on the clock. The seat had
-    // none while the house was covering it — a bot cannot run out of time — so
-    // without this a player could reconnect onto their own turn and hold the
-    // table for as long as they liked.
-    if (this.turn?.playerId === id) this.armTurnTimer();
+    if (this.turn?.playerId === id) {
+      // Walking back in on your own turn puts you back on the clock. The seat
+      // had none while the house was covering it — a bot cannot run out of
+      // time — so without this a player could reconnect onto their own turn
+      // and hold the table for as long as they liked.
+      //
+      // But only a seat with no live clock gets a fresh one. A refresh, or a
+      // re-sent join, while your own clock is still running is not a reason
+      // to start it again — re-arming every time let one player reload every
+      // eighty seconds and hold a table of strangers for ever.
+      const live = this.turn.endsAt && this.turn.endsAt > Date.now() && this.timers.turn;
+      if (wasBot || !live) this.armTurnTimer();
+    } else if (this.status === 'playing' && this.turn && !this.turn.endsAt
+      && Number(this.settings.turnSeconds) > 0 && this.current && !this.autoPlayed(this.current)) {
+      // Somebody else's turn that began with nobody else here had no clock —
+      // there was nobody to keep waiting. There is now: without one, a player
+      // who left their tab open and walked away would hold this table with
+      // nothing pending anywhere to move it on.
+      this.armTurnTimer();
+    }
     // And re-open every seat that was held without a deadline because, at the
     // moment it was vacated, there was nobody here to be kept waiting. There
     // is somebody here now. Without this a table could be left with not one
@@ -604,6 +641,10 @@ export class GameRoom {
 
   /** Spreads everyone across the teams as evenly as the seat count allows. */
   balanceTeams() {
+    // Teams are picked before the dice, like setTeam. Mid-game a reshuffle
+    // decides who pays whom rent and which side has already won, so a host
+    // could deal themselves onto the leader's team.
+    if (this.status !== 'lobby') return;
     if (!this.teamsOn) {
       this.players.forEach((p) => { p.team = null; });
       return;
@@ -632,10 +673,10 @@ export class GameRoom {
     const p = this.player(id);
     if (!p || this.status !== 'lobby') return;
     if (name) {
-      const clean = cleanText(name.slice(0, 16));
+      const clean = cleanText(String(name).slice(0, 16));
       p.name = isAllMasked(clean) ? 'Player' : clean;
     }
-    if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
+    if (flag !== undefined) p.flag = cleanFlag(flag);
     if (color && COLORS.includes(color) && !this.players.some((x) => x.id !== id && x.color === color)) {
       p.color = color;
     }
@@ -693,11 +734,15 @@ export class GameRoom {
     const allowed = Object.keys(DEFAULT_SETTINGS);
     for (const [k, v] of Object.entries(patch)) {
       if (!allowed.includes(k)) continue;
-      // Four strangers read these rules off chips that say "on" or "off", so
-      // at their table a switch is a switch and nothing else gets stored.
-      this.settings[k] = quick && typeof DEFAULT_SETTINGS[k] === 'boolean' ? !!v : v;
+      // A switch is a switch and nothing else gets stored, at every table.
+      // Four strangers read these rules off chips that say "on" or "off", and
+      // the apps decode them as booleans: a string here, from a host's console
+      // at a private table, left every iPhone and Android phone that joined it
+      // unable to read a single push.
+      this.settings[k] = typeof DEFAULT_SETTINGS[k] === 'boolean' ? !!v : v;
     }
-    this.settings.maxPlayers = Math.max(2, Math.min(8, Number(this.settings.maxPlayers) || 4));
+    // Whole seats, for the same reason — the apps read this as an integer.
+    this.settings.maxPlayers = Math.max(2, Math.min(8, Math.floor(Number(this.settings.maxPlayers)) || 4));
     // The bankroll and the clock arrive as numbers from a picker, which is to
     // say they arrive as whatever a socket feels like sending. Both are then
     // written straight onto real seats — startingCash onto everybody's money,
@@ -711,7 +756,7 @@ export class GameRoom {
     else this.settings.turnSeconds = clock <= 0 ? 0 : Math.max(30, Math.min(600, clock));
     if (patch.mapId) this.map = getMap(this.settings.mapId);
     if (patch.teams !== undefined) {
-      this.settings.teams = Math.max(0, Math.min(4, Number(this.settings.teams) || 0));
+      this.settings.teams = Math.max(0, Math.min(4, Math.floor(Number(this.settings.teams)) || 0));
       this.syncTeamsWithSettings();
     }
     // Any bankroll that arrived, even one the clamp above had to replace —
@@ -984,6 +1029,14 @@ export class GameRoom {
   /** Nobody granted more time — the chair goes back to the board. */
   seatRanOut(id) {
     const p = this.player(id);
+    // A seat held for somebody who has since gone out — bankrupted while the
+    // house minded it — has nothing left to give up, but its card still has
+    // to come off everyone's screen.
+    if (p?.bankrupt && this.awaiting?.[id]) {
+      delete this.awaiting[id];
+      this.push();
+      return;
+    }
     if (!p || p.connected || p.bankrupt || this.status !== 'playing') return;
     // A seat held without a deadline is one nobody is waiting on — it does not
     // run out. Checked here as well as at the timer, so no other caller can
@@ -1201,6 +1254,27 @@ export class GameRoom {
     const values = this.quickRoll?.values;
     if (!values) return [];
     return QUICK_HOST_KEYS.filter((k) => Object.hasOwn(values, k) && this.settings[k] !== values[k]);
+  }
+
+  /**
+   * Is anything at all still due to happen to this table? The server's stall
+   * watchdog asks, and pokes the turn on when the answer stays no.
+   *
+   * Two things made the old answer wrong both ways. A person holding the turn
+   * with the clock switched off has no timer at all while they think — that
+   * is not a stall, they can move it on themselves, and poking it ended
+   * healthy turns every few minutes (dropping a pending buy, or an open debt
+   * with the debtor still in the red). And a timer that has already fired, or
+   * was cleared without its key being deleted, is not work still due: counting
+   * those handles switched the watchdog off for good at nearly every table
+   * that had ever had a bot, an auction or a reconnect.
+   */
+  workPending() {
+    if (this.auction) return true;
+    const cur = this.current;
+    if (cur && !cur.bankrupt && cur.connected && !this.autoPlayed(cur)) return true;
+    // `_destroyed` is how Node marks a Timeout that has run or been cleared.
+    return Object.values(this.timers || {}).some((t) => t && typeof t === 'object' && !t._destroyed);
   }
 
   /** One timer, gone — handle and key both, so a listing of timers is true. */
@@ -1538,6 +1612,14 @@ export class GameRoom {
     if (this.status === 'playing') this.hooks.turn?.(this.turn.playerId, this);
     const seconds = Math.max(0, Math.floor(Number(this.settings.turnSeconds) || 0));
     const p = this.player(this.turn.playerId);
+    // The same absent-chair rule nextTurn applies when a turn arrives, applied
+    // when a turn is handed back. A roller whose connection dropped during
+    // their own auction got the turn back from finishAuction with no clock
+    // (two people, one gone, is "nobody else here") and no house cover (that
+    // is only given when a turn arrives) — so the table froze until their
+    // grace ran out. The caller's maybeBot plays it now; reconnect takes it
+    // straight back.
+    if (this.status === 'playing' && p && !p.isBot && !p.bankrupt && !p.connected) p.botControlled = true;
     if (this.status !== 'playing' || !seconds || !p) {
       if (this.turn) this.turn.endsAt = null;
       return;
@@ -2084,7 +2166,10 @@ export class GameRoom {
       this.say(`${p.name} passed START and collected $${SALARY}`, 'money');
       this.noteLap(p);
     }
-    this.landOn(p, to);
+    // Backwards stays salary-free all the way down: a "go back" card that
+    // happens to stop on START is still a penalty, not the biggest payday
+    // on the board.
+    this.landOn(p, to, { backwards: steps < 0 });
   }
 
   teleport(p, to, { collectSalary = true, cause = 'card' } = {}) {
@@ -2108,6 +2193,10 @@ export class GameRoom {
     const t = this.tile(index);
     switch (t.type) {
       case 'start':
+        if (opts.backwards) {
+          this.say(`${p.name} is back on START`, 'info');
+          break;
+        }
         this.receive(p, START_BONUS);
         this.say(`${p.name} landed right on START — $${START_BONUS}!`, 'money');
         break;
@@ -2572,6 +2661,9 @@ export class GameRoom {
     if (this.turn.phase === 'auction') return { error: 'Auction in progress' };
     if (p.money < JAIL_FINE) return { error: 'Not enough money' };
     p.money -= JAIL_FINE;
+    // The same fine the third failed roll charges through charge(), and it
+    // goes to the same place: the vacation pot, when that rule is on.
+    this.bankSink(JAIL_FINE);
     p.jail = false;
     p.jailTurns = 0;
     // The fine buys the door, not the dice.
@@ -2844,6 +2936,7 @@ export class GameRoom {
     if (this.teamsOn) {
       const teams = [...new Set(alive.map((p) => p.team))];
       if (teams.length > 1) return false;
+      this.closeDebtAtEnd();
       this.turnCount++;
       this.recordWorth();
       this.status = "ended";
@@ -2855,6 +2948,7 @@ export class GameRoom {
       this.botFarewell(alive);
     } else {
       if (alive.length > 1) return false;
+      this.closeDebtAtEnd();
       this.turnCount++;
       this.recordWorth();
       this.status = "ended";
@@ -2868,8 +2962,28 @@ export class GameRoom {
     return true;
   }
 
+  /**
+   * The game is over with a bill still open — the winner was paying off a
+   * card fine or a tax when the last opponent walked out. forgiveDebtTo only
+   * clears what was owed to the leaver, and nobody is left to collect what is
+   * owed to the bank, so it is written off here. Without this the winner
+   * finished in the red, on the final standings and the net-worth chart both,
+   * with a debt phase on a game that no longer has turns.
+   */
+  closeDebtAtEnd() {
+    const d = this.turn?.debt;
+    if (!d) return;
+    const debtor = this.player(d.debtor);
+    if (debtor && !debtor.bankrupt) debtor.money = Math.max(0, debtor.money);
+    this.turn.debt = null;
+    if (this.turn.phase === 'debt') this.turn.phase = 'end';
+  }
+
   bankrupt(p, creditor) {
     p.bankrupt = true;
+    // Out is out: a seat being held for their return has nothing left to hold.
+    this.clearTimer(`grace:${p.id}`);
+    if (this.awaiting) delete this.awaiting[p.id];
     // Settle any live auction before the estate is counted: an escrowed bid
     // returns to the leaver's cash so a creditor inherits it too, and the
     // race carries on (or closes) without forking the turn.
@@ -2926,9 +3040,22 @@ export class GameRoom {
     if (!from || !target || from.bankrupt || target.bankrupt) return { error: 'Invalid player' };
     if (this.status !== 'playing') return { error: 'Game not running' };
 
+    // Every open offer rides in every push to every socket at the table, and
+    // nothing ever expires one, so how many a single player may have out at
+    // once is a limit on the size of the whole table's state. Uncapped, one
+    // client could post thousands in a second and stall the process for every
+    // room on it. Five is more than any person keeps waiting; a bot keeps one.
+    if (this.trades.filter((t) => t.from === id).length >= MAX_OPEN_OFFERS) {
+      return { error: 'Wait for answers to your open offers first' };
+    }
+
+    // A deed named twice is still one deed — and a list of the same index a
+    // hundred thousand times over is the same flood as a hundred thousand
+    // offers, in one envelope.
     const clean = (side, owner) => ({
       money: Math.max(0, Math.min(owner.money, Math.floor(Number(side?.money) || 0))),
-      tiles: (side?.tiles || []).map(Number).filter((i) => this.own(i)?.owner === owner.id),
+      tiles: [...new Set((Array.isArray(side?.tiles) ? side.tiles : []).map(Number))]
+        .filter((i) => this.own(i)?.owner === owner.id),
       cards: Math.max(0, Math.min(owner.getOutCards, Math.floor(Number(side?.cards) || 0))),
     });
     const offer = { id: tradeSeq++, from: id, to, give: clean(give, from), get: clean(get, target), at: Date.now() };
@@ -4406,10 +4533,10 @@ export class GameRoom {
       history: base.history.map((h) => ({ ...h, w: mapKeys(h.w) })),
       stats: base.stats && mapKeys(base.stats),
       titles: base.titles && mapKeys(base.titles),
-      // The card on the table names whoever drew it — a seat, or the board's
-      // own deadlock card — and that name is a token like any other. Left out
-      // of this list, every card drawn handed its drawer's wallet key to
-      // everyone at the table and everyone watching it.
+      // The card on the table names whoever drew it — a Treasure, a Surprise,
+      // or the board's own deadlock card — and that name is a token like any
+      // other. Left out of this list, every card drawn handed its drawer's
+      // wallet key to everyone at the table and everyone watching it.
       lastCard: base.lastCard && { ...base.lastCard, playerId: mapId(base.lastCard.playerId) },
       lastMove: base.lastMove && { ...base.lastMove, playerId: mapId(base.lastMove.playerId) },
       moves: base.moves.map((m) => ({ ...m, playerId: mapId(m.playerId) })),

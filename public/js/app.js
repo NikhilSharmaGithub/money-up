@@ -12,7 +12,7 @@ import {
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
-  cupSettledLine, noteDeviceSeat,
+  cupSettledLine, noteDeviceSeat, winnerLabel, wonGame,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -96,7 +96,16 @@ const actions = {
   kick: emit('kick'),
   settings: emit('settings'),
   appearance: (d) => {
-    if (d.name) storeName(d.name);
+    // The in-memory name is what the landing box shows, what the next Create
+    // or Play now saves, and what a reconnect rejoins under — storage alone
+    // would have the old name written straight back over the new one.
+    const name = String(d.name || '').trim().slice(0, 16);
+    if (name) {
+      nickname = name;
+      storeName(nickname);
+      const box = $('#nickInput');
+      if (box) box.value = nickname;
+    }
     if (d.flag !== undefined) { myFlag = d.flag; storeFlag(d.flag); }
     socket?.emit('appearance', d);
   },
@@ -175,7 +184,24 @@ function socialHooks() {
   return {
     token, name: nickname, flag: myFlag,
     onToast: toast,
-    onJoin: (id) => go(id),
+    // An invite strip can drop in under a thumb mid-game, so walking off a
+    // seat that is still in play gets the same choice the Leave button gives.
+    onJoin: (id) => {
+      const seat = state?.players?.find((p) => p.id === meId);
+      if (state?.status !== 'playing' || !seat || isOut(seat) || id === roomId) return go(id);
+      return openLeaveModal({
+        // boot() puts the table on the Continue shelf on its way out.
+        onKeepSeat: () => go(id),
+        onQuit: () => {
+          actions.quit();
+          forgetGame(roomId);
+          // Let the quit reach the server first, and drop the state with it
+          // so the room switch does not put the quit table back on the shelf.
+          setTimeout(() => { state = null; go(id); }, 150);
+        },
+        onConcede: null,
+      });
+    },
     // Whatever table this browser is sitting at, so a friend can be asked to
     // come to it — and so an invite to the table you are already in is not
     // announced back at you.
@@ -808,6 +834,10 @@ function joinInvite(code) {
     history.replaceState({}, '', `/room/${code}`);
     return boot();
   }
+  // The address goes back to the bare landing first. Left at /?room=CODE,
+  // browser Back from the table would land on the invite again — and now
+  // that a name exists, walk straight back in, every time it was pressed.
+  history.replaceState({}, '', '/');
   showLanding();
   // Dismissing the name sheet must not lose the invite: the code is sitting in
   // the join field behind it, one tap from being used again.
@@ -866,7 +896,18 @@ function boot() {
     return;
   }
 
-  roomId = match[1].toLowerCase();
+  // Walking from one table straight to another — an invite's Join, a
+  // friend's — leaves the first the way "I'll come back" does: on the
+  // Continue shelf, and with none of its state or chat counts carried over
+  // to be read against the new table's.
+  const nextRoom = match[1].toLowerCase();
+  if (roomId && roomId !== nextRoom) {
+    rememberGame();
+    state = null;
+    seenChatId = null;
+    heardChatId = null;
+  }
+  roomId = nextRoom;
   // Offer ids start again at 1 in a new room, so what has already been shown
   // has to be forgotten with the room it belonged to.
   offersShown.clear();
@@ -947,7 +988,11 @@ function boot() {
     d.spectate ? `${d.message} — you're watching this table` : d.message,
     d.spectate ? 'info' : 'error',
   ));
-  socket.on('disconnect', () => toast('Connection lost — reconnecting…', 'error'));
+  // Closing the socket on purpose — every Leave, every room switch — reports
+  // 'io client disconnect' too, and that is no lost connection.
+  socket.on('disconnect', (reason) => {
+    if (reason !== 'io client disconnect') toast('Connection lost — reconnecting…', 'error');
+  });
   socket.on('connect_error', () => {
     if (state) return; // already in a game, socket.io will keep retrying
     toast('Could not reach the game server — is it running?', 'error');
@@ -1734,6 +1779,7 @@ function readGames() {
 /** Called on the way out of a live table — newest first, five deep. */
 function rememberGame() {
   if (!roomId || state?.status !== 'playing') return;
+  if (!state.players?.some((p) => p.id === meId)) return; // watching, not playing
   writeGames([{
     id: roomId,
     map: state.map?.name || '',
@@ -1878,8 +1924,10 @@ function recordMatch(s) {
     room: roomId,
     map: s.map?.name || '',
     players: (s.players || []).map((p) => p.name),
-    winner: s.winner?.name || '',
-    meWon: !!s.winner && s.winner.id === meId,
+    // A team game is the team's: the server's lone `winner` there is only
+    // the first of its survivors.
+    winner: winnerLabel(s)?.name || '',
+    meWon: wonGame(s, meId),
     // The slice of state the report card actually reads. History is the one
     // heavy field, and the card never charts it.
     state: {
@@ -1931,7 +1979,7 @@ function goHome() {
   roomId = null;
   offersShown.clear();
   if (document.body.classList.contains('chat-open')) closeChatDock();
-  chatSeen = 0;
+  seenChatId = null;
   heardChatId = null;
   resetBoard();
   resetLedger();
@@ -1941,8 +1989,9 @@ function goHome() {
 $('#leaveBtn').addEventListener('click', () => {
   sfx.click();
   // Mid-game, leaving deserves a second thought — and a choice: a bot can hold
-  // the seat, or the deeds can go back to the bank for good.
-  if (state?.status === 'playing') {
+  // the seat, or the deeds can go back to the bank for good. Someone only
+  // watching has no seat to keep or quit, so they just go.
+  if (state?.status === 'playing' && state.players?.some((p) => p.id === meId)) {
     openLeaveModal({
       onKeepSeat: () => {
         rememberGame();
@@ -2404,15 +2453,30 @@ function showNewOffers(s) {
 // channel chips, the emotes and the input keep working exactly as they did.
 const chatDockBtn = $('#chatBubble');
 const chatPanel = document.querySelector('.chat-panel');
-let chatSeen = 0;
+// The id of the last line the player has had in front of them. The server
+// only ever sends the newest 50 lines, so once a table has said that much the
+// length stops moving: counting unread by length read every later line as
+// already seen. Counting what sits after this id does not care.
+let seenChatId = null;
 
-function chatCount(s) {
-  return (s?.chat || []).length;
+function markChatSeen(s) {
+  const feed = s?.chat || [];
+  seenChatId = feed[feed.length - 1]?.id ?? '';
+}
+
+function unreadChat(s) {
+  const feed = s?.chat || [];
+  const from = feed.findIndex((m) => m.id === seenChatId);
+  // No anchor, or one that has scrolled off the window: all of it is new.
+  const fresh = from >= 0 ? feed.slice(from + 1) : feed;
+  // Your own line is not news to you — the same rule the pop sound uses.
+  const mine = myName();
+  return fresh.filter((m) => m.name !== mine).length;
 }
 
 function openChatDock() {
   document.body.classList.add('chat-open');
-  chatSeen = chatCount(state);
+  markChatSeen(state);
   paintChatBadge();
   // The keyboard should land in the message box, but not on a phone where
   // that would throw the keyboard up over the panel before it is even read.
@@ -2423,13 +2487,13 @@ function openChatDock() {
 
 function closeChatDock() {
   document.body.classList.remove('chat-open');
-  chatSeen = chatCount(state);
+  markChatSeen(state);
   paintChatBadge();
 }
 
 function paintChatBadge() {
   if (!chatDockBtn) return;
-  const unread = Math.max(0, chatCount(state) - chatSeen);
+  const unread = unreadChat(state);
   const open = document.body.classList.contains('chat-open');
   chatDockBtn.classList.toggle('has-unread', unread > 0 && !open);
   chatDockBtn.dataset.unread = unread > 99 ? '99+' : String(unread);
@@ -2470,7 +2534,7 @@ function syncChatDock(s) {
     // First state of this table: whatever was already said is history, and
     // none of it is unread either.
     heardChatId = last?.id ?? '';
-    chatSeen = feed.length;
+    markChatSeen(s);
   } else if (last && last.id !== heardChatId) {
     const from = feed.findIndex((m) => m.id === heardChatId);
     // No anchor, or one that has scrolled off the server's window: everything
@@ -2484,7 +2548,7 @@ function syncChatDock(s) {
     const mine = myName();
     if (fresh.some((m) => m.name !== mine)) sfx.pop();
   }
-  if (document.body.classList.contains('chat-open')) chatSeen = chatCount(s);
+  if (document.body.classList.contains('chat-open')) markChatSeen(s);
   paintChatBadge();
 }
 
@@ -2707,13 +2771,32 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => repositionTokens(state), 120);
 });
 
+/** Focus that arrived by Tab rather than by a click, judged as it arrives:
+ *  Chromium makes whatever is focused match :focus-visible once any key goes
+ *  down, so asking inside the keydown would call a clicked emote keyboard's. */
+const keyboardFocused = new WeakSet();
+document.addEventListener('focusin', (e) => {
+  if (!(e.target instanceof Element)) return;
+  let byKeyboard;
+  try { byKeyboard = e.target.matches(':focus-visible'); } catch { byKeyboard = true; } // no :focus-visible: assume keyboard
+  if (byKeyboard) keyboardFocused.add(e.target); else keyboardFocused.delete(e.target);
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeModal();
     $('#cardPopup').classList.add('hidden');
     if (document.body.classList.contains('chat-open')) closeChatDock();
   }
-  if (document.activeElement?.tagName === 'INPUT') return;
+  // A key pressed into a field or a select is that control's: Space or Enter
+  // there types, or opens the list, and must never press Start Game behind
+  // it. So is a key on a button or link the keyboard itself moved to. One a
+  // mouse click merely left focused is not — Space after tapping an emote
+  // should still roll, not send the emote again.
+  const target = e.target instanceof Element ? e.target : null;
+  if (target?.closest('input, select, textarea')) return;
+  const control = target?.closest('button, a[href]');
+  if (control && keyboardFocused.has(control)) return;
   // A sheet on top owns the keyboard: Space must not reach through a trade
   // composer or a "declare bankruptcy?" prompt and fire the board behind it.
   if (!$('#modalRoot').classList.contains('hidden')) return;

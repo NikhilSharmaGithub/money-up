@@ -6,6 +6,7 @@
 //   4. same origin           — local runs and single-host deploys
 //
 // Same origin is the normal case: the game server serves this page too.
+// Off localhost the first two are fenced in — see `trusted` below.
 //
 // Then, at the bottom, what this end says once it gets there: the state
 // protocol, which turns a whole board re-sent per action into the little that
@@ -14,8 +15,24 @@
 import { applyPatch, applyFeed } from './delta.js';
 
 const KEY = 'moneymove:server';
+// The same URL again, written only by useServer: proof the player typed it
+// into the "can't reach the server" box themselves rather than a link
+// setting it for them.
+const TYPED_KEY = 'moneymove:server:typed';
 
 const clean = (url) => String(url || '').trim().replace(/\/+$/, '');
+
+const isLocalHost = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'].includes(location.hostname);
+
+/**
+ * Every api() call and the socket join carry the player's token, the Google
+ * sign-in credential and the checkout redirect, so where they go cannot be
+ * up to whoever wrote a link. Off localhost an override from ?server= — and
+ * anything a link saved before this check existed — counts only when it is
+ * this site's own server. Localhost keeps the free hand a developer needs.
+ */
+const trusted = (url) => !!url && (isLocalHost
+  || url === clean(location.origin) || url === clean(window.MONEYMOVE_SERVER));
 
 // A ?server= param wins and is remembered; ?server= (empty) clears the override.
 // Storage may be blocked entirely — the override just won't stick then.
@@ -23,15 +40,25 @@ const fromQuery = new URLSearchParams(location.search).get('server');
 if (fromQuery !== null) {
   const value = clean(fromQuery);
   try {
-    if (value) localStorage.setItem(KEY, value);
-    else localStorage.removeItem(KEY);
+    if (!value) {
+      localStorage.removeItem(KEY);
+      localStorage.removeItem(TYPED_KEY);
+    } else if (trusted(value)) {
+      localStorage.setItem(KEY, value);
+      localStorage.removeItem(TYPED_KEY);
+    }
   } catch { /* storage blocked */ }
 }
 
 let stored = '';
-try { stored = clean(localStorage.getItem(KEY)); } catch { /* private mode */ }
-
-const isLocalHost = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'].includes(location.hostname);
+try {
+  const saved = clean(localStorage.getItem(KEY));
+  if (trusted(saved) || (saved && saved === clean(localStorage.getItem(TYPED_KEY)))) {
+    stored = saved;
+  } else if (saved) {
+    localStorage.removeItem(KEY);
+  }
+} catch { /* private mode */ }
 
 // A checked-in config.js points at the deployed server, which would send a
 // local `npm start` off to production. Anything served from localhost talks to
@@ -48,13 +75,19 @@ export function useServer(url) {
   if (!value) return false;
   const scheme = location.protocol === 'http:' ? 'http://' : 'https://';
   const full = /^https?:\/\//i.test(value) ? value : scheme + value;
-  try { localStorage.setItem(KEY, clean(full)); } catch { /* ignore */ }
+  try {
+    localStorage.setItem(KEY, clean(full));
+    localStorage.setItem(TYPED_KEY, clean(full));
+  } catch { /* ignore */ }
   location.reload();
   return true;
 }
 
 export function forgetServer() {
-  try { localStorage.removeItem(KEY); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(KEY);
+    localStorage.removeItem(TYPED_KEY);
+  } catch { /* ignore */ }
   location.reload();
 }
 

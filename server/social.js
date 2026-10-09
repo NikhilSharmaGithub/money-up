@@ -13,7 +13,8 @@ import { randomName } from './names.js';
 import { itemById, emojiFor } from './store.js';
 import { TITLE_NAMES } from './game.js';
 import { RENT_PRICE } from './boards.js';
-import { cleanText, isAllMasked } from './banter.js';
+import { cleanText, cleanFlag, isAllMasked } from './banter.js';
+import { writeFileAtomic, readJsonStore } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Render's filesystem is wiped on every deploy — point DATA_DIR at a
@@ -46,8 +47,12 @@ const redeemed = new Set();
 
 // ---------------------------------------------------------------- storage --
 function load() {
+  // Missing is a first run; broken is set aside and the newest good backup
+  // is read instead — see storage.js. Either way, never a silent fresh start
+  // that the next save writes over everybody's wallet.
+  const raw = readJsonStore(STORE);
+  if (!raw) return;
   try {
-    const raw = JSON.parse(fs.readFileSync(STORE, 'utf8'));
     for (const p of raw.profiles || []) {
       profiles.set(p.token, p);
       byCode.set(p.code, p.token);
@@ -58,6 +63,8 @@ function load() {
         const clean = cleanText(String(p.name).slice(0, 16));
         p.name = isAllMasked(clean) ? 'Player' : clean;
       }
+      // Likewise flags written before cleanFlag existed.
+      if (p.flag) p.flag = cleanFlag(p.flag);
     }
     for (const txn of raw.redeemed || []) redeemed.add(txn);
     for (const [key, thread] of Object.entries(raw.dms || {})) {
@@ -66,28 +73,29 @@ function load() {
     if (Array.isArray(raw.notices)) notices.push(...raw.notices);
     if (Array.isArray(raw.reports)) reports.push(...raw.reports);
     console.log(`  social: restored ${profiles.size} profile(s)`);
-  } catch {
-    // first run, or the store was wiped by a redeploy — start fresh
+  } catch (err) {
+    console.error('social: the store parsed but could not be loaded —', err.message);
+  }
+}
+
+function writeStore() {
+  try {
+    writeFileAtomic(STORE, JSON.stringify({
+      profiles: [...profiles.values()],
+      dms: Object.fromEntries(dms),
+      notices: notices.slice(0, MAX_NOTICES),
+      reports: reports.slice(0, MAX_REPORTS),
+      redeemed: [...redeemed],
+    }));
+  } catch (err) {
+    console.warn('social: could not persist profiles —', err.message);
   }
 }
 
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(STORE), { recursive: true });
-      fs.writeFileSync(STORE, JSON.stringify({
-        profiles: [...profiles.values()],
-        dms: Object.fromEntries(dms),
-        notices: notices.slice(0, MAX_NOTICES),
-        reports: reports.slice(0, MAX_REPORTS),
-        redeemed: [...redeemed],
-      }));
-    } catch (err) {
-      console.warn('social: could not persist profiles —', err.message);
-    }
-  }, 1500);
+  saveTimer = setTimeout(() => { saveTimer = null; writeStore(); }, 1500);
   saveTimer.unref?.();
 }
 
@@ -99,27 +107,36 @@ function save() {
 let ledger = [];
 
 function loadLedger() {
+  // No ledger yet means it begins with the first credit after this deploy.
+  const raw = readJsonStore(LEDGER_STORE);
+  if (Array.isArray(raw)) ledger = raw;
+  if (ledger.length) console.log(`  ledger: restored ${ledger.length} entr${ledger.length === 1 ? 'y' : 'ies'}`);
+}
+
+function writeLedger() {
   try {
-    const raw = JSON.parse(fs.readFileSync(LEDGER_STORE, 'utf8'));
-    if (Array.isArray(raw)) ledger = raw;
-    if (ledger.length) console.log(`  ledger: restored ${ledger.length} entr${ledger.length === 1 ? 'y' : 'ies'}`);
-  } catch {
-    // no ledger yet — it begins with the first credit after this deploy
+    writeFileAtomic(LEDGER_STORE, JSON.stringify(ledger));
+  } catch (err) {
+    console.warn('ledger: could not persist —', err.message);
   }
 }
 
 let ledgerTimer = null;
 function saveLedger() {
   clearTimeout(ledgerTimer);
-  ledgerTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(LEDGER_STORE), { recursive: true });
-      fs.writeFileSync(LEDGER_STORE, JSON.stringify(ledger));
-    } catch (err) {
-      console.warn('ledger: could not persist —', err.message);
-    }
-  }, 1500);
+  ledgerTimer = setTimeout(() => { ledgerTimer = null; writeLedger(); }, 1500);
   ledgerTimer.unref?.();
+}
+
+/**
+ * Write whatever is still waiting out its debounce, now. A deploy stops the
+ * process with SIGTERM, and without this the last second and a half went
+ * with it — a coin pack the phone had already finished with StoreKit, a
+ * game's payout, the receipt that makes a replay of it refused.
+ */
+export function flushSocial() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; writeStore(); }
+  if (ledgerTimer) { clearTimeout(ledgerTimer); ledgerTimer = null; writeLedger(); }
 }
 
 function appendLedger(entry) {
@@ -177,7 +194,7 @@ export function profileFor(token, { name, flag } = {}) {
     const clean = cleanText(String(name).slice(0, 16));
     p.name = isAllMasked(clean) ? 'Player' : clean;
   }
-  if (flag !== undefined) p.flag = String(flag || '').slice(0, 8);
+  if (flag !== undefined) p.flag = cleanFlag(flag);
   // The wallet rides on the profile: coins earned by winning, cosmetics
   // bought in the store, and what's currently equipped.
   p.coins ??= 0;
@@ -231,7 +248,10 @@ export const karmaOf = (token) => profileFor(token)?.karma ?? KARMA_MAX;
 
 const publicView = (p) => ({
   code: p.code, name: p.name || 'Player', flag: p.flag || '',
-  avatar: p.equipped?.avatar || '',
+  // The face itself, as every other view of a player gives it. `equipped`
+  // holds the store item id, and every client printed that id — "av-cool" —
+  // as text in the friend's face circle, in front of their flag.
+  avatar: emojiFor(p.equipped?.avatar),
 });
 
 // ------------------------------------------------------------ store wallet --
@@ -316,10 +336,31 @@ export function awardCoins(token, amount) {
  * both read that number, and a player who was beaten showing up as a winner
  * is a lie neither of them can be talked out of afterwards.
  */
-export function awardWin(token, amount, note, { placing = false } = {}) {
+/**
+ * Coins one wallet may take from finished tables in a day, wins and
+ * runner-up places together.
+ *
+ * Every finished table pays, and nothing stops two windows on one machine
+ * starting a game, conceding it and pressing Play again, a few coins a lap
+ * and a leaderboard win each time. The server already refuses to pay a table
+ * that was never really played (see recordTransitions); this is the ceiling
+ * over the ones that were. Twenty wins a day is far past any real evening.
+ */
+export const TABLE_COINS_PER_DAY = 40;
+
+export function awardWin(token, amount, note, { placing = false, daily = false } = {}) {
   const coins = Math.floor(Number(amount) || 0);
+  // `daily` is a table's payout, and counts against the ceiling above. An
+  // operator's float or a test's does not.
+  const day = daily ? dayKey() : null;
+  const sofar = (p) => (day && p?.tableCoins?.day === day ? p.tableCoins.coins : 0);
+  if (day && sofar(profiles.get(token)) + coins > TABLE_COINS_PER_DAY) return null;
   const balance = awardCoins(token, coins);
   if (balance == null) return null;
+  if (day) {
+    const p = profiles.get(token);
+    if (p) p.tableCoins = { day, coins: sofar(p) + coins };
+  }
   // The lifetime tally the leaderboard reads: every win routed through here
   // bumps the count and banks the purse. awardCoins just minted the profile
   // if it somehow didn't exist, so the get can't miss.
@@ -959,19 +1000,15 @@ const BANS_STORE = path.join(DATA_DIR, 'bans.json');
 const bans = new Map();
 
 function loadBans() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(BANS_STORE, 'utf8'));
-    for (const b of raw || []) bans.set(b.token, b);
-    if (bans.size) console.log(`  bans: restored ${bans.size}`);
-  } catch {
-    // nobody banned yet
-  }
+  // Nobody banned yet reads as null.
+  const raw = readJsonStore(BANS_STORE);
+  for (const b of Array.isArray(raw) ? raw : []) bans.set(b.token, b);
+  if (bans.size) console.log(`  bans: restored ${bans.size}`);
 }
 
 function saveBans() {
   try {
-    fs.mkdirSync(path.dirname(BANS_STORE), { recursive: true });
-    fs.writeFileSync(BANS_STORE, JSON.stringify([...bans.values()]));
+    writeFileAtomic(BANS_STORE, JSON.stringify([...bans.values()]));
   } catch (err) {
     console.warn('bans: could not persist —', err.message);
   }

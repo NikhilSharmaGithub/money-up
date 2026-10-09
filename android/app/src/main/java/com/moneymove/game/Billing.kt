@@ -218,6 +218,15 @@ class Billing(app: Application) : AndroidViewModel(app) {
             connect()
             return
         }
+        if (client?.isReady != true) {
+            // Play dropped the line after the catalogue came in, so the pack
+            // is known and the sheet cannot be opened. Nothing else would ever
+            // dial again while the shop stays on screen: the rows are still
+            // priced, so there is no "Try again" row to press either.
+            note("Reconnecting to Google Play — try again.")
+            connect()
+            return
+        }
         buying = packId
         val flow = BillingFlowParams.newBuilder()
             .setProductDetailsParamsList(
@@ -238,7 +247,13 @@ class Billing(app: Application) : AndroidViewModel(app) {
         if (result?.responseCode != BillingClient.BillingResponseCode.OK) {
             Log.w(TAG, "flow refused: ${result?.responseCode} ${result?.debugMessage}")
             buying = null
-            note("Google Play wouldn't open that purchase.")
+            if (result?.responseCode == BillingClient.BillingResponseCode.SERVICE_DISCONNECTED) {
+                // The line went between the check above and the sheet.
+                note("Reconnecting to Google Play — try again.")
+                connect()
+            } else {
+                note("Google Play wouldn't open that purchase.")
+            }
         }
     }
 
@@ -260,6 +275,12 @@ class Billing(app: Application) : AndroidViewModel(app) {
             .enablePendingPurchases(
                 PendingPurchasesParams.newBuilder().enableOneTimeProducts().build(),
             )
+            // Play drops the binding as a matter of routine — it updates
+            // itself, or the system reclaims it. With this (Billing 8.0 on), a
+            // call made on a dropped line dials again before it runs, so the
+            // catalogue, the sweep and the consume after a grant heal on
+            // their own rather than answering SERVICE_DISCONNECTED.
+            .enableAutoServiceReconnection()
             .build()
         client = c
         c.startConnection(object : BillingClientStateListener {
@@ -279,8 +300,9 @@ class Billing(app: Application) : AndroidViewModel(app) {
             override fun onBillingServiceDisconnected() {
                 connecting = false
                 // Play drops this connection as a matter of routine. The next
-                // tap reconnects; retrying in a loop here would be a loop on
-                // a phone that has no Play Store to reconnect to at all.
+                // call made on it, or the next tap on a pack (see [buy]),
+                // reconnects; retrying in a loop here would be a loop on a
+                // phone that has no Play Store to reconnect to at all.
             }
         })
     }

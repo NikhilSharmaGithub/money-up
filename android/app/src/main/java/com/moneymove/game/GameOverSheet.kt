@@ -39,13 +39,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -381,12 +382,19 @@ private var lastDouble: Pair<Int, Int>? by mutableStateOf(null)
  * when the gateway says Google, the house ad for every other answer. Once
  * paid, the offer is replaced by what it bought: an offer already taken must
  * not still look pressable.
+ *
+ * The loop runs in the store's scope, not the sheet's. The sheet can close
+ * under it while Google's ad is still playing — anyone at the table may press
+ * Play again, and the room going back to the lobby takes the result with it —
+ * and a loop that died with the sheet would never send the claim for an ad
+ * watched to the end. What it writes to the sheet's own state after that
+ * lands nowhere, which is harmless; the toast and the wallet are the store's
+ * and the account's, and still there.
  */
 @Composable
 private fun DoubleWinOffer(store: GameStore, account: AccountStore, state: GameState) {
     val p = P.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var ads by remember { mutableStateOf<AdsConfig?>(null) }
     var busy by remember { mutableStateOf(false) }
     var doubled by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -394,6 +402,17 @@ private fun DoubleWinOffer(store: GameStore, account: AccountStore, state: GameS
     // Held while the house ad is up, with what the break is worth; the loop
     // below is waiting on it.
     var gate by remember { mutableStateOf<Pair<CompletableDeferred<Boolean>, Int>?>(null) }
+    // The house break is drawn inside this sheet, so it closes with it. The
+    // loop outlives the sheet now, and would wait for ever on a break nobody
+    // can see: one the sheet took away was not watched to the end, and one
+    // due after the sheet has gone has nowhere to be shown.
+    var onScreen by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) {
+        onDispose {
+            onScreen = false
+            gate?.first?.complete(false)
+        }
+    }
 
     LaunchedEffect(Unit) {
         // A read that didn't land leaves the offer off; a dark server answers
@@ -448,6 +467,7 @@ private fun DoubleWinOffer(store: GameStore, account: AccountStore, state: GameS
                 NetworkAdOutcome.EARNED -> true
                 NetworkAdOutcome.DISMISSED -> false
                 NetworkAdOutcome.UNAVAILABLE -> {
+                    if (!onScreen) return
                     val g = CompletableDeferred<Boolean>()
                     gate = g to worth
                     try { g.await() } finally { gate = null }
@@ -507,7 +527,7 @@ private fun DoubleWinOffer(store: GameStore, account: AccountStore, state: GameS
                 OfferButton(
                     if (busy) "Loading the ad…" else "Watch an ad — double your winnings$sum",
                     busy = busy,
-                ) { scope.launch { watch(spec, factor) } }
+                ) { store.viewModelScope.launch { watch(spec, factor) } }
                 Text(
                     "Five seconds, and the win pays ${if (factor == 2) "twice" else "$factor times"}." +
                         if (spec.remaining > 0) " ${spec.remaining} left today." else "",

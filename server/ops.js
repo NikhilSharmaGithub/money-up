@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 // — a corrupt write, an over-eager admin — not a lost disk: the snapshots
 // live on the same volume as the originals. Off-site is the download button.
 const BACKUP_KEEP_DAYS = 7;
-const BACKUP_FILES = ['social.json', 'ledger.json', 'stats.json', 'bans.json', 'audit.json'];
+const BACKUP_FILES = ['social.json', 'ledger.json', 'stats.json', 'bans.json', 'audit.json', 'tournaments.json'];
 
 /** Server-local calendar date, the same shape the daily reward keys on. */
 function dayStamp(when = Date.now()) {
@@ -32,6 +32,15 @@ export function runBackup(dataDir) {
     for (const name of BACKUP_FILES) {
       const src = path.join(dataDir, name);
       if (!fs.existsSync(src)) continue; // not written yet — nothing to keep
+      // A file that does not parse is not a backup, it is the damage the
+      // backups exist to undo. Copying it would put it over today's good
+      // snapshot — at boot, the very moment a broken store is found.
+      try {
+        JSON.parse(fs.readFileSync(src, 'utf8'));
+      } catch (err) {
+        console.warn(`backup: skipped ${name} — it does not parse (${err.message})`);
+        continue;
+      }
       fs.copyFileSync(src, path.join(dir, name));
       copied++;
     }

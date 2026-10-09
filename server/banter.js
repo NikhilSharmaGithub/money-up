@@ -168,3 +168,21 @@ export function cleanText(text) {
 
 /** True when a name is nothing but a masked slur — those get replaced wholesale. */
 export const isAllMasked = (text) => /^\*+$/.test(String(text).trim());
+
+/**
+ * A flag is one country flag — two regional-indicator letters — or one of
+ * the two picks every client offers beside the countries. Anything else is
+ * nothing.
+ *
+ * It is shown on the board, the chat and the profile card of everyone at the
+ * table, and decoded by apps that expect a short string: a number or an
+ * object there stopped every iPhone at the table decoding state for the rest
+ * of the game, a hundred thousand characters rode every push, and eight
+ * characters of anything at all were a name that skipped the name filter.
+ */
+const FLAG_EXTRAS = new Set(['🏴‍☠️', '🌍']);
+const COUNTRY_FLAG = /^[\u{1F1E6}-\u{1F1FF}]{2}$/u;
+export function cleanFlag(flag) {
+  if (typeof flag !== 'string') return '';
+  return COUNTRY_FLAG.test(flag) || FLAG_EXTRAS.has(flag) ? flag : '';
+}

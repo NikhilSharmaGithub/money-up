@@ -325,7 +325,7 @@ struct DeedSheet: View {
                                     caption: "Unmortgage",
                                     detail: money(unmortgageCost(price)),
                                     kind: .primary,
-                                    enabled: store.state?.settings.mortgage != false && price > 0) {
+                                    enabled: store.canUnmortgage(tileIndex)) {
                             store.unmortgage(tileIndex)
                         }
                     } else {
@@ -912,7 +912,7 @@ struct PropertiesSheet: View {
         if store.canMortgage(i), let price = tile.price {
             buttons.append(RowButton(label: "Mortgage +\(money(price / 2))", kind: .gold) { store.mortgage(i) })
         }
-        if own?.isMortgaged == true, store.state?.settings.mortgage != false, let price = tile.price {
+        if store.canUnmortgage(i), let price = tile.price {
             buttons.append(RowButton(label: "Unmortgage \(money(unmortgageCost(price)))", kind: .primary) { store.unmortgage(i) })
         }
         return buttons

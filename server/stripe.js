@@ -65,17 +65,30 @@ export async function createCheckout({ token, packId, origin }) {
     cancel_url: `${back}/?coins=cancelled`,
   });
 
-  const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${SECRET}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body,
-  });
-  const session = await res.json();
-  if (!res.ok || !session.url) {
-    console.warn('stripe: checkout failed —', session.error?.message || res.status);
+  // A network fault on the way to Stripe — a reset, a DNS blip, a 5xx page
+  // that is not JSON — is a failed payment start, said as one. Thrown, it was
+  // a rejection inside an Express 4 route, which nothing caught: the whole
+  // server went down, and every live game with it, for one tap on Buy. The
+  // timeout keeps a hung connection from holding the request open for ever.
+  let res;
+  let session;
+  try {
+    res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SECRET}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    session = await res.json();
+  } catch (err) {
+    console.warn('stripe: checkout failed —', err.message);
+    return { error: 'Could not start the payment' };
+  }
+  if (!res.ok || !session?.url) {
+    console.warn('stripe: checkout failed —', session?.error?.message || res.status);
     return { error: 'Could not start the payment' };
   }
   return { ok: true, url: session.url };

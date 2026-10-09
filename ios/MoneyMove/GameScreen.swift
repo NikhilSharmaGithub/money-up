@@ -486,10 +486,16 @@ struct GameScreen: View {
             Button("Leave for good", role: .destructive) {
                 // The quit has to reach the server before the socket goes
                 // away — it's what hands the streets back to the bank.
+                let room = store.roomId
                 store.quitGame()
                 Task {
                     try? await Task.sleep(for: .milliseconds(350))
                     store.leaveRoom()
+                    // The push that shows the seat gone may not have landed
+                    // yet, and leaving files a table that still looks live
+                    // under History's "still going". There is no going back
+                    // to this one.
+                    if let room { store.dropUnfinished(room) }
                 }
             }
         } message: {
