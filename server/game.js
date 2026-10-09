@@ -4406,6 +4406,11 @@ export class GameRoom {
       history: base.history.map((h) => ({ ...h, w: mapKeys(h.w) })),
       stats: base.stats && mapKeys(base.stats),
       titles: base.titles && mapKeys(base.titles),
+      // The card on the table names whoever drew it — a seat, or the board's
+      // own deadlock card — and that name is a token like any other. Left out
+      // of this list, every card drawn handed its drawer's wallet key to
+      // everyone at the table and everyone watching it.
+      lastCard: base.lastCard && { ...base.lastCard, playerId: mapId(base.lastCard.playerId) },
       lastMove: base.lastMove && { ...base.lastMove, playerId: mapId(base.lastMove.playerId) },
       moves: base.moves.map((m) => ({ ...m, playerId: mapId(m.playerId) })),
     };
