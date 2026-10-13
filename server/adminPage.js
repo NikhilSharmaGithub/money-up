@@ -1714,13 +1714,29 @@ export const adminPageHTML = `<!doctype html>
 
   function renderGames() {
     var games = state.data.recentGames || [];
-    var html = '<tr><th>when</th><th>room</th><th>map</th><th>winner</th><th>players</th><th>turns</th></tr>';
+    var html = '<tr><th>when</th><th>room</th><th>map</th><th>winner</th><th>humans</th><th>players</th><th>turns</th></tr>';
     games.slice(0, 100).forEach(function (g) {
+      // Games recorded before the desk counted people carry no number; they
+      // show a dash rather than a guess.
+      var counted = typeof g.humans === 'number';
+      var humansCell = counted
+        ? '<b class="' + (g.humans > 1 ? 'ok' : '') + '">' + fmtNum(g.humans) + '</b>' +
+          '<span class="dim"> of ' + fmtNum(g.seats || (g.players || []).length) + '</span>'
+        : '<span class="dim">—</span>';
+      // House players' names are dimmed so the people at the table stand out.
+      var bots = g.botNames || [];
+      var names = (g.players || []).map(function (n) {
+        var i = bots.indexOf(n);
+        if (i === -1) return esc(n);
+        bots = bots.slice(0, i).concat(bots.slice(i + 1));
+        return '<span class="dim">' + esc(n) + '</span>';
+      }).join(', ');
       html += '<tr><td>' + fmtWhen(g.at) + '</td><td class="mono">' + esc(g.roomId) + '</td>' +
         '<td>' + esc(g.map) + '</td><td class="ok">' + esc(g.winner || '—') + (g.winnerIsBot ? ' <span class="dim">(house)</span>' : '') + '</td>' +
-        '<td>' + esc((g.players || []).join(', ')) + '</td><td>' + fmtNum(g.turns) + '</td></tr>';
+        '<td>' + humansCell + '</td>' +
+        '<td>' + names + '</td><td>' + fmtNum(g.turns) + '</td></tr>';
     });
-    if (!games.length) html += '<tr><td colspan="6" class="dim">No finished games yet</td></tr>';
+    if (!games.length) html += '<tr><td colspan="7" class="dim">No finished games yet</td></tr>';
     swap('games', html);
     document.getElementById('gamecount').textContent = games.length || '';
 
@@ -1739,8 +1755,18 @@ export const adminPageHTML = `<!doctype html>
     document.getElementById('gamescaption').textContent = total > 0
       ? fmtNum(total) + ' finished in the last 30 days (peak ' + fmtNum(peak(counts)) + '/day)' +
         (bookHasHistory() ? ', with ' + fmtNum(sum(pCounts)) + ' real player-days behind them' : '') +
-        '. The table below keeps only the ' + fmtNum(games.length) + ' most recent.'
+        '. The table below keeps only the ' + fmtNum(games.length) + ' most recent' + peopleNote(games) + '.'
       : 'Finished games land here as tables wrap up. Only the most recent 100 are kept in the table below.';
+  }
+
+  // Of the recent games that were counted, how many had two or more people
+  // at the table rather than one person against the house.
+  function peopleNote(games) {
+    var counted = games.filter(function (g) { return typeof g.humans === 'number'; });
+    if (!counted.length) return '';
+    var together = counted.filter(function (g) { return g.humans > 1; }).length;
+    return ' — ' + fmtNum(together) + ' of the last ' + fmtNum(counted.length) +
+      ' counted had two or more people playing, the rest were one person against the house';
   }
 
   function playerByCode(code) {

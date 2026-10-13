@@ -1269,10 +1269,19 @@ function recordTransitions(room) {
       const out = cup.matchFinished(room.id, room.winner?.id, worth);
       if (out?.roundComplete) seatCupMatches();
     }
+    // How many of the seats were people: every seat that was never a house
+    // player counts, including someone who walked out or was covered by the
+    // house for a while, and a second player on the same phone — they all
+    // sat down as people. The names of the house players go along, so the
+    // desk can tell them apart in the list.
+    const humans = room.players.filter((p) => !p.isBot);
     stats.recent.unshift({
       roomId: room.id,
       map: room.map.name,
       players: room.players.map((p) => p.name),
+      humans: humans.length,
+      seats: room.players.length,
+      botNames: room.players.filter((p) => p.isBot).map((p) => p.name),
       winner: room.winner?.name || null,
       // The lobby illusion stops at this desk: the owner sees which winners
       // were house players.
