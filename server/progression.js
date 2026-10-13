@@ -91,16 +91,28 @@ export const seedXp = ({ games = 0, wins = 0 } = {}) =>
 const digest = (text) => createHash('sha1').update(text).digest();
 
 /**
- * A house player's level, from nothing but its code: 3 to 40, most of them
- * somewhere in the low teens. Squaring a uniform draw is what leans it low —
- * a table full of level-38 strangers would be a stranger table than a real
- * one ever is. Fixed, so the chip in the lobby and the one on its profile
- * after the game are the same number.
+ * A house player's record, from nothing but its code: a few dozen wins out of
+ * rather more games. social.js builds the rest of its card (winnings, titles,
+ * "playing since") on top of these two numbers, and its level is read off
+ * them, so the card can never claim a hundred and sixty games at level four.
+ */
+export function houseRecord(code) {
+  const h = createHash('sha1').update(String(code || '')).digest();
+  const wins = 3 + (h.readUInt16BE(0) % 88);                // 3–90
+  const games = wins + 6 + (h.readUInt16BE(2) % 135);       // and 6–140 more played
+  return { wins, games };
+}
+
+/**
+ * A house player's level: what its record would have earned at the rates a
+ * real game pays — a game played, a win, and the turns in between — held to
+ * 3–40. Fixed for the code, so the chip in the lobby and the one on its
+ * profile after the game are the same number.
  */
 export function houseLevel(code) {
-  const h = digest(`level:${String(code || '')}`);
-  const u = h.readUInt16BE(0) / 65536;
-  return 3 + Math.floor(37 * u * u + 0.5 * (h[2] / 256));
+  const { wins, games } = houseRecord(code);
+  const turns = Math.round(games * 8);                      // about sixteen turns a game, a point per two
+  return Math.max(3, Math.min(40, levelFor(seedXp({ games, wins }) + turns)));
 }
 
 /** The boards a house player might call its favourite: every one there is, Classic most often. */

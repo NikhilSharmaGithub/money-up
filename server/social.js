@@ -16,7 +16,7 @@ import { RENT_PRICE } from './boards.js';
 import { cleanText, cleanFlag, isAllMasked } from './banter.js';
 import { writeFileAtomic, readJsonStore } from './storage.js';
 import {
-  levelFor, levelInfo, gameXp, seedXp, houseLevel, houseCareer, LEVEL_UP_COINS, MISSION_XP, GAME_XP_PER_DAY,
+  levelFor, levelInfo, gameXp, seedXp, houseLevel, houseRecord, houseCareer, LEVEL_UP_COINS, MISSION_XP, GAME_XP_PER_DAY,
   CAREER_KEYS, favoriteBoard, foldCareer,
   missionKinds, missionOf, missionProgress, MISSION_COINS, MISSION_BONUS_COINS,
   weekKey, weekResetsAt,
@@ -1583,8 +1583,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 function houseStats(code) {
   const h = createHash('sha1').update(code).digest();
-  const wins = 3 + (h.readUInt16BE(0) % 88);                // 3–90
-  const games = wins + 6 + (h.readUInt16BE(2) % 135);       // and 6–140 more played
+  const { wins, games } = houseRecord(code);
   const winnings = wins * 2 + (h[4] % 41);                  // two a win, and change
   const since = HOUSE_EPOCH + (h.readUInt16BE(5) % 181) * DAY_MS + (h[7] % 24) * 60 * 60 * 1000;
   const titles = [];
