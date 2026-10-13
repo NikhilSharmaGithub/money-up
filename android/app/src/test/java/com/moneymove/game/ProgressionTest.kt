@@ -97,6 +97,100 @@ class ProgressionTest {
         assertEquals("+3 coins · +10 XP", claimLine(3, 10))
         assertEquals("+5 coins", claimLine(5, 0))
         assertEquals("+1 coin", claimLine(1, 0))
+        // Round 2: a mission pays XP alone, and its toast says only that.
+        assertEquals("+10 XP", claimLine(0, 10))
+    }
+
+    // ── round 2: missions pay XP, the bonus pays the coins ──────────────────
+
+    @Test
+    fun `a round-two card pays XP per mission and coins only on the bonus`() {
+        val view = MMJson.decodeFromString(
+            MissionsView.serializer(),
+            """{"day":"2026-10-13","resetsAt":1791961200000,"signedIn":true,
+               "missions":[
+                 {"id":"playGames","kind":"playGames","title":"Play 2 games","target":2,"progress":2,
+                  "coins":0,"xp":10,"done":true,"claimed":true},
+                 {"id":"winGame","kind":"winGame","title":"Win a game","target":1,"progress":1,
+                  "coins":0,"xp":10,"done":true,"claimed":false},
+                 {"id":"winAuction","kind":"winAuction","title":"Win an auction","target":1,"progress":1,
+                  "coins":0,"xp":10,"done":true,"claimed":false}],
+               "bonus":{"coins":3,"ready":true,"claimed":false}}""",
+        )
+        assertTrue(view.missions.all { it.coins == 0 && it.xp == 10 })
+        assertEquals(3, view.bonus.coins)
+        assertTrue(view.anythingToClaim)
+        assertEquals(3, view.doneCount)
+    }
+
+    // ── round 2: the daily reward climbs 1 → 7 and starts again ─────────────
+
+    private fun daily(text: String) = MMJson.decodeFromString(DailyView.serializer(), text)
+
+    @Test
+    fun `the bar is drawn from the cycle's step, never from the streak`() {
+        // A streak of nine is on step three of its second week, today unclaimed.
+        val before = daily(
+            """{"signedIn":true,"claimable":true,"streak":9,"amount":3,"nextAt":null,
+               "cycleDay":3,"cycleLength":7,"claimedToday":false}""",
+        )
+        assertEquals(3, before.step)
+        assertEquals(7, before.steps)
+        assertFalse(before.collectedToday)
+        assertEquals(2, before.collectedSteps)
+        // Collected: the step is the one paid today, and it is lit with the rest.
+        val after = daily(
+            """{"signedIn":true,"claimable":false,"streak":10,"amount":4,"nextAt":1791961200000,
+               "cycleDay":3,"cycleLength":7,"claimedToday":true}""",
+        )
+        assertEquals(3, after.step)
+        assertTrue(after.collectedToday)
+        assertEquals(3, after.collectedSteps)
+    }
+
+    @Test
+    fun `the day after a seven is step one again`() {
+        val seventh = daily(
+            """{"signedIn":true,"claimable":false,"streak":7,"amount":1,"nextAt":1791961200000,
+               "cycleDay":7,"cycleLength":7,"claimedToday":true}""",
+        )
+        assertEquals(7, seventh.collectedSteps)
+        val eighth = daily(
+            """{"signedIn":true,"claimable":true,"streak":7,"amount":1,"nextAt":null,
+               "cycleDay":1,"cycleLength":7,"claimedToday":false}""",
+        )
+        assertEquals(1, eighth.step)
+        assertEquals(0, eighth.collectedSteps)
+    }
+
+    @Test
+    fun `no streak, signed out or a stranger's token is step one`() {
+        val none = daily("""{"signedIn":false,"claimable":false,"streak":0,"amount":1,"cycleDay":1,"cycleLength":7,"claimedToday":false}""")
+        assertEquals(1, none.step)
+        assertEquals(0, none.collectedSteps)
+    }
+
+    @Test
+    fun `an older server's daily still draws a sensible bar`() {
+        // No cycleDay: before the claim the step is today's amount…
+        val waiting = daily("""{"signedIn":true,"claimable":true,"streak":4,"amount":5,"nextAt":null}""")
+        assertEquals(5, waiting.step)
+        assertEquals(4, waiting.collectedSteps)
+        // …after it, the streak held at the top, as that server's ladder was.
+        val spent = daily("""{"signedIn":true,"claimable":false,"streak":12,"amount":7,"nextAt":1791961200000}""")
+        assertTrue(spent.collectedToday)
+        assertEquals(7, spent.step)
+        assertEquals(7, spent.collectedSteps)
+        // And nothing at all reads as a first day.
+        assertEquals(1, daily("{}").step)
+    }
+
+    @Test
+    fun `a step outside the climb is held inside it`() {
+        assertEquals(7, daily("""{"signedIn":true,"claimable":true,"cycleDay":9,"cycleLength":7}""").step)
+        assertEquals(1, daily("""{"signedIn":true,"claimable":true,"cycleDay":0}""").step)
+        // A nonsense length falls back to a week.
+        assertEquals(7, daily("""{"cycleLength":0}""").steps)
     }
 
     @Test

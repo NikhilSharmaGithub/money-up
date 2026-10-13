@@ -698,7 +698,7 @@ struct MissionsCard: View {
         if m.isClaimed {
             claimedMark(P)
         } else if m.isDone && signedIn {
-            claimButton(m.id, label: "Claim", P)
+            claimButton(m.id, label: "Claim", glyph: .level, P)
         } else if m.isDone {
             // Earned, and waiting behind an account rather than gone.
             Text("Sign in\nto claim")
@@ -706,23 +706,31 @@ struct MissionsCard: View {
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(P.gold)
         } else {
+            // XP is what a mission pays now; the coins wait on the bonus row
+            // for all three. A server that still pays coins per mission says
+            // so, and the row says it too rather than hide money owed.
             VStack(alignment: .trailing, spacing: 1) {
                 HStack(spacing: 3) {
-                    Art.icon(.coin, size: 12)
-                    Text("\(m.coins ?? 3)")
+                    Art.icon(.level, size: 12)
+                    Text("+\(m.xp ?? 10) XP")
                         .font(.system(size: 12, weight: .heavy, design: .rounded))
                         .foregroundStyle(P.ink2)
                 }
-                Text("+\(m.xp ?? 10) XP")
-                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                if let coins = m.coins, coins > 0 {
+                    HStack(spacing: 2) {
+                        Art.icon(.coin, size: 10)
+                        Text("\(coins)")
+                            .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                    }
+                }
             }
         }
     }
 
     private func bonusRow(_ b: MissionsBoard, signedIn: Bool, _ P: Palette) -> some View {
         let bonus = b.bonus
-        let coins = bonus?.coins ?? 5
+        let coins = bonus?.coins ?? 3
         let claimed = bonus?.claimed ?? false
         let ready = (bonus?.ready ?? false) && !claimed
         return HStack(spacing: 11) {
@@ -740,16 +748,20 @@ struct MissionsCard: View {
                 Text("All three done")
                     .font(.system(size: 13.5, weight: .bold, design: .rounded))
                     .foregroundStyle(claimed ? P.ink3 : P.ink)
-                Text("Bonus \(coins) coins")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink3)
+                // The day's only coins: the one line on the card that pays any.
+                HStack(spacing: 3) {
+                    Art.icon(.coin, size: 11)
+                    Text("Bonus \(coins) \(coins == 1 ? "coin" : "coins")")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                }
             }
             Spacer(minLength: 4)
             Group {
                 if claimed {
                     claimedMark(P)
                 } else if ready && signedIn {
-                    claimButton("bonus", label: "Claim", P)
+                    claimButton("bonus", label: "Claim", glyph: .coin, P)
                 } else {
                     Text("\(b.doneCount)/\(b.list.count)")
                         .font(.system(size: 12, weight: .heavy, design: .rounded))
@@ -763,13 +775,15 @@ struct MissionsCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func claimButton(_ id: String, label: String, _ P: Palette) -> some View {
+    /// The button wears what it pays: the level star on a mission's, the coin
+    /// on the bonus's.
+    private func claimButton(_ id: String, label: String, glyph: Glyph, _ P: Palette) -> some View {
         Button {
             Task { await claim(id) }
         } label: {
             HStack(spacing: 5) {
                 if claiming == id { ProgressView().tint(P.accentInk) }
-                else { Art.icon(.coin, size: 14) }
+                else { Art.icon(glyph, size: 14) }
                 Text(label)
             }
         }
@@ -857,7 +871,14 @@ struct MissionsCard: View {
         store.noteClaim(reply)
         // A repeat paid nothing, so it plays nothing: the coins it would be
         // celebrating were celebrated wherever they were first claimed.
-        guard reply.duplicate != true, (reply.awarded?.coins ?? 0) > 0 else { return }
+        guard reply.duplicate != true else { return }
+        // A mission pays XP alone now: a tap of the hand for it, and the
+        // level-up, if it crossed one, is noteClaim's to celebrate. Only the
+        // bonus's coins fly.
+        guard (reply.awarded?.coins ?? 0) > 0 else {
+            if (reply.awarded?.xp ?? 0) > 0 { Haptics.tap() }
+            return
+        }
         Haptics.turn()
         SoundKit.shared.gain()
         // The counter in the corner catches the coins — the same flight every

@@ -506,6 +506,10 @@ struct TradePickerSheet: View {
     var fromId: String
     var give: Set<Int> = []
     let pick: (String) -> Void
+    /// The list of every open offer at the table (1.0.6). The bar's trade key
+    /// is the one door to it that is always there: the dock shows a lone
+    /// offer as its card, and nothing else of the table's while it does.
+    var openOffers: (() -> Void)? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.dismiss) private var dismiss
@@ -518,6 +522,7 @@ struct TradePickerSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 8) {
+                    offersRow(P)
                     if let i = give.first, give.count == 1, let tile = store.tile(i) {
                         Text("Offering \(tile.name)")
                             .font(.system(size: 12.5, weight: .semibold, design: .rounded))
@@ -550,6 +555,55 @@ struct TradePickerSheet: View {
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    /// "Open offers · 1 for you, 2 between others", and the way to them. Only
+    /// while there are any, and only as a row above the partners — making an
+    /// offer is still what this sheet is for.
+    @ViewBuilder private func offersRow(_ P: Palette) -> some View {
+        let incoming = store.incomingOffers.count
+        let sent = store.sentOffers.count
+        let table = store.tableTrades.count
+        if let openOffers, incoming + sent + table > 0 {
+            let parts = [incoming > 0 ? "\(incoming) for you" : nil,
+                         sent > 0 ? "\(sent) sent" : nil,
+                         table > 0 ? "\(table) between others" : nil].compactMap { $0 }
+            let brass = BackdropKind.paper.settledGlass(P).goldInk
+            Button {
+                Haptics.tap()
+                openOffers()
+            } label: {
+                HStack(spacing: 9) {
+                    Art.icon(.trade, size: 15, tint: P.ink2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Open offers")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink)
+                        Text(parts.joined(separator: " · "))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Text("See all")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(brass)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(brass)
+                }
+                .padding(.vertical, 10)
+                .padding(.horizontal, 13)
+                .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(P.gold.opacity(0.5), lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint("Opens the list of offers")
+        }
     }
 
     private func partnerRow(_ p: PlayerState, _ P: Palette) -> some View {

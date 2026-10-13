@@ -127,6 +127,20 @@ data class GameState(
     val isEnded: Boolean get() = status == "ended"
 
     /**
+     * A table whose host set its rules. A Play-now or a cup table plays round
+     * 2's three — estates, auction-only, the shuffle — at their defaults
+     * whatever the fields say (docs/API-1.0.6.md), so nothing here reads
+     * them off one of those.
+     */
+    val hostSetsRules: Boolean get() = quick != true && cup != true
+
+    /**
+     * Auction-only (1.0.6 round 2): every unowned street goes straight under
+     * the hammer, so there is never a Buy to show — the auction is the panel.
+     */
+    val isAuctionOnly: Boolean get() = hostSetsRules && settings.auctionOnly == true
+
+    /**
      * The game clock to count down, while there is a game for it to run on.
      * The server clears it in the lobby; the guard is for the beat between a
      * push that ends the game and one that has not caught up.
@@ -318,8 +332,21 @@ data class GameSettings(
     val botLevel: String? = null,
     /** The game clock in minutes — 0, 20, 30, 45 or 60, where 0 is no clock. */
     val timeLimit: Int? = null,
+    /**
+     * What a bankrupt player's streets do (1.0.6 round 2): "release" — back
+     * to the bank, unowned, as they always went — or "auction", one lot at a
+     * time. Absent from an older server, which only ever released them.
+     */
+    val bankruptProperties: String? = null,
+    /** Every unowned street goes straight to auction; nobody buys at the sticker. */
+    val auctionOnly: Boolean? = null,
+    /** The colour sets trade places on the board at the start of each game. */
+    val shuffleBoard: Boolean? = null,
 ) {
     val botSkill: BotSkill get() = BotSkill.of(botLevel)
+
+    /** A bankrupt player's streets go under the hammer rather than back to the bank. */
+    val auctionsEstates: Boolean get() = bankruptProperties == "auction"
 
     /** Minutes on the game clock; 0 for an untimed table and an older server. */
     val gameMinutes: Int get() = timeLimit?.takeIf { it in GAME_LENGTHS } ?: 0
@@ -330,6 +357,12 @@ data class GameSettings(
 
         /** "Unlimited" or "30 min", as the lobby's menu and summary say it. */
         fun gameLengthLabel(minutes: Int): String = if (minutes <= 0) "Unlimited" else "$minutes min"
+
+        /**
+         * The two values `bankruptProperties` takes, as the lobby's menu
+         * offers them — the server refuses anything else, whole.
+         */
+        val BANKRUPT_CHOICES = listOf("release" to "Back to the bank", "auction" to "Auction them")
     }
 }
 
@@ -359,7 +392,24 @@ data class MapData(
     val layout: MapLayout = MapLayout(),
     val size: Int = 0,
     val groups: Map<String, List<Int>>? = null,
-)
+    /**
+     * This game's layout is a shuffle of the printed board (round 2): the
+     * colour sets sit on new squares, carrying their own deeds. False in the
+     * lobby, which always shows the printed board, and absent from an older
+     * server. [uid] says which layout exactly.
+     */
+    val shuffled: Boolean? = null,
+) {
+    /**
+     * What anything cached per board is keyed on: the exact layout, which a
+     * shuffle changes while the id stays "classic". An older server sends
+     * no uid, and its id was the layout.
+     */
+    val layoutKey: String get() = uid?.takeIf { it.isNotBlank() } ?: id
+
+    /** This game's layout is a shuffle — false in the lobby and from an older server. */
+    val isShuffled: Boolean get() = shuffled == true
+}
 
 @Serializable
 data class MapLayout(
@@ -578,7 +628,29 @@ data class AuctionState(
     val leader: String? = null,
     val inRace: List<String> = emptyList(),
     val endsAt: Double? = null,
+    /**
+     * A lot from a bankrupt player's estate (1.0.6 round 2), sold off one
+     * street at a time at a table that auctions estates. Null for an ordinary
+     * auction — a declined deed, an auction-only landing — and from an older
+     * server, which never sold an estate.
+     */
+    val estate: EstateLot? = null,
 ) {
+    /**
+     * "Ravi's estate — 2 more after this": whose streets are under the
+     * hammer and how many of theirs are still to come. Null for an ordinary
+     * auction.
+     */
+    val estateLine: String?
+        get() = estate?.let { lot ->
+            val whose = lot.from.ifBlank { "A bankrupt player" } + "'s"
+            when {
+                lot.left <= 0 -> "$whose estate — the last lot"
+                lot.left == 1 -> "$whose estate — 1 more after this"
+                else -> "$whose estate — ${lot.left} more after this"
+            }
+        }
+
     /**
      * The window the countdown is measured against. The room opens on twenty
      * seconds and every bid resets it to twelve; measuring both against twenty
@@ -599,6 +671,14 @@ data class AuctionState(
     /** The three paddle amounts the dock offers, minus any this purse cannot cover. */
     fun steps(purse: Int): List<Int> = listOf(nextBid, nextBid + 40, nextBid + 90).filter { it <= purse }
 }
+
+/**
+ * Where an estate lot comes from: the bankrupt player's NAME (never an id),
+ * and how many more lots of that same estate follow this one — 0 on its
+ * last. A second estate queued behind it is not counted.
+ */
+@Serializable
+data class EstateLot(val from: String = "", val left: Int = 0)
 
 @Serializable
 data class TradeSide(

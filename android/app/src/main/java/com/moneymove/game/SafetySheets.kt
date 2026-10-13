@@ -1071,6 +1071,18 @@ private val SF_MARKS: Map<String, List<GlyphPart>> = mapOf(
         sfFill("M7 10.8a5.2 5.2 0 1 0 10.4 0a5.2 5.2 0 1 0 -10.4 0Z"),
         sfFill("M2.8 27.4c0-5.3 4.2-9 9.4-9s9.4 3.7 9.4 9Z"),
     ),
+    // One person, solid: the mark on a seat's disc that opens their profile.
+    "person.fill" to listOf(
+        sfFill("M10.6 10.2a5.4 5.4 0 1 0 10.8 0a5.4 5.4 0 1 0 -10.8 0Z"),
+        sfFill("M4.6 28.2c0-6 5-10.4 11.4-10.4s11.4 4.4 11.4 10.4Z"),
+    ),
+    // This table's rules, beside the sound button: a solid disc with the
+    // "i" cut through it, iOS's info.circle.fill.
+    "info.circle.fill" to listOf(
+        sfFill("M3.4 16a12.6 12.6 0 1 0 25.2 0a12.6 12.6 0 1 0 -25.2 0Z"),
+        sfCutFill("M14.1 9.9a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0 -3.8 0Z"),
+        sfCut("M16 15v8", 3.2f),
+    ),
     "eye.fill" to listOf(
         sfFill("M16 7c6.4 0 11.2 4.2 13.4 9-2.2 4.8-7 9-13.4 9S4.8 20.8 2.6 16C4.8 11.2 9.6 7 16 7Z"),
         sfCutFill("M10.4 16a5.6 5.6 0 1 0 11.2 0a5.6 5.6 0 1 0 -11.2 0Z"),

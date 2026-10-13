@@ -104,6 +104,11 @@ final class GameStore: ObservableObject {
     /// the anchor rather than news. Caught on a simulator — three lines sent,
     /// two counted.
     private var chatPrimed = false
+    /// How many views of each open offer are on screen (see setTradeViewing).
+    private var tradeViewers: [Int: Int] = [:]
+    /// When this device last answered, withdrew or set aside an offer — the
+    /// only trade calls a player makes on purpose (see isViewingEcho).
+    private var lastTradeAnswer = Date.distantPast
     @Published var meId: String = ""
     @Published var roomId: String?
     /// This socket came to watch (1.0.6): it joined with `spectate: true`,
@@ -612,7 +617,8 @@ final class GameStore: ObservableObject {
             case .resync: socket.emit("resync")
             }
         case "toast":
-            if let dict = args.first as? [String: Any], let msg = dict["message"] as? String {
+            if let dict = args.first as? [String: Any], let msg = dict["message"] as? String,
+               !isViewingEcho(msg) {
                 showToast(msg, isError: (dict["type"] as? String) == "error")
             }
         case "joinFailed":
@@ -1601,7 +1607,8 @@ final class GameStore: ObservableObject {
             // notices reach the main socket as well, so only the errors are
             // said here, and never twice in a row.
             guard let dict = args.first as? [String: Any], let msg = dict["message"] as? String,
-                  (dict["type"] as? String) == "error", toast?.text != msg else { return }
+                  (dict["type"] as? String) == "error", toast?.text != msg,
+                  !isViewingEcho(msg) else { return }
             showToast(msg, isError: true)
             return
         case "joinFailed":
@@ -1863,25 +1870,52 @@ final class GameStore: ObservableObject {
         ]])
     }
     func respondTrade(_ id: Int, accept: Bool) {
+        lastTradeAnswer = Date()
         // The responder must be the offer's target — route from their socket
         // when that target is one of our local seats.
         let target = state?.trades.first { $0.id == id }?.to ?? meId
         emitAs(localIds.contains(target) ? target : meId, "trade:respond", [["id": id, "accept": accept]])
     }
     func cancelTrade(_ id: Int) {
+        lastTradeAnswer = Date()
         // Only the proposer or target may cancel — route from the right seat.
         let from = state?.trades.first { $0.id == id }?.from ?? meId
         emitAs(localIds.contains(from) ? from : meId, "trade:cancel", [["id": id]])
     }
     /// Set an offer aside: it leaves the dock but stays in the trade list.
     func ignoreTrade(_ id: Int, ignored: Bool = true) {
+        lastTradeAnswer = Date()
         let target = state?.trades.first { $0.id == id }?.to ?? meId
         emitAs(localIds.contains(target) ? target : meId, "trade:ignore", [["id": id, "ignored": ignored]])
     }
+    /// The server's "Trade not found" in answer to a viewing report rather
+    /// than to anything the player pressed. An offer can be withdrawn in the
+    /// same instant its card comes up — the dock's card appears the moment a
+    /// second offer goes, and the sender of the one left may be withdrawing
+    /// it too — and the report that it is being read then lands on nothing.
+    /// Nobody did anything wrong, so nobody is told off: the card has already
+    /// gone with the state that removed it. A refusal of an answer, a cancel
+    /// or a set-aside the player made in the last few seconds is still said.
+    private func isViewingEcho(_ message: String) -> Bool {
+        message == "Trade not found" && Date().timeIntervalSince(lastTradeAnswer) > 3
+    }
+
     /// Live "is viewing" presence on an offer. Guarded so a sheet closing
     /// after the trade already resolved never emits against a dead offer.
+    ///
+    /// Counted (1.0.6): one offer can be on screen twice at once — its card in
+    /// the dock and again in the offers list or its own sheet over it — and
+    /// the first of those to close must not tell the sender nobody is reading
+    /// while the other still shows it. Only the first to open and the last to
+    /// close say anything.
     func setTradeViewing(_ id: Int, _ viewing: Bool, as seat: String? = nil) {
-        guard state?.trades.contains(where: { $0.id == id }) == true else { return }
+        let live = Set((state?.trades ?? []).map(\.id))
+        tradeViewers = tradeViewers.filter { live.contains($0.key) }
+        guard live.contains(id) else { return }
+        let held = tradeViewers[id] ?? 0
+        let now = max(0, held + (viewing ? 1 : -1))
+        tradeViewers[id] = now == 0 ? nil : now
+        guard (held == 0) != (now == 0) else { return }
         let who = seat.flatMap { localIds.contains($0) ? $0 : nil } ?? meId
         emitAs(who, "trade:viewing", [["id": id, "viewing": viewing]])
     }
@@ -1912,8 +1946,21 @@ final class GameStore: ObservableObject {
 
     var me: PlayerState? { state?.player(activeId) }
     var isHost: Bool { state?.hostId == meId }
-    var isMyTurn: Bool { state?.isPlaying == true && localIds.contains(state?.turn?.playerId ?? "") }
+    var isMyTurn: Bool { onClockId.map { localIds.contains($0) } ?? false }
     var currentPlayer: PlayerState? { state?.player(state?.turn?.playerId) }
+
+    /// The seat on the clock — the one whose turn it is and who can still
+    /// play it. A bankrupt seat can hold `turn.playerId` for a while: at a
+    /// table that auctions estates (1.0.6, G5) the turn only moves on after
+    /// the last lot falls. Nobody on that seat can do anything, so it is
+    /// nobody's turn as far as the dock, the rail and the pods are concerned
+    /// — no "Your turn" on the phone of a player who is out. As presented, so
+    /// a bust still on stage keeps its turn until it lands.
+    var onClockId: String? {
+        guard let state, state.isPlaying, let id = state.turn?.playerId else { return nil }
+        if let p = state.player(id), shown(p).isBankrupt { return nil }
+        return id
+    }
 
     /// Live standings by net worth, player id -> position. Recomputed from
     /// the presented players, so the crown does not change hands before the

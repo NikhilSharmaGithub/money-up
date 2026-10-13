@@ -31,6 +31,8 @@ struct ActionPanel: View {
     var openCounter: ((TradeOffer) -> Void)? = nil
     /// Reopens the final standings — the result sheet can be swiped away.
     var openResults: (() -> Void)? = nil
+    /// The list of every open offer at the table (1.0.6).
+    var openOffers: (() -> Void)? = nil
     @State private var confirmBankrupt = false
 
     /// What we put behind the dock. `GameScreen` only ever renders it inside
@@ -112,8 +114,20 @@ struct ActionPanel: View {
         .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
             Button("Go bankrupt", role: .destructive) { store.declareBankrupt() }
         } message: {
-            Text("Everything you own goes to whoever you owe, and you are out of the game.")
+            Text(bankruptcyTerms)
         }
+    }
+
+    /// What giving up actually does, at this table. The creditor has only
+    /// ever kept the cash already paid over; the streets go back to the bank
+    /// — or under the hammer, one at a time, where the host chose that
+    /// (1.0.6, G5). A Play-now or cup table always releases them.
+    private var bankruptcyTerms: String {
+        let state = store.state
+        let auctioned = state?.hasTableRules == true && EstateRule.of(state?.settings) == .auction
+        return auctioned
+            ? "Whatever you have paid stays with whoever you owe, your properties are auctioned to the other players, and you are out of the game."
+            : "Whatever you have paid stays with whoever you owe, your properties go back to the bank, and you are out of the game."
     }
 
     // MARK: - the morph
@@ -124,12 +138,21 @@ struct ActionPanel: View {
     /// on the same word, so the strip rides up and down with the dock as one
     /// cluster instead of jumping while the shell below it glides.
     static func stage(of store: GameStore) -> String {
-        guard let state = store.state else { return "" }
-        let incoming = state.trades.filter { store.isLocal($0.to) }
+        guard store.state != nil else { return "" }
+        // The same three rows tradeRows draws, in words: one offer's card, the
+        // offers row (whose count can tick without the dock changing shape),
+        // what was sent, and the table's line.
+        let incoming = store.incomingOffers
+        let sent = store.sentOffers
         var parts: [String] = []
-        if let offer = incoming.first(where: { $0.ignored != true }) { parts.append("offer \(offer.id)") }
-        if incoming.contains(where: { $0.ignored == true }) { parts.append("parked") }
-        if let sent = state.trades.first(where: { store.isLocal($0.from) }) { parts.append("sent \(sent.id)") }
+        if incoming.count == 1, let offer = incoming.first, offer.ignored != true {
+            parts.append("offer \(offer.id)")
+        } else if !incoming.isEmpty {
+            parts.append("offers")
+        }
+        if sent.count == 1, let one = sent.first { parts.append("sent \(one.id)") }
+        else if sent.count > 1 { parts.append("sent") }
+        if incoming.isEmpty, !store.tableTrades.isEmpty { parts.append("table") }
         parts.append(controls(of: store))
         return parts.joined(separator: " · ")
     }
@@ -172,7 +195,7 @@ struct ActionPanel: View {
                 WatchingLine(glass: glass)
             }
 
-            firstIncomingTrade
+            tradeRows
 
             // The header stays put across a change of phase — it is the same
             // seat's turn — so it sits outside the block that swaps, and only
@@ -335,7 +358,17 @@ struct ActionPanel: View {
             debtControls(turn: turn, P: P)
 
         case "action":
-            if let pending = turn.pending, pending.type == "buy",
+            // Auction-only (1.0.6, G6): a landing goes straight to the hammer
+            // and the server never offers a deed to buy, so there is no Buy
+            // here at all. Should one ever arrive at such a table anyway, the
+            // only door is the auction it would have gone to.
+            if store.state?.settings.auctionOnly == true {
+                if let pending = turn.pending, pending.type == "buy" {
+                    MMIconButton(.gavel, "Send to auction", kind: .primary, big: true) {
+                        store.skipBuy()
+                    }
+                }
+            } else if let pending = turn.pending, pending.type == "buy",
                let tile = store.tile(pending.tile) {
                 let price = pending.price ?? tile.price ?? 0
                 let canAfford = (store.me?.money ?? 0) >= price
@@ -373,7 +406,16 @@ struct ActionPanel: View {
                     // to say so before it is pressed — a player who expects to
                     // roll afterwards has spent $50 on a turn they were losing
                     // anyway.
-                    hint("In prison · attempt \((store.me?.jailTurns ?? 0) + 1) of 3")
+                    // The third try cannot keep anybody in: a miss walks out
+                    // free and moves by the roll (1.0.6). Paying then would be
+                    // $50 for a turn spent standing still, so the panel says
+                    // which roll this is before anybody reaches for the fine.
+                    let attempt = (store.me?.jailTurns ?? 0) + 1
+                    if attempt >= 3 {
+                        hint("In prison · last try — double or not, this roll walks you out free")
+                    } else {
+                        hint("In prison · attempt \(attempt) of 3")
+                    }
                     hint("Paying the fine ends your turn — the card lets you roll.")
                 }
             } else {
@@ -505,8 +547,12 @@ struct ActionPanel: View {
     private func liveWaitingRow(_ P: Palette) -> some View {
         HStack(spacing: 10) {
             if let current = store.currentPlayer {
+                // A seat that went bankrupt keeps the turn while its estate
+                // sells (G5), and "is playing…" would be a player who is out
+                // playing on. As presented, like the rest of the dock.
+                let selling = store.state?.auction?.estate != nil && store.shown(current).isBankrupt
                 AvatarView(name: current.name, colorCSS: current.color, flag: current.flag ?? "", size: 26, emoji: current.avatar ?? "")
-                Text("\(current.name) is playing…")
+                Text(selling ? "\(current.name)’s estate is up for auction…" : "\(current.name) is playing…")
                     .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(ink(true))
             }
@@ -521,180 +567,164 @@ struct ActionPanel: View {
         .padding(.vertical, 2)
     }
 
-    /// Only the topmost live incoming offer takes over the dock; offers set
-    /// aside for later collapse into a one-line chip until picked back up.
+    /// The dock's trade rows (1.0.6, G9): never more than one card, however
+    /// many deals are open.
+    ///
+    /// A single offer waiting on an answer is the card itself, answered right
+    /// here. Two or more — or any set aside for later — fold into one "Offers
+    /// (n)" row that opens the list, where each is a compact card of its own:
+    /// the old dock showed the first with "+2 more" beside it and nowhere to
+    /// see the other two. What this device sent is a line with its Cancel, or
+    /// a count once there are several. And while nobody has offered this
+    /// device anything, other people's open offers (G8) are one quiet line —
+    /// the table's news, read-only, opening the same list.
     /// Pass & play: offers to ANY seat on this device show up here.
-    @ViewBuilder private var firstIncomingTrade: some View {
+    @ViewBuilder private var tradeRows: some View {
         let P = Palette.current(scheme)
-        let mine = (store.state?.trades ?? []).filter { store.isLocal($0.to) }
-        let active = mine.filter { $0.ignored != true }
-        let parked = mine.filter { $0.ignored == true }
-        let sent = (store.state?.trades ?? []).filter { store.isLocal($0.from) }
+        let incoming = store.incomingOffers
+        let active = incoming.filter { $0.ignored != true }
+        let sent = store.sentOffers
+        let table = store.tableTrades
+        let ink = OfferInk.glass(glass, increaseContrast: increaseContrast)
 
-        if let trade = active.first {
-            let from = store.state?.player(trade.from)
-            let forGuest = trade.to != store.meId ? store.state?.player(trade.to) : nil
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Art.icon(.trade, size: 13, tint: ink(true))
-                    // PanelTitle's small caps, in the glass's second ink:
-                    // PanelTitle prints in ink3, which this material cannot
-                    // carry.
-                    Text("Offer from \(from?.name ?? "?")\(forGuest.map { " to \($0.name)" } ?? "")".uppercased())
-                        .font(.system(size: 11, weight: .bold))
-                        .kerning(1)
-                        .foregroundStyle(ink(true))
-                    Spacer()
-                    if active.count > 1 {
-                        Text("+\(active.count - 1) more")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(ink(true))
-                    }
-                }
-                tradeLine(label: "You get", side: trade.give,
-                          color: glass.good(increaseContrast: increaseContrast))
-                tradeLine(label: "You give", side: trade.get,
-                          color: glass.bad(increaseContrast: increaseContrast))
-                if let watching = viewerNames(trade) {
-                    ViewingLine(text: "\(watching) is reading this",
-                                color: glass.goldInk, faces: viewerColours(trade))
-                }
-                // Accepting a deal you can't fund just bounces off the server
-                // with a toast; say so before the tap instead. A deal that asks
-                // for no cash is always affordable, as respondTrade() has it —
-                // a debtor's negative balance must not grey out the very offer
-                // that would pay the debt off.
-                let short = trade.get.money > 0
-                    ? trade.get.money - (store.state?.player(trade.to)?.money ?? 0) : 0
-                if short > 0 {
-                    Text("Short \(money(short)) — sell or mortgage first.")
-                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(glass.bad(increaseContrast: increaseContrast))
-                }
-                HStack(spacing: 8) {
-                    Button("Accept") { store.respondTrade(trade.id, accept: true) }
-                        .buttonStyle(MMButtonStyle(kind: .good))
-                        .disabled(short > 0)
-                        .opacity(short > 0 ? 0.45 : 1)
-                    if let openCounter {
-                        Button("Negotiate") { openCounter(trade) }
-                            .buttonStyle(MMButtonStyle(kind: .gold))
-                    }
-                    Button("Decline") { store.respondTrade(trade.id, accept: false) }
-                        .buttonStyle(MMButtonStyle(kind: .bad))
-                    Button {
-                        store.ignoreTrade(trade.id)
-                        Haptics.tap()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Art.icon(.snooze, size: 13, tint: ink())
-                            Text("Later")
-                                .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                        }
-                        .fixedSize()
-                    }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-                    .fixedSize()
-                }
-            }
-            .padding(10)
-            // The offer is the one block on the dock with an edge of its own:
-            // it is something to answer, not a line of status.
-            .background(wash(P.gold), in: block)
-            .overlay(block.stroke(P.gold.opacity(0.6), lineWidth: 1))
-            .id(trade.id)
-            .transition(rowSwap)
-            .onAppear { store.setTradeViewing(trade.id, true, as: trade.to) }
-            .onDisappear { store.setTradeViewing(trade.id, false, as: trade.to) }
+        if incoming.count == 1, let trade = active.first {
+            OfferCard(trade: trade, ink: ink,
+                      onLater: { store.ignoreTrade(trade.id) },
+                      onCounter: openCounter,
+                      compact: true)
+                .padding(10)
+                // The offer is the one block on the dock with an edge of its
+                // own: it is something to answer, not a line of status.
+                .background(wash(P.gold), in: block)
+                .overlay(block.stroke(P.gold.opacity(0.6), lineWidth: 1))
+                .id(trade.id)
+                .transition(rowSwap)
+        } else if !incoming.isEmpty {
+            offersRow(incoming, active: active, P)
+                .transition(rowSwap)
         }
 
-        if !parked.isEmpty {
-            Button {
-                if let t = parked.first { store.ignoreTrade(t.id, ignored: false) }
-                Haptics.tap()
-            } label: {
-                HStack(spacing: 6) {
-                    Art.icon(.snooze, size: 14, tint: ink(true))
-                    Text("\(parked.count == 1 ? "1 offer" : "\(parked.count) offers") set aside")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        if sent.count == 1, let trade = sent.first {
+            SentOfferRow(trade: trade, ink: ink)
+                .transition(rowSwap)
+        } else if sent.count > 1 {
+            listRow(glyph: .trade,
+                    title: "\(sent.count) offers sent",
+                    detail: "waiting on \(names(sent.map(\.to)))",
+                    action: "Review", P)
+                .transition(rowSwap)
+        }
+
+        if incoming.isEmpty, let first = table.first {
+            listRow(glyph: .eye,
+                    title: table.count == 1 ? "Table trade" : "Table trades (\(table.count))",
+                    detail: store.tablePhrase(first),
+                    action: nil, P)
+                .transition(rowSwap)
+        }
+    }
+
+    /// "Offers (3)": the senders' faces, who they are, and the way into the
+    /// list. A wash of brass with an edge while any of them is waiting on an
+    /// answer; a plain well when every one has been set aside.
+    private func offersRow(_ incoming: [TradeOffer], active: [TradeOffer], _ P: Palette) -> some View {
+        var senders: [PlayerState] = []
+        for t in incoming {
+            if let p = store.state?.player(t.from), !senders.contains(where: { $0.id == p.id }) {
+                senders.append(p)
+            }
+        }
+        let parked = incoming.count - active.count
+        let who = "From " + names(incoming.map(\.from))
+        let detail = active.isEmpty
+            ? (parked == 1 ? "Set aside for later" : "All \(parked) set aside for later")
+            : parked > 0 ? "\(who) · \(parked) set aside" : who
+        return Button {
+            openOffers?()
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 10) {
+                HStack(spacing: -8) {
+                    ForEach(senders.prefix(3)) { p in
+                        AvatarView(name: p.name, colorCSS: p.color, flag: "", size: 26, emoji: p.avatar ?? "")
+                            .overlay(Circle().stroke(glass.solid, lineWidth: 2))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Offers (\(incoming.count))")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(ink())
+                        .contentTransition(.numericText())
+                    Text(detail)
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(ink(true))
-                    Spacer()
-                    Text("Review")
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text("Review")
+                    .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(glass.goldInk)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundStyle(glass.goldInk)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(active.isEmpty ? well : wash(P.gold), in: block)
+            .overlay(block.stroke(active.isEmpty ? .clear : P.gold.opacity(0.6), lineWidth: 1))
+            .contentShape(block)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Offers, \(incoming.count). \(detail)")
+        .accessibilityHint("Opens the list of offers")
+    }
+
+    /// A one-line way into the offers list: what it is, a word on it, and —
+    /// where there is something to do there — the word for doing it.
+    private func listRow(glyph: Glyph, title: String, detail: String, action: String?, _ P: Palette) -> some View {
+        Button {
+            openOffers?()
+            Haptics.tap()
+        } label: {
+            HStack(spacing: 7) {
+                Art.icon(glyph, size: 13, tint: ink(true))
+                Text(title)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(ink())
+                    .fixedSize()
+                Text(detail)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(ink(true))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if let action {
+                    Text(action)
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(glass.goldInk)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(well, in: block)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(action == nil ? ink(true) : glass.goldInk)
             }
-            .buttonStyle(.plain)
-            .transition(rowSwap)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(well, in: block)
+            .contentShape(block)
         }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the list of offers")
+    }
 
-        if let trade = sent.first {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    // Name the deal, not just the recipient — you can't take
-                    // back what you offered if you can't remember it.
-                    Text("Offer sent to \(store.state?.player(trade.to)?.name ?? "?"): \(summary(trade.give)) ⇄ \(summary(trade.get))")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(ink(true))
-                        .lineLimit(2)
-                    if let watching = viewerNames(trade) {
-                        ViewingLine(text: "\(watching) is reading this",
-                                    color: glass.goldInk, faces: viewerColours(trade))
-                    } else if trade.ignored == true {
-                        HStack(spacing: 5) {
-                            Art.icon(.snooze, size: 13, tint: ink(true))
-                            Text("Set aside for later")
-                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(ink(true))
-                        }
-                    }
-                }
-                Spacer()
-                Button("Cancel") { store.cancelTrade(trade.id) }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-            }
-            .transition(rowSwap)
+    /// "Ravi", "Ravi and Asha", "Ravi, Asha and Kabeer" — each seat once.
+    private func names(_ ids: [String]) -> String {
+        var seen: [String] = []
+        for id in ids {
+            let name = store.state?.player(id)?.name ?? "?"
+            if !seen.contains(name) { seen.append(name) }
         }
-    }
-
-    /// The colours of everyone looking, so the line shows who without having
-    /// to spell out a list of names that would not fit anyway.
-    private func viewerColours(_ trade: TradeOffer) -> [Color] {
-        (trade.viewers ?? [])
-            .filter { !store.isLocal($0) }
-            .compactMap { store.state?.player($0) }
-            .map { Color(css: $0.color) }
-    }
-
-    /// Everyone looking at the offer right now, minus this device's own seats.
-    private func viewerNames(_ trade: TradeOffer) -> String? {
-        let names = (trade.viewers ?? [])
-            .filter { !store.isLocal($0) }
-            .compactMap { store.state?.player($0)?.name }
-        return names.isEmpty ? nil : names.joined(separator: ", ")
-    }
-
-    /// One side of a deal as a single readable phrase.
-    private func summary(_ side: TradeSide) -> String {
-        var bits: [String] = []
-        if side.money > 0 { bits.append(money(side.money)) }
-        bits.append(contentsOf: side.tiles.compactMap { store.tile($0)?.name })
-        if side.cards > 0 { bits.append("\(side.cards)× prison card") }
-        return bits.isEmpty ? "nothing" : bits.joined(separator: " · ")
-    }
-
-    private func tradeLine(label: String, side: TradeSide, color: Color) -> some View {
-        HStack(alignment: .top) {
-            Text(label).font(.system(size: 12)).foregroundStyle(ink(true))
-            Spacer()
-            Text(summary(side))
-                .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                .foregroundStyle(color)
-                .multilineTextAlignment(.trailing)
-        }
+        if seen.count > 1 { return seen.dropLast().joined(separator: ", ") + " and " + seen.last! }
+        return seen.first ?? "?"
     }
 
     private func hint(_ text: String) -> some View {

@@ -17,7 +17,10 @@ struct HowToPlayCard: View {
         var id: String { title }
     }
 
-    /// Mirrors RULES_HELP on the web, in the same order.
+    /// Mirrors RULES_HELP on the web, in the same order. The prison row is the
+    /// paragraph docs/API-1.0.6.md gives every client (round 2: the third miss
+    /// walks out free), and the bankruptcy row says what the server has always
+    /// done — the creditor keeps the cash raised, never the streets.
     private static let rules: [Rule] = [
         Rule(glyph: .dice, title: "Rolling",
              body: "Roll two dice and move. A double lets you roll again — but three doubles in a row sends you straight to prison."),
@@ -30,11 +33,11 @@ struct HowToPlayCard: View {
         Rule(glyph: .bank, title: "Mortgage",
              body: "Short of cash? Mortgage a property for half its price. Mortgaged streets collect no rent until you buy them back at 10% interest."),
         Rule(glyph: .trade, title: "Trading",
-             body: "Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded."),
+             body: "Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded. Every open offer is shown to the whole table; only the player it is sent to can answer it."),
         Rule(glyph: .police, title: "Prison",
-             body: "Roll a double to walk out, pay the $50 fine, or use a card. After three failed attempts you pay anyway."),
+             body: "Land on Go to Prison, draw the card, or roll three doubles in a row, and you are locked up. On each turn inside you can roll for a double, which walks you out and moves you by that roll. You can also pay the $50 fine before rolling, which opens the door but ends that turn, or use a get-out card. If your third roll still is not a double, you walk out for free and move by that roll anyway."),
         Rule(glyph: .skull, title: "Bankruptcy",
-             body: "Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins."),
+             body: "Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, if the table says so. Last player standing wins."),
     ]
 
     var body: some View {

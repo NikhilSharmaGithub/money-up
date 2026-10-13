@@ -182,8 +182,15 @@ export const MISSION_POOL = [
   { kind: 'rollDoubles', target: 3, title: 'Roll 3 doubles' },
   { kind: 'lapsBoard', target: 3, title: 'Lap the board 3 times' },
 ];
-export const MISSION_COINS = 3;
-export const MISSION_BONUS_COINS = 5;
+/**
+ * What the missions pay. A mission on its own pays its XP and no coins; the
+ * coins are for doing all three — one small bonus, once a day. Three coins a
+ * mission plus five for the set was fourteen coins a day on top of the daily
+ * reward; a mission is now a reason to play, and the day's set is the one
+ * thing worth a coin.
+ */
+export const MISSION_COINS = 0;
+export const MISSION_BONUS_COINS = 3;
 export const MISSIONS_PER_DAY = 3;
 
 const missionByKind = new Map(MISSION_POOL.map((m) => [m.kind, m]));

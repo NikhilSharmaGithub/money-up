@@ -170,7 +170,10 @@ data class Mission(
     val fraction: Float get() = if (target <= 0) 1f else (progress.toFloat() / target).coerceIn(0f, 1f)
 }
 
-/** The fourth reward: all three done, five more coins and no XP. */
+/**
+ * The fourth reward: all three done, a few coins and no XP. Since 1.0.6's
+ * round 2 it is the only coin on the card — each mission pays XP alone.
+ */
 @Serializable
 data class MissionBonus(val coins: Int = 0, val ready: Boolean = false, val claimed: Boolean = false)
 
@@ -470,11 +473,44 @@ data class InviteFeed(val invite: Invite? = null)
 data class DailyView(
     val signedIn: Boolean = false,
     val claimable: Boolean = false,
+    /** The whole run of days in a row — 9, 16, 40. Never what the bar is drawn from. */
     val streak: Int = 0,
+    /** Today's coins while [claimable]; tomorrow's once today's are in. */
     val amount: Int = 1,
     /** Epoch ms the next one unlocks. */
     val nextAt: Double? = null,
-)
+    /**
+     * The step of this week's climb the card is about, 1 to 7: today's,
+     * before it is collected, and the one collected today after. The day
+     * after a seven pays one again. Absent from an older server — see [step].
+     */
+    val cycleDay: Int? = null,
+    /** How many steps a climb has: seven. */
+    val cycleLength: Int? = null,
+    /** Today's coins are in. Absent from an older server — see [collectedToday]. */
+    val claimedToday: Boolean? = null,
+) {
+    /** The steps on the bar — the server's seven, and seven from an older one. */
+    val steps: Int get() = cycleLength?.takeIf { it in 1..31 } ?: 7
+
+    /**
+     * Today has been collected. An older server only says so by having a
+     * next unlock and nothing to claim, which is the same moment.
+     */
+    val collectedToday: Boolean get() = claimedToday ?: (signedIn && !claimable && nextAt != null)
+
+    /**
+     * Where on the climb the card stands, 1 to [steps]. An older server's
+     * ladder never came back down: it paid one more each day up to the top
+     * and stayed there, so its step is today's amount before the claim and
+     * the streak, held at the top, after it.
+     */
+    val step: Int
+        get() = (cycleDay ?: if (collectedToday) minOf(streak, steps) else amount).coerceIn(1, steps)
+
+    /** Steps already collected on this climb, not counting one waiting today. */
+    val collectedSteps: Int get() = if (collectedToday) step else step - 1
+}
 
 @Serializable
 data class Achievements(

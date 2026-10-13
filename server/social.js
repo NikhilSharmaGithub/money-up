@@ -609,12 +609,14 @@ export function consumeRental(token, mapId, roomId) {
 
 // ------------------------------------------------------------ daily reward --
 // Showing up pays, but barely: one coin on day one, two on the second day
-// in a row, up to seven and no further — a week of habit is worth a week's
-// worth, and a missed day starts the ladder over. Coins have to stay scarce
-// enough that the shop is worth visiting. Dates are the server's calendar.
+// in a row, up to seven — and then the week starts again at one. A streak
+// is a run of seven-day cycles, 1 → 7 → 1 → 7, for as long as it lasts; a
+// missed day starts it over at one too. Coins have to stay scarce enough
+// that the shop is worth visiting, and a ladder that parked at seven paid a
+// regular the top rate every day for as long as they kept coming. Dates are
+// the server's calendar.
 const DAILY_BASE = 1;
-const DAILY_STEP = 1;
-const DAILY_CAP = 7;
+const DAILY_CYCLE = 7;
 
 /** Server-local calendar date as a key: same day, same string. */
 function dayKey(when = Date.now()) {
@@ -637,13 +639,35 @@ function nextMidnight(when = Date.now()) {
   return d.getTime();
 }
 
-/** What a claim pays once the streak stands at `streak` days. */
-const dailyAmount = (streak) => Math.min(DAILY_CAP, DAILY_BASE + (streak - 1) * DAILY_STEP);
+/**
+ * Where in the seven-day cycle a streak's last claim stood, 1–7. Kept on the
+ * profile (`daily.cycle`) since the cycle began; a profile from before it
+ * only has the streak, and its last claim paid what the old ladder paid —
+ * the streak, held at seven — which is exactly its place in a cycle. A
+ * regular who sat on seven-coin days under the old ladder therefore starts
+ * the next cycle at one, as the rule says the day after a seven does.
+ */
+function cycleOf(d) {
+  const c = Math.floor(Number(d?.cycle));
+  if (c >= 1 && c <= DAILY_CYCLE) return c;
+  return Math.max(1, Math.min(DAILY_CYCLE, Math.floor(Number(d?.streak)) || 1));
+}
+
+/** The step after this one: 7 wraps to 1. */
+const nextStep = (step) => (step % DAILY_CYCLE) + 1;
+
+/** What a claim pays at a given step of the cycle — the step, in coins. */
+const dailyAmount = (step) => DAILY_BASE + (step - 1);
 
 /**
  * Read-only peek — the same rule as walletOf: the home screen asks on every
  * load, and asking must not mint a profile. An unknown token simply sees day
  * one waiting for it; a lapsed streak already reads as zero.
+ *
+ * `cycleDay` is the step of the seven-day cycle the card is about, for the
+ * seven-step bar: before today's claim, the step today's claim pays (always
+ * `amount`); once it is claimed (`claimedToday`), the step that was claimed —
+ * `amount` is then tomorrow's, which is the next step round.
  */
 export function dailyView(token) {
   const p = token ? profiles.get(token) : null;
@@ -655,18 +679,28 @@ export function dailyView(token) {
   const signedIn = !!p?.login;
   const d = p?.daily;
   const today = dayKey();
-  if (!d?.last) return { signedIn, claimable: signedIn, streak: 0, amount: DAILY_BASE, nextAt: null };
+  const cycle = { cycleLength: DAILY_CYCLE };
+  if (!d?.last) {
+    return { signedIn, claimable: signedIn, streak: 0, amount: dailyAmount(1), nextAt: null,
+      cycleDay: 1, claimedToday: false, ...cycle };
+  }
   if (d.last === today) {
     // Claimed already; the amount shown is what tomorrow's claim will pay.
-    return { signedIn, claimable: false, streak: d.streak, amount: dailyAmount(d.streak + 1), nextAt: nextMidnight() };
+    const step = cycleOf(d);
+    return { signedIn, claimable: false, streak: d.streak, amount: dailyAmount(nextStep(step)), nextAt: nextMidnight(),
+      cycleDay: step, claimedToday: true, ...cycle };
   }
   const streakAlive = d.last === yesterdayKey();
+  const step = streakAlive ? nextStep(cycleOf(d)) : 1;
   return {
     signedIn,
     claimable: signedIn,
     streak: streakAlive ? d.streak : 0,
-    amount: dailyAmount(streakAlive ? d.streak + 1 : 1),
+    amount: dailyAmount(step),
     nextAt: null,
+    cycleDay: step,
+    claimedToday: false,
+    ...cycle,
   };
 }
 
@@ -686,14 +720,18 @@ export function claimDaily(token) {
   const today = dayKey();
   const d = p.daily ?? (p.daily = { last: null, streak: 0 });
   if (d.last === today) {
-    return { error: 'Already claimed today', claimed: true, streak: d.streak, nextAt: nextMidnight() };
+    return { error: 'Already claimed today', claimed: true, streak: d.streak, nextAt: nextMidnight(), cycleDay: cycleOf(d) };
   }
-  d.streak = d.last === yesterdayKey() ? d.streak + 1 : 1;
+  const alive = d.last === yesterdayKey();
+  // The step is worked out from the last claim before either is moved on.
+  const step = alive ? nextStep(cycleOf(d)) : 1;
+  d.streak = alive ? d.streak + 1 : 1;
+  d.cycle = step;
   d.last = today;
   // The moment, not just the day: the daily reminder rings about a day after
   // this, which is about the time of day this player tends to turn up.
   d.at = Date.now();
-  const amount = dailyAmount(d.streak);
+  const amount = dailyAmount(step);
   credit(p, amount);
   appendLedger({
     at: Date.now(),
@@ -703,10 +741,10 @@ export function claimDaily(token) {
     coins: amount,
     token,
     txn: `daily:${today}:${p.code}`,
-    note: `day ${d.streak} of the streak`,
+    note: `day ${d.streak} of the streak, ${step} of ${DAILY_CYCLE}`,
   });
   save();
-  return { ok: true, amount, coins: p.coins, earned: p.earned, streak: d.streak, nextAt: nextMidnight() };
+  return { ok: true, amount, coins: p.coins, earned: p.earned, streak: d.streak, nextAt: nextMidnight(), cycleDay: step };
 }
 
 // ------------------------------------------------------------ rewarded ads --
@@ -1852,11 +1890,17 @@ export function claimMission(token, rawId, now = Date.now()) {
   const m = missionOf(id);
   if ((book.progress[id] || 0) < m.target) return { error: 'That mission is not finished yet' };
   book.claimed.push(id);
-  credit(p, MISSION_COINS);
-  appendLedger({
-    at: now, provider: 'mission', packId: id, usd: 0, coins: MISSION_COINS, token,
-    txn: `mission:${book.day}:${p.code}:${id}`, note: m.title,
-  });
+  // A mission on its own pays XP only now (see MISSION_COINS). Nothing is
+  // minted, so nothing goes in the coin ledger — the ledger is a record of
+  // coins, and a row of zeros in it is a coin flow that never happened. The
+  // claim itself is still remembered, in the day's book, exactly once.
+  if (MISSION_COINS > 0) {
+    credit(p, MISSION_COINS);
+    appendLedger({
+      at: now, provider: 'mission', packId: id, usd: 0, coins: MISSION_COINS, token,
+      txn: `mission:${book.day}:${p.code}:${id}`, note: m.title,
+    });
+  }
   const { levelUp } = addXp(p, MISSION_XP, now);
   save();
   return reply({ coins: MISSION_COINS, xp: MISSION_XP }, levelUp);

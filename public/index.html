@@ -401,6 +401,10 @@
         <button id="paletteBtn" class="icon-btn" title="Table style" aria-label="Table style" data-ico="palette"></button>
         <button id="helpBtn" class="icon-btn" title="How to play" aria-label="How to play" data-ico="question"></button>
         <button id="addLocalBtn" class="icon-btn" title="Add another player on this device" aria-label="Add another player on this device" data-ico="people"></button>
+        <!-- Every rule this table plays by, beside the sound: the ? is how
+             the game works, this is how this table runs it. Players and
+             watchers both get it. -->
+        <button id="rulesBtn" class="icon-btn" title="This table's rules" aria-label="This table's rules" data-ico="info"></button>
         <button id="soundBtn" class="icon-btn" title="Toggle sound" aria-label="Toggle sound"></button>
         <button id="leaveBtn" class="icon-btn" title="Leave game" aria-label="Leave game" data-ico="door"></button>
       </div>
@@ -492,6 +496,10 @@
      a phone, and the scrim the panel opens over. The panel itself stays in the
      rail where it was written — this only changes where it is shown. -->
 <button id="chatBubble" class="chat-bubble" type="button" aria-label="Open chat" data-ico="chat"></button>
+<!-- Beside it, only while a trade offer is waiting on this seat (1.0.6): one
+     capsule however many there are, opening the list of them. Same glass as
+     the chat button, so it rides the chat button's rules. -->
+<button id="offersDock" class="chat-bubble offers-dock" type="button" aria-label="Offers" data-ico="trade"><span class="od-label">Offers</span><b class="od-n">0</b></button>
 <div id="chatScrim" class="chat-scrim"></div>
 <div id="modalRoot" class="modal-root hidden"></div>
 <div id="cardPopup" class="card-popup hidden"></div>

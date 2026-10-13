@@ -1,4 +1,5 @@
-// Somebody else, opened from a result, a leaderboard row or the friends list:
+// Somebody else, opened from a result, a leaderboard row, the friends list or
+// a seat at the table on screen (1.0.6):
 // their level, what they have won, what they do at a table, how long they have
 // been at it, and the one thing to do about them — ask to be friends.
 //
@@ -11,6 +12,31 @@
 // anybody else's: nothing on this sheet says who is a person.
 
 import SwiftUI
+
+extension PlayerResult {
+    /// A seat at the table on screen, as the profile sheet wants it: the seat's
+    /// own colour, face and level to draw the top while the profile is on its
+    /// way. Nothing about the game is settled yet, so it is worth nothing and
+    /// beaten by nobody.
+    static func seat(_ p: PlayerState) -> PlayerResult {
+        PlayerResult(id: "seat:" + p.id, name: p.name, color: p.color, flag: p.flag,
+                     avatar: p.avatar, code: p.code, worth: 0, bankrupt: false,
+                     removedFor: nil, isBot: p.isBot ?? false, level: p.level)
+    }
+}
+
+extension GameStore {
+    /// Whether a seat at the table opens a profile: anybody the server gave a
+    /// code — a house player too, whose numbers are its own made-up ones and
+    /// whose friend request stays "Request sent" — but never a seat this
+    /// device plays, and never a pass & play guest, who has no code. The
+    /// standings use the same rule.
+    func opensProfile(_ p: PlayerState) -> Bool {
+        guard let code = p.code, !code.isEmpty else { return false }
+        if isLocal(p.id) || code == myCode { return false }
+        return token.isEmpty || !p.id.hasPrefix(token)
+    }
+}
 
 /// GET /api/player. Optional throughout, so a field a server leaves out never
 /// sinks the read; `error` arrives instead of the rest when there is nobody

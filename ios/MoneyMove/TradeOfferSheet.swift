@@ -25,6 +25,9 @@ struct TradeOfferSheet: View {
     /// means that is not always the main player.
     var seat: String
     var onNegotiate: (TradeOffer) -> Void
+    /// Opens the list of every open offer (1.0.6) — for when another one
+    /// lands while this sheet is up.
+    var onSeeAll: (() -> Void)? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -42,10 +45,7 @@ struct TradeOfferSheet: View {
 
     // Face value only: the price on the deed, nothing about how badly anyone
     // needs it. The meter says as much underneath itself.
-    private func worth(_ side: TradeSide) -> Int {
-        side.money + side.cards * 50
-            + side.tiles.reduce(0) { $0 + (store.tile($1)?.price ?? 0) }
-    }
+    private func worth(_ side: TradeSide) -> Int { store.tradeWorth(side) }
 
     private var theirs: Int { worth(trade.give) }
     private var ours: Int { worth(trade.get) }
@@ -55,6 +55,7 @@ struct TradeOfferSheet: View {
         let P = Palette.current(scheme)
         VStack(spacing: 0) {
             header(P)
+            moreOffers(P)
             ScrollView {
                 VStack(spacing: 0) {
                     ZStack {
@@ -97,6 +98,12 @@ struct TradeOfferSheet: View {
         }
         .onDisappear {
             store.setTradeViewing(trade.id, false, as: seat)
+        }
+        // Withdrawn by its sender, or answered from the dock behind: there is
+        // nothing left here to answer, and an Accept on a dead offer is only
+        // a toast.
+        .onChange(of: store.state?.trades.contains { $0.id == trade.id } ?? false) { _, live in
+            if !live { dismiss() }
         }
     }
 
@@ -141,6 +148,46 @@ struct TradeOfferSheet: View {
         .padding(.horizontal, 16)
         .padding(.top, 18)
         .padding(.bottom, 14)
+    }
+
+    /// Another offer arrived while this one was open. It is not put on a
+    /// sheet of its own over this one: it waits in the dock's offers row, and
+    /// this line is the way to all of them from here.
+    @ViewBuilder private func moreOffers(_ P: Palette) -> some View {
+        let others = store.incomingOffers.filter { $0.id != trade.id && $0.ignored != true }
+        if let onSeeAll, !others.isEmpty {
+            Button {
+                Haptics.tap()
+                dismiss()
+                // SwiftUI will not swap one sheet for another in the same
+                // frame, so the list opens after this one is gone.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onSeeAll() }
+            } label: {
+                HStack(spacing: 8) {
+                    Art.icon(.trade, size: 14, tint: P.ink2)
+                    Text(others.count == 1 ? "1 more offer waiting" : "\(others.count) more offers waiting")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink)
+                    Spacer(minLength: 6)
+                    Text("See all")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(BackdropKind.paper.settledGlass(P).goldInk)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(BackdropKind.paper.settledGlass(P).goldInk)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(P.goldSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(P.gold.opacity(0.5), lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+            .transition(.opacity)
+        }
     }
 
     // MARK: - the two piles

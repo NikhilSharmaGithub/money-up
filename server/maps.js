@@ -544,6 +544,100 @@ export function generateRandomMap() {
   });
 }
 
+// ---- the shuffled board ------------------------------------------------------
+// A table that asks for it (settings.shuffleBoard) plays a board whose colour
+// sets have traded places. Only the sets move. START and the other corners,
+// the cards, the taxes, the airports and the utilities stay exactly where the
+// board puts them, so the rhythm of a lap is the board's own; what changes is
+// which country is waiting where — New York can sit two steps after START.
+//
+// A set moves whole. Each one holds a run of slots on the board — Brazil's
+// two on Classic are 1 and 3, either side of a Treasure — and sets only ever
+// trade runs with a set of the same size, so a run of two never has to fit
+// three streets. Inside the run the streets keep their own order, and every
+// street carries its own deed with it: name, price, rent, house cost. A set's
+// rents were worked out from its own prices when the board was built, so
+// nothing about a deed has to be worked out again.
+//
+// Seeded, so one seed is one board: the room keeps the seed with the game,
+// a test can name one, and the same seed on the same board deals the same
+// layout on every machine.
+
+/** A small, fast PRNG — mulberry32 — so a seed is the whole layout. */
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * The same board with its colour sets traded among the runs of their size.
+ *
+ * Returns a new map; the one passed in is never touched (the stock boards are
+ * module constants shared by every table on the box). The result keeps the
+ * board's `id` — it is still Classic, for the career card, the shop and the
+ * watch-live list — and gets its own `uid`, which is how every client already
+ * knows a board needs drawing again. `shuffled` and `shuffleSeed` say what was
+ * done. A board with no two sets of the same size has nothing to trade and
+ * comes back as it went in, with `shuffled: false`.
+ */
+export function shuffleMap(map, seed) {
+  const rnd = seeded(seed);
+  const sets = Object.entries(map.groups || {});
+  // Sets by size: only these can trade runs with each other.
+  const bySize = new Map();
+  for (const [g, idxs] of sets) {
+    if (!bySize.has(idxs.length)) bySize.set(idxs.length, []);
+    bySize.get(idxs.length).push(g);
+  }
+  const movable = [...bySize.values()].some((list) => list.length > 1);
+  if (!movable) return { ...map, shuffled: false, shuffleSeed: null };
+
+  const deal = () => {
+    const runOf = {};
+    for (const groups of bySize.values()) {
+      const runs = groups.map((g) => map.groups[g]);
+      // Fisher–Yates over the runs, from the seed.
+      for (let i = runs.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [runs[i], runs[j]] = [runs[j], runs[i]];
+      }
+      groups.forEach((g, k) => { runOf[g] = runs[k]; });
+    }
+    return runOf;
+  };
+  // "The board was shuffled" should be true, so a deal that put every set
+  // back where it started is dealt again. The seed decides that too, so the
+  // same seed still always lands on the same board.
+  let runOf = deal();
+  for (let tries = 0; tries < 8 && sets.every(([g, idxs]) => runOf[g] === idxs); tries++) runOf = deal();
+
+  const tiles = map.tiles.map((t) => ({ ...t }));
+  for (const [g, idxs] of sets) {
+    const run = runOf[g];
+    // Streets in their own order (cheapest first, as the board lists them)
+    // into the run's slots in board order.
+    idxs.forEach((from, k) => { tiles[run[k]] = { ...map.tiles[from], index: run[k] }; });
+  }
+  // The group table in board order, as buildMap writes it: a client listing
+  // the sets walks them from START, and so should a shuffled board's.
+  const groups = Object.fromEntries(sets
+    .map(([g]) => [g, [...runOf[g]]])
+    .sort((a, b) => a[1][0] - b[1][0]));
+  return {
+    ...map,
+    uid: `${map.uid || map.id}~${(seed >>> 0).toString(36)}`,
+    tiles,
+    groups,
+    shuffled: true,
+    shuffleSeed: seed >>> 0,
+  };
+}
+
 // ---- country boards ----------------------------------------------------------
 // Each COUNTRY_BOARDS entry becomes a full 40-tile board in the proven classic
 // shape, plus its own localized Treasure/Surprise deck. Group keys are

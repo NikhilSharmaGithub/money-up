@@ -501,7 +501,10 @@ console.log('\n▶ targeted rules');
 }
 
 {
-  // Settling the forced prison fine actually releases the player.
+  // The third failed roll in prison walks out for free and moves by that roll.
+  // (Round 2, G1: this used to charge the $50 fine — opening a debt when the
+  // player could not cover it — and only walk once the debt was paid. There is
+  // no fine at the door any more, so there is no debt and nothing is charged.)
   const room = new GameRoom('jf', () => {});
   room.map = MAPS.classic;
   room.addPlayer({ id: 'a', name: 'A' });
@@ -512,17 +515,14 @@ console.log('\n▶ targeted rules');
   const a = room.player('a');
   room.sendToJail(a);
   a.jailTurns = 2;
-  a.money = 10;                       // cannot afford the $50 fine
+  a.money = 10;                       // could never have paid the old $50 fine
   room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
-  room.roll('a', [2, 3]);             // third failed attempt → fine → debt
-  if (room.turn.phase !== 'debt') fail('unpayable fine should open a debt');
-  if (!room.turn.debt?.jailRelease) fail('the fine debt should remember the rolled move');
-  if (a.money !== -40) fail(`the $10 on hand should sink into the fine first (${a.money})`);
-  room.receive(a, 400);               // raises cash — the last $40 streams to the bank
-  if (a.jail) fail('paying off the fine debt must release the player');
-  if (a.money !== 360) fail(`the player should keep what the fine did not eat (${a.money})`);
+  room.roll('a', [2, 3]);             // third failed attempt → free
+  if (room.turn.debt || room.turn.phase === 'debt') fail('the third failed roll must not open a debt');
+  if (a.jail) fail('the third failed roll must open the cell');
+  if (a.money !== 10) fail(`nothing is charged at the door (${a.money})`);
   if (a.pos !== room.cornerIndex('prison') + 5) fail(`released player should have walked 5 tiles, at ${a.pos}`);
-  ok('prison fine via debt releases and moves');
+  ok('third failed prison roll releases for free and moves');
 }
 
 {
@@ -1485,9 +1485,11 @@ console.log('\n▶ the debt stream (money is never minted)');
 }
 
 {
-  // A debt born INSIDE the jail-release walk: the fine debt settles, the
-  // stored roll plays out, and the landing's unpayable rent must open a
-  // second debt that stands — and then streams like any other.
+  // A debt born INSIDE the walk out of prison: the third failed roll walks
+  // out free, and the landing's unpayable rent must open a debt that stands —
+  // and then streams like any other. (Round 2, G1: this used to go through a
+  // $50 fine debt first, settled before the stored walk played out; the walk
+  // is immediate now, so the rent debt is the only one.)
   const room = new GameRoom('ds5', () => {});
   room.map = MAPS.classic;
   room.addPlayer({ id: 'a', name: 'Ava' });
@@ -1510,18 +1512,16 @@ console.log('\n▶ the debt stream (money is never minted)');
   const rent = room.rentFor(s);
   a.jail = true; a.jailTurns = 2; a.pos = prison; a.money = 10; b.money = 1000;
   room.turn = { playerId: 'a', phase: 'roll', dice: null, doubles: 0, pending: null, debt: null, rolledThisTurn: false };
-  room.roll('a', dice);                         // third failed attempt → fine → debt
-  if (room.turn.phase !== 'debt' || !room.turn.debt?.jailRelease) fail('setup: the fine should stall with a stored walk');
-  room.receive(a, 60);                          // fine paid ($40) + $20 spare → the walk plays
+  room.roll('a', dice);                         // third failed attempt → walks out free
   if (a.jail || a.pos !== s) fail(`the release walk should land on the hotel (at ${a.pos}, wanted ${s})`);
   if (room.turn.phase !== 'debt') fail(`the walk's rent debt must stand (${room.turn.phase})`);
-  if (room.turn.debt?.creditor !== 'b') fail('the second debt is owed to the landlord');
-  if (a.money !== 20 - rent) fail(`red by exactly the shortfall (${a.money} vs ${20 - rent})`);
+  if (room.turn.debt?.creditor !== 'b') fail('the debt is owed to the landlord');
+  if (a.money !== 10 - rent) fail(`red by exactly the shortfall (${a.money} vs ${10 - rent})`);
   room.receive(a, rent);                        // clears it — landlord gets rent to the rupee
-  if (a.money !== 20 || b.money !== 1000 + rent) fail(`the landlord ends on exactly the rent (${b.money - 1000})`);
-  if (room.turn.debt) fail('the second debt should close itself');
+  if (a.money !== 10 || b.money !== 1000 + rent) fail(`the landlord ends on exactly the rent (${b.money - 1000})`);
+  if (room.turn.debt) fail('the debt should close itself');
   room.dispose();
-  ok('a debt born inside the jail-release walk stands and streams');
+  ok('a debt born inside the walk out of prison stands and streams');
 }
 
 {

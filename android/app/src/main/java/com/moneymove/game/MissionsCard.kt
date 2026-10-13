@@ -52,9 +52,10 @@ import kotlinx.coroutines.delay
  * the app on a day you were not going to play.
  *
  * Three rows, each with the drawn mark of what it asks for, the title in the
- * server's words, a bar and its count, and what it pays; a Claim button in
- * the table's colour once it is done, and a tick once it has been collected.
- * Under them the bonus for finishing all three. Progress is counted for
+ * server's words, a bar and its count, and what it pays — XP alone since
+ * 1.0.6's round 2; a Claim button in the table's colour once it is done, and
+ * a tick once it has been collected. Under them the bonus for finishing all
+ * three, the one row on the card that pays coins. Progress is counted for
  * everybody, so a player who is not signed in still sees it climb, and the
  * card says once, at the bottom, what collecting it takes — the daily
  * reward's rule, in the daily reward's button.
@@ -108,7 +109,9 @@ fun MissionsCard(account: AccountStore, store: GameStore) {
                 else -> {
                     Haptics.turn()
                     SoundKit.gain()
-                    store.showToast(claimLine(r.paid, r.xp), glyph = "coin")
+                    // A mission pays XP alone, and wears the level's star;
+                    // only the bonus brings coins, and the coin with them.
+                    store.showToast(claimLine(r.paid, r.xp), glyph = if (r.paid > 0) "coin" else "star")
                 }
             }
         }
@@ -153,7 +156,7 @@ fun MissionsCard(account: AccountStore, store: GameStore) {
         if (!view.signedIn) {
             Spacer(Modifier.height(12.dp))
             Text(
-                "Progress counts for everyone — sign in to collect the coins.",
+                "Progress counts for everyone — sign in to collect the XP and the bonus.",
                 color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
             )
             // A sign-in button that cannot sign anyone in is a dead tap, as
@@ -247,7 +250,15 @@ private fun MissionRow(m: Mission, signedIn: Boolean, busy: Boolean, onClaim: ()
                 Trailing.CLAIM -> LandingButton(
                     "Claim", LandingKind.PRIMARY,
                     enabled = !busy,
-                    lead = { ink -> if (busy) LandingSpinner(ink, 16.dp) else Icon("coin", size = 15.dp) },
+                    lead = { ink ->
+                        when {
+                            busy -> LandingSpinner(ink, 16.dp)
+                            m.coins > 0 -> Icon("coin", size = 15.dp)
+                            // The star in the plate's own ink: an inked
+                            // glyph on a coloured plate is part of the label.
+                            else -> Icon("star", size = 14.dp, tint = ink)
+                        }
+                    },
                     gap = 6.dp,
                 ) { onClaim() }
                 Trailing.REWARD -> RewardPill(m.coins, m.xp, dim = !m.done)
@@ -256,7 +267,11 @@ private fun MissionRow(m: Mission, signedIn: Boolean, busy: Boolean, onClaim: ()
     }
 }
 
-/** The bonus: all three done, five more coins — and its own row, so it is something to aim at. */
+/**
+ * The bonus: all three done, a few coins — the only coins on the card since
+ * the missions themselves went to XP alone, and its own row, so it is
+ * something to aim at.
+ */
 @Composable
 private fun BonusRow(view: MissionsView, busy: Boolean, onClaim: () -> Unit) {
     val p = P.current
@@ -356,10 +371,16 @@ private fun MissionBar(fraction: Float, done: Boolean) {
     }
 }
 
-/** What a mission pays, before it can be claimed: the coin and its number, and the XP beside it. */
+/**
+ * What a row pays, before it can be claimed. A mission pays XP alone (1.0.6
+ * round 2), so its pill is the level's star and "+10 XP"; the bonus pays
+ * coins alone, so its pill is the coin and its number. An older server whose
+ * missions still pay both gets the coin with the XP small beside it.
+ */
 @Composable
 private fun RewardPill(coins: Int, xp: Int, dim: Boolean) {
     val p = P.current
+    if (coins <= 0 && xp <= 0) return
     Row(
         Modifier
             .alpha(if (dim) 0.75f else 1f)
@@ -370,16 +391,26 @@ private fun RewardPill(coins: Int, xp: Int, dim: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon("coin", size = 13.dp)
-        Text(
-            "$coins",
-            color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
-            style = TextStyle(fontFeatureSettings = "tnum"),
-        )
-        if (xp > 0) {
+        if (coins > 0) {
+            Icon("coin", size = 13.dp)
+            Text(
+                "$coins",
+                color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+            if (xp > 0) {
+                Text(
+                    "+$xp XP",
+                    color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, softWrap = false,
+                )
+            }
+        } else {
+            Icon("star", size = 12.dp, tint = p.gold)
             Text(
                 "+$xp XP",
-                color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+                style = TextStyle(fontFeatureSettings = "tnum"),
                 maxLines = 1, softWrap = false,
             )
         }
@@ -426,7 +457,7 @@ internal fun missionGlyph(kind: String): String = when (kind) {
 private fun countText(m: Mission): String =
     if (m.kind == "collectRent") "${money(m.progress)} / ${money(m.target)}" else "${m.progress}/${m.target}"
 
-/** The toast a claim earns: "+3 coins · +10 XP", or just the coins for the bonus. */
+/** The toast a claim earns: "+10 XP" for a mission, "+3 coins" for the bonus, both from an older server. */
 internal fun claimLine(coins: Int, xp: Int): String = buildString {
     if (coins > 0) append("+$coins coin${if (coins == 1) "" else "s"}")
     if (xp > 0) {

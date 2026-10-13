@@ -318,6 +318,15 @@ const BODY = {
       stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
     <circle cx="16.1" cy="23.2" r="1.9" fill="currentColor"/>`,
 
+  /** This table's rules: a lower-case i in the same disc the help mark sits
+      in, so the two read as a pair in the toolbar — how the game is played,
+      and how this particular table plays it. */
+  info: `
+    <circle cx="16" cy="16" r="13" fill="currentColor" opacity=".26"/>
+    <circle cx="16" cy="9.4" r="2" fill="currentColor"/>
+    <path d="M13.4 14.2h2.8v9M13 23.2h6.2" stroke="currentColor" stroke-width="2.6"
+      stroke-linecap="round" stroke-linejoin="round"/>`,
+
   /** The airport tile's plane, in ink, for buttons and chips. */
   plane: `<path d="${PLANE}" fill="currentColor"/>`,
 

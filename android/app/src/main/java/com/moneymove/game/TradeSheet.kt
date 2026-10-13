@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +68,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -1100,6 +1104,24 @@ fun TradeOfferSheet(store: GameStore, offer: TradeOffer, seat: String = offer.to
                 Haptics.tap()
                 close()
             }
+            // Another offer landed while this one was open (1.0.6, round 2).
+            // It does not get a sheet of its own over this one: it waits in
+            // the dock's "Offers (n)" pile, and this line is the way to all
+            // of them from here — iOS's moreOffers. Away first, then the list.
+            val others = store.incomingOffers.count { it.id != trade.id }
+            if (others > 0) {
+                MoreOffersLine(others) {
+                    if (!leaving) {
+                        Haptics.tap()
+                        leaving = true
+                        armed = false
+                        scope.launch {
+                            sheetState.hide()
+                            store.openOffers()
+                        }
+                    }
+                }
+            }
             Hairline()
             val sheetScroll = rememberScrollState()
             Column(
@@ -1135,6 +1157,44 @@ fun TradeOfferSheet(store: GameStore, offer: TradeOffer, seat: String = offer.to
                 },
             )
         }
+    }
+}
+
+/**
+ * "2 more offers waiting · See all", under an offer's own header: gold on
+ * its soft gold, as iOS draws it, and the one way from a single offer to
+ * the list of every one of them.
+ */
+@Composable
+private fun MoreOffersLine(count: Int, onSeeAll: () -> Unit) {
+    val p = P.current
+    val shape = RoundedCornerShape(12.dp)
+    val words = if (count == 1) "1 more offer waiting" else "$count more offers waiting"
+    Row(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 12.dp)
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.goldSoft)
+            .border(1.dp, p.gold.copy(alpha = 0.5f), shape)
+            .clickable(role = Role.Button, onClickLabel = "See all offers") { onSeeAll() }
+            .semantics(mergeDescendants = true) { contentDescription = "$words. See all" }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SwapArrows(14.dp, p.ink2, flipped = true)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            words,
+            modifier = Modifier.weight(1f),
+            color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("See all", color = p.gold, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Spacer(Modifier.width(4.dp))
+        RowChevron(p.gold, 9.dp)
     }
 }
 
@@ -1413,11 +1473,7 @@ private fun OfferLean(theirs: Int, ours: Int) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                when {
-                    even -> "An even deal"
-                    diff > 0 -> "${money(diff)} your way"
-                    else -> "${money(-diff)} their way"
-                },
+                dealLeanWords(theirs, ours),
                 modifier = Modifier.alignByBaseline(),
                 color = tone, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
             )
@@ -1531,44 +1587,554 @@ private fun tabularFigures(): TextStyle = LocalTextStyle.current.copy(fontFeatur
 // ── the dock ───────────────────────────────────────────────────────────────
 
 /**
- * Trades, as the dock shows them: the oldest live offer to anyone on this
- * phone with every answer to it, the offers set aside folded into one line,
- * and the offer this phone sent, with the way to take it back.
+ * Trades, as the dock shows them: a live offer to anyone on this phone with
+ * every answer to it, the offers set aside folded into one line, the offer
+ * this phone sent with the way to take it back, and — trades being public at
+ * the table from 1.0.6 — one quiet line for everybody else's.
  *
- * Only the oldest offer takes the dock. Two or three at once would push the
- * board's own controls off the screen, so the rest wait behind "+N more" —
- * and "Later" is how a deal gets thought about while the turn goes on.
- * Draws nothing when there is nothing on the table.
+ * One offer takes the dock as a card. Two or more at once (round 2, G9)
+ * would stack card on card and push the board's own controls off the screen,
+ * so they fold into a single "Offers (n)" pile instead, which opens the
+ * whole list — every one of them answerable there, none of them hidden
+ * behind another. "Later" is still how a single deal gets thought about
+ * while the turn goes on. Draws nothing when there is nothing on the table.
  */
 @Composable
 fun TradeDock(store: GameStore, modifier: Modifier = Modifier) {
     val incoming = store.incomingOffers
     val parked = store.setAsideOffers
     val sent = store.sentOffers.firstOrNull()
-    if (incoming.isEmpty() && parked.isEmpty() && sent == null) return
+    val others = store.tableTrades
+    if (incoming.isEmpty() && parked.isEmpty() && sent == null && others.isEmpty()) return
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        incoming.firstOrNull()?.let { offer ->
-            // Keyed on the deal, so the reading ping follows the offer on
-            // show rather than the slot it happens to sit in.
-            key(offer.id) { TradeOfferCard(store, offer, more = incoming.size - 1) }
+        if (incoming.size >= 2) {
+            OffersStack(store, incoming)
+        } else {
+            incoming.firstOrNull()?.let { offer ->
+                // Keyed on the deal, so the reading ping follows the offer on
+                // show rather than the slot it happens to sit in.
+                key(offer.id) { TradeOfferCard(store, offer) }
+            }
         }
         if (parked.isNotEmpty()) SetAsideChip(store, parked.size)
         sent?.let { offer -> key(offer.id) { SentOfferRow(store, offer) } }
+        if (others.isNotEmpty()) TableTradesLine(store, others)
+    }
+}
+
+/**
+ * Several offers waiting on this phone at once, as one pile in the dock:
+ * how many, from whom, and their faces — a tap opens them all as a list.
+ * Two lips of card under it say "more than one" before the count is read.
+ *
+ * Nothing on it answers anything, so nobody is told it is being read: the
+ * list says that, offer by offer, as each one comes into view.
+ */
+@Composable
+fun OffersStack(store: GameStore, offers: List<TradeOffer>, modifier: Modifier = Modifier) {
+    val p = P.current
+    val state = store.state ?: return
+    val senders = offers.mapNotNull { state.player(it.from) }.distinctBy { it.id }
+    val shape = RoundedCornerShape(12.dp)
+    val count = offers.size
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(p.goldSoft.copy(alpha = 0.6f))
+                .border(1.dp, p.gold.copy(alpha = 0.6f), shape)
+                .clickable(role = Role.Button, onClickLabel = "Open the offers") {
+                    Haptics.tap()
+                    store.openOffers()
+                }
+                .semantics(mergeDescendants = true) {
+                    contentDescription = "Offers ($count) from ${namesList(senders.map { it.name })}"
+                }
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SwapArrows(14.dp, p.ink2, flipped = true)
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                CardTitle(offersTitle(count))
+                Text(
+                    "${namesList(senders.map { it.name })} ${if (senders.size == 1) "wants" else "want"} to trade",
+                    color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            FaceRow(senders.map { cssColor(it.color, p.ink3) }, ring = p.card)
+            Spacer(Modifier.width(10.dp))
+            Text("Open", color = p.gold, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+        }
+        // The pile's lower cards: two lips, each narrower than the one above.
+        StackLip(Modifier.padding(horizontal = 14.dp), p.goldSoft.copy(alpha = 0.5f), p.gold.copy(alpha = 0.4f))
+        StackLip(Modifier.padding(horizontal = 28.dp), p.goldSoft.copy(alpha = 0.35f), p.gold.copy(alpha = 0.25f))
+    }
+}
+
+/** One lower card of the offers pile: only its bottom edge shows. */
+@Composable
+private fun StackLip(modifier: Modifier, fill: Color, rim: Color) {
+    val shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(shape)
+            .background(fill)
+            .drawBehind {
+                val w = 1.dp.toPx()
+                // The sides and the foot, not the top — the card above covers that.
+                drawLine(rim, Offset(0f, 0f), Offset(0f, size.height), w)
+                drawLine(rim, Offset(size.width, 0f), Offset(size.width, size.height), w)
+                drawLine(rim, Offset(0f, size.height - w / 2f), Offset(size.width, size.height - w / 2f), w)
+            },
+    )
+}
+
+/** Overlapping discs in the players' own colours, each ringed so the row does not read as one smear. */
+@Composable
+private fun FaceRow(faces: List<Color>, ring: Color, size: Dp = 16.dp, step: Dp = 10.dp) {
+    if (faces.isEmpty()) return
+    val shown = faces.take(4)
+    Canvas(Modifier.size(width = size + step * (shown.size - 1), height = size)) {
+        val r = size.toPx() / 2f
+        val s = step.toPx()
+        shown.forEachIndexed { n, c ->
+            val at = Offset(r + s * n, this.size.height / 2f)
+            drawCircle(c, radius = r, center = at)
+            drawCircle(ring, radius = r, center = at, style = Stroke(width = 1.5.dp.toPx()))
+        }
+    }
+}
+
+/**
+ * Everybody else's open offers, as one line in the dock (1.0.6, round 2):
+ * the oldest of them in words — "Ravi → Asha: Tel Aviv for $300" — and how
+ * many more. Read-only: a tap opens the list, where they sit under "Table
+ * trades" beside anything of this phone's own.
+ */
+@Composable
+fun TableTradesLine(store: GameStore, trades: List<TradeOffer>, modifier: Modifier = Modifier) {
+    val p = P.current
+    val first = trades.firstOrNull() ?: return
+    val line = store.tableTradeLine(first)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(p.sunken)
+            .clickable(role = Role.Button, onClickLabel = "Open the table's trades") {
+                Haptics.tap()
+                store.openOffers()
+            }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Table trades: $line" + if (trades.size > 1) ", and ${trades.size - 1} more" else ""
+            }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SwapArrows(14.dp, p.ink3, flipped = true)
+        Spacer(Modifier.width(7.dp))
+        Text(
+            line,
+            modifier = Modifier.weight(1f),
+            color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        if (trades.size > 1) {
+            Spacer(Modifier.width(6.dp))
+            Text("+${trades.size - 1}", color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text("View", color = p.gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ── every offer at once ────────────────────────────────────────────────────
+
+/**
+ * Every open trade at the table in one scrolling list (1.0.6, round 2):
+ *
+ *  - the offers to a seat on this phone, oldest first, each a compact card
+ *    with both sides drawn as themselves (flags and all), which way the
+ *    price on the deeds leans, and its three answers — Accept, Counter,
+ *    Decline;
+ *  - the ones set aside, answerable just the same;
+ *  - what this phone sent, with the way to take each back;
+ *  - and "Table trades": everybody else's, read-only, with whether the
+ *    person it is for is reading it.
+ *
+ * It replaces the sheet-per-offer queue when two or more arrive together —
+ * one surface, scrolled, rather than offers stacked over offers.
+ *
+ * The answers are dead for a moment whenever the list changes under the
+ * thumb: an offer answered or withdrawn slides the next card up into the
+ * place the finger already was, and that card's Accept is not what the
+ * finger meant. A card that has been answered stops answering at once,
+ * before the push that takes it away arrives.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OffersSheet(store: GameStore, onDismiss: () -> Unit) {
+    val p = P.current
+    if (store.state == null) {
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
+    val incoming = store.incomingOffers
+    val parked = store.setAsideOffers
+    val sent = store.sentOffers
+    val others = store.tableTrades
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    var leaving by remember { mutableStateOf(false) }
+    var armed by remember { mutableStateOf(false) }
+    var answered by remember { mutableStateOf(emptySet<Int>()) }
+    val shown = (incoming + parked).map { it.id }
+    LaunchedEffect(shown) {
+        armed = false
+        delay(450)
+        if (!leaving) armed = true
+    }
+    val close: () -> Unit = {
+        if (!leaving) {
+            leaving = true
+            armed = false
+            scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+        }
+    }
+    // A counter goes the way the single offer's Negotiate goes: this sheet
+    // slides away first, then the composer comes up in its slot.
+    val counter: (TradeOffer) -> Unit = { offer ->
+        if (!leaving) {
+            leaving = true
+            armed = false
+            scope.launch {
+                sheetState.hide()
+                store.openCounter(offer)
+            }
+        }
+    }
+    val answer: (TradeOffer, Boolean) -> Unit = { offer, yes ->
+        answered = answered + offer.id
+        store.respondTrade(offer.id, yes)
+    }
+
+    MMSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 18.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SwapArrows(22.dp, p.ink2, flipped = true)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (incoming.isNotEmpty()) offersTitle(incoming.size) else "Trades on the table",
+                    modifier = Modifier.semantics { heading() },
+                    color = p.ink, fontSize = 18.sp, fontWeight = FontWeight.Black,
+                )
+                Text(
+                    if (incoming.isNotEmpty() || parked.isNotEmpty()) "Answer any of them. Closing this leaves them on the table."
+                    else "Every open offer at the table. Only the player it is for can answer it.",
+                    color = quietInk(), fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            MMButton("Done", kind = BtnKind.GHOST) {
+                Haptics.tap()
+                close()
+            }
+        }
+        Hairline()
+        LazyColumn(
+            Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(incoming, key = { "in:${it.id}" }) { offer ->
+                OfferListCard(
+                    store, offer,
+                    live = armed && offer.id !in answered,
+                    onAnswer = answer, onCounter = counter,
+                )
+            }
+            if (parked.isNotEmpty()) {
+                item(key = "head:parked") { ListHeading("Set aside", Modifier.padding(top = 6.dp)) }
+                items(parked, key = { "in:${it.id}" }) { offer ->
+                    OfferListCard(
+                        store, offer,
+                        live = armed && offer.id !in answered,
+                        onAnswer = answer, onCounter = counter,
+                    )
+                }
+            }
+            if (sent.isNotEmpty()) {
+                item(key = "head:sent") { ListHeading("Sent by you", Modifier.padding(top = 6.dp)) }
+                items(sent, key = { "out:${it.id}" }) { offer -> ListPlate { SentOfferRow(store, offer) } }
+            }
+            if (others.isNotEmpty()) {
+                item(key = "head:table") { ListHeading("Table trades", Modifier.padding(top = 6.dp)) }
+                items(others, key = { "table:${it.id}" }) { offer -> TableTradeRow(store, offer) }
+            }
+            if (incoming.isEmpty() && parked.isEmpty() && sent.isEmpty() && others.isEmpty()) {
+                item(key = "empty") {
+                    Text(
+                        "No open offers right now.",
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        color = quietInk(), fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A section of the offers list: small capitals in the quiet ink. */
+@Composable
+private fun ListHeading(text: String, modifier: Modifier = Modifier) {
+    CardTitle(text, modifier.padding(start = 4.dp))
+}
+
+/** A row of the list drawn on its own card, as the offer cards are. */
+@Composable
+private fun ListPlate(content: @Composable ColumnScope.() -> Unit) {
+    val p = P.current
+    val shape = RoundedCornerShape(14.dp)
+    CompositionLocalProvider(LocalControlBackdrop provides BackdropKind.Paper) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(p.card)
+                .border(1.dp, p.rule, shape)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content,
+        )
+    }
+}
+
+/**
+ * One offer to a seat on this phone, compact: who from, what you get and
+ * what you give drawn as themselves, which way it leans by the price on the
+ * deeds, whether the seat could pay for it, and the three answers.
+ *
+ * On show it tells the sender their offer is being read, as the dock's card
+ * and the offer's own sheet do — the list only composes the cards in view,
+ * so that is the ones actually on the screen.
+ */
+@Composable
+private fun OfferListCard(
+    store: GameStore,
+    offer: TradeOffer,
+    live: Boolean,
+    onAnswer: (TradeOffer, Boolean) -> Unit,
+    onCounter: (TradeOffer) -> Unit,
+) {
+    val p = P.current
+    val state = store.state ?: return
+    // The table's copy, so money and readers are as they are now.
+    val trade = store.liveOffer(offer.id) ?: offer
+    val from = state.player(trade.from)
+    // Pass & play: an offer to the other person on this phone says whose it is.
+    val forGuest = if (trade.to != store.meId) state.player(trade.to) else null
+
+    DisposableEffect(trade.id, trade.to) {
+        store.beginReading(trade.id, trade.to)
+        onDispose { store.endReading(trade.id, trade.to) }
+    }
+
+    val theirs = store.sideWorth(trade.give)
+    val ours = store.sideWorth(trade.get)
+    val diff = theirs - ours
+    val tone = if (abs(diff) < 25) p.ink3 else if (diff > 0) p.good else p.bad
+    val short = store.offerShortfall(trade)
+
+    ListPlate {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            InitialDisc(from, 30.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    from?.name ?: "Someone",
+                    color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    when {
+                        forGuest != null -> "to ${forGuest.name}"
+                        trade.isSetAside -> "set aside for later"
+                        else -> "wants to trade"
+                    },
+                    color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            LeanPill(dealLeanWords(theirs, ours), tone)
+        }
+        SideStrip(store, "You get", trade.give, p.good)
+        SideStrip(store, "You give", trade.get, p.bad)
+        if (short > 0) {
+            Text(
+                "Short ${money(short)} — sell or mortgage first.",
+                color = p.bad, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Faded whole when it cannot be paid for, as the dock's is.
+            MMButton(
+                "Accept",
+                Modifier.weight(1f).alpha(if (short > 0) 0.45f else 1f),
+                kind = BtnKind.GOOD, fitScale = 0.75f,
+            ) {
+                if (!live || short > 0) return@MMButton
+                Haptics.turn()
+                onAnswer(trade, true)
+            }
+            MMButton("Counter", Modifier.weight(1f), kind = BtnKind.GOLD, fitScale = 0.75f) {
+                if (!live) return@MMButton
+                Haptics.tap()
+                onCounter(trade)
+            }
+            MMButton("Decline", Modifier.weight(1f), kind = BtnKind.DANGER, fitScale = 0.75f) {
+                if (!live) return@MMButton
+                Haptics.tap()
+                onAnswer(trade, false)
+            }
+        }
+    }
+}
+
+/** One side of a compact offer: its label down the left, and everything on it as chips. */
+@Composable
+private fun SideStrip(store: GameStore, label: String, side: TradeSide, tone: Color) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            label.uppercase(),
+            modifier = Modifier.width(66.dp).padding(top = 7.dp),
+            color = tone, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 0.8.sp, maxLines = 1,
+        )
+        Box(Modifier.weight(1f)) { DealChips(store, side) }
+    }
+}
+
+/** "$120 your way", in a small capsule of its own colour. */
+@Composable
+private fun LeanPill(text: String, tone: Color) {
+    val shape = RoundedCornerShape(99.dp)
+    Text(
+        text,
+        modifier = Modifier
+            .clip(shape)
+            .background(tone.copy(alpha = 0.12f))
+            .border(1.dp, tone.copy(alpha = 0.34f), shape)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        color = tone, fontSize = 11.5.sp, fontWeight = FontWeight.ExtraBold,
+        maxLines = 1, style = tabularFigures(),
+    )
+}
+
+/**
+ * One of everybody else's open offers, read-only: the two faces with the
+ * deal between them in words, and whether the player it is for is reading
+ * it, has set it aside, or has not looked yet.
+ */
+@Composable
+private fun TableTradeRow(store: GameStore, offer: TradeOffer) {
+    val p = P.current
+    val state = store.state ?: return
+    val from = state.player(offer.from)
+    val to = state.player(offer.to)
+    ListPlate {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            InitialDisc(from, 24.dp)
+            SwapArrows(13.dp, p.ink3)
+            InitialDisc(to, 24.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    store.tableTradeLine(offer),
+                    color = p.ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    store.readingLine(offer)
+                        ?: if (offer.isSetAside) "${to?.name ?: "They"} set it aside for later"
+                        else "Waiting for ${to?.name ?: "an answer"}",
+                    color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** "Offers (3)" — the pile's name in the dock and the list's title. */
+internal fun offersTitle(count: Int): String = "Offers ($count)"
+
+/** "Ravi", "Ravi and Asha", "Ravi, Asha and Bilal". */
+internal fun namesList(names: List<String>): String = when (names.size) {
+    0 -> "Somebody"
+    1 -> names[0]
+    else -> names.dropLast(1).joinToString(", ") + " and " + names.last()
+}
+
+/**
+ * One of the table's trades as its row says it (docs/API-1.0.6.md, G8):
+ * "Ravi → Asha: Tel Aviv for $300". [give] is what the sender parts with and
+ * [get] what they ask for, each already written as a phrase, or null for a
+ * side with nothing on it.
+ */
+internal fun tableTradeWords(from: String, to: String, give: String?, get: String?): String {
+    // iOS's words (OffersSheet.swift, tablePhrase), so a table of mixed
+    // phones reads one deal one way.
+    val deal = when {
+        give != null && get != null -> "$give for $get"
+        give != null -> "$give for nothing"
+        get != null -> "asks for $get"
+        else -> "an empty offer"
+    }
+    return "$from → $to: $deal"
+}
+
+/**
+ * Which way a deal leans by the price on the deeds, from the side of the
+ * seat it is offered to: [theirs] is what they would get, [ours] what they
+ * would give. Within $25 either way it is even.
+ */
+internal fun dealLeanWords(theirs: Int, ours: Int): String {
+    val diff = theirs - ours
+    return when {
+        abs(diff) < 25 -> "An even deal"
+        diff > 0 -> "${money(diff)} your way"
+        else -> "${money(-diff)} their way"
     }
 }
 
 /**
  * An offer somebody has made a seat on this phone, as the dock holds it:
  * both sides in a line each, who is reading it, whether it can be paid for,
- * and all four answers. `more` is how many further live offers wait behind it.
+ * and all four answers. Only ever the one: two or more fold into the
+ * "Offers (n)" pile instead ([OffersStack]).
  *
  * On show it tells the sender their offer is being read — which is also what
  * an iOS player facing this phone sees, so it is not optional.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TradeOfferCard(store: GameStore, offer: TradeOffer, modifier: Modifier = Modifier, more: Int = 0) {
+fun TradeOfferCard(store: GameStore, offer: TradeOffer, modifier: Modifier = Modifier) {
     val p = P.current
     val state = store.state ?: return
     val from = state.player(offer.from)
@@ -1597,10 +2163,6 @@ fun TradeOfferCard(store: GameStore, offer: TradeOffer, modifier: Modifier = Mod
                 "Offer from ${from?.name ?: "?"}${forGuest?.let { " to ${it.name}" } ?: ""}",
                 modifier = Modifier.weight(1f),
             )
-            if (more > 0) {
-                Spacer(Modifier.width(8.dp))
-                Text("+$more more", color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
         }
         TradeLine("You get", store.tradeSummary(offer.give), p.good)
         TradeLine("You give", store.tradeSummary(offer.get), p.bad)

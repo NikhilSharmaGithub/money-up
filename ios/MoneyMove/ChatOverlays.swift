@@ -576,7 +576,10 @@ struct ChatLogSheet: View {
         case "turn":              ("play.fill", P.gold, 13)
         case "jail", "warn":      ("exclamationmark.triangle", .orange, 13)
         case "bankrupt":          ("xmark.octagon", P.bad, 13)
-        case "auction", "trade":  ("hammer", P.gold, 13)
+        case "auction":           ("hammer", P.gold, 13)
+        // Every offer made, withdrawn, declined or struck is the table's news
+        // now (1.0.6, G8) — its own mark, the ticker's, not the gavel's.
+        case "trade":             ("arrow.left.arrow.right", P.gold, 13)
         case "system":            ("sparkles", P.red, 13)
         case "treasure":          ("gift", .orange, 13)
         case "surprise":          ("questionmark.circle", .pink, 13)
@@ -632,16 +635,40 @@ struct AuctionBox: View {
         VStack(spacing: 5) {
             HStack(spacing: 5) {
                 Art.icon(.gavel, size: 12, tint: P.gold)
-                Text("AUCTION")
+                Text(auction.estate == nil ? "AUCTION" : "ESTATE SALE")
                     .font(.system(size: 10, weight: .black, design: .rounded))
                     .kerning(1.5)
                     .foregroundStyle(P.gold)
             }
 
-            Text(store.tile(auction.tile)?.name ?? "Property")
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(P.ink)
-                .lineLimit(1)
+            // The deed's printed price stays the reference for the bidding —
+            // at an auction-only table there is no other place it is said. It
+            // rides the name's line: the well is a fixed square, and a line of
+            // its own pushed the box up under the turn clock.
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(store.tile(auction.tile)?.name ?? "Property")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(P.ink)
+                if let price = store.tile(auction.tile)?.price, price > 0 {
+                    Text("deed \(money(price))")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+
+            // An estate lot (1.0.6, G5) says whose it was and how much more
+            // follows. The turn has no clock while the estate sells, so the
+            // line takes the room the clock would have had.
+            if let line = estateLine {
+                Text(line)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+            }
 
             Text(money(auction.bid))
                 .font(.system(size: 26, weight: .heavy, design: .rounded))
@@ -670,6 +697,13 @@ struct AuctionBox: View {
         .onChange(of: auction.inRace) { _, race in
             if let chosen = chosenSeat, !race.contains(chosen) { chosenSeat = nil }
         }
+    }
+
+    /// "Ravi's estate — 2 more after this", or "— the last lot".
+    private var estateLine: String? {
+        guard let estate = auction.estate else { return nil }
+        let left = estate.left ?? 0
+        return "\(estate.from)’s estate — " + (left > 0 ? "\(left) more after this" : "the last lot")
     }
 
     /// One chip per local seat still racing, shown only when the phone holds

@@ -25,6 +25,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -79,6 +80,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -401,6 +403,12 @@ private val STRIP_AIR = 5.dp
 private val BAR_BUTTON = 34.dp
 private val ROOM_CAPSULE_CHROME = 7.dp + 6.dp + 26.dp
 
+/** A door on a bar too narrow for seven at 34 — still wider than any glyph on it. */
+private val BAR_BUTTON_TIGHT = 30.dp
+
+/** How wide the bar's doors are drawn: [BAR_BUTTON], or [BAR_BUTTON_TIGHT] on a narrow phone. */
+private val LocalBarDoor = staticCompositionLocalOf { BAR_BUTTON }
+
 /**
  * The bar's padding round its doors: a 22 shell with 8 of it holds 14s, the
  * spec's concentric pairing for the game's top bar on every client.
@@ -640,17 +648,20 @@ private fun Dock(store: GameStore, state: GameState, floor: Dp, modifier: Modifi
 
 /**
  * The strip at the top: the way out, the room code with the connection's
- * state beside it, and the table's doors — sound, chat, and while a game is
- * on, trading and your streets. Share sits last, in the accent, because it is
- * how the next seat gets filled. The lobby's own doors — the house rules and
- * your look — are in the lobby panel, where iOS keeps them.
+ * state beside it, and the table's doors — sound, this table's rules (the
+ * "i", 1.0.6), chat, and while a game is on, trading and your streets. Share
+ * sits last, in the accent, because it is how the next seat gets filled. The
+ * lobby's own doors — the house rules and your look — are in the lobby panel,
+ * where iOS keeps them.
  *
  * iOS lays the bar out as one row at twelve points between every pair, the
  * flexible space included — so the code sits twelve in from the way out and
- * at least twenty-four clear of the first door. Six round buttons, the code
+ * at least twenty-four clear of the first door. Seven round buttons, the code
  * and those gaps come to more than a 360-point phone has, though, so on a
- * narrow phone the gaps close up, down to six, before the code is asked to
- * give way; on anything wider they are iOS's twelve exactly.
+ * narrow phone the gaps close up, down to six; if even six will not fit, the
+ * doors give up four points each and the gaps close to three, and only then
+ * is the code asked to give way. On anything wider they are iOS's twelve
+ * exactly.
  *
  * It is one piece of glass, where it was six card-coloured discs and a
  * capsule standing loose on the page: this is the table's navigation, the
@@ -671,81 +682,96 @@ private fun TableBar(store: GameStore, modifier: Modifier = Modifier) {
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
     val surface = rememberGlassSurface(BackdropKind.Page)
+    // The rules can be read wherever there is a table to read them from —
+    // seated, watching, in the lobby or after the last roll.
+    val rules = store.state != null
     BoxWithConstraints(modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-        val doors = if (playing) 5 else 3
+        val doors = (if (playing) 5 else 3) + (if (rules) 1 else 0)
         val code = with(density) { measurer.measure(store.roomId.orEmpty(), ROOM_CODE).size.width.toDp() }
-        val used = BAR_BUTTON * (doors + 1) + code + ROOM_CAPSULE_CHROME + BAR_INSET * 2
-        val gap = ((maxWidth - used) / (doors + 2)).coerceIn(6.dp, 12.dp)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                // A layer of its own, so the bar is drawn when the bar changes
-                // and not whenever the table does. Nothing between it and the
-                // board holds one, and the pieces breathe every frame of the
-                // game: without this the glass — its shadow re-blurred, its
-                // rim re-swept — was redrawn sixty times a second along with
-                // them, to come out exactly the same.
-                .graphicsLayer {}
-                .mmGlass(backdrop = BackdropKind.Page, shape = MMShapes.r22)
-                .padding(BAR_INSET),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val row = this
-            OnGlass(surface) {
-                // The doors' ink: the glass's quiet one, which on the bar is
-                // what the palette's second rank now answers with.
-                val quiet = P.current.ink2
-                with(row) {
-                    BarDoor("Leave the table", onClick = { store.requestLeave() }) {
-                        // iOS's chevron.left: the row arrow, turned round.
-                        Box(Modifier.rotate(180f)) { RowChevron(quiet, 13.dp) }
-                    }
-                    Spacer(Modifier.width(gap))
-                    // If a large system font still tips the bar over, the code gives
-                    // way rather than the share button falling off the end of it.
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { RoomCapsule(store) }
-                    Spacer(Modifier.width(gap * 2))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(gap),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        SoundToggle(store)
-                        Box {
-                            // iOS's bubble.left.and.bubble.right.fill: two solid
-                            // bubbles, not the drawn set's one bubble with dots.
-                            BarDoor("Open chat", onClick = { store.openChat() }) {
-                                SfMark("bubble.left.and.bubble.right.fill", 22.dp, quiet)
-                            }
-                            UnreadBadge(store.unreadChat, Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-4).dp))
+        fun used(door: Dp) = door * (doors + 1) + code + ROOM_CAPSULE_CHROME + BAR_INSET * 2
+        val roomy = (maxWidth - used(BAR_BUTTON)) / (doors + 2)
+        val tight = roomy < 6.dp
+        val door = if (tight) BAR_BUTTON_TIGHT else BAR_BUTTON
+        val gap = if (tight) ((maxWidth - used(door)) / (doors + 2)).coerceIn(3.dp, 6.dp) else roomy.coerceIn(6.dp, 12.dp)
+        CompositionLocalProvider(LocalBarDoor provides door) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    // A layer of its own, so the bar is drawn when the bar changes
+                    // and not whenever the table does. Nothing between it and the
+                    // board holds one, and the pieces breathe every frame of the
+                    // game: without this the glass — its shadow re-blurred, its
+                    // rim re-swept — was redrawn sixty times a second along with
+                    // them, to come out exactly the same.
+                    .graphicsLayer {}
+                    .mmGlass(backdrop = BackdropKind.Page, shape = MMShapes.r22)
+                    .padding(BAR_INSET),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val row = this
+                OnGlass(surface) {
+                    // The doors' ink: the glass's quiet one, which on the bar is
+                    // what the palette's second rank now answers with.
+                    val quiet = P.current.ink2
+                    with(row) {
+                        BarDoor("Leave the table", onClick = { store.requestLeave() }) {
+                            // iOS's chevron.left: the row arrow, turned round.
+                            Box(Modifier.rotate(180f)) { RowChevron(quiet, 13.dp) }
                         }
-                        if (playing) {
-                            // iOS's arrow.left.arrow.right — a left arrow over a right
-                            // one. The drawn set's nearest is `swap`, the same two
-                            // arrows standing upright, so it is laid on its side and
-                            // mirrored to put the left-pointing one on top. Always
-                            // live, as on iOS: a seat with nobody left to deal with
-                            // opens on the picker's "Nobody left to trade with."
-                            BarDoor("Offer a trade", onClick = { store.openTrade() }) {
-                                Icon(
-                                    "swap", size = 20.dp, tint = quiet,
-                                    modifier = Modifier.graphicsLayer {
-                                        rotationZ = 90f
-                                        scaleX = -1f
-                                    },
-                                )
+                        Spacer(Modifier.width(gap))
+                        // If a large system font still tips the bar over, the code gives
+                        // way rather than the share button falling off the end of it.
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { RoomCapsule(store) }
+                        Spacer(Modifier.width(gap * 2))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(gap),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SoundToggle(store)
+                            // Beside the sound, where iOS hangs it: every rule
+                            // this table plays, for a player or a watcher.
+                            if (rules) {
+                                BarDoor("This table's rules", onClick = { store.openTableRules() }) {
+                                    SfMark("info.circle.fill", 19.dp, quiet)
+                                }
                             }
-                            // building.columns.fill: four solid columns.
-                            BarDoor("Your properties", onClick = { store.openProperties() }) {
-                                SfMark("building.columns.fill", 18.dp, quiet)
+                            Box {
+                                // iOS's bubble.left.and.bubble.right.fill: two solid
+                                // bubbles, not the drawn set's one bubble with dots.
+                                BarDoor("Open chat", onClick = { store.openChat() }) {
+                                    SfMark("bubble.left.and.bubble.right.fill", 22.dp, quiet)
+                                }
+                                UnreadBadge(store.unreadChat, Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-4).dp))
                             }
-                        }
-                        store.inviteLink?.let { link ->
-                            // The web client reads ?room= on load, so the link seats a
-                            // friend from a browser with no install in the way.
-                            BarDoor("Share the table", plate = p.red, onClick = {
-                                shareText(context, link) { store.showToast("Invite copied") }
-                            }) {
-                                Icon(GlyphFor.SHARE, size = 20.dp, tint = p.accentInk)
+                            if (playing) {
+                                // iOS's arrow.left.arrow.right — a left arrow over a right
+                                // one. The drawn set's nearest is `swap`, the same two
+                                // arrows standing upright, so it is laid on its side and
+                                // mirrored to put the left-pointing one on top. Always
+                                // live, as on iOS: a seat with nobody left to deal with
+                                // opens on the picker's "Nobody left to trade with."
+                                BarDoor("Offer a trade", onClick = { store.openTrade() }) {
+                                    Icon(
+                                        "swap", size = 20.dp, tint = quiet,
+                                        modifier = Modifier.graphicsLayer {
+                                            rotationZ = 90f
+                                            scaleX = -1f
+                                        },
+                                    )
+                                }
+                                // building.columns.fill: four solid columns.
+                                BarDoor("Your properties", onClick = { store.openProperties() }) {
+                                    SfMark("building.columns.fill", 18.dp, quiet)
+                                }
+                            }
+                            store.inviteLink?.let { link ->
+                                // The web client reads ?room= on load, so the link seats a
+                                // friend from a browser with no install in the way.
+                                BarDoor("Share the table", plate = p.red, onClick = {
+                                    shareText(context, link) { store.showToast("Invite copied") }
+                                }) {
+                                    Icon(GlyphFor.SHARE, size = 20.dp, tint = p.accentInk)
+                                }
                             }
                         }
                     }
@@ -756,7 +782,8 @@ private fun TableBar(store: GameStore, modifier: Modifier = Modifier) {
 }
 
 /**
- * One of the bar's doors, 34 across. `says` is what a screen reader reads for
+ * One of the bar's doors, 34 across — 30 on a phone too narrow for seven at
+ * 34 (see [TableBar]). `says` is what a screen reader reads for
  * it: the glyph is a drawing, and a drawing has no name of its own.
  *
  * At rest it is only its drawing, printed on the bar — a disc of its own
@@ -780,7 +807,7 @@ private fun BarDoor(
     val well = LocalGlassHost.current?.well() ?: P.current.sunken
     Box(
         Modifier
-            .size(BAR_BUTTON)
+            .size(LocalBarDoor.current)
             .glassPress(press)
             .drawWithCache {
                 val outline = DOOR_SHAPE.createOutline(size, layoutDirection, this)
@@ -935,7 +962,10 @@ private fun ChatBubble(store: GameStore, modifier: Modifier = Modifier) {
  *
  * The strip keeps the seat on the clock in view — or this phone's own between
  * turns — because at a six-seat table the one that matters was forever off
- * the right-hand edge. Tapping a player opens a trade already aimed at them.
+ * the right-hand edge. Tapping a player opens a trade already aimed at them;
+ * their disc, which wears a small person for it, opens their profile, as
+ * does holding the chip — and where there is no trade to offer (the lobby,
+ * the rail, a seat that is out) the whole chip opens it.
  *
  * The strip is iOS's 54 points tall wherever it stands — [STRIP_AIR] above
  * and below the chips. `badgeRoom` is further headroom over the chips for the
@@ -989,6 +1019,7 @@ private fun Seats(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, rank: Int?, isNext: Boolean) {
     val p = P.current
@@ -1005,6 +1036,11 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
     // one with the chip: a faded layer is cut off at its own edges, and the
     // badge rides fifteen points above the chip's.
     val dim = if (player.isBankrupt) 0.5f else 1f
+    // Who can be traded with is a decision, so it asks the table as it is,
+    // not as it is shown.
+    val live = state.player(player.id) ?: player
+    val trades = store.canTradeWith(live)
+    val profile = store.opensProfile(live)
     Box {
         Row(
             Modifier
@@ -1012,14 +1048,27 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
                 .clip(shape)
                 .background(p.card)
                 .border(if (isTurn) 2.dp else 1.dp, ring, shape)
-                // Who can be traded with is a decision, so it asks the table
-                // as it is, not as it is shown.
-                .clickable(enabled = store.canTradeWith(state.player(player.id) ?: player)) { store.openTrade(to = player.id) }
+                // The trade keeps the chip's tap, as it always had it; the
+                // profile is the disc's tap and the chip's long press, and
+                // the chip's tap too wherever there is no trade to offer.
+                .combinedClickable(
+                    enabled = trades || profile,
+                    onClickLabel = if (trades) "Offer ${player.name} a trade" else "Open ${player.name}'s profile",
+                    onLongClickLabel = if (trades && profile) "Open ${player.name}'s profile" else null,
+                    onLongClick = if (trades && profile) {
+                        {
+                            Haptics.tap()
+                            store.openProfile(live)
+                        }
+                    } else null,
+                ) {
+                    if (trades) store.openTrade(to = player.id) else store.openProfile(live)
+                }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            PlayerDisc(player, size = 32.dp)
+            SeatFace(player, profile, opensOwnTap = trades) { store.openProfile(live) }
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1070,6 +1119,48 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
         // money under it; a long amount grows back across the chip's own top
         // rather than out over the seats either side.
         MoneyDeltaBadge(store, player.id, Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-15).dp).alpha(dim))
+    }
+}
+
+/**
+ * A seat chip's disc, and the way to the person behind it: a seat with a
+ * profile wears a small person on the disc's free shoulder (the flag has the
+ * other), so the face reads as something to tap. While the chip's own tap
+ * is the trade ([opensOwnTap]), the disc takes its own tap for the profile;
+ * otherwise the whole chip already opens it and the disc leaves it to the
+ * chip.
+ */
+@Composable
+private fun SeatFace(player: PlayerState, profile: Boolean, opensOwnTap: Boolean, onProfile: () -> Unit) {
+    val p = P.current
+    Box(
+        // Not clipped to the disc: the person and the flag both hang past
+        // its rim, and a clip would shave them off.
+        if (profile && opensOwnTap) {
+            Modifier
+                .clickable(onClickLabel = "Open ${player.name}'s profile", role = Role.Button) {
+                    Haptics.tap()
+                    onProfile()
+                }
+        } else {
+            Modifier
+        },
+    ) {
+        PlayerDisc(player, size = 32.dp)
+        if (profile) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = (-3).dp, y = (-3).dp)
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(p.card)
+                    .border(1.dp, p.rule, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                SfMark("person.fill", 9.dp, p.ink2)
+            }
+        }
     }
 }
 
@@ -1445,11 +1536,20 @@ private fun TableSheets(
         // Read the offer live inside the sheet; closing it leaves the offer
         // on the table and answers nothing.
         is TableSheet.Offer -> TradeOfferSheet(store, open.offer, open.seat, onDismiss = close)
+        // Two or more at once, and everybody else's: one list, each offer
+        // to a seat here with its own answers (1.0.6, round 2).
+        is TableSheet.Offers -> OffersSheet(store, onDismiss = close)
         is TableSheet.ChatLog -> ChatSheet(store, initialTab = open.tab, onDismiss = close)
         // The table style is the player's, not the room's; iOS's settings
         // sheet carries it at the foot, so this one is handed the setter.
         is TableSheet.Rules -> LobbySheet(account, store, onTheme = onTheme, onDismiss = close)
         is TableSheet.Look -> PiecePicker(store, account, onDismiss = close)
+        // Somebody at the table, by the seat's code; keyed on it so a second
+        // seat's card is a fresh read rather than the first one renamed.
+        is TableSheet.Profile -> key(open.seed.code) {
+            PlayerProfileSheet(store, account, open.seed, onDismiss = close)
+        }
+        is TableSheet.TableRules -> TableRulesSheet(store, onDismiss = close)
         else -> Unit
     }
 }

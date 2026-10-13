@@ -86,4 +86,21 @@ class PlayerProfileTest {
         ).invite
         assertEquals("", older?.flag)
     }
+
+    // ── round 2: a profile from a seat at the table ─────────────────────────
+
+    @Test
+    fun `a seat at the table opens the profile by its code, wearing tonight's colour`() {
+        val state = MMJson.decodeFromJsonElement(GameState.serializer(), obj(full))
+        val zoe = ProfileSeed.of(state.players.first { it.id == "u_abc" })
+        assertEquals("H0A1B2", zoe.code)
+        assertEquals("Zoe", zoe.name)
+        assertEquals("#3f6fae", zoe.color)
+        // A seat from a server that sends no level opens with none.
+        assertEquals(0, zoe.level)
+        // A seat with a level carries it to the card's chip until the card lands.
+        assertEquals(27, ProfileSeed.of(PlayerState(id = "bot:1", name = "Ravi", code = "H0Z9Y8", level = 27)).level)
+        // A pass & play guest has no code, so nothing to look up.
+        assertEquals("", ProfileSeed.of(state.players.first { it.id == "me-token_p2" }).code)
+    }
 }

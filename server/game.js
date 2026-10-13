@@ -2,7 +2,7 @@
 // Every rule lives here; clients only send intents and render what comes back.
 
 import { createHash } from 'node:crypto';
-import { getMap, GROUPS, MAPS } from './maps.js';
+import { getMap, GROUPS, MAPS, shuffleMap } from './maps.js';
 import { buildDecks, shuffled, cardTone } from './cards.js';
 import { banter, cleanText, cleanFlag, isAllMasked } from './banter.js';
 import {
@@ -46,7 +46,27 @@ export const DEFAULT_SETTINGS = {
   botLevel: 'normal',
   /** Minutes until the richest player wins; 0 plays to the last one standing. */
   timeLimit: 0,
+  /** What happens to a bankrupt player's streets: back to the bank, or auctioned one by one. */
+  bankruptProperties: 'release',
+  /** Every unowned street goes straight to auction — nobody buys at the sticker. */
+  auctionOnly: false,
+  /** The colour sets trade places on the board at the start of each game. */
+  shuffleBoard: false,
 };
+
+/**
+ * What a bankrupt player's streets do — see sellEstate. 'release' is the rule
+ * that has always shipped: they go back to the bank, unowned, for whoever
+ * lands there next. 'auction' puts each one under the hammer in turn.
+ */
+export const BANKRUPT_RULES = ['release', 'auction'];
+
+/**
+ * The table rules a Play-now or a cup table never plays, whatever the field
+ * says: the room checks them at its own door as well as at the setter's (see
+ * ruleOn), the way armGameClock does for the clock.
+ */
+const HOUSE_TABLE_ONLY = ['bankruptProperties', 'auctionOnly', 'shuffleBoard'];
 
 /**
  * The bot skills a host may pick. 'normal' is the house player that has
@@ -692,6 +712,18 @@ export class GameRoom {
     return !!p && (p.isBot || p.botControlled);
   }
 
+  /**
+   * One of the round-2 table rules (bankrupt properties, auction-only, the
+   * shuffled board) as this table actually plays it. A Play-now table and a
+   * cup table play the default whatever the field says: neither may set them
+   * (updateSettings, and the socket handler for the cup), and asking again
+   * here means no other door can spring one on strangers who never agreed.
+   */
+  ruleOn(key) {
+    if (this.quick || this.cupMatch) return DEFAULT_SETTINGS[key];
+    return this.settings[key] ?? DEFAULT_SETTINGS[key];
+  }
+
   updateAppearance(id, { name, color, flag }) {
     const p = this.player(id);
     if (!p || this.status !== 'lobby') return;
@@ -733,8 +765,15 @@ export class GameRoom {
     // there); these two are refused here as well, at the room's own door,
     // because a cup game already has its clock — the whistle — and never a
     // house player.
-    if (this.cupMatch && (patch.botLevel !== undefined || patch.timeLimit !== undefined)) {
+    // The three round-2 table rules join them: a cup game is the same game for
+    // every pair in the draw, and a bracket decided on shuffled boards for
+    // some and not others is not one competition.
+    if (this.cupMatch && ['botLevel', 'timeLimit', ...HOUSE_TABLE_ONLY].some((k) => patch[k] !== undefined)) {
       return { error: 'A cup table is set by the cup' };
+    }
+    // A list, like bot skill: a value off it has no nearest.
+    if (patch.bankruptProperties !== undefined && !BANKRUPT_RULES.includes(patch.bankruptProperties)) {
+      return { error: 'Bankrupt properties go back to the bank or to auction' };
     }
     // The two 1.0.6 pickers are lists, not ranges, so a value off the list is
     // refused outright rather than rounded: a bot skill of "brutal" has no
@@ -801,6 +840,12 @@ export class GameRoom {
     const clock = Math.floor(Number(this.settings.turnSeconds));
     if (!Number.isFinite(clock)) this.settings.turnSeconds = DEFAULT_SETTINGS.turnSeconds;
     else this.settings.turnSeconds = clock <= 0 ? 0 : Math.max(30, Math.min(600, clock));
+    // Auction-only is auctions with the sticker sale taken away, so it cannot
+    // be on while auctions are off. Turning it on turns auctions on; turning
+    // auctions off (and not auction-only on, in the same patch) turns it off.
+    // Either way the two switches the lobby shows never contradict each other.
+    if (patch.auctionOnly !== undefined && this.settings.auctionOnly) this.settings.auction = true;
+    else if (patch.auction !== undefined && !this.settings.auction) this.settings.auctionOnly = false;
     if (patch.mapId) this.map = getMap(this.settings.mapId);
     if (patch.teams !== undefined) {
       this.settings.teams = Math.max(0, Math.min(4, Math.floor(Number(this.settings.teams)) || 0));
@@ -949,6 +994,23 @@ export class GameRoom {
 
     // "Random" means a brand new board each game, not a fixed shuffle.
     if (this.settings.mapId === 'random') this.map = getMap('random');
+    // A shuffled board is dealt here, once a game, from the board the lobby
+    // showed — and before the decks, whose cards name streets by where they
+    // stand ("Advance to Rio" has to send you to wherever Rio is now). The
+    // seed comes off Math.random like the dice, so a seeded test table deals
+    // the same board every time; it stays with the game in shuffleSeed.
+    if (this.map.shuffled) this.map = this.boardBeforeShuffle || getMap(this.settings.mapId);
+    this.boardBeforeShuffle = null;
+    this.shuffleSeed = null;
+    if (this.ruleOn('shuffleBoard')) {
+      const seed = Math.floor(Math.random() * 2 ** 32);
+      const dealt = shuffleMap(this.map, seed);
+      if (dealt.shuffled) {
+        this.boardBeforeShuffle = this.map;
+        this.map = dealt;
+        this.shuffleSeed = seed;
+      }
+    }
     // Country boards bring their own localized Treasure/Surprise decks.
     this.decks = this.freshDecks();
 
@@ -1002,7 +1064,10 @@ export class GameRoom {
     this.statFor(this.players[0]).turns++;
     this.recordWorth();
     this.armGameClock();
+    // Last game's estate sale, if the hammer was still up when it ended.
+    this.estate = null;
     this.say('Game started! Good luck.', 'system');
+    if (this.map.shuffled) this.say('The board was shuffled', 'system');
     if (this.endsAt) {
       this.say(`A ${this.settings.timeLimit}-minute game — when the clock runs out, the richest player wins`, 'system');
     }
@@ -1669,6 +1734,16 @@ export class GameRoom {
     clearTimeout(this.timers.turn);
     this.timers.turn = null;
     if (!this.turn) return;
+    // A turn parked under an estate sale (see sellEstate) has no clock and
+    // nobody to tell: its player is not being handed anything, and is only
+    // one bidder among the rest until the last lot falls. finishAuction arms
+    // it, once, when the turn actually goes back to them. Without this every
+    // lot re-armed it, and a player away from the table was sent "Your
+    // turn" once per lot of somebody else's estate.
+    if (this.auction?.estate) {
+      this.turn.endsAt = null;
+      return;
+    }
     // A turn has just begun. Whether anybody needs telling is not this file's
     // business — the server knows which seats have a tab or a phone still
     // attached, and this one only knows whose turn it is. Both places a turn
@@ -1949,7 +2024,8 @@ export class GameRoom {
     p.bankrupt = true;      // the turn loop already skips these
     p.timedOut = true;      // …but the client shows a different story
     p.removedFor = reason;
-    for (const i of this.tilesOf(p.id)) delete this.ownership[i];
+    const estate = this.tilesOf(p.id);
+    for (const i of estate) delete this.ownership[i];
     p.money = 0;
     if (this.turn?.debt?.debtor === p.id) this.turn.debt = null;
     else this.forgiveDebtTo(p);
@@ -1959,6 +2035,11 @@ export class GameRoom {
     const settled = this.settleAuctionExit(p);
     if (karma) this.hooks.karma?.(p.id, -1, reason);
     if (this.checkGameEnd()) return;
+    // Back on the market — or, at a table that auctions estates, under the
+    // hammer one by one. A walkout or a timeout is a bankruptcy to the bank
+    // as far as the streets are concerned. With a lot now up, the turn stays
+    // parked on the auction and finishAuction moves it on, as below.
+    this.sellEstate(p, estate);
     // While an auction still runs, the turn stays parked on the auction
     // phase; finishAuction moves it on the moment the hammer falls.
     if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
@@ -2335,27 +2416,31 @@ export class GameRoom {
         this.turn.noReroll = true;
         this.say(`${p.name} rolled a double (${d1}+${d2}) and walked out of prison`, 'dice');
         this.movePlayer(p, d1 + d2);
-        this.turn.phase = this.turn.phase === 'debt' ? 'debt' : (this.turn.pending ? this.turn.phase : 'end');
+        this.turn.phase = this.phaseAfterWalk();
         this.push();
         this.maybeBot();
         return { ok: true };
       }
       p.jailTurns++;
-      this.say(`${p.name} rolled ${d1}+${d2} — still in prison (${p.jailTurns}/${MAX_JAIL_TURNS})`, 'dice');
       if (p.jailTurns >= MAX_JAIL_TURNS) {
-        this.say(`${p.name} must pay the $${JAIL_FINE} fine`, 'warn');
-        if (this.charge(p, JAIL_FINE, null, 'as a prison fine')) {
-          p.jail = false;
-          p.jailTurns = 0;
-          this.movePlayer(p, d1 + d2);
-          // The walk itself can land on unpayable rent — that debt must stand.
-          this.turn.phase = this.turn.debt ? 'debt' : (this.turn.pending ? this.turn.phase : 'end');
-        } else {
-          // Can't pay yet: remember the rolled move so settling the fine in
-          // the debt phase actually opens the cell and walks the player out.
-          this.turn.debt.jailRelease = d1 + d2;
-        }
+        // Time served. The third roll that misses the double opens the door
+        // for nothing and the piece walks it, the way a double would have —
+        // no $50 at the door any more. Prison is three turns of standing
+        // still, not three turns and then a bill; paying the fine is now
+        // only ever a choice made before rolling (jailPay), never a charge.
+        p.jail = false;
+        p.jailTurns = 0;
+        // Kind 'dice', like the double-escape line above: this IS the throw.
+        // Every shipped client keys its dice sound, and the line it shows
+        // the moment the dice land, on a fresh 'dice' line ('jail' is the
+        // prison-door sound and a warning glyph, held until the piece stops).
+        this.say(`${p.name} rolled ${d1}+${d2} — third try, so they walk out of prison free`, 'dice');
+        this.movePlayer(p, d1 + d2);
+        // The walk itself can land on unpayable rent — that debt must stand —
+        // or on a deed for sale, or (auction-only) under the hammer.
+        this.turn.phase = this.phaseAfterWalk();
       } else {
+        this.say(`${p.name} rolled ${d1}+${d2} — still in prison (${p.jailTurns}/${MAX_JAIL_TURNS})`, 'dice');
         this.turn.phase = 'end';
       }
       this.push();
@@ -2385,6 +2470,41 @@ export class GameRoom {
     this.push();
     this.maybeBot();
     return { ok: true };
+  }
+
+  /**
+   * Where a walk out of prison leaves the turn. A lot under the hammer holds
+   * it (an auction-only street, or an estate sale a card set off) — the
+   * hammer hands it back; a debt the landing opened stands; a deed on offer
+   * waits for its answer. Otherwise the turn is over: a walk out of prison
+   * never rolls again, double or not.
+   */
+  phaseAfterWalk() {
+    if (this.auction) return 'auction';
+    if (this.turn.debt || this.turn.phase === 'debt') return 'debt';
+    if (this.turn.pending) return this.turn.phase;
+    return 'end';
+  }
+
+  /**
+   * The phase a turn goes back to once a hammer it was parked under has
+   * fallen. A bill still open comes first; otherwise the dice decide, which
+   * is another roll only on a double — an ordinary auction only ever follows
+   * a throw.
+   *
+   * An estate sale (see sellEstate) is the one hammer that can fall into the
+   * middle of anything, so after its last lot the turn picks up exactly where
+   * it was: a deed still on offer is still on offer, and a roller who had not
+   * yet thrown the dice gets the throw back — unless the game clock ran out
+   * during the sale, in which case finishAuction ends the game instead.
+   */
+  phaseAfterHammer(p, estate = false) {
+    if (this.turn.debt) return 'debt';
+    if (estate) {
+      if (this.turn.pending) return 'action';
+      if (!this.turn.rolledThisTurn) return 'roll';
+    }
+    return this.afterActionPhase(p);
   }
 
   noteMove(p, from, to, steps, cause) {
@@ -2498,7 +2618,11 @@ export class GameRoom {
       case 'utility': {
         const o = this.own(index);
         if (!o) {
-          this.offerPurchase(p, index);
+          // Auction-only: nobody buys at the sticker, the street goes straight
+          // under the hammer. The sticker is still on the deed and the board —
+          // it is what the bidding is measured against.
+          if (this.ruleOn('auctionOnly') && this.active.length > 1) this.startAuction(index);
+          else this.offerPurchase(p, index);
         } else if (o.owner === p.id) {
           this.say(`${p.name} landed on their own ${t.name}`, 'info');
         } else if (o.mortgaged) {
@@ -2733,6 +2857,9 @@ export class GameRoom {
 
   buy(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    // An estate lot can go under the hammer while a deed of the roller's own
+    // is still on offer; the offer waits until the hammer falls.
+    if (this.auction) return { error: 'Auction in progress' };
     const pend = this.turn.pending;
     if (!pend || pend.type !== 'buy') return { error: 'Nothing to buy' };
     const p = this.current;
@@ -2752,6 +2879,7 @@ export class GameRoom {
 
   skipBuy(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    if (this.auction) return { error: 'Auction in progress' };
     const pend = this.turn.pending;
     if (!pend || pend.type !== 'buy') return { error: 'Nothing to skip' };
     const tileIndex = pend.tile;
@@ -2769,7 +2897,7 @@ export class GameRoom {
   }
 
   // ------------------------------------------------------------------ auction --
-  startAuction(tileIndex) {
+  startAuction(tileIndex, estate = null) {
     const t = this.tile(tileIndex);
     // Fresh hammer, fresh heads: every bot re-prices the street once and
     // holds that ceiling for the whole race (see botAuctionCap). Kept off
@@ -2781,8 +2909,16 @@ export class GameRoom {
       leader: null,
       inRace: this.active.map((p) => p.id),
       endsAt: Date.now() + AUCTION_SECONDS * 1000,
+      // A lot from a bankrupt player's estate (see sellEstate) says whose it
+      // was and how many more follow it — by name, never by id. Null for the
+      // ordinary auction a pass or an auction-only landing starts.
+      estate,
     };
     this.turn.phase = 'auction';
+    // An estate lot stops the clock of whatever turn it dropped into, so a
+    // stale one cannot run down (or fire) mid-sale: armTurnTimer sees the lot
+    // and leaves the turn without one until finishAuction hands it back.
+    if (estate) this.armTurnTimer();
     this.say(`${t.name} goes to auction! Starting bid $10`, 'auction');
     this.push();
     this.armAuctionTimer();
@@ -2844,23 +2980,30 @@ export class GameRoom {
     clearTimeout(this.timers.auction);
     this.auction = null;
     this.auctionCaps = {};
-    // The player on turn was excused the shot clock while this ran. Give it
-    // back now, fresh — they have been sitting through somebody else's
-    // bidding war and should not lose their turn to the leftover of it.
-    if (this.status === 'playing' && this.turn) this.armTurnTimer();
-    // A game that ended mid-countdown has nothing left to award.
-    if (this.status !== 'playing') return { ok: true };
+    // A game that ended mid-countdown has nothing left to award — nor any
+    // estate left to sell.
+    if (this.status !== 'playing') { this.estate = null; return { ok: true }; }
     const t = this.tile(a.tile);
     if (a.leader && !this.player(a.leader)?.bankrupt) {
       // The bid is already escrowed by bid(); just hand over the deed.
       const winner = this.player(a.leader);
       this.ownership[a.tile] = { owner: winner.id, houses: 0, mortgaged: false };
       this.statFor(winner).auctionsWon++;
+      // At an auction-only table the hammer is the only way a street is ever
+      // bought off the bank, so winning a landing's lot is buying the street:
+      // without this "Buy 6 streets", Land Grabber and the career's streets
+      // bought could never move at such a table. Not an estate lot (that is
+      // a sale of somebody's leftovers, as at any table), and not an airport
+      // or a utility, which buy() does not count either.
+      if (!a.estate && t.type === 'property' && this.ruleOn('auctionOnly')) this.statFor(winner).streetsBought++;
       this.lastBuy = { by: winner.id, tile: a.tile, at: Date.now() };
       this.say(`${winner.name} won ${t.name} at auction for ${a.bid}`, 'auction');
     } else {
       this.say(`Nobody bid on ${t.name} — it stays with the bank`, 'auction');
     }
+    // A bankrupt player's estate still has lots to sell: the next one goes
+    // under the hammer now, and the turn stays parked until the last falls.
+    if (this.nextEstateLot()) return { ok: true };
     const p = this.current;
     if (!p || p.bankrupt) {
       // The roller left while the hammer was up — their turn leaves with
@@ -2868,10 +3011,91 @@ export class GameRoom {
       this.nextTurn();
       return { ok: true };
     }
-    this.turn.phase = this.turn.debt ? 'debt' : this.afterActionPhase(p);
+    this.turn.phase = this.phaseAfterHammer(p, !!a.estate);
+    // The game clock ran out while an estate sale held a turn that had not
+    // yet rolled, with nothing owed. That turn is the one clockRanOut would
+    // have stopped on the spot had no hammer been up, so it stops now: the
+    // throw is not handed back after time, where it could still move the
+    // standings that decide the winner, the purse and the XP. (Only an
+    // estate lot can get here — every other auction follows a roll, which
+    // midTurn counts as a turn in progress.)
+    if (this.timeUp && !this.midTurn()) {
+      this.finishOnTime();
+      return { ok: true };
+    }
+    // The player on turn was excused the shot clock while this ran. Give it
+    // back now, fresh — they have been sitting through somebody else's
+    // bidding war and should not lose their turn to the leftover of it. Only
+    // here, where the turn really goes back to them: not between estate lots
+    // (see armTurnTimer), and not for a turn that is leaving (nextTurn arms
+    // the next one's).
+    this.armTurnTimer();
     this.push();
     this.maybeBot();
     return { ok: true };
+  }
+
+  // ------------------------------------------------------------ estate sale --
+  /**
+   * A player is out and their streets are going back to the bank. At a table
+   * that sells bankrupt estates (settings.bankruptProperties 'auction') they
+   * go to the remaining players instead, one auction after another, through
+   * the same hammer every other auction uses: escrowed bids, bots bidding as
+   * usual, a lot nobody wants staying with the bank.
+   *
+   * By the time this is called the estate is already the bank's — buildings
+   * gone back and mortgages lifted, exactly as 'release' leaves them — so a
+   * lot is an ordinary unowned street with a starting bid of $10. The lots go
+   * in board order. Several estates in a row (a card can put two people out
+   * at once) queue behind each other rather than running side by side, and a
+   * lot already under the hammer when this is called finishes first.
+   *
+   * Not once the game clock has run out — the last turn is not the moment
+   * for a dozen auctions — and not with one player left, which is a game
+   * already over. Returns true when a sale was queued.
+   */
+  sellEstate(p, tiles) {
+    if (this.ruleOn('bankruptProperties') !== 'auction') return false;
+    if (this.status !== 'playing' || this.timeUp || this.active.length < 2) return false;
+    const forSale = new Set(['property', 'airport', 'utility']);
+    const lots = [...new Set(tiles)]
+      .filter((i) => forSale.has(this.tile(i)?.type) && !this.own(i))
+      .sort((a, b) => a - b);
+    if (!lots.length) return false;
+    this.estate ??= { lots: [] };
+    // Numbered, so "how many more after this" counts this estate's lots and
+    // not the next one queued behind it.
+    this.estateSeq = (this.estateSeq || 0) + 1;
+    for (const i of lots) this.estate.lots.push({ tile: i, from: p.name, sale: this.estateSeq });
+    const what = lots.length === 1 ? '1 property goes' : `${lots.length} properties go`;
+    this.say(`${p.name}'s ${what} to auction, one at a time`, 'auction');
+    if (!this.auction) this.nextEstateLot();
+    return true;
+  }
+
+  /**
+   * Put the next estate lot under the hammer. False — and the sale is over —
+   * when there is none left, the game has ended, the clock has run out, or
+   * only one player is left to bid.
+   */
+  nextEstateLot() {
+    const sale = this.estate;
+    if (!sale) return false;
+    if (this.status !== 'playing' || this.timeUp || this.active.length < 2) {
+      if (sale.lots.length && this.status === 'playing') this.say('The rest of the estate stays with the bank', 'auction');
+      this.estate = null;
+      return false;
+    }
+    while (sale.lots.length) {
+      const lot = sale.lots.shift();
+      // Somebody's already — cannot happen through the hammer, but a lot is
+      // only ever sold by the bank.
+      if (this.own(lot.tile)) continue;
+      this.startAuction(lot.tile, { from: lot.from, left: sale.lots.filter((l) => l.sale === lot.sale).length });
+      return true;
+    }
+    this.estate = null;
+    return false;
   }
 
   /**
@@ -2910,8 +3134,9 @@ export class GameRoom {
     if (this.turn.phase === 'auction') return { error: 'Auction in progress' };
     if (p.money < JAIL_FINE) return { error: 'Not enough money' };
     p.money -= JAIL_FINE;
-    // The same fine the third failed roll charges through charge(), and it
-    // goes to the same place: the vacation pot, when that rule is on.
+    // A fine to the bank like any other, so it goes where they go: the
+    // vacation pot, when that rule is on. (The third failed roll used to
+    // charge this same fine; it walks out for free now — see roll.)
     this.bankSink(JAIL_FINE);
     p.jail = false;
     p.jailTurns = 0;
@@ -3092,8 +3317,9 @@ export class GameRoom {
    * The moment the debtor's balance climbs back to zero the debt is done —
    * no confirmation step, because the money already flowed as it arrived.
    * The turn picks up exactly where the charge interrupted it: a doubles
-   * roll keeps its re-roll, a paid-off prison fine opens the cell and walks
-   * the stored move, and a pending purchase gets resolved.
+   * roll keeps its re-roll and a pending purchase gets resolved. (A prison
+   * fine used to open a debt here and walk the stored roll once it was paid;
+   * the third failed roll walks out for free now, so there is no such debt.)
    */
   settleDebtIfPossible() {
     const d = this.turn?.debt;
@@ -3102,22 +3328,10 @@ export class GameRoom {
     if (!p || p.money < 0) return;
     this.turn.debt = null;
     this.say(`${p.name} is back in the black — the debt is settled`, 'money');
-
-    if (d.jailRelease) {
-      // The prison fine is paid — open the cell and play out the stored roll.
-      p.jail = false;
-      p.jailTurns = 0;
-      this.turn.phase = 'end';
-      this.say(`${p.name} leaves prison`, 'jail');
-      this.movePlayer(p, d.jailRelease);
-      // landOn set the phase where it belongs (action/debt/auction); a plain
-      // tile leaves the 'end' baseline standing.
-      if (this.turn.debt) this.turn.phase = 'debt';
-      else if (this.turn.pending) this.turn.phase = 'action';
-    } else {
-      // A doubles roll whose landing opened this debt still owes a re-roll.
-      this.turn.phase = this.turn.pending ? 'action' : this.afterActionPhase(p);
-    }
+    // A doubles roll whose landing opened this debt still owes a re-roll.
+    // An estate lot under the hammer keeps the turn until it falls.
+    if (this.auction) this.turn.phase = 'auction';
+    else this.turn.phase = this.turn.pending ? 'action' : this.afterActionPhase(p);
     this.maybeBot();
   }
 
@@ -3208,6 +3422,8 @@ export class GameRoom {
     // Won the long way — everyone else is out — unless the cup's whistle is
     // what put the last of them out, which is a game decided on the clock.
     this.endReason = this.whistleBlown ? 'time' : 'last';
+    // Nobody left to sell an estate to.
+    this.estate = null;
     this.clearTimer('gameClock');
     this.clearTimer('gameClockStop');
     this.settleLeadShare();
@@ -3262,6 +3478,12 @@ export class GameRoom {
     this.trades = this.trades.filter((t) => t.from !== p.id && t.to !== p.id);
 
     if (this.checkGameEnd()) return;
+    // At a table that auctions estates the streets go under the hammer now,
+    // one after another (see sellEstate) — to the bank's account, as above,
+    // whoever the debt was owed to. The turn waits on the hammer: the
+    // bankrupt roller's turn moves on when the last lot falls, anybody
+    // else's picks up where it was.
+    this.sellEstate(p, tiles);
     if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
     else this.push();
   }
@@ -3394,10 +3616,22 @@ export class GameRoom {
     return { ok: true };
   }
 
+  /**
+   * Take back an offer you sent. Only the sender: every open offer is on the
+   * table for everyone to read now, and the one person who answers it does so
+   * with Accept, Decline or a counter — all through respondTrade, which says
+   * so in the log. Withdrawing says so too, so nobody watching the table
+   * trades list is left wondering where an offer went.
+   */
   cancelTrade(id, tradeId) {
-    const idx = this.trades.findIndex((t) => t.id === tradeId && (t.from === id || t.to === id));
+    const idx = this.trades.findIndex((t) => t.id === tradeId);
     if (idx === -1) return { error: 'Trade not found' };
+    const trade = this.trades[idx];
+    if (trade.from !== id) return { error: trade.to === id ? 'Decline it instead' : 'Not your trade' };
     this.trades.splice(idx, 1);
+    const from = this.player(trade.from);
+    const to = this.player(trade.to);
+    if (from && to) this.say(`${from.name} withdrew the trade offer to ${to.name}`, 'trade');
     this.push();
     return { ok: true };
   }
@@ -3419,6 +3653,12 @@ export class GameRoom {
   setTradeViewing(id, tradeId, viewing) {
     const trade = this.trades.find((t) => t.id === tradeId);
     if (!trade || !this.player(id)) return { error: 'Trade not found' };
+    // "Ravi is reading this" means the person who has to answer it. Every
+    // offer is on the table for everyone to read now, and a third seat
+    // opening one to look must not read to the sender as their answer coming.
+    // Quietly, not as an error: a client that reports every sheet it opens
+    // has done nothing wrong, and a toast for it would be a scold for reading.
+    if (trade.to !== id && trade.from !== id) return { ok: true };
     const list = trade.viewers || [];
     const has = list.includes(id);
     if (viewing === has) return { ok: true }; // no change — don't spam pushes
@@ -3538,8 +3778,16 @@ export class GameRoom {
     this.ownership = {};
     this.turn = null;
     this.auction = null;
+    this.estate = null;
     this.trades = [];
     this.vacationPot = 0;
+    // Last game's shuffle was last game's. The lobby shows the board as it is
+    // printed, and start() deals a fresh shuffle from it (a new seed) if the
+    // table still asks for one — so a rematch never replays the same layout
+    // by accident, and switching the rule off in the lobby really is off.
+    if (this.map.shuffled) this.map = this.boardBeforeShuffle || getMap(this.settings.mapId);
+    this.boardBeforeShuffle = null;
+    this.shuffleSeed = null;
     // Last game's purchase belongs to last game; a bot must not open the
     // rematch talking about a deed nobody at this board owns any more.
     this.lastBuy = null;
@@ -3964,9 +4212,9 @@ export class GameRoom {
         // Bots no longer buy their way out. Since the fine stopped carrying a
         // move with it, paying spends the whole turn standing in the doorway,
         // while rolling for a double costs nothing, can leave *and* move, and
-        // loses to the third failed attempt paying the fine and walking out
-        // regardless. The dice are the better bet every time, and the cash
-        // stays in hand for streets.
+        // the third failed attempt walks out for free regardless. The dice
+        // are the better bet every time, and the cash stays in hand for
+        // streets.
       }
       return this.roll(p.id);
     }
@@ -4739,6 +4987,12 @@ export class GameRoom {
         layout: this.map.layout,
         size: this.map.size,
         groups: this.map.groups, // group key -> tile indices, needed to spot full sets
+        // True for a board whose colour sets were shuffled at the start of
+        // this game (settings.shuffleBoard). The tiles and groups above are
+        // the shuffled ones — the only copy of this layout anywhere, which is
+        // why every client draws the board from here and never from
+        // /api/maps — and `uid` is this layout's own.
+        shuffled: !!this.map.shuffled,
       },
       groups: GROUPS,
       teamInfo: TEAMS,

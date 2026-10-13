@@ -28,6 +28,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -198,9 +200,20 @@ fun BoardView(
         val fits = minOf(maxWidth, if (constraints.hasBoundedHeight) maxHeight else window)
         val side = with(LocalDensity.current) { fits.toPx() }
         val dpPx = LocalDensity.current.density
-        val geom = remember(state.map.id, side, dpPx) {
+        // Keyed on the exact layout, not the board's id: a shuffled game
+        // (1.0.6 round 2) is still "classic" by id, with different streets on
+        // the same squares, and the room's state map is the only copy of it.
+        // The squares themselves come off `state.map` on every draw.
+        val layoutKey = state.map.layoutKey
+        val geom = remember(layoutKey, side, dpPx) {
             BoardGeometry(state.map.layout, Size(side, side), maxPt = dpPx)
         }
+        // The tap reads the board and the deck as they are now, not as they
+        // were when the gesture was first set up.
+        val tiles by rememberUpdatedState(state.map.tiles)
+        val tapTile by rememberUpdatedState(onTapTile)
+        val dealing by rememberUpdatedState(deck)
+        val frames by rememberUpdatedState(geom)
         // iOS lifts the board off the page on a soft drop shadow — black at
         // 0.22, 16pt soft and 8pt down, and 0.5 on a night table, where a
         // light one would not show at all. Drawn in the board's own Canvas
@@ -212,12 +225,12 @@ fun BoardView(
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(state.map.id, side) {
+                    .pointerInput(layoutKey, side) {
                         detectTapGestures { at ->
                             // Nothing to open while the board is still cards in the deck.
-                            if (deck?.deck == DeckIntro.Deck.WAITING) return@detectTapGestures
-                            state.map.tiles.firstOrNull { geom.frame(it.index).contains(at) }
-                                ?.let { onTapTile(it.index) }
+                            if (dealing?.deck == DeckIntro.Deck.WAITING) return@detectTapGestures
+                            tiles.firstOrNull { frames.frame(it.index).contains(at) }
+                                ?.let { tapTile(it.index) }
                         }
                     },
             ) {

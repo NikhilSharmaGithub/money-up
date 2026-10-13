@@ -30,7 +30,7 @@ enum Glyph: String, CaseIterable {
     case soundOn, soundOff, replay, snooze
     // standing and stakes
     case crown, trophy, medalGold, medalSilver, medalBronze, heart, skull
-    case people, crane, ticket, level
+    case people, person, crane, ticket, level
     // places and things
     case globe, question, plane, palette, moon, bag, key, shuffle, chart, island, clock
     // money moving
@@ -40,6 +40,8 @@ enum Glyph: String, CaseIterable {
     // the rest
     case bolt, warning, toolbox, shield, door, map, scales, sparkle, robot
     case sun, flame, droplet, turbine
+    // the table's own rules
+    case info
 }
 
 extension Glyph {
@@ -69,6 +71,7 @@ extension Glyph {
         case .map: "map.fill"
         case .chat: "ellipsis.bubble.fill"
         case .people: "person.2.fill"
+        case .person: "person.fill"
         case .question: "questionmark.circle.fill"
         case .plane: "airplane"
         case .palette: "paintpalette.fill"
@@ -551,6 +554,15 @@ private enum ArtCanvas {
             ctx.fill(head, with: .color(ink), style: FillStyle(eoFill: true))
             A.wash(ctx, A.rrect(0.8, 12.8, 2.8, 7, 1.4), ink, 0.5)
             A.wash(ctx, A.rrect(28.4, 12.8, 2.8, 7, 1.4), ink, 0.5)
+
+        case .info:
+            // The table's rules (1.0.6): a disc with the letter cut through
+            // it, so whatever the key sits on shows in the "i" — solid like
+            // the filled speaker beside it on the bar, never a line drawing.
+            var disc = A.circle(16, 16, 13.6)
+            disc.addPath(A.circle(16, 9.4, 2.4))
+            disc.addPath(A.rrect(13.8, 13.4, 4.4, 11.8, 2.2))
+            ctx.fill(disc, with: .color(ink), style: FillStyle(eoFill: true))
 
         case .turbine:
             let blade = Color(hex: 0x4A86BD)

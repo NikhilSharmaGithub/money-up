@@ -82,6 +82,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -434,10 +435,15 @@ private fun ContinueCard(store: GameStore) {
 
 // ── today's coins ──────────────────────────────────────────────────────────
 
-/** Days the ladder climbs before it tops out — seven pips is the whole climb. */
+/**
+ * Days the ladder climbs before it tops out — seven steps is the whole climb,
+ * and the day after the seventh starts the next one at one. The server says
+ * so itself ([DailyView.steps]); this is only the empty card's count.
+ */
 private const val LADDER = 7
 
-private class Celebration(val amount: Int, val day: Int)
+/** What just landed: the coins, the streak's day, and the step of the climb they paid. */
+private class Celebration(val amount: Int, val day: Int, val step: Int, val steps: Int)
 
 /**
  * Which of the card's faces is up, with what it needs to draw itself. Data
@@ -517,7 +523,11 @@ private fun DailyCard(account: AccountStore, store: GameStore) {
                 SoundKit.click()
                 val offered = f.d.amount
                 val day = f.d.streak + 1
-                account.claimDaily { paid, error ->
+                // The step the card was showing as today's, until the
+                // server's own word on which one it paid arrives with it.
+                val shown = f.d.step
+                val steps = f.d.steps
+                account.claimDaily { paid, step, error ->
                     claiming = false
                     if (paid == null) {
                         // Already claimed is the client being eager, not
@@ -532,7 +542,10 @@ private fun DailyCard(account: AccountStore, store: GameStore) {
                     Haptics.turn()
                     SoundKit.gain()
                     // The count runs up to what the server paid, as iOS's does.
-                    celebrating = Celebration(if (paid > 0) paid else offered, day)
+                    celebrating = Celebration(
+                        if (paid > 0) paid else offered, day,
+                        step = (step ?: shown).coerceIn(1, steps), steps = steps,
+                    )
                 }
             }
             is DailyFace.Quiet -> DailyQuiet(f.d)
@@ -560,7 +573,7 @@ private fun DailyLocked(signingIn: Boolean, canSignIn: Boolean, onSignIn: () -> 
     LandingCard(padding = 16.dp) {
         DailyHead("Sign in and it is yours every day")
         Spacer(Modifier.height(11.dp))
-        LadderStrip(0)
+        LadderStrip(collected = 0)
         Spacer(Modifier.height(11.dp))
         // The button wears the table's own colour, like Play now and every
         // other call to action on the tab, so changing the style changes it
@@ -600,9 +613,10 @@ private fun DailyClaim(d: DailyView, claiming: Boolean, onClaim: () -> Unit) {
     LandingCard(padding = 16.dp) {
         DailyHead(if (day > 1) "Day $day of your streak" else "Waiting for you")
         Spacer(Modifier.height(11.dp))
-        // Days already banked, not counting today's — today's pip is the one
-        // the button lights, and the celebration is the only place it does.
-        LadderStrip(day - 1)
+        // This week's climb, from the server's step rather than the streak —
+        // a streak of nine is on step two. Steps already banked are lit;
+        // today's is ringed, and only the celebration fills it.
+        LadderStrip(collected = d.collectedSteps, today = d.step, steps = d.steps)
         Spacer(Modifier.height(11.dp))
         LandingButton(
             if (claiming) "Collecting…" else "Collect $amount ${if (amount == 1) "coin" else "coins"}",
@@ -612,8 +626,8 @@ private fun DailyClaim(d: DailyView, claiming: Boolean, onClaim: () -> Unit) {
         ) { onClaim() }
         Spacer(Modifier.height(11.dp))
         Text(
-            if (day >= LADDER) "Your streak is paying the most it ever will — just don't break it."
-            else "Come back tomorrow and it pays a little more.",
+            if (d.step >= d.steps) "The top of the climb — tomorrow it starts again at 1."
+            else "Come back tomorrow for ${d.step + 1} coins.",
             color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
         )
     }
@@ -680,7 +694,7 @@ private fun DailyCelebration(party: Celebration, onDone: () -> Unit) {
                 if (party.day > 1) "Day ${party.day} in a row" else "Day one — see you tomorrow",
                 color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
             )
-            LadderStrip(party.day, Modifier.padding(horizontal = 20.dp))
+            LadderStrip(collected = party.step, steps = party.steps, modifier = Modifier.padding(horizontal = 20.dp))
         }
     }
 }
@@ -736,25 +750,84 @@ private fun untilText(ms: Long): String {
 }
 
 /**
- * Seven pips: the whole climb from day one to the top of the ladder, lit in
- * the table's own colour so the strip follows the style with the button.
+ * The week's climb: seven steps, each labelled with the coins it pays, lit
+ * in the table's own colour so the bar follows the style with the button.
+ * [collected] steps are lit; [today], when it is still waiting, is ringed in
+ * that colour over a faint wash of it, so the eye lands on what the button
+ * is about to collect. The day after the seventh, the server starts the bar
+ * again at one.
  */
 @Composable
-private fun LadderStrip(day: Int, modifier: Modifier = Modifier) {
+private fun LadderStrip(
+    collected: Int,
+    today: Int? = null,
+    steps: Int = LADDER,
+    modifier: Modifier = Modifier,
+) {
     val p = P.current
-    val lit = day.coerceIn(0, LADDER)
+    val lit = collected.coerceIn(0, steps)
+    val waiting = today?.takeIf { it > lit && it <= steps }
     val pill = RoundedCornerShape(99.dp)
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        repeat(LADDER) { i ->
-            val on = i < lit
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(5.dp)
-                    .clip(pill)
-                    .background(if (on) p.red else p.sunken)
-                    .then(if (on) Modifier else Modifier.border(1.dp, p.rule, pill)),
-            )
+    Row(
+        modifier
+            .fillMaxWidth()
+            // One sentence for the whole bar: seven separate numbers read
+            // out one by one say nothing about where you are on it.
+            .clearAndSetSemantics {
+                contentDescription = buildString {
+                    append(
+                        when {
+                            waiting != null -> "Step $waiting of $steps today"
+                            lit > 0 -> "Step $lit of $steps collected"
+                            else -> "$steps steps"
+                        },
+                    )
+                    append(" — each pays one more coin, up to $steps, then back to 1")
+                }
+            },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        for (i in 1..steps) {
+            val on = i <= lit
+            val now = i == waiting
+            Column(
+                Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(pill)
+                        .background(
+                            when {
+                                on -> p.red
+                                now -> p.red.copy(alpha = 0.22f)
+                                else -> p.sunken
+                            },
+                        )
+                        .then(
+                            when {
+                                on -> Modifier
+                                now -> Modifier.border(1.dp, p.red, pill)
+                                else -> Modifier.border(1.dp, p.rule, pill)
+                            },
+                        ),
+                )
+                Text(
+                    "$i",
+                    color = when {
+                        on -> p.red
+                        now -> p.ink
+                        else -> p.ink3
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = if (on || now) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    style = TABULAR,
+                    maxLines = 1, softWrap = false,
+                )
+            }
         }
     }
 }

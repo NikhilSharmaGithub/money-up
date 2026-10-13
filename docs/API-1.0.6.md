@@ -161,7 +161,8 @@ server's calendar day (the same day key and midnight the daily reward uses). Nev
 | `lapsBoard`     | 3        | Lap the board 3 times    | `stats.laps`                          |
 
 Rewards: each mission **3 coins + 10 XP** when claimed; all three done → **bonus 5 coins**
-(no XP). Progress is tracked for everybody (signed in or not); **claiming needs a signed-in
+(no XP). **Changed in Round 2 (G10, end of this file): each mission is 0 coins + 10 XP, and the
+bonus is 3 coins.** The shapes below are unchanged; only the numbers in them moved. Progress is tracked for everybody (signed in or not); **claiming needs a signed-in
 account** (Google / Apple), the same rule as the daily reward. Progress resets at the server's
 midnight (`resetsAt`); unclaimed rewards from yesterday are gone.
 
@@ -610,3 +611,330 @@ On every state (full and patch), for everyone at the table: how many **people** 
 without a seat — watchers who joined with `spectate: true` plus anyone the old path turned into a
 spectator (a full table, a game already under way). Distinct identities, not sockets; a seated
 player (in the game or knocked out) is never counted. `0` when nobody is watching.
+
+===================================================================================================
+
+# Round 2 — G1 prison, G2 daily cycle, G5 bankrupt estates, G6 auction-only, G7 shuffled board, G8 public trades, G10 missions
+
+Same rules as the two parts above: every new field is additive and rides full states and patches
+alike; an old server never sends it — treat absent as the default given here. Where this part
+differs from the round-2 spec, this part wins. G3, G4 and G9 are client-only and add no server
+shapes (G4 reads everything it lists from `state.settings`, including the three keys below).
+
+---------------------------------------------------------------------------------------------------
+
+## Three more lobby settings
+
+In `state.settings` with the others, changed by the host in the lobby with the existing socket
+event, validated the same way: a patch with one bad value is refused **whole** and the host gets a
+`toast` `{ type: "error", message }`. A guest's patch is still ignored silently.
+
+```js
+socket.emit('settings', { bankruptProperties: 'auction', auctionOnly: true, shuffleBoard: true });
+```
+
+| key                  | type    | values                     | default     |
+|----------------------|---------|----------------------------|-------------|
+| `bankruptProperties` | string  | `"release"` `"auction"`    | `"release"` |
+| `auctionOnly`        | boolean | `true` `false`             | `false`     |
+| `shuffleBoard`       | boolean | `true` `false`             | `false`     |
+
+- `bankruptProperties` is a list, like `botLevel`: anything else (`null`, `1`, `true`, an array…)
+  is refused.
+- `auctionOnly` and `shuffleBoard` are switches like every other switch: whatever arrives is
+  stored as `true`/`false` (never refused).
+- **`auctionOnly` forces `auction` on.** A patch that turns `auctionOnly` on sets `auction: true`
+  as well (even if the same patch says `auction: false`). A patch that turns `auction` off (and
+  does not turn `auctionOnly` on) turns `auctionOnly` off too. The two never contradict each
+  other in `state.settings`, so a client can render both toggles straight from it.
+
+Refusals (exact `toast` messages):
+
+| When                                         | message |
+|----------------------------------------------|---------|
+| `bankruptProperties` not one of the two      | `Bankrupt properties go back to the bank or to auction` |
+| any of the three at a Play-now table         | `A Play-now table keeps its seats, privacy, house players, teams and clock` (the existing message) |
+| any of the three at a cup table              | `A cup table is set by the cup` (the existing message) |
+
+A Play-now table and a cup table always play the defaults (`release`, no auction-only, the
+printed board) whatever the fields say. **Clients:** show the three to the host in the lobby; hide
+them when `state.quick` or `state.cup` is true.
+
+Labels the "This table's rules" sheet (G4) can use: Bankrupt properties — "Back to the bank" /
+"Auctioned"; Auction-only — on/off; Shuffled board — on/off.
+
+---------------------------------------------------------------------------------------------------
+
+## G1 — Prison: the third failed roll walks out free
+
+Server rule (no new fields):
+
+1. A turn in prison, before rolling: **Pay $50** (`jailPay`) opens the door and **ends the
+   turn** (no roll) — unchanged. A get-out card (`jailCard`) frees the player, who then rolls —
+   unchanged.
+2. Rolling a double walks out and moves by that roll, with no extra roll — unchanged.
+3. A miss on the first or second try: still in prison, turn over. `jailTurns` counts the misses
+   (`1`, then `2`). Log: `Asha rolled 1+2 — still in prison (1/3)`.
+4. **A miss on the third try: the player walks out free — no $50, no debt, whatever their cash —
+   and moves by that roll as usual** (buy offer, rent, card, auction…). No extra roll (it was not
+   a double). Log: `Asha rolled 2+3 — third try, so they walk out of prison free`, kind
+   `dice` — it is the throw, like the double-escape line (`… rolled a double (3+3) and walked out
+   of prison`, also `dice`): play the dice sound and show it as the dice land, not the
+   prison-door sound.
+
+`turn.debt.jailRelease` is never sent any more (it only existed for the old fine).
+
+**How to play text** (every client; the web /how-to-play page already says this):
+
+> Land on Go to Prison, draw the card, or roll three doubles in a row, and you are locked up. On
+> each turn inside you can roll for a double, which walks you out and moves you by that roll. You
+> can also pay the $50 fine before rolling, which opens the door but ends that turn, or use a
+> get-out card. If your third roll still is not a double, you walk out for free and move by that
+> roll anyway.
+
+---------------------------------------------------------------------------------------------------
+
+## G2 — Daily reward: cycles of 1 → 7 → 1
+
+The amount climbs 1, 2, … 7 coins over a streak, and the day after a 7-coin day pays **1** again
+(a new cycle), for as long as the streak lasts. A missed day also starts again at 1. A streak
+from before this change that had been sitting on 7-coin days starts its next cycle at 1.
+
+### `GET /api/daily?token=<token>` — additions
+
+```json
+{
+  "signedIn": true, "claimable": true, "streak": 9, "amount": 3, "nextAt": null,
+  "cycleDay": 3, "cycleLength": 7, "claimedToday": false
+}
+```
+
+| field          | meaning |
+|----------------|---------|
+| `cycleDay`     | 1–7: the step of the current 7-day cycle the card is about. **Before** today's claim (`claimedToday: false`): the step today's claim pays — always equal to `amount`. **After** it (`claimedToday: true`): the step that was claimed today; `amount` is then tomorrow's, which is `cycleDay % 7 + 1`. |
+| `cycleLength`  | Always `7`. |
+| `claimedToday` | `true` once today's coin has been collected (the same moment `nextAt` becomes a number and `claimable` false). |
+
+- `streak` still counts the whole run of days (it can be 9, 16, 40…); draw the bar from `cycleDay`,
+  never from `streak`.
+- The bar: steps `1…7` labelled `1…7` coins. Steps `< cycleDay` are collected. Step `cycleDay` is
+  "today" when `claimedToday` is false, collected when it is true.
+- No streak / broken streak / unknown token: `cycleDay: 1`, `amount: 1`, `streak: 0`.
+
+### `POST /api/daily/claim` — additions
+
+`200` gains `cycleDay` (the step just paid; equal to `amount`):
+
+```json
+{ "ok": true, "amount": 1, "coins": 51, "earned": 1, "streak": 8, "nextAt": 1791961200000, "cycleDay": 1 }
+```
+
+`409 { "error": "Already claimed today", "claimed": true, "streak": 8, "nextAt": …, "cycleDay": 1 }`
+(the step claimed today). `401` is unchanged.
+
+---------------------------------------------------------------------------------------------------
+
+## G5 — Bankrupt properties: release or auction
+
+`settings.bankruptProperties`:
+
+- `"release"` (default) — exactly today's rule: the player's properties go back to the bank,
+  unowned, buildings gone and mortgages lifted.
+- `"auction"` — the same estate (buildings gone back to the bank, mortgages lifted) is sold to the
+  remaining players **one property at a time, in board order**, through the ordinary auction
+  (starting bid $10, the usual 20 s / +12 s per bid, escrowed bids, house players bid as usual).
+  A lot nobody bids on stays with the bank. The game continues normally after the last lot.
+
+It applies to **every** way a player's properties go back to the bank: bankrupt to the bank
+(taxes, cards, bank debts), conceding (`bankrupt`), walking out (`quit`), and being removed for
+timeouts. **Bankrupt to another player:** in this game the creditor has always kept only the
+cash that was paid (the properties never went to the creditor — they go back to the bank), and
+that is unchanged; so at an `"auction"` table those properties are auctioned too.
+
+Not sold (released instead): once a timed game's clock has run out (`timeUp`), and when the
+bankruptcy ends the game (one player or team left).
+
+### What clients see
+
+The running lot is the ordinary `state.auction`, with one new field, `estate`:
+
+```json
+{
+  "auction": {
+    "tile": 6, "bid": 0, "leader": null, "inRace": ["u_…", "u_…"], "endsAt": 1791891901400,
+    "estate": { "from": "Ravi", "left": 2 }
+  }
+}
+```
+
+| `auction.estate` | meaning |
+|------------------|---------|
+| `null`           | An ordinary auction (a declined deed, or an auction-only landing). Old servers never send the field — treat absent as `null`. |
+| `{ from, left }` | A lot from a bankrupt player's estate. `from` is that player's **name** (not an id). `left` is how many more lots **of this estate** follow this one (0 on its last; another estate queued behind it is not counted). |
+
+Suggested label: "Ravi's estate — 2 more after this".
+
+- While lots run, `turn.phase` is `"auction"` and the turn does not move. Rolling, ending the turn,
+  `buy` and `skipBuy` are refused (`Cannot roll now` / `Auction in progress`).
+- While lots run the turn has **no shot clock**: `turn.endsAt` is `null` from the first lot to the
+  last (hide the turn clock, as for any `null`), and nobody can time out on it. When the turn goes
+  back to its player after the last lot it gets one fresh `turn.endsAt` (and an away player one
+  "Your turn" push — once per sale, not once per lot).
+- If the bankrupt player held the turn, the turn passes to the next player when the last lot
+  falls. If somebody else holds it, it **picks up exactly where it was**: back to `"roll"` if they
+  had not rolled yet, back to `"action"` with the same `turn.pending` if a deed was on offer,
+  `"debt"` if they owe money, otherwise wherever their dice say (another roll on a double).
+- **Timed games (F9):** if the game clock ran out during the sale and the turn it dropped into had
+  not rolled yet (nothing owed, no deed on offer), the throw is **not** handed back: the game ends
+  on the clock the moment the last lot falls, exactly as it would have ended at once had no hammer
+  been up (`status: "ended"`, `endReason: "time"`). A turn that had already rolled plays out as
+  any last turn does (a deed on offer is still theirs to decide; End turn ends the game).
+- Two estates in a row (a card can knock out two players) queue: the first estate's lots, then
+  the second's.
+
+Log lines, in order: `Ravi went bankrupt — the streets return to the bank` (or the existing
+creditor line), `Ravi's 3 properties go to auction, one at a time` (`1 property goes`), then per
+lot the usual `Tel Aviv goes to auction! Starting bid $10` … `Asha won Tel Aviv at auction for
+120` / `Nobody bid on Tel Aviv — it stays with the bank`. If a timed game's clock runs out
+mid-sale: `The rest of the estate stays with the bank` when the lot under the hammer falls (then,
+on an unrolled turn, `Time's up — richest player wins` and the winner line).
+
+Stats: an estate lot won counts in `stats.auctionsWon` (the "Win an auction" mission, Auction
+Hawk), never in `stats.streetsBought` — at an auction-only table too.
+
+---------------------------------------------------------------------------------------------------
+
+## G6 — Auction-only
+
+With `settings.auctionOnly: true`, landing on an unowned street, airport or utility — by dice,
+by card, or walking out of prison — starts its auction **at once**:
+
+- There is never a `turn.pending` of type `"buy"` and never a `"action"` phase for a purchase.
+  Draw the auction UI from `state.auction` (with `estate: null`), never a Buy panel.
+- `turn.phase` is `"auction"` until the hammer falls; then the turn carries on as after any
+  landing (`"end"`, or `"roll"` after a double).
+- The deed's `price` is still on the tile (board and deed card) and is the reference for the
+  bidding; bids may go above it. The roller bids like everyone else.
+- House players bid as they always do. Log: `Rio goes to auction! Starting bid $10`.
+- `buy` / `skipBuy` while a lot is up: `toast` `Auction in progress`.
+- **Stats:** the hammer is the only way a street is bought here, so winning the lot of a
+  **street** (`type: "property"`) that somebody landed on counts in `stats.streetsBought` as well
+  as `stats.auctionsWon` — the "Buy 6 streets" mission, the Land Grabber title and the career's
+  streets bought all move at an auction-only table. An airport or utility won counts in
+  `auctionsWon` only (buying one never counted as a street), and so does an estate lot (G5). At
+  every other table nothing changes: only `buy` counts a street bought.
+
+---------------------------------------------------------------------------------------------------
+
+## G7 — Shuffled board
+
+With `settings.shuffleBoard: true`, each game (each `start`, including after Play again) deals a
+new layout from a fresh seed:
+
+- START and the other corners, Treasure/Surprise, taxes, airports and utilities stay on their
+  squares.
+- Every colour set keeps its streets together and moves, whole, onto the squares of another set
+  **of the same size** (Classic: the two 2-street sets swap or stay, the six 3-street sets are
+  permuted). Inside a set the streets keep their order. Each street carries its own deed: name,
+  price, rent table, house cost, group, flag. Expensive streets can now sit right after START.
+- Log, right after `Game started! Good luck.`: `The board was shuffled`.
+- Cards that name a square ("Advance to Rio", the nearest airport, the priciest street) follow the
+  streets. Sets, rent, building, even-build, mortgages, trades, bots, the deadlock rule and the
+  end-of-game stats all use the shuffled layout.
+- The board keeps its **id** (`state.mapId`, `state.map.id`, `settings.mapId` stay `"classic"`):
+  careers ("Favourite board"), the shop and Watch live count it as Classic.
+
+### Where clients draw the board from — `state.map` (this is the only copy)
+
+Every state (full and patch) carries the board the table is playing:
+
+```json
+{
+  "mapId": "classic",
+  "map": {
+    "id": "classic",
+    "uid": "classic~1a2q0ns",
+    "name": "Classic",
+    "icon": "🌐",
+    "tiles": [ { "type": "start", "name": "START", "index": 0 },
+               { "type": "property", "name": "San Francisco", "group": "US", "price": 360,
+                 "rent": [35, 175, 500, 1100, 1300, 1500], "houseCost": 200, "groupSize": 2, "index": 1 }, "…" ],
+    "layout": { "corners": [0, 10, 20, 30], "top": [1, "…"], "right": ["…"], "bottom": ["…"], "left": ["…"] },
+    "size": 40,
+    "groups": { "US": [1, 3], "IL": [6, 7, 9], "…": [] },
+    "shuffled": true
+  },
+  "groups": { "US": { "name": "United States", "color": "#2f80d8", "flag": "🇺🇸" }, "…": {} }
+}
+```
+
+- **Draw every square, deed, set, flag and price from `state.map.tiles[i]`, and every set from
+  `state.map.groups`** — the board, the deed card, the property list, trade rows (a tile index in
+  a trade is a square of `state.map`), set/monopoly detection, build buttons, the mini-map.
+  Colours and flags come from the top-level `state.groups[tile.group]`.
+- **Never** use a board from `GET /api/maps` (or a bundled copy) to draw a table: the shuffled
+  layout exists nowhere else. `/api/maps` is for the board picker only.
+- `state.map.uid` identifies the exact layout. It changes whenever the layout does (a shuffled
+  board is `<board uid>~<seed>`; a Random board is `random-xxxx`, shuffled `random-xxxx~seed`).
+  A client that caches anything per board must key it on `uid` and rebuild when it changes —
+  the web client already does (`board.js`, `map.uid || map.id`).
+- `state.map.shuffled`: `true` while a shuffled game is on (and in its ended state); `false` in
+  the lobby and on an unshuffled board. Old servers never send it — treat absent as `false`.
+- The lobby shows the printed board (`shuffled: false`, `uid: "classic"`). Play again restores
+  the printed board in the lobby; the next start deals a new shuffle (a different seed) if the
+  setting is still on, or plays the printed board if it was switched off.
+
+---------------------------------------------------------------------------------------------------
+
+## G8 — Trades are public at the table
+
+`state.trades` has always been sent to every socket at the table; from 1.0.6 every client shows
+the offers that are not its own too ("Table trades", read-only). The rules the server enforces:
+
+| who                                   | may |
+|---------------------------------------|-----|
+| the receiver (`trade.to`)             | `trade:respond` (accept/decline — a counter is a decline plus a new offer), `trade:ignore`, `trade:viewing` |
+| the sender (`trade.from`)             | `trade:cancel`, `trade:viewing` |
+| anyone else at the table              | read it — nothing else |
+| a watcher (`spectate: true`)          | read it — every action is refused with `You are watching this game` |
+
+Refusals (`toast`, the offer is untouched):
+
+| event | from | message |
+|-------|------|---------|
+| `trade:respond` | not the receiver | `Not your trade` |
+| `trade:cancel`  | the receiver | `Decline it instead` |
+| `trade:cancel`  | anyone else | `Not your trade` |
+| `trade:viewing` | not a party | no toast, no change (ignored) — "X is reading this" only ever names a party |
+
+Ids: `from`, `to` and `viewers` are aliased exactly like every other id — a third player or a
+watcher sees the same ids it sees on `state.players`, so `players.find(p => p.id === trade.from)`
+gives the name; no token is ever in another viewer's state. Each party still sees its own real id.
+
+```json
+{ "id": 7, "from": "u_1pc4f6m61atbjlvfxrv", "to": "u_8rvv37ovuu6ykdsxp3",
+  "give": { "money": 300, "tiles": [6], "cards": 0 }, "get": { "money": 0, "tiles": [], "cards": 0 },
+  "at": 1791891882281 }
+```
+
+Row text, e.g. "Ravi → Asha: Tel Aviv for $300": `give` is what the sender parts with, `get` what
+the sender asks for; tile names from `state.map.tiles[i].name`.
+
+Log lines (kind `trade`, for everyone): `Ravi sent a trade offer to Asha`, `Asha declined the
+trade from Ravi`, `Ravi and Asha completed a trade` (unchanged), and new:
+`Ravi withdrew the trade offer to Asha`.
+
+---------------------------------------------------------------------------------------------------
+
+## G10 — Missions: XP each, coins only for all three
+
+Numbers only; the shapes in F2 are unchanged.
+
+- Each mission: **0 coins + 10 XP**. `GET /api/missions` rows read `"coins": 0, "xp": 10`.
+  Claiming one: `"awarded": { "coins": 0, "xp": 10 }`; `coins` (the wallet balance) does not move.
+  No coin-ledger row is written for it (nothing is minted); the claim is still once only
+  (`duplicate: true` on a repeat).
+- All three done: **bonus 3 coins** (`"bonus": { "coins": 3, … }`), claimed once with
+  `id: "bonus"` → `"awarded": { "coins": 3, "xp": 0 }`. Claiming the three missions first is still
+  not required.
+- Card: show "+10 XP" on each mission row and the coin amount only on the all-done bonus row.

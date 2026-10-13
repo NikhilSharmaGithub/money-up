@@ -19,6 +19,15 @@ struct DailyState: Decodable, Equatable {
     var amount: Int?
     /// Epoch milliseconds of the coming midnight; null while a claim is owed.
     var nextAt: Double?
+    /// Where the card stands in the seven-day climb, 1...7 (1.0.6). Before
+    /// today's claim it is the step today pays; after it, the step that was
+    /// paid. The climb starts again at 1 after a 7-coin day, so a streak of 9
+    /// is on step 2 — which is why the bar is drawn from this, never from
+    /// `streak`. The claim's answer carries it too: the step just paid.
+    var cycleDay: Int?
+    var cycleLength: Int?
+    /// Today's coin has been collected.
+    var claimedToday: Bool?
 
     // claim only
     var ok: Bool?
@@ -27,6 +36,20 @@ struct DailyState: Decodable, Equatable {
     var claimed: Bool?
 
     var nextDate: Date? { nextAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+
+    /// Today's coin is in the wallet. An older server sends no flag, and there
+    /// a day that cannot be claimed is a day already claimed.
+    var collected: Bool { claimedToday ?? (claimable == false) }
+
+    /// The step of the climb, 1...7, with a fallback for an older server that
+    /// sends no cycle: its amount was the step, a ladder that topped out at 7
+    /// rather than going round.
+    var step: Int {
+        let length = max(1, cycleLength ?? 7)
+        if let cycleDay { return min(max(cycleDay, 1), length) }
+        if !collected, let amount, amount > 0 { return min(amount, length) }
+        return min(max(streak ?? 1, 1), length)
+    }
 }
 
 /// Coins arriving, on the Play tab.
@@ -57,9 +80,10 @@ struct DailyRewardCard: View {
     /// after a spell in the background. `.task(id:)` cancels the old one.
     @State private var reloads = 0
 
-    /// The ladder tops out after a week of days, so seven pips is the whole
-    /// climb — not an arbitrary strip of dots.
-    private static let ladder = 7
+    /// The climb is a week of days — 1 coin, then 2, up to 7, and round to 1
+    /// again — so seven steps is the whole of it, not an arbitrary strip of
+    /// dots.
+    static let ladder = 7
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -107,7 +131,7 @@ struct DailyRewardCard: View {
                     }
                     Spacer(minLength: 6)
                 }
-                ladderStrip(0, P)
+                ladderStrip(lit: 0, P)
                 Button {
                     onSignIn?()
                 } label: {
@@ -132,7 +156,8 @@ struct DailyRewardCard: View {
     /// long as it takes to tap it, and never a second longer.
     private func claimFace(_ d: DailyState, _ P: Palette) -> some View {
         let day = (d.streak ?? 0) + 1
-        let amount = d.amount ?? 0
+        let step = d.step
+        let amount = d.amount ?? step
         return MMCard(padding: 16) {
             VStack(alignment: .leading, spacing: 11) {
                 HStack(spacing: 10) {
@@ -148,10 +173,10 @@ struct DailyRewardCard: View {
                     Spacer(minLength: 6)
                 }
 
-                // Days already banked, not counting today's — today's pip is
-                // the one the button lights, and the celebration is the only
-                // place it does.
-                ladderStrip(day - 1, P)
+                // This week's steps already banked, and today's ringed rather
+                // than lit — the button is what lights it, and the celebration
+                // is the only place it does.
+                ladderStrip(lit: step - 1, today: step, P)
 
                 Button {
                     Task { await claim() }
@@ -169,8 +194,8 @@ struct DailyRewardCard: View {
                 .buttonStyle(MMButtonStyle(kind: .primary, big: true))
                 .disabled(claiming)
 
-                Text(day >= Self.ladder
-                     ? "Your streak is paying the most it ever will — just don't break it."
+                Text(step >= Self.ladder
+                     ? "The top of the climb. Tomorrow a new week starts again at 1 coin."
                      : "Come back tomorrow and it pays a little more.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(P.ink3)
@@ -189,6 +214,8 @@ struct DailyRewardCard: View {
     /// coin.
     private func celebration(_ amount: Int, _ d: DailyState, _ P: Palette) -> some View {
         let day = d.streak ?? 1
+        // The step just paid, lit along with every one before it this week.
+        let step = d.step
         return MMCard(padding: 16) {
             VStack(spacing: 9) {
                 Art.icon(.coin, size: 40)
@@ -210,7 +237,7 @@ struct DailyRewardCard: View {
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(P.ink2)
 
-                ladderStrip(day, P)
+                ladderStrip(lit: step, P)
                     .padding(.horizontal, 20)
             }
             .frame(maxWidth: .infinity)
@@ -255,17 +282,36 @@ struct DailyRewardCard: View {
         }
     }
 
-    /// Seven pips: the whole climb from day one to the top of the ladder.
-    private func ladderStrip(_ day: Int, _ P: Palette) -> some View {
-        let lit = min(max(day, 0), Self.ladder)
+    /// This week's climb: seven steps, each labelled with the coins it pays.
+    /// The first `lit` are collected. `today`, when there is one, is the step
+    /// the button is about to pay — ringed in the table's colour rather than
+    /// filled, because it is not in the wallet yet.
+    private func ladderStrip(lit: Int, today: Int? = nil, _ P: Palette) -> some View {
+        let lit = min(max(lit, 0), Self.ladder)
         return HStack(spacing: 5) {
-            ForEach(0..<Self.ladder, id: \.self) { i in
-                Capsule()
-                    .fill(i < lit ? AnyShapeStyle(P.red) : AnyShapeStyle(P.sunken))
-                    .frame(height: 5)
-                    .overlay(Capsule().stroke(P.rule, lineWidth: i < lit ? 0 : 1))
+            ForEach(1...Self.ladder, id: \.self) { n in
+                let done = n <= lit
+                let now = n == today
+                VStack(spacing: 3) {
+                    Capsule()
+                        .fill(done ? AnyShapeStyle(P.red) : AnyShapeStyle(now ? P.redSoft : P.sunken))
+                        .frame(height: 5)
+                        .overlay(Capsule().stroke(now ? P.red : P.rule, lineWidth: done ? 0 : 1))
+                    Text("\(n)")
+                        .font(.system(size: 9.5, weight: now ? .black : .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(now ? P.red : (done ? P.ink2 : P.ink3))
+                }
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ladderLabel(lit: lit, today: today))
+    }
+
+    private func ladderLabel(lit: Int, today: Int?) -> String {
+        if let today { return "Day \(today) of \(Self.ladder) this week: \(today) \(today == 1 ? "coin" : "coins") today" }
+        if lit > 0 { return "Day \(lit) of \(Self.ladder) this week collected" }
+        return "Seven days a week: 1 coin, then 2, up to 7"
     }
 
     private func waitLine(_ d: DailyState, day: Int) -> String {
@@ -356,7 +402,9 @@ struct DailyRewardCard: View {
                 return
             }
             daily = DailyState(claimable: false, streak: reply.streak,
-                               amount: daily?.amount, nextAt: reply.nextAt)
+                               amount: daily?.amount, nextAt: reply.nextAt,
+                               cycleDay: reply.cycleDay, cycleLength: daily?.cycleLength,
+                               claimedToday: true)
             // The pill on the quiet face is tomorrow's payout, and this reply
             // never carried one — only the peek knows it.
             reloads += 1
@@ -364,8 +412,12 @@ struct DailyRewardCard: View {
         }
 
         let amount = reply.amount ?? 0
+        // The step just paid lights on the bar; an older server sends no
+        // cycle, and there the amount it paid was the step.
         daily = DailyState(claimable: false, streak: reply.streak,
-                           amount: daily?.amount, nextAt: reply.nextAt)
+                           amount: daily?.amount, nextAt: reply.nextAt,
+                           cycleDay: reply.cycleDay ?? (amount > 0 ? amount : nil),
+                           cycleLength: daily?.cycleLength, claimedToday: true)
         counted = 0
         celebrating = amount
         Haptics.turn()

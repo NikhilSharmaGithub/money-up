@@ -191,12 +191,18 @@ const LOG_ICON = {
   warn: 'warning', turn: 'replay',
 };
 
-/** Street names by board, so a line that names a city can fly its flag. */
+/**
+ * Street names by board, so a line that names a city can fly its flag. Kept
+ * by the layout's uid rather than the board's id: two Random boards share an
+ * id and not a street, and the index must be read off the board this table
+ * is playing (state.map), never one remembered from somewhere else.
+ */
 let flagIndexFor = null;
 let flagIndex = new Map();
 function cityFlags(state) {
-  if (flagIndexFor !== state.map?.id) {
-    flagIndexFor = state.map?.id;
+  const key = state.map?.uid || state.map?.id;
+  if (flagIndexFor !== key) {
+    flagIndexFor = key;
     flagIndex = new Map();
     for (const t of state.map?.tiles || []) {
       const mark = t.group ? state.groups?.[t.group]?.flag : null;
@@ -327,6 +333,9 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
   livePlayersState = state;
   const rank = rankByWorth(state, shown);
   const nextUp = nextUpId(state);
+  // This browser's own seats, read once for the whole roster: none of them
+  // opens a profile (see opensProfile).
+  const here = deviceCodes();
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
   const structure = state.players.map((p) => `${p.id}:${shown.out(p) ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
@@ -384,6 +393,48 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
     if (faceEl.dataset.v !== face) {
       faceEl.dataset.v = face;
       faceEl.textContent = face;
+    }
+
+    // The face and the name open this player's profile (1.0.6) — the sheet
+    // the result standings open — at the lobby and mid-game alike, for any
+    // seat with a friend code that is not sitting at this keyboard. Nothing
+    // else on the card answers a tap: Trade, Make host and the rest are
+    // buttons of their own, so the two never compete for one touch. The face
+    // is the one keyboard stop; the name is the same target for a pointer.
+    const profile = opensProfile(p, meId, here);
+    const profileKey = profile ? `${p.code}:${p.name}` : '';
+    if (card.dataset.profile !== profileKey) {
+      card.dataset.profile = profileKey;
+      card.classList.toggle('has-profile', profile);
+      const disc = card.querySelector('.avatar');
+      const pid = p.id;
+      const open = (e) => {
+        e.stopPropagation();
+        sfx.click();
+        // The seat as it is now, not as it was when the card was wired: the
+        // name and the level move under a card that is never rebuilt for it.
+        const seat = livePlayersState?.players.find((x) => x.id === pid);
+        if (seat?.code) openPlayerProfile(seat, { token: meId });
+      };
+      if (profile) {
+        const label = `See ${p.name}'s profile`;
+        disc.setAttribute('role', 'button');
+        disc.tabIndex = 0;
+        disc.setAttribute('aria-label', label);
+        disc.title = label;
+        nameEl.title = label;
+        disc.onclick = open;
+        nameEl.onclick = open;
+        disc.onkeydown = (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(e); }
+        };
+      } else {
+        ['role', 'tabindex', 'aria-label', 'title'].forEach((a) => disc.removeAttribute(a));
+        nameEl.removeAttribute('title');
+        disc.onclick = null;
+        nameEl.onclick = null;
+        disc.onkeydown = null;
+      }
     }
 
     // live position — the leader wears the crown, everyone else their number
@@ -674,10 +725,13 @@ export function renderRightPanel(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   // Whose turn it is decides whether the deed rows carry ＋, − and the
   // mortgage buttons at all, so a turn passing has to repaint them even when
-  // no deed changed.
+  // no deed changed. The layout is in it too: every street name and flag on
+  // this panel is read off state.map, and a shuffled board (1.0.6) is the
+  // same board id dealt into a different order — only its uid moves.
+  const layout = state.map.uid || state.map.id;
   const sig = state.status === 'lobby'
-    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${quickSig(state)}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}${me ? '' : `:w${state.spectators || 0}`}`;
+    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${layout}:${state.players.length}:${quickSig(state)}`
+    : `game:${layout}:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}${me ? '' : `:w${state.spectators || 0}`}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   // A lobby repaints under whoever is typing their name — somebody sat
@@ -1439,10 +1493,73 @@ function tableClockRows(state, dis) {
       </div>`;
 }
 
+// What happens to a bankrupt player's properties (1.0.6). A list like the
+// bot skill rather than a switch, because "off" would not say which of the
+// two a table is doing — and the words under it are the rule itself.
+const ESTATE_RULES = [
+  { id: 'release', name: 'Back to the bank', desc: 'A bankrupt player’s properties go back to the bank, unowned' },
+  { id: 'auction', name: 'Auction them', desc: 'A bankrupt player’s properties are auctioned one at a time to everyone still playing' },
+];
+/** The table's estate rule, read as "back to the bank" from a server that has never heard of it. */
+const estateRuleOf = (state) => ESTATE_RULES.find((r) => r.id === state.settings?.bankruptProperties) || ESTATE_RULES[0];
+/**
+ * Whether a seat that leaves this game — bankrupt, conceding or walking out —
+ * sends its streets under the hammer. Play-now and cup tables never do, as
+ * the server always reads them as "back to the bank" whatever is stored.
+ */
+export const estateGoesToAuction = (state) => !!state && !state.quick && !state.cup && estateRuleOf(state).id === 'auction';
+
+/**
+ * Auction only, as a lobby row that sits straight under Auction: the two are
+ * one decision — turning it on turns auctions on, and turning auctions off
+ * turns it off, both on the server — so they read as a pair, and each row is
+ * drawn from state.settings as it is, never from the tap.
+ */
+function auctionOnlyRow(state, dis) {
+  if (state.quick || state.cup) return '';
+  const on = !!state.settings.auctionOnly;
+  return toggleRow(state, {
+    key: 'auctionOnly', icon: 'gavel', name: 'Auction only',
+    desc: on ? 'Nobody buys at the printed price — every unowned street goes straight to auction'
+      : 'Land on an unowned street and you may buy it at its price first',
+  }, dis);
+}
+
+/**
+ * The other two house rules of 1.0.6 round 2: a shuffled board and what a
+ * bankruptcy does with the streets. Like bot skill and game length, neither
+ * is drawn at a Play-now or a cup table, which always play the printed board
+ * and send estates back to the bank (the server refuses both there anyway).
+ */
+function houseRuleRows(state, dis) {
+  if (state.quick || state.cup) return '';
+  const shuffle = !!state.settings.shuffleBoard;
+  const estate = estateRuleOf(state);
+  return `
+      ${toggleRow(state, {
+        key: 'shuffleBoard', icon: 'map', name: 'Shuffle the board',
+        desc: shuffle ? 'The colour sets are dealt to new places at the start — prices and rents move with them'
+          : 'Every street sits where the board prints it',
+      }, dis)}
+      <div class="setting stacked">
+        <span class="s-icon">${icon('skull')}</span>
+        <div class="s-body">
+          <div class="s-name">Bankrupt properties</div>
+          <div class="s-desc">${estate.desc}</div>
+          <div class="chat-channels bot-seg" role="radiogroup" aria-label="Bankrupt properties">${ESTATE_RULES.map((r) => `
+            <button type="button" role="radio" data-estate="${r.id}" class="${r.id === estate.id ? 'on' : ''}"
+              aria-checked="${r.id === estate.id}" ${dis}>${r.name}</button>`).join('')}
+          </div>
+        </div>
+      </div>`;
+}
+
 /**
  * The lobby headline's half-line about how this game will be played, for
- * the people who cannot open the settings: the clock, and a bot skill other
- * than the usual when there are bots to have it.
+ * the people who cannot open the settings: the clock, a bot skill other
+ * than the usual when there are bots to have it, and the two house rules
+ * that change what the board in front of them is about to do — the lobby
+ * shows the printed board, and a shuffle only happens at the deal.
  */
 function lobbyTerms(state) {
   if (state.quick || state.cup) return '';
@@ -1452,6 +1569,8 @@ function lobbyTerms(state) {
   const bots = botLevelOf(state);
   const hasBots = state.settings?.allowBots || state.players.some((p) => p.isBot);
   if (bots.id !== 'normal' && hasBots) parts.push(`${bots.name} bots`);
+  if (state.settings?.shuffleBoard) parts.push('Shuffled board');
+  if (state.settings?.auctionOnly) parts.push('Auction only');
   return parts.map((p) => ` · ${p}`).join('');
 }
 
@@ -1526,7 +1645,8 @@ function renderSettings(state, meId, el, actions) {
 
     <div class="panel">
       <div class="panel-title">Gameplay rules</div>
-      ${RULES.map(toggle).join('')}
+      ${RULES.map((d) => toggle(d) + (d.key === 'auction' ? auctionOnlyRow(state, dis) : '')).join('')}
+      ${houseRuleRows(state, dis)}
     </div>
 
     ${isHost ? `
@@ -1547,6 +1667,16 @@ function renderSettings(state, meId, el, actions) {
       if (b.classList.contains('on')) return;
       sfx.click();
       actions.settings({ botLevel: b.dataset.bot });
+    };
+  });
+  // The estate picker answers the same way: the side lights when the state
+  // says the table changed, not under the finger.
+  el.querySelectorAll('[data-estate]').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = () => {
+      if (b.classList.contains('on')) return;
+      sfx.click();
+      actions.settings({ bankruptProperties: b.dataset.estate });
     };
   });
   wireLookPanel(state, meId, el, actions);
@@ -1769,26 +1899,20 @@ function renderMyStuff(state, meId, el, actions) {
     return `<div class="group-head ${complete ? 'complete' : ''}">${title}${complete ? '<i>FULL SET</i>' : ''}</div>${rows}${oneAwayRow(state, meId, key)}`;
   }).join('');
 
-  const incoming = state.trades.filter((t) => t.to === meId);
-  const outgoing = state.trades.filter((t) => t.from === meId);
-
+  // Trades, top to bottom: the offers waiting on you (one panel, however
+  // many), the ones you sent, then everybody else's (1.0.6) — what you can
+  // answer first, what you can only read last.
   el.innerHTML = `
     ${raiseCashPanel(state, meId)}
     ${deadlockPanel(state, meId)}
-    ${incoming.map((t) => tradeCard(state, t, meId)).join('')}
-    ${outgoing.map((t) => `<div class="panel">
-      <div class="panel-title">Offer sent</div>
-      <div class="dim small">${t.ignored
-        ? `${icon('snooze')} ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')} set it aside for later`
-        : `Waiting for ${escapeHtml(state.players.find((p) => p.id === t.to)?.name || '')}…`}</div>
-      ${tradeViewerLine(state, t, meId)}
-      <button class="btn small wide" style="margin-top:8px" data-cancel="${t.id}">Cancel offer</button>
-    </div>`).join('')}
+    ${offersPanelHTML(state, meId)}
+    ${sentOffersHTML(state, meId)}
+    ${tableTradesHTML(state, meId)}
 
     ${me ? `<div class="panel">
       <div class="panel-title">Your properties</div>
       ${mine.length ? sections : `<div class="empty">${
-        isOut(me) ? `Your deeds went back to the bank. You are watching from the rail now ${icon('eye')}`
+        isOut(me) ? `You are out of this game and watching from the rail now ${icon('eye')}`
           : state.status === 'ended' ? 'You finished with nothing on the board.'
           : 'Nothing owned yet — land on a street and buy it.'}</div>`}
     </div>` : watchPanelHTML(state)}
@@ -1823,28 +1947,15 @@ function renderMyStuff(state, meId, el, actions) {
   wire('mort', actions.mortgage, sfx.cash);
   wire('unmort', actions.unmortgage, sfx.cash);
   wire('cancel', actions.cancelTrade, sfx.click);
-  wire('ignore', (id) => actions.ignoreTrade(id, true), sfx.click);
-  wire('unignore', (id) => actions.ignoreTrade(id, false), sfx.click);
-  el.querySelectorAll('[data-accept]').forEach((b) => {
-    b.onclick = () => { sfx.trade(); actions.respondTrade(Number(b.dataset.accept), true); };
-  });
-  el.querySelectorAll('[data-decline]').forEach((b) => {
-    b.onclick = () => { sfx.click(); actions.respondTrade(Number(b.dataset.decline), false); };
-  });
+  // Accept, Decline, Counter, Later and Open — the same wiring the Offers
+  // sheet gives the same cards.
+  wireOfferButtons(el, () => livePlayersState || state, meId, actions);
   // "1 away" → the composer opens with that street already on their side.
   el.querySelectorAll('[data-ask]').forEach((b) => {
     b.onclick = (e) => {
       e.stopPropagation();
       sfx.click();
       openTradeModal(state, meId, b.dataset.askTo, actions, { get: { tiles: [Number(b.dataset.ask)] } });
-    };
-  });
-  el.querySelectorAll('[data-negotiate]').forEach((b) => {
-    b.onclick = () => {
-      sfx.click();
-      const t = state.trades.find((x) => x.id === Number(b.dataset.negotiate));
-      // Counter their offer: same deal, seen from this side of the table.
-      if (t) openTradeModal(state, meId, t.from, actions, { give: t.get, get: t.give, counterOf: t.id });
     };
   });
   const rb = $('#rematchBtn', el);
@@ -1877,41 +1988,18 @@ function tradeViewerLine(state, t, meId) {
   </div>`;
 }
 
-function tradeCard(state, t, meId) {
+/**
+ * An offer you set aside, folded down to a single quiet line. It is still a
+ * live offer — the sender is still waiting on it — so it keeps a face, a name
+ * and a way back in, and nothing else.
+ */
+function setAsideRow(state, t) {
   const from = state.players.find((p) => p.id === t.from);
-  const describe = (side) => {
-    const bits = [];
-    if (side.money) bits.push(money(side.money));
-    side.tiles.forEach((i) => bits.push(state.map.tiles[i].name));
-    if (side.cards) bits.push(`${side.cards}× prison card`);
-    return bits.length ? bits.map(escapeHtml).join(' · ') : 'nothing';
-  };
-
-  // Set aside: folded down to a single quiet line. It is still a live offer —
-  // the sender is still waiting on it — so it keeps a face, a name and a way
-  // back in, and nothing else.
-  if (t.ignored) {
-    return `<div class="trade-mini">
+  return `<div class="trade-mini">
       <span class="avatar xs" style="background:${from?.color || 'var(--ink-3)'}">${escapeHtml((from?.name?.[0] || '?').toUpperCase())}</span>
       <span class="tm-text">${escapeHtml(from?.name || '')}<i>${icon('snooze', 12)} set aside</i></span>
       <button class="btn tiny" data-unignore="${t.id}">Open</button>
     </div>`;
-  }
-
-  return `<div class="panel trade-offer">
-    <div class="panel-title">${icon('trade')} Offer from ${escapeHtml(from?.name || '')}</div>
-    <div class="trade-line good"><span>You get</span><b>${describe(t.give)}</b></div>
-    <div class="trade-line bad"><span>You give</span><b>${describe(t.get)}</b></div>
-    ${tradeViewerLine(state, t, meId)}
-    <div class="row-2">
-      <button class="btn good small" data-accept="${t.id}">Accept</button>
-      <button class="btn bad small" data-decline="${t.id}">Decline</button>
-    </div>
-    <div class="row-2" style="margin-top:6px">
-      <button class="btn small" data-negotiate="${t.id}">${icon('trade')} Negotiate</button>
-      <button class="btn ghost small" data-ignore="${t.id}" title="Keep it in the list, decide later">${icon('snooze')} Later</button>
-    </div>
-  </div>`;
 }
 
 /**
@@ -1924,6 +2012,222 @@ function tileMark(tile, g, size) {
   if (tile.type === 'airport') return icon('airport', size);
   if (tile.type === 'utility') return icon(utilityName(tile.icon), size);
   return `<span class="dotc" style="background:${g?.color || '#7c6bb0'}"></span>`;
+}
+
+/**
+ * One side of a deal drawn as the things on it: a coin for cash, a street in
+ * its own colour with its own flag and price, a card for a card. A tile index
+ * in a trade is a square of the board this table is playing, so it is read
+ * off state.map — on a shuffled board (1.0.6) a stale copy would name the
+ * wrong street.
+ */
+function dealChips(state, side) {
+  const out = [];
+  if (side.money) {
+    out.push(`<span class="deal-chip cash">${icon('coin', 15)}<b>${money(side.money)}</b></span>`);
+  }
+  (side.tiles || []).forEach((i) => {
+    const tile = state.map.tiles[i];
+    if (!tile) return;
+    const g = tile.group ? state.groups[tile.group] : null;
+    const mark = g?.flag || tile.type === 'airport' || tile.type === 'utility'
+      ? `<span class="dc-flag">${tileMark(tile, g, 16)}</span>`
+      : `<i class="dc-dot" style="background:${g?.color || 'var(--ink-3)'}"></i>`;
+    out.push(`<span class="deal-chip street" style="--c:${g?.color || 'var(--ink-3)'}">
+      ${mark}<b>${escapeHtml(tile.name)}</b><em>$${tile.price}</em></span>`);
+  });
+  if (side.cards) {
+    out.push(`<span class="deal-chip card">${icon('key', 14)}<b>${side.cards}× out of prison</b></span>`);
+  }
+  return out.length ? out.join('') : '<span class="deal-chip empty">nothing</span>';
+}
+
+/**
+ * Which way an offer leans for the person it was sent to. Face value only —
+ * the price on the deed, not what it is worth to whoever needs that last
+ * street — and everything that prints it says so.
+ */
+function dealLean(state, t) {
+  const worth = (side) => (side.money || 0) + (side.cards || 0) * 50
+    + (side.tiles || []).reduce((sum, i) => sum + (state.map.tiles[i]?.price || 0), 0);
+  const mine = worth(t.give);
+  const theirs = worth(t.get);
+  const diff = mine - theirs;
+  const even = Math.abs(diff) < 25;
+  return {
+    mine,
+    theirs,
+    // Half the track is neutral; the needle leans as far as the gap is wide.
+    lean: Math.max(-1, Math.min(1, diff / Math.max(mine, theirs, 1))),
+    verdict: even ? 'An even deal' : diff > 0 ? `${money(diff)} your way` : `${money(-diff)} their way`,
+    mood: even ? 'even' : diff > 0 ? 'good' : 'bad',
+  };
+}
+
+/**
+ * An offer folded to the size of a card in a list (1.0.6). Two or three
+ * offers at once used to be two or three full panels down the rail and a
+ * sheet apiece, one over the other; now each is a card — who it is from,
+ * what you get and what you give as the chips the full sheet draws, which
+ * way it leans, and the answers — so the third offer costs a card's height
+ * rather than a screen. The rail and the Offers sheet print the same card.
+ */
+function offerCardHTML(state, t) {
+  const from = state.players.find((p) => p.id === t.from);
+  const { verdict, mood } = dealLean(state, t);
+  return `<div class="offer-card" data-offer="${t.id}">
+      <div class="oc-head">
+        <span class="avatar xs" style="background:${from?.color || 'var(--ink-3)'}">${escapeHtml((from?.name?.[0] || '?').toUpperCase())}</span>
+        <b class="oc-from">${escapeHtml(from?.name || 'Somebody')}</b>
+        <span class="oc-lean ${mood}" title="Weighed by the price on the deeds">${escapeHtml(verdict)}</span>
+      </div>
+      <div class="oc-side good"><span class="oc-label">You get</span><div class="oc-items">${dealChips(state, t.give)}</div></div>
+      <div class="oc-side bad"><span class="oc-label">You give</span><div class="oc-items">${dealChips(state, t.get)}</div></div>
+      <div class="oc-actions">
+        <button class="btn good small" data-accept="${t.id}">Accept</button>
+        <button class="btn small" data-negotiate="${t.id}">Counter</button>
+        <button class="btn ghost danger small" data-decline="${t.id}">Decline</button>
+        <button class="btn ghost small oc-later" data-ignore="${t.id}" title="Keep it in the list, decide later"
+          aria-label="Decide later">${icon('snooze', null, 'solo')}</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Every offer sent to this seat, in one panel: "Offers", how many, and the
+ * cards in a list that scrolls inside the panel once it holds more than two,
+ * so the deeds below stay where they were however many deals land at once.
+ * Offers set aside fold to a line each under the list.
+ */
+function offersPanelHTML(state, meId) {
+  const incoming = state.trades.filter((t) => t.to === meId).sort((a, b) => a.id - b.id);
+  if (!incoming.length) return '';
+  const open = incoming.filter((t) => !t.ignored);
+  const aside = incoming.filter((t) => t.ignored);
+  return `<div class="panel trade-offer offers-panel">
+      <div class="panel-title">${icon('trade')} Offers <i class="panel-n">${incoming.length}</i></div>
+      ${open.length ? `<div class="offer-list${open.length > 2 ? ' scrolls' : ''}">${open.map((t) => offerCardHTML(state, t)).join('')}</div>` : ''}
+      ${aside.length ? `<div class="offers-aside">${aside.map((t) => setAsideRow(state, t)).join('')}</div>` : ''}
+    </div>`;
+}
+
+/**
+ * One side of somebody's deal in words, each street flying its flag:
+ * "Tel Aviv and $300". For the lines a reader only reads — the table's
+ * trades, and what you sent.
+ */
+function dealWords(state, side) {
+  const bits = [];
+  (side.tiles || []).forEach((i) => {
+    const tile = state.map.tiles[i];
+    if (!tile) return;
+    const g = tile.group ? state.groups[tile.group] : null;
+    bits.push(`<span class="tt-street">${tileMark(tile, g, 13)}${escapeHtml(tile.name)}</span>`);
+  });
+  if (side.money) bits.push(`<b>${money(side.money)}</b>`);
+  if (side.cards) bits.push(side.cards === 1 ? 'a get-out card' : `${side.cards} get-out cards`);
+  if (bits.length < 2) return bits.join('');
+  return `${bits.slice(0, -1).join(', ')} and ${bits[bits.length - 1]}`;
+}
+
+/** "Tel Aviv for $300" — `give` is what the sender parts with, `get` what they ask for. */
+function dealLine(state, t) {
+  const give = dealWords(state, t.give);
+  const get = dealWords(state, t.get);
+  if (give && get) return `${give} for ${get}`;
+  if (give) return `${give}, asking nothing back`;
+  return get ? `asks for ${get}` : 'an empty offer';
+}
+
+/**
+ * Everybody else's open offers (1.0.6). The table has always been sent every
+ * trade; now it is shown them — read-only, because only the person an offer
+ * is sent to can answer it and only its sender can take it back, and a
+ * button the server would refuse is a button nobody should be shown. One
+ * line each, "Ravi → Asha: Tel Aviv for $300". Somebody watching gets the
+ * same list, which is half of what watching a table is for.
+ */
+function tableTradesHTML(state, meId) {
+  const others = state.trades
+    .filter((t) => t.from !== meId && t.to !== meId)
+    .sort((a, b) => a.id - b.id);
+  if (!others.length) return '';
+  const who = (id) => state.players.find((p) => p.id === id);
+  const face = (p) => `<span class="avatar xs" style="background:${p?.color || 'var(--ink-3)'}">${escapeHtml((p?.name?.[0] || '?').toUpperCase())}</span>`;
+  const rows = others.map((t) => {
+    const from = who(t.from);
+    const to = who(t.to);
+    const note = t.ignored ? `<i class="tt-note">${icon('snooze', 12)} set aside</i>`
+      : (t.viewers || []).includes(t.to) ? `<i class="tt-note">${icon('eye', 12)} reading</i>` : '';
+    return `<div class="tt-row">
+        <div class="tt-who">${face(from)}<b>${escapeHtml(from?.name || '')}</b><span class="tt-arrow" aria-label="to">→</span>${face(to)}<b>${escapeHtml(to?.name || '')}</b>${note}</div>
+        <div class="tt-what">${dealLine(state, t)}</div>
+      </div>`;
+  }).join('');
+  return `<div class="panel table-trades">
+      <div class="panel-title">${icon('trade')} Table trades <i class="panel-n">${others.length}</i></div>
+      <div class="tt-list${others.length > 3 ? ' scrolls' : ''}">${rows}</div>
+    </div>`;
+}
+
+/**
+ * The offers this seat has sent, in one panel however many there are: who
+ * each went to and what it says, whether they set it aside or have it open
+ * in front of them, and a way to take it back.
+ */
+function sentOffersHTML(state, meId) {
+  const outgoing = state.trades.filter((t) => t.from === meId).sort((a, b) => a.id - b.id);
+  if (!outgoing.length) return '';
+  return `<div class="panel offers-sent">
+      <div class="panel-title">${outgoing.length > 1 ? `Offers sent <i class="panel-n">${outgoing.length}</i>` : 'Offer sent'}</div>
+      ${outgoing.map((t) => {
+        const name = escapeHtml(state.players.find((p) => p.id === t.to)?.name || '');
+        return `<div class="sent-row">
+          <div class="dim small">${t.ignored
+            ? `${icon('snooze')} ${name} set it aside for later`
+            : `Waiting for ${name}…`}</div>
+          <div class="tt-what">${dealLine(state, t)}</div>
+          ${tradeViewerLine(state, t, meId)}
+          <button class="btn small wide" data-cancel="${t.id}">Cancel offer</button>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+/**
+ * The answers on an offer card, wherever the card is printed. Accepting or
+ * declining folds the card at once — the state that removes it is a moment
+ * behind — and gives it back if the server refused and nothing changed.
+ * Counter opens the composer with their deal turned round, as the full
+ * sheet's Negotiate does.
+ */
+function wireOfferButtons(root, liveState, meId, actions) {
+  const answered = (b) => {
+    const card = b.closest('.offer-card');
+    if (!card) return;
+    card.classList.add('answered');
+    const keys = card.querySelectorAll('button');
+    keys.forEach((k) => { k.disabled = true; });
+    setTimeout(() => {
+      if (!card.isConnected) return;
+      card.classList.remove('answered');
+      keys.forEach((k) => { k.disabled = false; });
+    }, 2500);
+  };
+  const each = (attr, fn) => root.querySelectorAll(`[data-${attr}]`).forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); fn(Number(b.dataset[attr]), b); };
+  });
+  each('accept', (id, b) => { sfx.trade(); answered(b); actions.respondTrade(id, true); });
+  each('decline', (id, b) => { sfx.click(); answered(b); actions.respondTrade(id, false); });
+  each('ignore', (id) => { sfx.click(); actions.ignoreTrade(id, true); });
+  each('unignore', (id) => { sfx.click(); actions.ignoreTrade(id, false); });
+  each('negotiate', (id) => {
+    sfx.click();
+    const s = liveState();
+    const t = s?.trades.find((x) => x.id === id);
+    // Counter their offer: same deal, seen from this side of the table.
+    if (t) openTradeModal(s, meId, t.from, actions, { give: t.get, get: t.give, counterOf: t.id });
+  });
 }
 
 /**
@@ -1942,47 +2246,16 @@ function tileMark(tile, g, size) {
  * and says so rather than pretending to advise.
  *
  * The cross closes it without touching the deal: it stays live on the rail,
- * and this sheet will not reopen for the same offer.
+ * and this sheet will not reopen for the same offer. If the deal goes away
+ * underneath it — withdrawn, or its sender out of the game — the sheet goes
+ * with it rather than offering an Accept the server can only refuse; a second
+ * offer arriving turns it into the Offers list (see app.js).
  */
 export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
   const from = state.players.find((p) => p.id === t.from);
   if (!from) return;
 
-  /** One thing on the table, drawn as itself. */
-  const chips = (side) => {
-    const out = [];
-    if (side.money) {
-      out.push(`<span class="deal-chip cash">${icon('coin', 15)}<b>${money(side.money)}</b></span>`);
-    }
-    (side.tiles || []).forEach((i) => {
-      const tile = state.map.tiles[i];
-      if (!tile) return;
-      const g = tile.group ? state.groups[tile.group] : null;
-      const mark = g?.flag || tile.type === 'airport' || tile.type === 'utility'
-        ? `<span class="dc-flag">${tileMark(tile, g, 16)}</span>`
-        : `<i class="dc-dot" style="background:${g?.color || 'var(--ink-3)'}"></i>`;
-      out.push(`<span class="deal-chip street" style="--c:${g?.color || 'var(--ink-3)'}">
-        ${mark}<b>${escapeHtml(tile.name)}</b><em>$${tile.price}</em></span>`);
-    });
-    if (side.cards) {
-      out.push(`<span class="deal-chip card">${icon('key', 14)}<b>${side.cards}× out of prison</b></span>`);
-    }
-    return out.length ? out.join('') : '<span class="deal-chip empty">nothing</span>';
-  };
-
-  // Face value only — the price on the deed, not what it is worth to whoever
-  // needs that last street. The meter says as much underneath itself.
-  const worth = (side) => (side.money || 0) + (side.cards || 0) * 50
-    + (side.tiles || []).reduce((sum, i) => sum + (state.map.tiles[i]?.price || 0), 0);
-  const mine = worth(t.give);
-  const theirs = worth(t.get);
-  const diff = mine - theirs;
-  const span = Math.max(mine, theirs, 1);
-  // Half the track is neutral; the needle leans as far as the gap is wide.
-  const lean = Math.max(-1, Math.min(1, diff / span));
-  const verdict = Math.abs(diff) < 25 ? 'An even deal'
-    : diff > 0 ? `${money(diff)} your way` : `${money(-diff)} their way`;
-  const mood = Math.abs(diff) < 25 ? 'even' : diff > 0 ? 'good' : 'bad';
+  const { mine, theirs, lean, verdict, mood } = dealLean(state, t);
 
   const seat = (player, label, cls, total, side) => `
     <div class="deal-side ${cls}">
@@ -1990,7 +2263,7 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
         <span class="ds-label">${label}</span>
         <span class="ds-total">${money(total)}</span>
       </div>
-      <div class="ds-items">${chips(side)}</div>
+      <div class="ds-items">${dealChips(state, side)}</div>
       <div class="ds-who">
         <span class="avatar xs" style="background:${player.color}">${escapeHtml((player.name[0] || '?').toUpperCase())}</span>
         from ${player.id === meId ? 'you' : escapeHtml(player.name)}
@@ -2025,7 +2298,7 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
       <button class="btn" id="toNegotiate">${icon('swap', 15)} Negotiate</button>
       <button class="btn ghost danger" id="toDecline">Decline</button>
     </div>
-    <p class="offer-foot dim small">Closing this leaves the offer on the table — your properties panel keeps it.</p>`,
+    <p class="offer-foot dim small">Closing this leaves the offer on the table — it waits under Offers.</p>`,
   (root) => {
     // A sheet nobody asked for arrives under whatever finger or cursor was
     // already on its way somewhere else, and the button it lands on accepts a
@@ -2041,6 +2314,11 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
     onModalClose(() => {
       if (livePlayersState?.trades?.some((x) => x.id === t.id)) actions.tradeViewing?.(t.id, false);
     });
+    sheetRepaint = (s) => {
+      if (s?.trades?.some((x) => x.id === t.id)) return;
+      closeModal();
+      toast(`${from.name}’s offer is off the table`);
+    };
     const retire = () => onDismiss?.(t.id);
     $('#toClose', root).onclick = () => { sfx.click(); retire(); closeModal(); };
     $('#toAccept', root).onclick = () => { sfx.trade(); retire(); closeModal(); actions.respondTrade(t.id, true); };
@@ -2052,6 +2330,103 @@ export function openTradeOfferModal(state, t, meId, actions, onDismiss) {
       openTradeModal(state, meId, t.from, actions, { give: t.get, get: t.give, counterOf: t.id });
     };
   }, 'offer-sheet');
+}
+
+/**
+ * Every offer waiting on you, in one sheet (1.0.6). Two offers arriving
+ * together used to be two sheets — the second waiting under the first, and
+ * on a phone not seen at all until the first was answered. Now a second
+ * offer turns the sheet into this list: one header with the count, one card
+ * per offer, scrolling once there are more than fit, each with its own
+ * Accept, Counter and Decline. It follows the table while it is open — an
+ * offer answered, withdrawn or newly sent is seen leaving or arriving — and
+ * closes itself when the last one goes.
+ */
+export function openOffersModal(state, meId, actions) {
+  const waiting = (s) => (s?.status === 'playing' ? s.trades || [] : [])
+    .filter((t) => t.to === meId)
+    .sort((a, b) => a.id - b.id);
+  if (!waiting(state).length) return;
+  openModal(`
+    <div class="offer-top">
+      <span class="offer-avatar offers-mark">${icon('trade', 22)}</span>
+      <div class="offer-title">
+        <h2>Offers <span class="panel-n" id="ofN"></span></h2>
+        <p class="sub" id="ofSub"></p>
+      </div>
+      <button class="sheet-x" id="ofClose" aria-label="Close">${icon('close')}</button>
+    </div>
+    <div class="offers-scroll" id="ofList"></div>
+    <p class="offer-foot dim small">Closing this leaves every offer on the table — they wait under Offers.</p>`,
+  (root) => {
+    const list = $('#ofList', root);
+    let live = state;
+    let last = '';
+    // When each card's buttons wake. A card is guarded the first time this
+    // sheet draws it, for the same reason the single sheet is: it arrived
+    // under a finger that was on its way to something else.
+    const wake = new Map();
+    // Offers the senders are being told you are reading.
+    const reading = new Set();
+    const paint = (s) => {
+      if (!s) return;
+      live = s;
+      const mine = waiting(s);
+      if (!mine.length) { closeModal(); return; }
+      const sig = mine.map((t) => `${t.id}${t.ignored ? '!' : ''}`).join();
+      if (sig === last) return;
+      last = sig;
+      const open = mine.filter((t) => !t.ignored);
+      const aside = mine.filter((t) => t.ignored);
+      $('#ofN', root).textContent = String(mine.length);
+      $('#ofSub', root).textContent = [
+        open.length ? `${open.length} waiting for your answer` : 'Nothing waiting for an answer',
+        aside.length ? `${aside.length} set aside` : '',
+      ].filter(Boolean).join(' · ');
+      list.innerHTML = open.map((t) => offerCardHTML(s, t)).join('')
+        + (aside.length ? `<div class="offers-aside">${aside.map((t) => setAsideRow(s, t)).join('')}</div>` : '');
+      wireOfferButtons(list, () => live, meId, actions);
+
+      const now = Date.now();
+      open.forEach((t) => { if (!wake.has(t.id)) wake.set(t.id, now + 450); });
+      list.querySelectorAll('.offer-card').forEach((card) => {
+        const wait = (wake.get(Number(card.dataset.offer)) || 0) - Date.now();
+        if (wait <= 0) return;
+        const keys = card.querySelectorAll('button');
+        keys.forEach((k) => { k.disabled = true; });
+        setTimeout(() => keys.forEach((k) => { if (!card.classList.contains('answered')) k.disabled = false; }), wait);
+      });
+
+      // The eye on each sender's card follows the list: lit while their offer
+      // is a card here, out once it is answered, set aside or gone.
+      open.forEach((t) => {
+        if (reading.has(t.id)) return;
+        reading.add(t.id);
+        actions.tradeViewing?.(t.id, true);
+      });
+      for (const id of [...reading]) {
+        if (open.some((t) => t.id === id)) continue;
+        reading.delete(id);
+        if (mine.some((t) => t.id === id)) actions.tradeViewing?.(id, false);
+      }
+    };
+    paint(state);
+    sheetRepaint = paint;
+    onModalClose(() => {
+      const still = new Set((livePlayersState?.trades || []).map((t) => t.id));
+      for (const id of reading) if (still.has(id)) actions.tradeViewing?.(id, false);
+      reading.clear();
+    });
+    $('#ofClose', root).onclick = () => { sfx.click(); closeModal(); };
+  }, 'offer-sheet offers-sheet');
+}
+
+/** Which offer sheet holds the screen, if any: the one offer, or the list. */
+export function offerSheetOpen() {
+  if (!isModalOpen()) return null;
+  const sheet = $('#modalRoot > .modal');
+  if (sheet?.classList.contains('offers-sheet')) return 'list';
+  return sheet?.classList.contains('offer-sheet') ? 'one' : null;
 }
 
 // ─────────────────────────────────────────────────────────── board centre ──
@@ -2122,12 +2497,20 @@ export function renderCenter(state, meId, actions) {
     // person, so it never lands on a house player — and anybody who has
     // pressed Ready wears the tick. A chair somebody just left says it is
     // being found rather than sitting there looking abandoned.
+    //
+    // A seat somebody else is sitting in opens their profile, as their card
+    // in the rail does — on a phone these faces are the first of the table
+    // anybody sees. Whether it opens is part of the markup, so the line is
+    // rewired whenever it is redrawn and left alone when it is not.
+    const here = deviceCodes();
     const seatHtml = (p) => {
       if (!p) return `<div class="seat-slot open"><span class="seat-face"></span><span class="seat-name">${lobby?.backfillAt ? 'finding…' : 'open'}</span></div>`;
       const face = p.avatar || (p.name[0] || '?').toUpperCase();
       const crown = lobby && p.id === state.hostId;
       const ready = lobby && !crown && p.ready;
-      return `<div class="seat-slot${crown ? ' host' : ''}${ready ? ' ready' : ''}">
+      const opens = opensProfile(p, meId, here);
+      return `<div class="seat-slot${crown ? ' host' : ''}${ready ? ' ready' : ''}${opens ? ' tap' : ''}"${opens
+        ? ` data-pid="${escapeHtml(p.id)}" role="button" tabindex="0" title="See ${escapeHtml(p.name)}'s profile"` : ''}>
           <span class="seat-face" style="background:${p.color}">${escapeHtml(face)}${crown ? `<i class="seat-crown">${icon('crown')}</i>` : ''}${ready ? `<i class="seat-tick">${TICK}</i>` : ''}</span>
           <span class="seat-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
         </div>`;
@@ -2149,7 +2532,20 @@ export function renderCenter(state, meId, actions) {
         : lobby ? `${seated} of ${seats} seated`
         : `${seated} of ${seats} seats taken`}</div>
       ${state.cup ? '<div class="dim small cup-note">Winner goes through. Loser is out of the cup.</div>' : ''}`;
-    if (statusWas !== status) statusEl.innerHTML = status;
+    if (statusWas !== status) {
+      statusEl.innerHTML = status;
+      statusEl.querySelectorAll('.seat-slot.tap[data-pid]').forEach((el) => {
+        const open = () => {
+          sfx.click();
+          const seat = livePlayersState?.players.find((x) => x.id === el.dataset.pid);
+          if (seat?.code) openPlayerProfile(seat, { token: meId });
+        };
+        el.onclick = open;
+        el.onkeydown = (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+        };
+      });
+    }
     statusEl.dataset.sig = status;
     on('#cStart', actions.start);
     paintQuickCountdown();
@@ -2195,10 +2591,20 @@ export function renderCenter(state, meId, actions) {
     // already on the table — read off the wallet alone it looks lower.
     const purse = (me?.money || 0) + (a.leader === meId ? a.bid : 0);
     const steps = [min, min + 40, min + 90].filter((v) => v <= purse);
+    // Which sale this is. A lot from a bankrupt player's estate (1.0.6) says
+    // whose and how many follow it, so a table watching five auctions in a
+    // row knows it is one sale and when it ends. An auction-only table says
+    // why there was no Buy button, and puts the deed's price beside the bid
+    // as the yardstick it is — bids can go past it.
+    const lot = a.estate
+      ? `${escapeHtml(a.estate.from)}’s estate — ${a.estate.left
+        ? `${a.estate.left} more after this` : 'the last lot'}`
+      : state.settings.auctionOnly && tile?.price ? `Auction only · the deed says ${money(tile.price)}` : '';
     cardEl.innerHTML = deedMarkup(state, a.tile, { compact: true }) || '';
     actionEl.innerHTML = `
       <div class="auction-box">
         <div class="auction-label">${icon('gavel')} Auction</div>
+        ${lot ? `<div class="auction-lot">${lot}</div>` : ''}
         <div class="auction-bid">${money(a.bid)}</div>
         <div class="dim small">${leader
           ? `leading: <b style="color:${leader.color}">${escapeHtml(leader.name)}${a.leader === meId ? ' (you)' : ''}</b>`
@@ -2256,9 +2662,17 @@ export function renderCenter(state, meId, actions) {
   } else if (t.phase === 'action' && t.pending?.type === 'buy') {
     const tile = state.map.tiles[t.pending.tile];
     cardEl.innerHTML = deedMarkup(state, t.pending.tile, { compact: true }) || '';
-    html = `<button class="btn good big" id="cBuy" ${me.money < tile.price ? 'disabled' : ''}>Buy for ${money(tile.price)}</button>
+    // An auction-only table (1.0.6) has no Buy step: the server opens the
+    // hammer on the landing and never sends a deed on offer. Should one get
+    // here all the same, the only way on is the one that table allows.
+    if (state.settings.auctionOnly) {
+      html = `<button class="btn primary big" id="cSkip">${icon('gavel')} Send to auction</button>`;
+      status = `<div class="dim small">Auction only · the deed says ${money(tile.price)}</div>`;
+    } else {
+      html = `<button class="btn good big" id="cBuy" ${me.money < tile.price ? 'disabled' : ''}>Buy for ${money(tile.price)}</button>
             <button class="btn wide ghost" id="cSkip">${state.settings.auction ? `${icon('gavel')} Send to auction` : 'Skip'}</button>`;
-    status = me.money < tile.price ? '<div class="dim small">Not enough cash for this one.</div>' : '';
+      status = me.money < tile.price ? '<div class="dim small">Not enough cash for this one.</div>' : '';
+    }
   } else if (t.phase === 'roll') {
     if (me.jail) {
       html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll for a double</button>
@@ -2268,9 +2682,13 @@ export function renderCenter(state, meId, actions) {
               </div>`;
       // The fine buys the door and nothing else, so the button has to say so
       // before it is pressed — a player who expects to roll afterwards has
-      // spent $50 on the turn they were going to lose anyway.
-      status = `<div class="dim small">In prison · attempt ${me.jailTurns + 1} of 3<br>
-        Paying the fine ends your turn — the card lets you roll.</div>`;
+      // spent $50 on the turn they were going to lose anyway. On the last
+      // try it is worth even less: a miss now walks out free (1.0.6), so the
+      // line says that before anybody pays for a door about to open itself.
+      const lastTry = (me.jailTurns || 0) >= 2;
+      status = `<div class="dim small">In prison · attempt ${(me.jailTurns || 0) + 1} of 3<br>
+        ${lastTry ? 'Miss this one and you walk out free anyway, moving by the roll.'
+          : 'Paying the fine ends your turn — the card lets you roll.'}</div>`;
     } else {
       html = `<button class="btn primary big" id="cRoll">${icon('dice')} Roll dice</button>`;
       status = t.doubles > 0 ? `<div class="dim small">Double! Free roll (${t.doubles} of 2)</div>` : '';
@@ -2290,8 +2708,14 @@ export function renderCenter(state, meId, actions) {
   on('#cJailPay', actions.jailPay, sfx.cash);
   on('#cJailCard', actions.jailCard, sfx.cash);
   on('#cPayDebt', actions.payDebt, sfx.cash);
+  // What the button costs, in the table's own terms. The streets have never
+  // followed the debt — whatever was raised already went to whoever was owed
+  // — so the prompt says where they really go: back to the bank, or (1.0.6)
+  // under the hammer one at a time at a table that auctions estates.
   on('#cBankrupt', () => confirmModal('Declare bankruptcy?',
-    'Everything you own goes to your creditor and you are out of the game.', actions.bankrupt));
+    estateGoesToAuction(state)
+      ? 'You are out of the game, and your properties are auctioned to the other players one at a time.'
+      : 'You are out of the game, and your properties go back to the bank, unowned.', actions.bankrupt));
 }
 
 function phaseHint(state, p) {
@@ -2299,6 +2723,7 @@ function phaseHint(state, p) {
   if (!t) return '';
   if (t.phase === 'debt') return 'raising funds…';
   if (t.phase === 'action') return 'deciding on a property…';
+  if (t.phase === 'auction') return 'waiting on the hammer…';
   if (t.phase === 'roll') return p.jail ? 'locked up' : 'about to roll…';
   return 'wrapping up…';
 }
@@ -3080,9 +3505,11 @@ export function openDmModal(token, code, name) {
   });
 }
 
-// The deed sheet outlives the state that opened it — building from it must
-// leave the numbers fresh, so it registers a repainter the render loop calls.
-let deedRepaint = null;
+// Some sheets outlive the state that opened them — building from the deed
+// sheet must leave the numbers fresh, and the table's rules must follow a
+// host still changing them in the lobby — so the open one registers a
+// repainter the render loop calls. There is one modal root, so one slot.
+let sheetRepaint = null;
 
 // Some sheets announce themselves to the table while they are open — the trade
 // composer tells the other side you are reading their offer. That has to be
@@ -3098,7 +3525,7 @@ function runModalCleanup() {
 
 /** Redraws whatever open modal has to follow the live game. */
 export function syncOpenModals(state) {
-  deedRepaint?.(state);
+  sheetRepaint?.(state);
 }
 
 /** Is a sheet already holding the screen? An offer waits its turn. */
@@ -3108,7 +3535,7 @@ export function isModalOpen() {
 
 export function closeModal() {
   const root = $('#modalRoot');
-  deedRepaint = null;
+  sheetRepaint = null;
   runModalCleanup();
   root.classList.add('hidden');
   root.innerHTML = '';
@@ -3116,7 +3543,7 @@ export function closeModal() {
 
 export function openModal(html, onMount, extraClass = '') {
   const root = $('#modalRoot');
-  deedRepaint = null; // a new sheet replaces whatever was repainting
+  sheetRepaint = null; // a new sheet replaces whatever was repainting
   runModalCleanup();  // …and a replaced sheet is a closed one
   root.classList.remove('hidden');
   root.innerHTML = `<div class="modal ${extraClass}">${html}</div>`;
@@ -3178,8 +3605,12 @@ export function openJoinNameModal(roomId, onJoin) {
   }, 'small');
 }
 
-/** Two ways out of a live game, spelled out — one keeps the chair, one doesn't. */
-export function openLeaveModal({ onKeepSeat, onQuit, onConcede }) {
+/**
+ * Two ways out of a live game, spelled out — one keeps the chair, one doesn't.
+ * A walkout's streets go where a bankrupt's do (1.0.6): back to the bank, or
+ * under the hammer at a table that auctions estates (estateGoesToAuction).
+ */
+export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estateAuction = false }) {
   openModal(`
     <h2>Leaving the table?</h2>
     <p class="sub">The game is still running — pick how you go.</p>
@@ -3190,7 +3621,9 @@ export function openLeaveModal({ onKeepSeat, onQuit, onConcede }) {
       </button>
       <button class="leave-choice bad" id="lQuit">
         <b>${icon('door')} Leave for good</b>
-        <span>Your deeds go back to the bank and the table plays on without you.</span>
+        <span>${estateAuction
+          ? 'Your properties are auctioned to the other players one at a time and the table plays on without you.'
+          : 'Your deeds go back to the bank and the table plays on without you.'}</span>
       </button>
       ${onConcede ? `<button class="leave-choice bad" id="lConcede">
         <b>${icon('gavel')} Give up — declare bankruptcy</b>
@@ -3349,7 +3782,7 @@ export function openDeedModal(state, i, meId, actions) {
   openModal('', (root) => {
     const sheet = $('.modal', root);
     paint(state, sheet);
-    deedRepaint = (s) => paint(s, sheet);
+    sheetRepaint = (s) => paint(s, sheet);
   }, 'deed-modal');
 }
 
@@ -3955,15 +4388,21 @@ export function openBoardModal(state, actions, token, onChange, mayRent = false)
   });
 }
 
+// The prison row is the paragraph the phones and /how-to-play print word for
+// word. The third miss used to cost the $50 fine; since 1.0.6 it walks the
+// player out for nothing, and a sheet that still said "you pay anyway" would
+// be telling somebody to fear a charge the table no longer makes. The
+// bankruptcy row had the same kind of lie in it: the streets never went to
+// the creditor, only the cash already raised did.
 const RULES_HELP = [
   ['dice', 'Rolling', 'Roll two dice and move. A double lets you roll again — but three doubles in a row sends you straight to prison.'],
   ['key', 'Buying', 'Land on an unowned street, airport or utility and you may buy it. Turn it down and it goes to auction, where everyone can bid.'],
   ['crane', 'Building', 'Own every street of one country and you can build houses, then a hotel. Rent climbs steeply with each one.'],
   ['payment', 'Rent', 'Land on someone else’s property and you pay their rent. Airports scale 25 / 50 / 100 / 200; utilities charge 4× or 10× your roll.'],
   ['bank', 'Mortgage', 'Short of cash? Mortgage a property for half its price. Mortgaged streets collect no rent until you buy them back at 10% interest.'],
-  ['trade', 'Trading', 'Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded.'],
-  ['police', 'Prison', 'Roll a double to walk out, pay the $50 fine, or use a card. After three failed attempts you pay anyway.'],
-  ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins.'],
+  ['trade', 'Trading', 'Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded. Every open offer is shown to the whole table; only the player it is sent to can answer it.'],
+  ['police', 'Prison', 'Land on Go to Prison, draw the card, or roll three doubles in a row, and you are locked up. On each turn inside you can roll for a double, which walks you out and moves you by that roll. You can also pay the $50 fine before rolling, which opens the door but ends that turn, or use a get-out card. If your third roll still is not a double, you walk out for free and move by that roll anyway.'],
+  ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, if the table says so. Last player standing wins.'],
 ];
 
 // ────────────────────────────────────────────────────────── first minutes ──
@@ -4103,6 +4542,173 @@ export function openHelpModal() {
     // findable afterwards — and this sheet is where somebody looks.
     $('#hIntro', root).onclick = () => { sfx.click(); closeModal(); openIntroModal(); };
   });
+}
+
+// ─────────────────────────────────────────────────── this table's rules ──
+// The toolbar's i, beside the sound: every rule this table plays by, in plain
+// words, read off state.settings. The ? in the same toolbar is how the game
+// works anywhere; this is how this table runs it — which a stranger who sat down at
+// a Play-now table, a guest who never saw the host's lobby, and anybody
+// watching from the rail had no other way to find out.
+
+/**
+ * The rules as three short lists of rows: [glyph, name, value, words, on].
+ * `on` colours the value — true for a switch that is on, false for one that
+ * is off, null for a value that is neither (a board, a sum, a length).
+ *
+ * A Play-now table and a cup table always play the three host-only rules of
+ * 1.0.6 and the game clock at their defaults whatever the fields say — the
+ * server checks them at its own door — so they are read the same way here
+ * rather than taken on the field's word.
+ */
+function tableRuleSections(state) {
+  const s = state.settings || {};
+  const own = !state.quick && !state.cup;
+  const sw = (v) => (v ? 'On' : 'Off');
+  const live = state.status !== 'lobby';
+  const map = state.map || {};
+  const sets = Object.keys(map.groups || {}).length;
+  const squares = Number(map.size) || map.tiles?.length || 0;
+
+  const seats = Math.floor(Number(s.maxPlayers) || 0);
+  const seatWord = seats ? ` · ${seats} seats` : '';
+  const table = state.cup ? ['Cup match', 'Two seats, set by the cup']
+    : state.quick ? ['Play now', `A public table, matched with whoever was online${seatWord}`]
+    : s.isPrivate ? ['Private', `Only people with the link can join${seatWord}`]
+    : ['Public', `Listed under All rooms — anyone can take a free seat${seatWord}`];
+
+  const teams = Math.floor(Number(s.teams) || 0);
+  const turn = Math.floor(Number(s.turnSeconds) || 0);
+  const minutes = own ? Math.floor(Number(s.timeLimit) || 0) : 0;
+  const bots = botLevelOf(state);
+  const botRow = state.cup ? ['None', 'A cup match is two people — no house players']
+    : state.quick ? ['Normal', 'House players at a Play-now table always play the usual way']
+    : [bots.name, `${bots.desc}${s.allowBots || state.players?.some((p) => p.isBot) ? '' : ' — if the host adds any'}`];
+
+  const bankrupt = own && s.bankruptProperties === 'auction';
+  const auctionOnly = own && !!s.auctionOnly;
+  // A shuffled game says so from the board it is playing, which is the truth
+  // whatever the switch says; the lobby only has the switch, and the deal
+  // that honours it is still to come.
+  const shuffled = !!map.shuffled;
+  const shuffle = shuffled || (own && !!s.shuffleBoard);
+  const pot = Number(state.vacationPot) || 0;
+
+  return [
+    ['The table', [
+      ['map', 'Board', map.name || 'Classic',
+        shuffled ? 'Shuffled for this game — the colour sets sit in new places'
+          : `${squares ? `${squares} squares` : ''}${squares && sets ? ', ' : ''}${sets ? `${sets} colour sets` : ''}`, null],
+      [state.quick ? 'bolt' : state.cup ? 'trophy' : 'key', 'Table', table[0], table[1], null],
+      ['cash', 'Starting cash', money(s.startingCash), 'What every player starts the game with', null],
+      ['shield', 'Teams', teams > 0 ? `${teams} teams` : 'Off', teams > 0
+        ? 'Teammates never charge each other rent and win together' : 'Every player for themselves', teams > 0],
+      ['snooze', 'Turn clock', turn ? `${clockOptionLabel(turn)} a turn` : 'Off', turn
+        ? 'Run out of time and the table moves on without you' : 'Take as long as you need', turn > 0],
+      // A cup game has no host clock, but it is not unlimited: the cup blows
+      // its whistle (see sweepCupNoShows on the server) and decides it on
+      // net worth. A Play-now table really does play on to the last one.
+      ['clock', 'Game length', state.cup ? 'Cup whistle' : minutes ? `${minutes} min` : 'Unlimited', state.cup
+        ? 'A game still running at the cup’s whistle is decided on net worth — whoever is ahead goes through'
+        : minutes ? 'When the clock runs out, the richest player wins' : 'Play on until one player is left standing', null],
+      ['robot', 'Bot skill', botRow[0], botRow[1], null],
+      ['shuffle', 'Turn order', s.randomizeOrder ? 'Drawn' : 'As seated', s.randomizeOrder
+        ? 'The order of play is drawn at random when the game starts'
+        : 'Players take their turns in the order they sat down', null],
+    ]],
+    ['Streets and money', [
+      ['coin', 'Double rent on full sets', sw(s.x2rent), s.x2rent
+        ? 'Owning a whole country doubles its base rent' : 'A full set charges the rent on the deed', !!s.x2rent],
+      ['gavel', 'Auctions', sw(s.auction), s.auction
+        ? 'A street somebody turns down goes to the highest bidder'
+        : 'A street somebody turns down stays with the bank', !!s.auction],
+      ['gavel', 'Auction-only', sw(auctionOnly), auctionOnly
+        ? 'Nobody buys at the price on the deed — every unowned street goes straight to auction'
+        : 'Land on an unowned street and you may buy it at its price', auctionOnly],
+      ['bank', 'Mortgages', sw(s.mortgage), s.mortgage
+        ? 'Raise half a property’s price; it collects no rent until you buy it back at 10% interest'
+        : 'Properties cannot be mortgaged at this table', !!s.mortgage],
+      ['houses', 'Even building', sw(s.evenBuild), s.evenBuild
+        ? 'Houses go up and come down evenly across a set'
+        : 'Build on any street of a full set, in any order', !!s.evenBuild],
+      ['skull', 'Bankrupt properties', bankrupt ? 'Auctioned' : 'Back to the bank', bankrupt
+        ? 'A bankrupt player’s properties are auctioned one at a time to everyone still playing'
+        : 'A bankrupt player’s properties go back to the bank, unowned', null],
+      ['shuffle', 'Shuffled board', sw(shuffle), !shuffle ? 'Every street sits where the board prints it'
+        : live ? 'The colour sets were dealt to new places for this game — prices and rents moved with them'
+        : 'The colour sets are dealt to new places when the game starts — prices and rents move with them', shuffle],
+      ['island', 'Vacation cash', sw(s.vacationCash), s.vacationCash
+        ? `Taxes and fines pile up and go to whoever lands on Vacation${live && pot > 0 ? ` — ${money(pot)} in the pot now` : ''}`
+        : 'Taxes and fines go to the bank', !!s.vacationCash],
+    ]],
+    ['Prison', [
+      ['police', 'Getting out', '3 tries',
+        'Roll a double to walk out and move by that roll. Paying the $50 fine before rolling opens the door but ends that turn; a get-out card lets you roll. Miss the third try and you walk out free, moving by that roll anyway.', null],
+      ['police', 'No rent while in prison', sw(s.noRentInPrison), s.noRentInPrison
+        ? 'Owners in prison collect no rent' : 'Owners keep collecting rent from inside', !!s.noRentInPrison],
+    ]],
+  ];
+}
+
+/** Who decided this table's rules — the line under the sheet's title. */
+function tableRulesWho(state) {
+  if (state.cup) return 'Set by the cup — the same for both seats.';
+  if (state.quick) {
+    const n = state.quickRoll?.edited?.length || 0;
+    return n ? `Rolled by Play now — the host changed ${n}.` : 'Rolled by Play now when the table was made.';
+  }
+  return state.status === 'lobby'
+    ? 'Set by the host — they can still change them until the game starts.'
+    : 'Set by the host before the game started.';
+}
+
+function tableRulesHTML(state) {
+  return `<p class="sub">${escapeHtml(tableRulesWho(state))}</p>
+    ${tableRuleSections(state).map(([title, rows]) => `
+      <p class="tr-head">${escapeHtml(title)}</p>
+      <div class="tr-list">${rows.map(([glyph, name, value, words, on]) => `
+        <div class="tr-row">
+          <span class="tr-ico">${icon(glyph, 19, 'solo')}</span>
+          <div class="tr-main">
+            <div class="tr-name"><b>${escapeHtml(name)}</b><span class="tr-val${on === true ? ' on' : on === false ? ' off' : ''}">${escapeHtml(value)}</span></div>
+            ${words ? `<div class="tr-desc">${escapeHtml(words)}</div>` : ''}
+          </div>
+        </div>`).join('')}
+      </div>`).join('')}`;
+}
+
+/**
+ * The sheet. It follows the live state while it is open, so a host flipping
+ * a switch in the lobby is seen flipping it — but only repaints when one of
+ * the things it prints has moved, so a rent payment does not jump the list
+ * back to the top under somebody reading the bottom of it.
+ */
+export function openTableRulesModal(state) {
+  if (!state?.settings) return;
+  const sig = (s) => `${JSON.stringify(s.settings)}:${s.map?.uid || s.map?.id}:${s.map?.shuffled ? 1 : 0}:`
+    + `${s.status}:${s.quick ? 1 : 0}:${s.cup ? 1 : 0}:${s.vacationPot || 0}:${(s.quickRoll?.edited || []).length}:`
+    + `${(s.players || []).some((p) => p.isBot) ? 1 : 0}`;
+  openModal(`
+    <h2>This table’s rules</h2>
+    <div id="trBody"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="trHelp">How to play</button>
+      <button class="btn primary" id="trClose">Got it</button>
+    </div>`, (root) => {
+    const body = $('#trBody', root);
+    let last = '';
+    const paint = (s) => {
+      if (!s?.settings) return;
+      const now = sig(s);
+      if (now === last) return;
+      last = now;
+      body.innerHTML = tableRulesHTML(s);
+    };
+    paint(state);
+    sheetRepaint = paint;
+    $('#trClose', root).onclick = closeModal;
+    $('#trHelp', root).onclick = () => { sfx.click(); openHelpModal(); };
+  }, 'table-rules');
 }
 
 export function openTradeModal(state, meId, targetId, actions, prefill = null) {
@@ -5095,12 +5701,13 @@ function worthChartSVG(state) {
 // on a dark server sees the app exactly as it was yesterday. Going live is one
 // toggle on the admin desk — nothing here is built or shipped on that day.
 //
-// Coins are scarce here on purpose — the daily ladder starts at one and tops
-// out at seven, a win pays two, and the cheapest piece in the shop is 300. A
-// view is therefore worth real money, so this client never mints anything: it
-// asks for a ticket, plays the ad, and hands the ticket back. What that was
-// worth, how many are left today and whether this one counts at all are the
-// server's business, and its refusals are printed rather than swallowed.
+// Coins are scarce here on purpose — the daily ladder starts at one, climbs
+// to seven and goes round again, a win pays two, and the cheapest piece in
+// the shop is 300. A view is therefore worth real money, so this client
+// never mints anything: it asks for a ticket, plays the ad, and hands the
+// ticket back. What that was worth, how many are left today and whether this
+// one counts at all are the server's business, and its refusals are printed
+// rather than swallowed.
 let adsConfig = null;
 // Whether the server has been asked at all yet. `adsConfig === null` on its own
 // cannot tell "ads are off" from "the answer is still in the air", and the two

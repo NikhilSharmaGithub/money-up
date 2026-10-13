@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -184,7 +186,9 @@ private fun Dock(
         // table being watched, and by how many.
         if (store.isSpectating) WatchingLine(state)
 
-        // Incoming offers, the ones set aside, and the one this phone sent.
+        // Incoming offers (one card, or the "Offers (n)" pile), the ones set
+        // aside, the one this phone sent, and everybody else's — read-only,
+        // and on show to a watcher too.
         TradeDock(store)
 
         DockMorph(moment) { shown ->
@@ -556,6 +560,19 @@ private fun TurnControls(
             val pending = turn.pending?.takeIf { it.type == "buy" } ?: return
             val tile = store.tile(pending.tile) ?: return
             val price = pending.price ?: tile.price ?: 0
+            // Auction-only (1.0.6 round 2): nobody buys at the price, so
+            // there is no Buy here at all — the server opens the auction
+            // the moment the piece lands, and the well draws it. Should a
+            // deed on offer ever reach this table anyway, the one way on is
+            // the hammer, so that is the only button rather than none.
+            if (state.isAuctionOnly) {
+                MMButton(
+                    "Send ${tile.name} to auction", kind = BtnKind.GOLD, big = true, icon = "gavel",
+                    modifier = Modifier.fillMaxWidth(),
+                ) { store.skipBuy() }
+                Hint("Auction-only table — every street goes under the hammer.")
+                return
+            }
             val canAfford = (me?.money ?: 0) >= price
             MMButton(
                 "Buy ${tile.name} — ${money(price)}", kind = BtnKind.GOOD, big = true,
@@ -593,9 +610,15 @@ private fun TurnControls(
             }
             // The fine buys the door and nothing else, so the panel says so
             // before it is pressed — a player who expects to roll afterwards
-            // has spent $50 on a turn they were losing anyway.
-            Hint("In prison · attempt ${(me?.jailTurns ?: 0) + 1} of 3")
-            Hint("Paying the fine ends your turn — the card lets you roll.")
+            // has spent $50 on a turn they were losing anyway. On the third
+            // try the roll is free either way: a miss walks out too, so the
+            // fine buys nothing a roll would not.
+            val attempt = (me?.jailTurns ?: 0) + 1
+            Hint("In prison · attempt ${attempt.coerceAtMost(3)} of 3")
+            Hint(
+                if (attempt >= 3) "Last try — even a miss walks you out free and moves you."
+                else "Paying the fine ends your turn — the card lets you roll.",
+            )
         }
 
         "roll" -> {
@@ -763,8 +786,12 @@ private fun WaitingRow(store: GameStore, state: GameState) {
         val who = store.currentPlayer
         if (who != null) {
             PlayerDisc(who, size = 26.dp)
+            // A seat that went bankrupt keeps the turn while its estate is
+            // auctioned lot by lot; saying it "is playing" then reads as if
+            // the bankrupt player were still in. iOS says the same.
+            val selling = state.auction?.estate != null && who.isBankrupt
             Text(
-                "${who.name} is playing…",
+                if (selling) "${who.name}’s estate is up for auction…" else "${who.name} is playing…",
                 modifier = Modifier.weight(1f),
                 color = p.ink2, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
             )
@@ -938,23 +965,32 @@ private fun WatchingLine(state: GameState) {
 }
 
 /**
- * The house's skill and the game's clock, as two small chips under Start —
- * only when the host has moved one off its default, because "Normal bots ·
- * Unlimited" on every table would be two chips of nothing. The full rows,
- * locked for everybody but the host, are behind Game settings.
+ * The terms a host moved off their defaults, as small chips under Start —
+ * the house's skill, the game's clock, and round 2's three: estates sold at
+ * auction, auction-only and a shuffled board. Only what differs, because
+ * "Normal bots · Unlimited" on every table would be chips of nothing. The
+ * full rows, locked for everybody but the host, are behind Game settings.
+ * Five at once wrap rather than run off a small phone.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TableTerms(settings: GameSettings) {
     val skill = settings.botSkill
     val minutes = settings.gameMinutes
-    if (skill == BotSkill.NORMAL && minutes == 0) return
-    Row(
+    val estates = settings.auctionsEstates
+    val auctionOnly = settings.auctionOnly == true
+    val shuffle = settings.shuffleBoard == true
+    if (skill == BotSkill.NORMAL && minutes == 0 && !estates && !auctionOnly && !shuffle) return
+    FlowRow(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (skill != BotSkill.NORMAL) TermChip("robot", "${skill.label} bots")
         if (minutes > 0) TermChip("hourglass", "$minutes-minute game")
+        if (shuffle) TermChip("shuffle", "Shuffled board")
+        if (auctionOnly) TermChip("gavel", "Auction only")
+        if (estates) TermChip("skull", "Estates auctioned")
     }
 }
 
@@ -1145,17 +1181,28 @@ private fun BoardsSheet(
     }
 }
 
+/**
+ * One seat in the lobby. A seat with somebody behind it — anyone but this
+ * device's own, with a code — opens their profile when tapped, and carries
+ * the chevron that says so, as the final standings' rows do; the team, Host
+ * and remove buttons on it keep their own taps.
+ */
 @Composable
 private fun LobbySeat(store: GameStore, state: GameState, player: PlayerState, teams: Int) {
     val p = P.current
     val team = state.teamOf(player)
     val shape = RoundedCornerShape(14.dp)
+    val profile = store.opensProfile(player)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(p.card)
             .border(1.dp, p.rule, shape)
+            .clickable(enabled = profile, onClickLabel = "Open ${player.name}'s profile", role = Role.Button) {
+                Haptics.tap()
+                store.openProfile(player)
+            }
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1189,6 +1236,7 @@ private fun LobbySeat(store: GameStore, state: GameState, player: PlayerState, t
                 }
             }
         }
+        if (profile) RowChevron(p.ink3, 10.dp)
         // iOS types "⇄" and "✕" on these two; the drawn set's arrows, laid
         // down, and its cross are the same marks.
         if (teams > 0 && store.canCycleTeam(player)) {

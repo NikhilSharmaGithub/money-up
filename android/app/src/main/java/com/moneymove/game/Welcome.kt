@@ -394,7 +394,7 @@ fun HowToPlaySheet(onDismiss: () -> Unit) {
         "What does a full country do?" to
             "Bare rent doubles the moment you hold all of it, before you build anything.",
         "How do I get out of prison?" to
-            "Roll a double, use a card, or pay $50 — but the fine buys the door and nothing else. You do not roll that turn.",
+            "Roll a double and you walk out, moving by that roll. A card frees you and you roll. Paying $50 before you roll opens the door but ends that turn. And if your third roll still is not a double, you walk out free and move by it anyway.",
         "What happens if nobody buys a street?" to
             "It goes to auction, and anybody can bid. The winner pays whatever they bid, which can be less than the price.",
         "What is a mortgage?" to

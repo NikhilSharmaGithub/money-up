@@ -1092,11 +1092,11 @@ private val RULES = listOf(
     ),
     Triple(
         "police", "Prison",
-        "Roll a double to walk out, pay the \$50 fine, or use a card. After three failed attempts you pay anyway.",
+        "Roll a double to walk out, pay the \$50 fine before rolling (that ends your turn), or use a get-out card. If your third roll still isn’t a double, you walk out free and move by it anyway.",
     ),
     Triple(
         "skull", "Bankruptcy",
-        "Owe more than you can raise and you must sell, mortgage or trade. Give up and everything goes to your creditor. Last player standing wins.",
+        "Owe more than you can raise and you must sell, mortgage or trade. Give up and your streets go back to the bank — or to auction, if the table says so. Last player standing wins.",
     ),
 )
 

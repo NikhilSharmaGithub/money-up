@@ -68,6 +68,10 @@ struct SettingsSheet: View {
                     // table is set by the cup, so neither shows the rows.
                     if store.state?.hasTableRules == true {
                         TableRulesCard(editable: canEdit("botLevel") && canEdit("timeLimit"))
+                        // Bankrupt properties, auction-only and the shuffled
+                        // board (1.0.6, round 2): host-set like the two above,
+                        // and like them never at a Play-now or cup table.
+                        TableTwistsCard(editable: canEdit("bankruptProperties"))
                     }
                     rulesSection(P)
                 }

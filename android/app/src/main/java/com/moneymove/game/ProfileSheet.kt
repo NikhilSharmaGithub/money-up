@@ -66,6 +66,12 @@ data class ProfileSeed(
             code = row.code, name = row.name.ifBlank { "Player" }, flag = row.flag, level = row.level,
         )
 
+        /** A seat at the table, mid-game or in the lobby: tonight's colour and the chip's level. */
+        fun of(seat: PlayerState) = ProfileSeed(
+            code = seat.code.orEmpty(), name = seat.name.ifBlank { "Player" }, color = seat.color,
+            flag = seat.flag, avatar = seat.avatar, level = seat.shownLevel ?: 0,
+        )
+
         fun of(friend: Friend) = ProfileSeed(
             code = friend.code, name = friend.name.ifBlank { friend.code },
             flag = friend.flag, avatar = friend.avatar,
@@ -78,7 +84,8 @@ data class ProfileSeed(
  * on their seat, their career, and the one thing worth doing about them —
  * asking to be friends, or saying yes to them having asked.
  *
- * Opened from a finished game's standings, from a leaderboard row and from a
+ * Opened from a finished game's standings, from a seat at the table (the
+ * lobby's rows, the strip's chips), from a leaderboard row and from a
  * friend, so it lives on its own rather than inside any one of them. Each
  * raises it beside its own sheet, the way the DM sheet is raised beside
  * Friends: a sheet is a window of its own, so this one opens over whatever

@@ -400,6 +400,28 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     fun openRules() = openSheet(TableSheet.Rules)
     fun openLook() = openSheet(TableSheet.Look)
 
+    /** "This table's rules": every rule in play here, in words, for a player or a watcher. */
+    fun openTableRules() = openSheet(TableSheet.TableRules)
+
+    /**
+     * A seat with somebody behind it to look up: anyone at the table but this
+     * device's own seats — the main one and every pass & play seat, which
+     * share its token — that came with a code. A pass & play guest's code is
+     * empty, and so is every code from a server too old to send one.
+     */
+    fun opensProfile(player: PlayerState): Boolean =
+        !player.code.isNullOrBlank() && !isLocal(player.id) && !(token.isNotEmpty() && player.id.startsWith(token))
+
+    /**
+     * Their profile, raised over the table: the same card the final
+     * standings open, read afresh by the seat's code. A house player answers
+     * with its steady made-up numbers, like anybody else.
+     */
+    fun openProfile(player: PlayerState) {
+        if (!opensProfile(player)) return
+        openSheet(TableSheet.Profile(ProfileSeed.of(player)))
+    }
+
     /**
      * The trade composer, aimed and loaded. Everything defaults: a bare call
      * is the "Offer a trade" button, `to` is a seat chip, `give` is a street
@@ -650,8 +672,20 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     val me: PlayerState? get() = state?.player(activeId)
     val currentPlayer: PlayerState? get() = state?.let { it.player(it.turn?.playerId) }
 
-    /** It is one of this device's seats' turn — pass & play hands the phone round. */
-    val isMyTurn: Boolean get() = state?.isPlaying == true && isLocal(state?.turn?.playerId)
+    /**
+     * It is one of this device's seats' turn — pass & play hands the phone
+     * round. Not a seat that is already out: at a table that auctions estates
+     * (G5) the server leaves the turn parked on the bankrupt chair until the
+     * last of its lots falls, and that chair has nothing to do with it. Read
+     * as its turn, the dock said "Your turn" over empty controls for the whole
+     * sale, and "You went bankrupt — watching how it ends" waited until after.
+     */
+    val isMyTurn: Boolean
+        get() {
+            val s = state ?: return false
+            val seat = s.turn?.playerId
+            return s.isPlaying && isLocal(seat) && s.player(seat)?.isBankrupt != true
+        }
     val isHost: Boolean get() = state?.hostId == meId
 
     /** Whether the board is still mid-story, so decisions stay behind it. */
@@ -2016,12 +2050,18 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * The auction's own voice: the gavel when it opens — held back with the
      * box if the landing that opened it is still walking — and a rising
      * paddle tick for every new bid, pitched by how high the bid is.
+     *
+     * A new lot is a new auction even with no gap before it: an estate sale
+     * (G5) swaps one lot for the next inside a single push, so the table never
+     * sees "no auction" between them, and the second street onwards opened in
+     * silence. A different tile, or a different place in the estate, is a
+     * fresh hammer and gets the gavel too.
      */
     private fun noteAuction(old: GameState?, next: GameState) {
         if (old == null) return
         val now = next.auction
         val was = old.auction
-        if (now != null && was == null) {
+        if (now != null && (was == null || now.tile != was.tile || now.estate != was.estate)) {
             if (theatreLive) auctionUnderHold = true else SoundKit.auction()
         } else if (now != null && was != null && now.bid > was.bid) {
             SoundKit.bid(now.bid)
@@ -2421,6 +2461,34 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     val sentOffers: List<TradeOffer>
         get() = state?.trades.orEmpty().filter { isLocal(it.from) }
 
+    /**
+     * Offers between two seats that are not on this device — trades are
+     * public at the table from 1.0.6 (round 2), so everybody, a watcher
+     * included, can read them. Nothing here can answer or withdraw one:
+     * only the receiver answers, only the sender takes it back, and the
+     * server refuses anyone else. Oldest first.
+     */
+    val tableTrades: List<TradeOffer>
+        get() = state?.trades.orEmpty().filter { !isLocal(it.from) && !isLocal(it.to) }
+
+    /** "Ravi → Asha: Tel Aviv for $300" — one of [tableTrades] as its row says it. */
+    fun tableTradeLine(offer: TradeOffer): String {
+        val s = state
+        return tableTradeWords(
+            from = s?.player(offer.from)?.name ?: "Someone",
+            to = s?.player(offer.to)?.name ?: "someone",
+            give = offer.give.takeUnless { it.isEmpty }?.let { tradeSummary(it) },
+            get = offer.get.takeUnless { it.isEmpty }?.let { tradeSummary(it) },
+        )
+    }
+
+    /**
+     * Every offer to a seat here and every offer between others, in one
+     * scrolling list (1.0.6, round 2): the "Offers (n)" stack in the dock
+     * opens it, and so does the table's own trades line.
+     */
+    fun openOffers() = openSheet(TableSheet.Offers)
+
     /** The offer as the table has it now — readers and all — or null once it is answered or withdrawn. */
     fun liveOffer(id: Int): TradeOffer? = state?.trades?.firstOrNull { it.id == id }
 
@@ -2785,16 +2853,32 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         }
 
         (sheet as? TableSheet.Offer)?.let { up -> if (up.offer.id !in live) sheet = null }
+        // The list of offers comes down once there is nothing left on it
+        // for a seat here — the last offer answered, nothing sent — or
+        // nothing on the table at all; the table's trades on their own are
+        // not worth holding a sheet over the board for.
+        if (sheet == TableSheet.Offers) {
+            val ours = next.trades.any { isLocal(it.to) || isLocal(it.from) }
+            val had = old?.trades.orEmpty().any { isLocal(it.to) || isLocal(it.from) }
+            if (next.trades.isEmpty() || (had && !ours)) sheet = null
+        }
 
         val moved = old == null ||
             old.trades.map { it.id to it.isSetAside } != next.trades.map { it.id to it.isSetAside }
         if (!moved || !next.isPlaying) return
         if (sheet != null || confirm != null || showGameOver || timedOut) return
-        val fresh = next.trades
-            .filter { isLocal(it.to) && !it.isSetAside && it.id !in offersShown }
-            .minByOrNull { it.id } ?: return
-        offersShown = offersShown + fresh.id
-        sheet = TableSheet.Offer(fresh, fresh.to)
+        val waiting = next.trades.filter { isLocal(it.to) && !it.isSetAside }
+        when (val pop = offerPop(waiting, offersShown)) {
+            null -> Unit
+            is OfferPop.One -> {
+                offersShown = offersShown + pop.offer.id
+                sheet = TableSheet.Offer(pop.offer, pop.offer.to)
+            }
+            is OfferPop.All -> {
+                offersShown = offersShown + pop.ids
+                sheet = TableSheet.Offers
+            }
+        }
     }
 
     // ── rules the UI needs to ask about before it offers a button ──────────
@@ -3199,6 +3283,28 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     }
 }
 
+/** What a fresh offer brings to the front of the screen — see [offerPop]. */
+internal sealed interface OfferPop {
+    /** The one offer, on its own sheet. */
+    data class One(val offer: TradeOffer) : OfferPop
+
+    /** Every waiting offer at once, as the list; all of them count as shown. */
+    data class All(val ids: List<Int>) : OfferPop
+}
+
+/**
+ * Whether an offer pops up, and how, given the offers waiting on an answer
+ * from a seat here (set-aside ones left out) and the ids already put in
+ * front of the player. Nothing new, nothing pops. One waiting is its own
+ * sheet, as it always was. Two or more (1.0.6, round 2) come up together as
+ * the list rather than a sheet per offer, each queued behind the last — and
+ * every one of them is on show in it, so none pops again on its own later.
+ */
+internal fun offerPop(waiting: List<TradeOffer>, shown: Set<Int>): OfferPop? {
+    val fresh = waiting.filter { it.id !in shown }.minByOrNull { it.id } ?: return null
+    return if (waiting.size >= 2) OfferPop.All(waiting.map { it.id }) else OfferPop.One(fresh)
+}
+
 /**
  * The sheet a table has open. One at a time — see [GameStore.sheet].
  *
@@ -3219,6 +3325,13 @@ sealed interface TableSheet {
     /** An incoming offer put in front of the seat it is for. */
     data class Offer(val offer: TradeOffer, val seat: String) : TableSheet
 
+    /**
+     * Every open offer at once (1.0.6, round 2): the ones to seats here, each
+     * with its answers, then the table's own trades, read-only, and what
+     * this device has sent.
+     */
+    data object Offers : TableSheet
+
     /** Chat and the game log, opening on one or the other. */
     data class ChatLog(val tab: Int = CHAT) : TableSheet {
         companion object {
@@ -3232,6 +3345,12 @@ sealed interface TableSheet {
 
     /** The player's own look — piece, colour, name. */
     data object Look : TableSheet
+
+    /** Somebody else at the table — their level, record, career and the friend button. */
+    data class Profile(val seed: ProfileSeed) : TableSheet
+
+    /** Every rule this table plays, read-only, for anyone sitting or watching. */
+    data object TableRules : TableSheet
 }
 
 /**

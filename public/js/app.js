@@ -8,10 +8,10 @@ import {
 import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
-  confetti, openDeedModal, openHelpModal, openIntroModal, INTRO_VERSION, openStoreModal, openJoinNameModal,
-  openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
+  confetti, openDeedModal, openHelpModal, openTableRulesModal, openIntroModal, INTRO_VERSION, openStoreModal, openJoinNameModal,
+  openLeaveModal, estateGoesToAuction, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
-  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
+  openAchievementsModal, leaderRowsHTML, openTradeOfferModal, openOffersModal, offerSheetOpen, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
   cupSettledLine, noteDeviceSeat, winnerLabel, wonGame, TICK,
   levelChip, levelFraction, MISSIONS, celebrateLevelUp, noteGameProgress, openPlayerProfile,
   leaderTabsHTML, fetchLeaderboard, leaderNote, leaderEmpty, leaderYouHTML, wireLeaderRows,
@@ -219,6 +219,7 @@ function socialHooks() {
           setTimeout(() => { state = null; go(id); }, 150);
         },
         onConcede: null,
+        estateAuction: estateGoesToAuction(state),
       });
     },
     // Whatever table this browser is sitting at, so a friend can be asked to
@@ -286,6 +287,37 @@ function stopDailyClock() {
 // that prints it has to be able to say "coin" as well as "coins".
 const coinWord = (n) => `${n} coin${n === 1 ? '' : 's'}`;
 
+/** The day of the seven-day cycle the server says the card is about, or 0 for a server from before it. */
+function cycleDayOf(d) {
+  const len = Math.floor(Number(d?.cycleLength)) || 7;
+  const day = Math.floor(Number(d?.cycleDay));
+  return day >= 1 && day <= len ? day : 0;
+}
+
+/**
+ * The ladder as seven steps, one to seven coins (1.0.6). It goes round: the
+ * day after a seven pays one again, for as long as the streak lasts, so the
+ * bar is this week of it — drawn from `cycleDay`, never from the streak,
+ * which keeps counting past seven. Steps before today are collected; today's
+ * is lit while it waits and collected once it is taken; the rest are to come.
+ * A server from before the cycle names no step, and the card goes without.
+ */
+function dailyStepsHTML(d) {
+  const day = cycleDayOf(d);
+  if (!day) return '';
+  const len = Math.floor(Number(d.cycleLength)) || 7;
+  const taken = !!d.claimedToday;
+  const steps = Array.from({ length: len }, (_, k) => {
+    const n = k + 1;
+    const kind = n < day || (n === day && taken) ? 'got' : n === day ? 'today' : 'next';
+    const said = kind === 'got' ? 'collected' : kind === 'today' ? 'today' : 'to come';
+    return `<li class="ds-step ${kind}" title="Day ${n} — ${coinWord(n)}, ${said}">
+        <span class="ds-pip">${kind === 'got' ? TICK : n}</span>
+      </li>`;
+  }).join('');
+  return `<ol class="daily-steps" aria-label="Day ${day} of ${len}: ${coinWord(day)}${taken ? ', collected' : ' today'}">${steps}</ol>`;
+}
+
 /** "07:12:44" — hours first, because the wait is always most of a day. */
 function untilText(at) {
   const ms = Math.max(0, at - Date.now());
@@ -340,22 +372,33 @@ function paintDaily(d) {
             follow you to any device.</div>
         </div>
       </div>
+      ${dailyStepsHTML(d)}
       <button class="btn wide wrap" id="dailySignIn">${icon('key', 15)} Sign in to collect</button>`;
     const go = $('#dailySignIn');
     if (go) go.onclick = pointAtSignIn;
     return;
   }
+  // Where today sits in the week of the ladder. A server from before the
+  // cycle says nothing, and the lines fall back to the streak they told.
+  const day = cycleDayOf(d);
+  const claimLine = !day
+    ? (streak > 0
+      ? `Day ${streak + 1} of your streak — miss a day and it starts again`
+      : 'Free coins, every day you turn up')
+    : streak === 0 ? 'Day 1 of 7 — a coin more every day you come back'
+    : day === 1 ? `A new week of coins — day ${streak + 1} of your streak`
+    : day === 7 ? 'Day 7 of 7 — the top of the week, then it goes round to 1'
+    : `Day ${day} of 7 — miss a day and it starts again at 1`;
   card.innerHTML = d.claimable
     ? `<div class="dc-head">
         <span class="dc-mark">${icon('coin', 22, 'solo')}</span>
         <div class="dc-body">
           <div class="dc-title">Daily reward</div>
-          <div class="dc-sub">${streak > 0
-            ? `Day ${streak + 1} of your streak — miss a day and it starts again`
-            : 'Free coins, every day you turn up'}</div>
+          <div class="dc-sub">${claimLine}</div>
         </div>
         ${streakChip}
       </div>
+      ${dailyStepsHTML(d)}
       <button class="btn gold wide wrap" id="dailyBtn">
         <span class="btn-ico">${icon('coin')}</span> Collect your daily ${coinWord(amount)}
       </button>`
@@ -363,15 +406,17 @@ function paintDaily(d) {
         <span class="dc-mark quiet">${icon('snooze', 22, 'solo')}</span>
         <div class="dc-body">
           <div class="dc-title">Back tomorrow</div>
-          <!-- Tomorrow's payout climbs with the streak, and only the server
-               knows by how much. Until it has said, the line promises coins
-               without naming a figure rather than naming the wrong one. -->
+          <!-- Tomorrow's payout is the next step of the week. When there
+               is no figure for it yet (a claim answered by a server from
+               before the cycle), the line promises coins without naming one
+               rather than naming the wrong one. -->
           <div class="dc-sub">${amount > 0
             ? `${amount} more coin${amount === 1 ? '' : 's'}`
             : 'More coins'} in <b id="dailyClock">${untilText(d.nextAt)}</b></div>
         </div>
         ${streakChip}
-      </div>`;
+      </div>
+      ${dailyStepsHTML(d)}`;
   card.classList.remove('hidden');
 
   if (d.claimable) {
@@ -408,6 +453,21 @@ function refreshDaily() {
     .catch(() => paintDaily(null));
 }
 
+/**
+ * The card's own view of a day already collected, built from a claim's answer
+ * (or its 409) without asking again: today's step taken, and tomorrow paying
+ * the next one round — the same sum dailyView makes. No step, no figure.
+ */
+function claimedView(out) {
+  const day = cycleDayOf(out);
+  return {
+    claimable: false,
+    streak: out.streak,
+    nextAt: out.nextAt,
+    ...(day ? { cycleDay: day, cycleLength: 7, claimedToday: true, amount: (day % 7) + 1 } : {}),
+  };
+}
+
 async function claimDaily() {
   const btn = $('#dailyBtn');
   if (btn) btn.disabled = true;
@@ -419,10 +479,11 @@ async function claimDaily() {
     });
     const out = await res.json();
     // 409 is an eager client, not a broken one — the card just catches up. The
-    // refusal carries no figure for tomorrow, so the card asks for one rather
-    // than printing the nothing it was handed.
+    // refusal names the step taken today but no figure for tomorrow, so the
+    // card works that out from the step where it can, and asks the server
+    // either way rather than trusting its own sum for long.
     if (!res.ok || !out.ok) {
-      if (res.status === 409) { paintDaily({ claimable: false, streak: out.streak, nextAt: out.nextAt }); refreshDaily(); }
+      if (res.status === 409) { paintDaily(claimedView(out)); refreshDaily(); }
       else if (res.status === 401) { toast('Sign in first — the daily coin needs an account'); refreshDaily(); }
       else toast(out.error || 'Could not collect today\'s coins', 'error');
       return;
@@ -432,12 +493,13 @@ async function claimDaily() {
     toast(out.streak > 1
       ? `+${coinWord(out.amount)} — ${out.streak} days in a row`
       : `+${coinWord(out.amount)} collected`);
-    // The card flips the moment the coins land, but without a figure on it:
-    // the claim only reports what today paid, and today's streak has already
-    // made tomorrow worth more. The read behind the count-up fills the number
+    // The card flips the moment the coins land, today's step already filled
+    // in on the bar. Tomorrow's figure is the step after it (seven goes round
+    // to one), and a server from before the cycle sends no step — the card
+    // then flips without a figure, and the read behind the count-up fills it
     // in. Same trip refreshes the wallet, since the claim moved the karma
     // chip's neighbour.
-    paintDaily({ claimable: false, streak: out.streak, nextAt: out.nextAt });
+    paintDaily(claimedView(out));
     setTimeout(() => { refreshWallet(); refreshDaily(); }, 900);
   } catch {
     toast('Could not reach the server — try again in a moment', 'error');
@@ -448,11 +510,12 @@ async function claimDaily() {
 
 // ---- daily missions ------------------------------------------------------
 // Three small jobs a day, dealt by the server from this player's code and the
-// day, beside the daily coins. Progress counts for everybody; claiming the
-// coins needs an account — the daily reward's door. The card is only ever
-// drawn from what the server last said, and a claim answers with the whole
-// card already updated, so a retry or a second tab can never show a reward
-// twice.
+// day, beside the daily coins. Each pays XP; only all three together pay
+// coins, a small bonus (1.0.6 — each one used to pay coins of its own).
+// Progress counts for everybody; claiming needs an account — the daily
+// reward's door. The card is only ever drawn from what the server last said,
+// and a claim answers with the whole card already updated, so a retry or a
+// second tab can never show a reward twice.
 let missionsTimer = null;
 // A claim on its way, so a second tap on another row waits its turn instead
 // of racing the first answer to the repaint.
@@ -489,12 +552,18 @@ function paintMissions(d) {
   const done = list.filter((m) => m.done).length;
   // The reward side of a row: a Claim plate when there is something to
   // take, the way in when there is something to take but no account to put
-  // it in, a tick once it is taken, and otherwise what it will pay.
+  // it in, a tick once it is taken, and otherwise what it will pay. A coin
+  // is only drawn where coins are paid — the bonus row, since 1.0.6 — so a
+  // mission row reads "+10 XP" and nothing that looks like money; a server
+  // from before that still paying coins per mission still gets them shown.
   const reward = (id, { claimed, ready, coins, xp }) => {
     if (claimed) return `<span class="mc-claimed">${TICK} Claimed</span>`;
     if (ready && signedIn) return `<button class="btn gold tiny" type="button" data-claim="${escapeHtml(id)}">Claim</button>`;
     if (ready) return '<button class="btn tiny" type="button" data-signin>Sign in to claim</button>';
-    return `<span class="mc-reward">${icon('coin', 13)}${Number(coins) || 0}${xp ? `<i>+${Number(xp)} XP</i>` : ''}</span>`;
+    const c = Number(coins) || 0;
+    const x = Number(xp) || 0;
+    if (!c) return `<span class="mc-reward xp">+${x} XP</span>`;
+    return `<span class="mc-reward">${icon('coin', 13)}${c}${x ? `<i>+${x} XP</i>` : ''}</span>`;
   };
   const row = (m) => {
     const pct = Math.min(100, Math.round(((Number(m.progress) || 0) / Math.max(1, Number(m.target) || 1)) * 100));
@@ -507,6 +576,7 @@ function paintMissions(d) {
       ${reward(m.id, { claimed: m.claimed, ready: m.done, coins: m.coins, xp: m.xp })}
     </div>`;
   };
+  const bonusCoins = Number(bonus.coins) || 0;
   const claimable = signedIn && (list.some((m) => m.done && !m.claimed) || bonus.ready);
   const allTaken = list.every((m) => m.claimed) && bonus.claimed;
   const resets = Number(d.resetsAt) || 0;
@@ -518,8 +588,8 @@ function paintMissions(d) {
       <div class="dc-body">
         <div class="dc-title">Daily missions</div>
         <div class="dc-sub">${allTaken ? 'All done for today'
-          : signedIn ? 'Three for today, and a bonus for all three'
-          : 'Your progress counts already — sign in to claim the coins'}${
+          : signedIn ? `XP for each, and ${bonusCoins ? coinWord(bonusCoins) : 'coins'} for all three`
+          : 'Your progress counts already — sign in to claim'}${
           resets ? ` · new ones in <b id="missionsClock">${untilShort(resets)}</b>` : ''}</div>
       </div>
       <span class="mc-count" title="${done} of ${list.length} done">${done}/${list.length}</span>
@@ -586,13 +656,19 @@ async function claimMission(id, btn) {
       return;
     }
     // A repeat (a retry, the other tab) answers success with nothing paid:
-    // the card catches up and nothing is thrown at the counter.
+    // the card catches up and nothing is thrown at the counter. A mission
+    // pays XP alone (1.0.6), which is no coin sound and no coin toast — it
+    // is said as XP, and the level row underneath is seen to climb.
     const paid = Number(out.awarded?.coins) || 0;
+    const xp = Number(out.awarded?.xp) || 0;
     if (!out.duplicate && paid > 0) {
       sfx.gain();
       toast(id === 'bonus'
         ? `+${coinWord(paid)} — all three missions done`
-        : `+${coinWord(paid)} and +${Number(out.awarded?.xp) || 0} XP`);
+        : `+${coinWord(paid)} and +${xp} XP`);
+    } else if (!out.duplicate && xp > 0) {
+      sfx.pop();
+      toast(`+${xp} XP`);
     }
     noteWallet(out);
     if (out.missions) paintMissions(out.missions);
@@ -1330,6 +1406,7 @@ function boot() {
     state = null;
     roomId = null;
     lastStatus = null;
+    syncOffersDock(null);
     resetBoard();
     resetLedger();
     showLanding();
@@ -1354,6 +1431,7 @@ function boot() {
   // Offer ids start again at 1 in a new room, so what has already been shown
   // has to be forgotten with the room it belonged to.
   offersShown.clear();
+  syncOffersDock(null);
   // Nothing on the landing is on screen any more — stop polling for it.
   clearInterval(roomsTimer);
   stopLive();
@@ -1529,6 +1607,7 @@ function render() {
   safe('chat', () => renderChat(state, $('#chatList'), chatChannel));
   safe('chatDock', () => syncChatDock(state));
   safe('offer', () => showNewOffers(state));
+  safe('offersDock', () => syncOffersDock(state));
 
   $('#shareCard').classList.toggle('hidden', state.status !== 'lobby');
   document.body.classList.toggle('my-turn', state.turn?.playerId === meId && state.status === 'playing');
@@ -2241,6 +2320,13 @@ document.querySelectorAll('#helpBtn, #helpBtnLanding').forEach((b) => {
   b.addEventListener('click', () => { sfx.click(); openHelpModal(); });
 });
 
+// This table's rules, beside the sound: read off the state the table is
+// playing, so it is the same sheet for a player and for somebody watching.
+$('#rulesBtn')?.addEventListener('click', () => {
+  sfx.click();
+  if (state) openTableRulesModal(state);
+});
+
 // Pass-and-play: opens a second window with its own identity in the same room.
 $('#addLocalBtn').addEventListener('click', () => {
   sfx.click();
@@ -2498,6 +2584,7 @@ function goHome({ replace = false } = {}) {
   roomId = null;
   forgetProgress();
   offersShown.clear();
+  syncOffersDock(null);
   if (document.body.classList.contains('chat-open')) closeChatDock();
   seenChatId = null;
   heardChatId = null;
@@ -2509,7 +2596,7 @@ function goHome({ replace = false } = {}) {
 $('#leaveBtn').addEventListener('click', () => {
   sfx.click();
   // Mid-game, leaving deserves a second thought — and a choice: a bot can hold
-  // the seat, or the deeds can go back to the bank for good. Someone only
+  // the seat, or the deeds can go back to the bank (or under the hammer) for good. Someone only
   // watching has no seat to keep or quit, so they just go.
   if (state?.status === 'playing' && state.players?.some((p) => p.id === meId)) {
     openLeaveModal({
@@ -2527,6 +2614,7 @@ $('#leaveBtn').addEventListener('click', () => {
       onConcede: state?.players?.some((p) => p.id === meId && !p.bankrupt)
         ? () => actions.bankrupt()
         : null,
+      estateAuction: estateGoesToAuction(state),
     });
     return;
   }
@@ -2986,18 +3074,63 @@ function showNewOffers(s) {
   const live = new Set(s.trades.map((t) => t.id));
   // Deals that are over stop taking up room in the set.
   for (const id of offersShown) if (!live.has(id)) offersShown.delete(id);
-  // One at a time, oldest first: two sheets stacked on each other would bury
-  // the first, and a sheet already open (a deed, the composer, the report
-  // card) is not something an offer gets to interrupt.
+  const waiting = s.trades.filter((t) => t.to === meId && !t.ignored).sort((a, b) => a.id - b.id);
+  const fresh = waiting.filter((t) => !offersShown.has(t.id));
+  if (!fresh.length) return;
+  const seen = () => waiting.forEach((t) => offersShown.add(t.id));
+  // Never two sheets on top of each other (1.0.6): with the Offers list
+  // already up, a new deal simply arrives in it (it follows the table), and
+  // with one offer's sheet up, a second turns that sheet into the list — so
+  // two or three deals at once are one sheet with two or three cards, not a
+  // pile with the first buried under the rest.
+  const sheet = offerSheetOpen();
+  if (sheet === 'list') { seen(); sfx.trade(); return; }
+  if (sheet === 'one' || (!isModalOpen() && waiting.length > 1)) {
+    seen();
+    sfx.trade();
+    openOffersModal(s, meId, actions);
+    return;
+  }
+  // Any other sheet (a deed, the composer, the report card) is not something
+  // an offer gets to interrupt; the Offers button carries the count meanwhile.
   if (isModalOpen()) return;
-  const next = s.trades
-    .filter((t) => t.to === meId && !t.ignored && !offersShown.has(t.id))
-    .sort((a, b) => a.id - b.id)[0];
-  if (!next) return;
+  const next = fresh[0];
   offersShown.add(next.id);
   sfx.trade();
   openTradeOfferModal(s, next, meId, actions, (id) => offersShown.add(id));
 }
+
+// ---- the offers dock -----------------------------------------------------
+// On a phone the Offers panel is in the rail, a long scroll under the board,
+// and a sheet that was closed — or never opened, because the composer was up
+// when the deal came in — left nothing on screen to say a deal was waiting.
+// So beside the chat button, while anything is waiting on this seat, a
+// capsule says "Offers" and how many, and opens the list of them. On a
+// desktop the rail is on screen and its Offers panel is the same thing.
+// Looked up when it is painted rather than held in a constant: the router
+// can clear it while this file is still loading, before a constant this far
+// down would exist.
+function syncOffersDock(s) {
+  const btn = $('#offersDock');
+  if (!btn) return;
+  const mine = s?.status === 'playing' ? s.trades.filter((t) => t.to === meId) : [];
+  const open = mine.filter((t) => !t.ignored).length;
+  btn.classList.toggle('on', mine.length > 0);
+  // Set aside is still waiting, but it is not news: the capsule only glows
+  // while something has not been put off.
+  btn.classList.toggle('fresh', open > 0);
+  const n = btn.querySelector('.od-n');
+  if (n) n.textContent = String(mine.length);
+  btn.setAttribute('aria-label', mine.length === 1 ? 'Offers: 1 trade offer' : `Offers: ${mine.length} trade offers`);
+}
+
+$('#offersDock')?.addEventListener('click', () => {
+  if (!state) return;
+  sfx.click();
+  // Opening the list is reading every card on it.
+  state.trades.forEach((t) => { if (t.to === meId) offersShown.add(t.id); });
+  openOffersModal(state, meId, actions);
+});
 
 // ---- the chat dock -------------------------------------------------------
 // On a phone the chat used to be a panel below the board, below the log, in a

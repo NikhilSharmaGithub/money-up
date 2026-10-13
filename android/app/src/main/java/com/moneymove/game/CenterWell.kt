@@ -462,6 +462,15 @@ private fun LobbyWell(state: GameState, modifier: Modifier) {
             color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
+        // The lobby always shows the printed board; at a table set to
+        // shuffle, the layout everybody sees here is not the one they will
+        // play, so the well says so before the dice do.
+        if (state.settings.shuffleBoard == true && state.hostSetsRules) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Icon("shuffle", size = 11.dp, tint = p.ink3)
+                Text("Shuffled at the start", color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (i in 0 until state.settings.maxPlayers) {
                 val seat = state.players.getOrNull(i)
@@ -549,11 +558,25 @@ private fun AuctionBox(store: GameStore, auction: AuctionState, modifier: Modifi
             Text("AUCTION", color = p.gold, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
         }
         // The well's text shrinks to 70% before it is cut short, as iOS's does.
+        val street = store.tile(auction.tile)
         FitText(
-            store.tile(auction.tile)?.name ?: "Property",
+            street?.name ?: "Property",
             color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
             minScale = 0.7f,
         )
+        // One quiet line at most under the name (1.0.6 round 2): whose
+        // estate this lot is and how many of it are still to come, or — at
+        // an auction-only table, where nobody saw a Buy button — the price
+        // on the deed, which is what the bidding is measured against.
+        val note = auction.estateLine
+            ?: street?.price?.takeIf { store.state?.isAuctionOnly == true }?.let { "Deed price ${money(it)}" }
+        if (note != null) {
+            FitText(
+                note,
+                color = p.ink2, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+                minScale = 0.7f,
+            )
+        }
         Text(money(auction.bid), color = p.gold, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
 
         val leader = store.auctionLeader

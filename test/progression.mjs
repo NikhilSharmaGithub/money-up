@@ -307,7 +307,9 @@ async function inProcess() {
       short(me.career));
     PASS(S.missionsView(FARM.token, now).missions.find((m) => m.kind === 'playGames')?.done === true, 'and so do the missions');
     const claim = S.claimMission(FARM.token, 'playGames', now);
-    PASS(claim?.ok === true && isDeepStrictEqual(claim.awarded, { coins: 3, xp: 10 }) && claim.xp === GAME_XP_PER_DAY + 10,
+    // Round 2 (G10): a mission on its own pays XP only — 0 coins — so the
+    // awarded block reads { coins: 0, xp: 10 } where it read 3 coins.
+    PASS(claim?.ok === true && isDeepStrictEqual(claim.awarded, { coins: 0, xp: 10 }) && claim.xp === GAME_XP_PER_DAY + 10,
       'a mission claimed past the ceiling still pays its 10 XP: missions have a daily bound of their own', short(claim?.awarded));
     const tomorrow = new Date(now);
     tomorrow.setHours(24, 5, 0, 0);
@@ -352,13 +354,14 @@ async function inProcess() {
     const v0 = S.missionsView(MIA.token, now);
     const kinds = missionKinds(MIA.code, today);
     PASS(v0.day === today && v0.signedIn === true && isDeepStrictEqual(v0.missions.map((m) => m.id), kinds)
-      && v0.missions.every((m) => m.kind === m.id && m.coins === 3 && m.xp === 10 && m.title === missionOf(m.kind).title),
-    'today\'s three, by kind, each worth 3 coins and 10 XP', short(v0.missions.map((m) => m.id)));
+      && v0.missions.every((m) => m.kind === m.id && m.coins === 0 && m.xp === 10 && m.title === missionOf(m.kind).title),
+    'today\'s three, by kind, each worth 10 XP and no coins (round 2)', short(v0.missions.map((m) => m.id)));
     const pg = v0.missions.find((m) => m.kind === 'playGames');
     PASS(pg?.progress === 2 && pg.done === true && pg.target === 2, 'the two games Mia already played count toward "Play 2 games"',
       short(pg));
     const midnight = new Date(now); midnight.setHours(24, 0, 0, 0);
-    PASS(v0.resetsAt === midnight.getTime() && isDeepStrictEqual(v0.bonus, { coins: 5, ready: false, claimed: false }),
+    // Round 2 (G10): the all-three bonus is 3 coins, down from 5.
+    PASS(v0.resetsAt === midnight.getTime() && isDeepStrictEqual(v0.bonus, { coins: 3, ready: false, claimed: false }),
       'resets at the server\'s midnight; the bonus waits for all three', short(v0.bonus));
 
     const ghost = `ghost-${hex(5)}`;
@@ -379,15 +382,18 @@ async function inProcess() {
     const wallet = S.walletOf(MIA.token).coins;
     const xp = S.meView(MIA.token).xp;
     const c1 = S.claimMission(MIA.token, 'playGames', now);
-    PASS(c1.ok === true && isDeepStrictEqual(c1.awarded, { coins: 3, xp: 10 }) && c1.coins === wallet + 3 && c1.xp === xp + 10
+    PASS(c1.ok === true && isDeepStrictEqual(c1.awarded, { coins: 0, xp: 10 }) && c1.coins === wallet && c1.xp === xp + 10
       && c1.level === levelFor(xp + 10) && c1.missions.missions.find((m) => m.kind === 'playGames')?.claimed === true,
-    'Mia claims "Play 2 games": 3 coins and 10 XP, and the card comes back with it claimed', short({ ...c1, missions: undefined }));
+    'Mia claims "Play 2 games": 10 XP and no coins, and the card comes back with it claimed', short({ ...c1, missions: undefined }));
     const again = S.claimMission(MIA.token, 'playGames', now);
     PASS(again.ok === true && again.duplicate === true && isDeepStrictEqual(again.awarded, { coins: 0, xp: 0 })
-      && again.coins === wallet + 3 && S.meView(MIA.token).xp === xp + 10,
+      && again.coins === wallet && S.meView(MIA.token).xp === xp + 10,
     'claiming it again (a retry, a second tab) is ok and pays nothing', short({ ...again, missions: undefined }));
-    PASS(ledgerOf(MIA, 'mission').filter((e) => e.txn === `mission:${today}:${MIA.code}:playGames`).length === 1,
-      'one ledger row, provider mission, named for the day and the mission');
+    // Round 2 (G10): nothing is minted by a single mission any more, so it
+    // writes no coin-ledger row (it used to write one 3-coin row). The claim
+    // is still booked once — the duplicate above proves that.
+    PASS(ledgerOf(MIA, 'mission').filter((e) => e.txn === `mission:${today}:${MIA.code}:playGames`).length === 0,
+      'no coin-ledger row for a mission that mints no coins');
 
     const early = S.claimMission(MIA.token, 'buildHouses', now);
     PASS(!early.ok && /not finished/.test(early.error || ''), 'a mission not yet done cannot be claimed', short(early));
@@ -408,14 +414,16 @@ async function inProcess() {
     for (const k of kinds.filter((x) => x !== 'playGames')) S.claimMission(MIA.token, k, now);
     const w = S.walletOf(MIA.token).coins;
     const bonus = S.claimMission(MIA.token, 'bonus', now);
-    PASS(bonus.ok && isDeepStrictEqual(bonus.awarded, { coins: 5, xp: 0 }) && bonus.coins === w + 5
+    PASS(bonus.ok && isDeepStrictEqual(bonus.awarded, { coins: 3, xp: 0 }) && bonus.coins === w + 3
       && bonus.missions.bonus.claimed === true && bonus.missions.bonus.ready === false,
-    'all three claimed: the bonus pays 5 coins', short({ ...bonus, missions: undefined }));
+    'all three claimed: the bonus pays 3 coins', short({ ...bonus, missions: undefined }));
     const bonus2 = S.claimMission(MIA.token, 'bonus', now);
-    PASS(bonus2.ok && bonus2.duplicate === true && S.walletOf(MIA.token).coins === w + 5, 'and only once');
+    PASS(bonus2.ok && bonus2.duplicate === true && S.walletOf(MIA.token).coins === w + 3, 'and only once');
+    // Round 2 (G10): one row for the day now — the bonus, 3 coins — where
+    // there were four (three 3-coin missions and a 5-coin bonus, 14 coins).
     const rows = ledgerOf(MIA, 'mission');
-    PASS(rows.length === 4 && new Set(rows.map((e) => e.txn)).size === 4 && rows.reduce((n, e) => n + e.coins, 0) === 14,
-      'four ledger rows for the day: three missions and the bonus, 14 coins', rows.map((e) => e.txn.split(':').pop()).join(','));
+    PASS(rows.length === 1 && rows[0].txn === `mission:${today}:${MIA.code}:bonus` && rows[0].coins === 3,
+      'one ledger row for the day: the bonus, 3 coins', rows.map((e) => e.txn.split(':').pop()).join(','));
 
     const tomorrow = now + DAY;
     const next = S.missionsView(MIA.token, tomorrow);
@@ -896,11 +904,13 @@ async function overTheWire() {
     PASS((await get(S, '/api/missions')).status === 400, 'no token: 400');
 
     const c1 = await post(S, '/api/missions/claim', { token: ASHA.token, id: 'winGame' });
-    PASS(c1.status === 200 && c1.json?.ok === true && c1.json.coins === 110 && isDeepStrictEqual(c1.json.awarded, { coins: 3, xp: 10 })
+    // Round 2 (G10): a mission pays 10 XP and no coins, so the wallet stays
+    // at 107 (100 + the two-coin purse + five for level 2) where it read 110.
+    PASS(c1.status === 200 && c1.json?.ok === true && c1.json.coins === 107 && isDeepStrictEqual(c1.json.awarded, { coins: 0, xp: 10 })
       && c1.json.xp === me.xp + 10 && c1.json.missions?.missions?.find((x) => x.kind === 'winGame')?.claimed === true,
-    'claiming it: 3 coins, 10 XP, the wallet balance and the redrawn card', short({ ...c1.json, missions: undefined }));
+    'claiming it: 10 XP and no coins, the wallet balance and the redrawn card', short({ ...c1.json, missions: undefined }));
     const c2 = await post(S, '/api/missions/claim', { token: ASHA.token, id: 'winGame' });
-    PASS(c2.status === 200 && c2.json?.duplicate === true && c2.json.coins === 110, 'claiming twice: 200, duplicate, not paid again',
+    PASS(c2.status === 200 && c2.json?.duplicate === true && c2.json.coins === 107, 'claiming twice: 200, duplicate, not paid again',
       short({ ...c2.json, missions: undefined }));
     const c3 = await post(S, '/api/missions/claim', { token: ASHA.token, id: 'playGames' });
     PASS(c3.status === 400 && /not finished/.test(c3.json?.error || ''), 'an unfinished one: 400', c3.text.slice(0, 120));
@@ -963,9 +973,20 @@ async function overTheWire() {
     f.emit('start');
     await until(() => f.state?.status === 'playing', 8000);
     PASS(f.state?.status === 'playing' && f.state.players.length === 2, 'setup: Farmer and one house player', f.toasts.join('; '));
-    for (let guard = 0; guard < 400 && f.state?.status === 'playing'; guard++) {
+    // Round 2: a minute of wall clock rather than 400 waits of 25 ms, and
+    // Farmer passes on any auction the house player starts on its own turn.
+    // The old budget was about ten seconds of house-player turns, and two of
+    // them with a double or an auction in them (a lot Farmer was left in for
+    // its full 20 seconds) could spend it — the section then failed once in a
+    // while in a full run, for nothing to do with the ceiling it tests.
+    const farmEnd = Date.now() + 60000;
+    while (Date.now() < farmEnd && f.state?.status === 'playing') {
       if (f.mine() && f.state.turnCount >= 3 && f.state.turn.phase === 'roll') { f.emit('quit'); break; }
-      if (f.mine()) await playTurn(f); else await sleep(25);
+      if (f.mine()) await playTurn(f);
+      else {
+        if (f.state?.auction?.inRace?.includes(f.token)) f.emit('passBid');
+        await sleep(25);
+      }
     }
     await until(() => f.state?.status === 'ended' && f.progress.length, 15000);
     const pf = f.progress[0];
@@ -992,7 +1013,8 @@ async function overTheWire() {
     const m = (await get(S, `/api/missions?token=${enc(ASHA.token)}`)).json;
     PASS(m?.missions?.find((x) => x.kind === 'winGame')?.claimed === true, 'the claimed mission is still claimed');
     const again = await post(S, '/api/missions/claim', { token: ASHA.token, id: 'winGame' });
-    PASS(again.json?.duplicate === true && again.json.coins === 110, 'and a retry after the restart still pays nothing', short(again.json?.coins));
+    // 107 since round 2 (G10): the mission paid 10 XP and no coins (was 110).
+    PASS(again.json?.duplicate === true && again.json.coins === 107, 'and a retry after the restart still pays nothing', short(again.json?.coins));
     const week = (await get(S, '/api/leaderboard?scope=week')).json;
     PASS(week?.top?.some((r) => r.code === ASHA.code && r.wins === 1), 'the week\'s board survived');
     PASS(isDeepStrictEqual((await get(S, `/api/prefs?token=${enc(BILAL.token)}`)).json, { dailyReminder: true, inviteAlerts: true }),

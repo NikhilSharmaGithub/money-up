@@ -30,10 +30,13 @@ enum ActiveSheet: Identifiable {
     case tradePicker(from: String, give: Set<Int>)        // choose who to trade with first
     case counter(TradeOffer)                              // negotiate an incoming offer
     case tradeOffer(TradeOffer, seat: String)             // an offer, put in front of you
+    case offers             // every open offer at the table, as one list (1.0.6)
     case chatLog(Int)       // initial tab: 0 chat, 1 log
     case settings
     case friends            // the lobby's way to ask friends to this table
     case gameOver
+    case tableRules         // "This table's rules", from the bar's info key
+    case profile(PlayerResult)                            // somebody else at the table
 
     var id: String {
         switch self {
@@ -43,10 +46,13 @@ enum ActiveSheet: Identifiable {
         case .tradePicker(let f, _): "tradepicker-\(f)"
         case .counter(let t): "counter-\(t.id)"
         case .tradeOffer(let t, _): "offer-\(t.id)"
+        case .offers: "offers"
         case .chatLog(let t): "chatlog-\(t)"
         case .settings: "settings"
         case .friends: "friends"
         case .gameOver: "gameover"
+        case .tableRules: "tablerules"
+        case .profile(let seat): "profile-\(seat.code ?? seat.id)"
         }
     }
 }
@@ -103,18 +109,25 @@ struct GameScreen: View {
 
     /// An offer lands while you are looking at the board, and the person who
     /// sent it is waiting on an answer — so it comes to the front once, on its
-    /// own. One at a time, oldest first: a sheet already open (a deed, the
-    /// composer, the result) is not something an offer gets to interrupt.
+    /// own. A sheet already open (a deed, the composer, the result) is not
+    /// something an offer gets to interrupt.
+    ///
+    /// One offer waiting comes up on its own sheet. Two or more come up as the
+    /// one list (1.0.6, G9) — never a sheet per offer, one after another, each
+    /// hiding the rest — and everything on that list counts as shown.
     private func presentNewOffer() {
         guard store.state?.isPlaying == true, sheet == nil else { return }
         let live = Set((store.state?.trades ?? []).map(\.id))
         offersShown = offersShown.intersection(live)
-        guard let next = (store.state?.trades ?? [])
-            .filter({ store.isLocal($0.to) && $0.ignored != true && !offersShown.contains($0.id) })
-            .min(by: { $0.id < $1.id }) else { return }
-        offersShown.insert(next.id)
+        let waiting = store.incomingOffers.filter { $0.ignored != true }
+        guard waiting.contains(where: { !offersShown.contains($0.id) }) else { return }
+        offersShown.formUnion(waiting.map(\.id))
         SoundKit.shared.trade()
-        open(.tradeOffer(next, seat: next.to))
+        if waiting.count == 1, let only = waiting.first {
+            open(.tradeOffer(only, seat: only.to))
+        } else {
+            open(.offers)
+        }
     }
 
     /// Tapping a seat opens a trade with it — from a seat of ours that is
@@ -125,6 +138,35 @@ struct GameScreen: View {
         guard store.state?.isPlaying == true, !store.isWatching,
               let me = store.me, !me.isBankrupt else { return false }
         return p.id != store.meId && !p.isBankrupt
+    }
+
+    /// What a tap on a seat does: a trade with it while one can be offered —
+    /// the tap it has always made — and otherwise its profile (1.0.6), for a
+    /// seat that has one: in the lobby, from the rail, or a seat already out.
+    private func tapSeat(_ p: PlayerState) {
+        if canOfferTrade(to: p) {
+            open(.trade(from: store.activeId, to: p.id, give: [], want: []))
+        } else if store.opensProfile(p) {
+            openProfile(p)
+        }
+    }
+
+    /// A seat's profile, from its tap or its long-press menu.
+    private func openProfile(_ p: PlayerState) {
+        guard store.opensProfile(p) else { return }
+        Haptics.tap()
+        open(.profile(.seat(p)))
+    }
+
+    /// The two doors on a seat, each nil where the seat does not open it.
+    /// Where the seat's tap is already a trade, its profile is the person
+    /// on its disc (a tap of its own) and its long-press menu.
+    private func profileDoor(_ p: PlayerState) -> (() -> Void)? {
+        store.opensProfile(p) ? { openProfile(p) } : nil
+    }
+
+    private func tradeDoor(_ p: PlayerState) -> (() -> Void)? {
+        canOfferTrade(to: p) ? { open(.trade(from: store.activeId, to: p.id, give: [], want: [])) } : nil
     }
 
     /// Seats on this device still in the game. More than one means "give up"
@@ -166,11 +208,8 @@ struct GameScreen: View {
                         VStack(spacing: 10) {
                             // The strip stays out of the corners — those belong
                             // to the players' own pods.
-                            PlayerStrip(sideInset: 196, onTapPlayer: { p in
-                                if canOfferTrade(to: p) {
-                                    open(.trade(from: store.activeId, to: p.id, give: [], want: []))
-                                }
-                            })
+                            PlayerStrip(sideInset: 196, onTapPlayer: tapSeat,
+                                        profileFor: profileDoor, tradeFor: tradeDoor)
                             .padding(.horizontal, 196)
 
                             AwaitingSeatsCard()
@@ -183,6 +222,7 @@ struct GameScreen: View {
                                            openHistory: { open(.chatLog(1), from: "history") },
                                            openCounter: { open(.counter($0)) },
                                            openResults: { open(.gameOver) },
+                                           openOffers: { open(.offers) },
                                            morphSpace: morphSpace)
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -196,7 +236,8 @@ struct GameScreen: View {
                         })
                     }
                 } else if store.state?.isLobby == true {
-                    PlayerStrip(onTapPlayer: { _ in })
+                    // Nothing to trade in a lobby, so a tap is the profile.
+                    PlayerStrip(onTapPlayer: tapSeat, profileFor: profileDoor)
                     BoardView(onTapTile: { open(.deed($0)) }) {
                         CenterWell()
                     }
@@ -207,45 +248,51 @@ struct GameScreen: View {
                     // bottom — player strip directly above the action dock, no
                     // orphaned bands floating in between. The chat bubble
                     // floats over the seam, thumb-height, always reachable.
-                    ZStack(alignment: .bottomTrailing) {
-                        VStack(spacing: 0) {
-                            BoardView(onTapTile: { open(.deed($0)) }) {
-                                CenterWell(openHistory: { open(.chatLog(1), from: "history") },
-                                           morphSpace: morphSpace)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.top, 2)
-
-                            Spacer(minLength: 10)
-
-                            // One cluster, and it moves as one: when the dock
-                            // stretches into a new phase the rail above it
-                            // rides up on the same curve, instead of jumping
-                            // to its new place while the shell below glides.
-                            VStack(spacing: 0) {
-                                PlayerStrip(onTapPlayer: { p in
-                                    if canOfferTrade(to: p) {
-                                        open(.trade(from: store.activeId, to: p.id, give: [], want: []))
-                                    }
-                                })
-                                // The rail and the dock are two pieces of
-                                // glass now, and butted edge to edge they
-                                // read as one slab stacked on another, the
-                                // rail's shadow lying across the dock's rim.
-                                // Eight apart they are two panes floating
-                                // together — still one cluster, on 17 as on
-                                // 26, where separate containers never fuse.
-                                // A held chair's card below keeps sitting
-                                // flush on the dock, as the dock's first line.
-                                .padding(.bottom, 8)
-
-                                bottomPanel
-                            }
-                            .animation(.mmMorph(reduceMotion: reduceMotion),
-                                       value: ActionPanel.stage(of: store))
+                    VStack(spacing: 0) {
+                        BoardView(onTapTile: { open(.deed($0)) }) {
+                            CenterWell(openHistory: { open(.chatLog(1), from: "history") },
+                                       morphSpace: morphSpace)
                         }
+                        .padding(.horizontal, 6)
+                        .padding(.top, 2)
 
-                        chatBubble(P)
+                        Spacer(minLength: 10)
+
+                        // One cluster, and it moves as one: when the dock
+                        // stretches into a new phase the rail above it
+                        // rides up on the same curve, instead of jumping
+                        // to its new place while the shell below glides.
+                        VStack(spacing: 0) {
+                            PlayerStrip(onTapPlayer: tapSeat,
+                                        profileFor: profileDoor, tradeFor: tradeDoor)
+                            // The rail and the dock are two pieces of
+                            // glass now, and butted edge to edge they
+                            // read as one slab stacked on another, the
+                            // rail's shadow lying across the dock's rim.
+                            // Eight apart they are two panes floating
+                            // together — still one cluster, on 17 as on
+                            // 26, where separate containers never fuse.
+                            // A held chair's card below keeps sitting
+                            // flush on the dock, as the dock's first line.
+                            .padding(.bottom, 8)
+
+                            bottomPanel
+                        }
+                        // The bubble sits on the rail's far end — a strip
+                        // that scrolls, so nothing is ever stuck under it —
+                        // and rides up with the cluster. It used to be pinned
+                        // a fixed height off the bottom, which was the rail
+                        // only while the dock stayed short: an offer, or the
+                        // offers row (1.0.6), grew the dock up under it and
+                        // the bubble sat on the row's own Review. Any higher
+                        // and a tall dock pushes it onto the board's corner,
+                        // where the vacation pot is printed.
+                        .overlay(alignment: .topTrailing) {
+                            chatBubble(P)
+                                .offset(y: -2)
+                        }
+                        .animation(.mmMorph(reduceMotion: reduceMotion),
+                                   value: ActionPanel.stage(of: store))
                     }
                 }
             } else {
@@ -307,14 +354,20 @@ struct GameScreen: View {
                 case .counter(let trade):
                     TradeSheet(countering: trade)
                 case .tradeOffer(let trade, let seat):
-                    TradeOfferSheet(trade: trade, seat: seat, onNegotiate: { open(.counter($0)) })
+                    TradeOfferSheet(trade: trade, seat: seat, onNegotiate: { open(.counter($0)) },
+                                    onSeeAll: { open(.offers) })
+                case .offers:
+                    OffersSheet(onCounter: { open(.counter($0)) })
                 case .tradePicker(let from, let give):
                     TradePickerSheet(fromId: from, give: give,
-                                     pick: { open(.trade(from: from, to: $0, give: give, want: [])) })
+                                     pick: { open(.trade(from: from, to: $0, give: give, want: [])) },
+                                     openOffers: { open(.offers) })
                 case .chatLog(let tab): ChatLogSheet(initialTab: tab)
                 case .settings: SettingsSheet()
                 case .friends: FriendsSheet()
                 case .gameOver: GameOverSheet()
+                case .tableRules: TableRulesSheet()
+                case .profile(let seat): PlayerProfileSheet(seat: seat)
                 }
             }
             .environmentObject(store)
@@ -418,7 +471,6 @@ struct GameScreen: View {
         .modifier(MorphSource(id: "chat.fab", space: morphSpace))
         .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: 4, y: -3) }
         .padding(.trailing, 14)
-        .padding(.bottom, 128)
         .accessibilityLabel("Open chat")
     }
 
@@ -435,7 +487,12 @@ struct GameScreen: View {
     private func topBar(_ P: Palette) -> some View {
         let glass = BackdropKind.page.settledGlass(P)
         return MMGlassContainer(spacing: 10) {
-            HStack(spacing: 8) {
+            // Four apart on a phone rather than eight: the rules key (1.0.6)
+            // made seven keys in play, and the points the gaps give back are
+            // what keep the game clock — stopwatch and all — on a phone's bar.
+            // The keys are bare glyphs in 34-point targets, so the glyphs
+            // still stand twenty apart and no target shrinks.
+            HStack(spacing: hSize == .regular ? 8 : 4) {
                 topBarKeys(P, glass)
             }
             .padding(8)
@@ -507,7 +564,11 @@ struct GameScreen: View {
                 }
             }
         } message: {
-            Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good returns your streets to the bank and costs 1 karma.")
+            // At a table that auctions a bankrupt player's estate (1.0.6,
+            // G5), walking out puts the streets under the hammer instead.
+            let sold = store.state?.hasTableRules == true
+                && EstateRule.of(store.state?.settings) == .auction
+            Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good \(sold ? "puts your streets up for auction" : "returns your streets to the bank") and costs 1 karma.")
         }
         .confirmationDialog("Who gives up?", isPresented: $confirmConcede, titleVisibility: .visible) {
             // Named per seat: several people share this phone, and the
@@ -529,28 +590,63 @@ struct GameScreen: View {
         // room for one of the two, and mid-game the clock is the one the
         // table needs: a game under way seats nobody new, and the code still
         // rides the invite link on the bar's last key.
+        //
+        // The keys have the last word on the width, so this stretch takes
+        // whatever they leave and steps down until it fits: the code and the
+        // clock, then the clock alone, then a tighter clock, then its digits
+        // without the stopwatch, then just the connection's dot. The code is
+        // always on the share key.
         let clock = store.state.flatMap { $0.isPlaying ? $0.endsAt : nil }
-        HStack(spacing: 6) {
-            Circle()
-                .fill(store.connection == .connected ? P.good : P.gold)
-                .frame(width: 7, height: 7)
-            if clock == nil || hSize == .regular {
-                Text(store.roomId ?? "")
-                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
-                    .foregroundStyle(glass.ink)
-                    .kerning(1)
-                    .lineLimit(1)
-                    .fixedSize()
+        let timeUp = store.state?.timeUp == true
+        let dot = Circle()
+            .fill(store.connection == .connected ? P.good : P.gold)
+            .frame(width: 7, height: 7)
+        let code = Text(store.roomId ?? "")
+            .font(.system(size: 14, weight: .heavy, design: .monospaced))
+            .foregroundStyle(glass.ink)
+            .kerning(1)
+            .lineLimit(1)
+            .fixedSize()
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                dot
+                if clock == nil || hSize == .regular { code }
+                if let clock { GameClockChip(endsAt: clock, timeUp: timeUp, glass: glass) }
             }
             if let clock {
-                GameClockChip(endsAt: clock, timeUp: store.state?.timeUp == true, glass: glass)
+                HStack(spacing: 6) {
+                    dot
+                    GameClockChip(endsAt: clock, timeUp: timeUp, glass: glass)
+                }
+                HStack(spacing: 5) {
+                    dot
+                    GameClockChip(endsAt: clock, timeUp: timeUp, glass: glass, fit: .tight)
+                }
+                HStack(spacing: 5) {
+                    dot
+                    GameClockChip(endsAt: clock, timeUp: timeUp, glass: glass, fit: .digits)
+                }
             }
+            dot
         }
         .padding(.horizontal, 4)
-
-        Spacer(minLength: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         SoundToggle()
+        // The table's rules, beside the sound (1.0.6): everything the host
+        // set, in words, for a player who sat down without seeing the lobby
+        // and for anybody watching.
+        Button {
+            Haptics.tap()
+            open(.tableRules, from: "rules")
+        } label: {
+            Art.icon(.info, size: 17, tint: keyInk(glass))
+                .frame(width: 34, height: 34)
+                .keyTarget()
+        }
+        .buttonStyle(MMButtonStyle(kind: .ghost, form: .key))
+        .modifier(MorphSource(id: "rules", space: morphSpace))
+        .accessibilityLabel("This table's rules")
         iconButton("bubble.left.and.bubble.right.fill", glass) { open(.chatLog(0), from: "chat.bar") }
             .modifier(MorphSource(id: "chat.bar", space: morphSpace))
             .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: 5, y: -4) }
@@ -612,11 +708,13 @@ struct GameScreen: View {
             if state.isLobby {
                 if state.isQuickWaiting {
                     QuickMatchPanel(openSettings: { open(.settings) },
-                                    openChat: { open(.chatLog(0)) })
+                                    openChat: { open(.chatLog(0)) },
+                                    openProfile: openProfile)
                         .frame(maxHeight: .infinity)
                 } else {
                     LobbyPanel(openSettings: { open(.settings) },
-                               openFriends: { open(.friends) })
+                               openFriends: { open(.friends) },
+                               openProfile: openProfile)
                         .frame(maxHeight: .infinity)
                 }
             } else {
@@ -628,7 +726,8 @@ struct GameScreen: View {
                 ActionPanel(openProperties: { open(.properties) },
                             openTrade: { open(.tradePicker(from: store.activeId, give: [])) },
                             openCounter: { open(.counter($0)) },
-                            openResults: { open(.gameOver) })
+                            openResults: { open(.gameOver) },
+                            openOffers: { open(.offers) })
                     .padding(.bottom, 4)
             }
         }
@@ -781,6 +880,13 @@ struct PlayerStrip: View {
     /// Horizontal space the parent has shaved off each side (iPad corner pods).
     var sideInset: CGFloat = 0
     let onTapPlayer: (PlayerState) -> Void
+    /// A seat's profile and a trade with it (1.0.6): the doors behind the
+    /// person on its disc and its long-press menu. Each answers nil for a
+    /// seat it does not open — this device's own, a pass & play guest with no
+    /// profile, a seat out of the game — and a seat that opens neither has no
+    /// mark and no menu at all.
+    var profileFor: (PlayerState) -> (() -> Void)? = { _ in nil }
+    var tradeFor: (PlayerState) -> (() -> Void)? = { _ in nil }
 
     /// How far the floating +/- badge rides above a chip's top edge, and the
     /// headroom the strip has to keep clear for it.
@@ -863,12 +969,16 @@ struct PlayerStrip: View {
     /// One seat on the rail.
     private func seat(_ p: PlayerState, ranks: [String: Int], nextUp: String?,
                       glass: GlassTokens, P: Palette) -> some View {
-        let isTurn = store.state?.isPlaying == true && store.state?.turn?.playerId == p.id
+        // Not a bankrupt seat still holding the turn while its estate is
+        // auctioned (G5): the ring is for a seat that can play.
+        let isTurn = store.onClockId == p.id
         let team = p.team.flatMap { store.state?.teamInfo?[safe: $0] }
         let ic = contrast == .increased
         let second = glass.label(secondary: true, increaseContrast: ic)
+        let profile = profileFor(p)
+        let trade = tradeFor(p)
         return HStack(spacing: 7) {
-            AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32, emoji: p.avatar ?? "")
+            face(p, profile: profile, ownTap: trade != nil, P: P)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(p.name)
@@ -956,6 +1066,50 @@ struct PlayerStrip: View {
         .opacity(p.isBankrupt ? 0.5 : 1)
         .id(p.id)
         .onTapGesture { onTapPlayer(p) }
+        // The tap keeps the job it has always had — a trade — and the face
+        // above takes the profile. The long press offers both, the way a
+        // contact's card opens on iOS.
+        .modifier(SeatMenu(name: p.name, profile: profile, trade: trade,
+                           radius: Self.seatRadius))
+    }
+
+    /// A seat's disc, and the way to the person behind it (1.0.6, G3). A seat
+    /// with a profile wears a small person on the disc's free shoulder — the
+    /// flag has the other — so the face reads as something to tap; Android's
+    /// rail draws the same mark. While the chip's own tap is a trade, the
+    /// disc takes a tap of its own for the profile, a child's gesture winning
+    /// over the chip's; otherwise the whole chip already opens the profile,
+    /// and the disc leaves the tap to it.
+    @ViewBuilder
+    private func face(_ p: PlayerState, profile: (() -> Void)?, ownTap: Bool, P: Palette) -> some View {
+        let disc = AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 32, emoji: p.avatar ?? "")
+            .overlay(alignment: .topLeading) {
+                if profile != nil {
+                    // Opaque, so it reads on a disc of any colour and on the
+                    // rail's glass where it hangs past the rim.
+                    Art.icon(.person, size: 9, tint: P.ink2)
+                        .frame(width: 14, height: 14)
+                        .background(P.card, in: Circle())
+                        .overlay(Circle().strokeBorder(P.rule, lineWidth: 1))
+                        .offset(x: -3, y: -3)
+                        .accessibilityHidden(true)
+                }
+            }
+        if let profile, ownTap {
+            disc
+                // The disc is 32; the chip's own padding round it makes the
+                // target the 44 a thumb needs, without moving anything.
+                .padding(6)
+                .contentShape(Rectangle())
+                .onTapGesture { profile() }
+                .padding(-6)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(p.name)’s profile")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { profile() }
+        } else {
+            disc
+        }
     }
 
     /// The width the strip should try to fill. Taken from the window rather
@@ -1023,6 +1177,43 @@ struct PlayerStrip: View {
             .padding(.horizontal, 5)
             .background(mine ? P.gold.opacity(ic ? 0.26 : 0.14) : glass.ink.opacity(ic ? 0.18 : 0.10),
                         in: Capsule())
+    }
+}
+
+/// A seat's long-press menu: "Profile", and "Offer a trade" where the tap
+/// would make one. Read out as actions too, so VoiceOver reaches the profile
+/// without the gesture. A seat with neither gets no menu, rather than a press
+/// that lifts it and offers nothing.
+private struct SeatMenu: ViewModifier {
+    let name: String
+    let profile: (() -> Void)?
+    let trade: (() -> Void)?
+    let radius: CGFloat
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if profile == nil && trade == nil {
+            content
+        } else {
+            content
+                .contentShape(.contextMenuPreview,
+                              RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .contextMenu {
+                    if let profile {
+                        Button { profile() } label: {
+                            Label("\(name)’s profile", systemImage: "person.crop.circle")
+                        }
+                    }
+                    if let trade {
+                        Button { trade() } label: {
+                            Label("Offer a trade", systemImage: "arrow.left.arrow.right")
+                        }
+                    }
+                }
+                .accessibilityActions {
+                    if let profile { Button("Profile") { profile() } }
+                    if let trade { Button("Offer a trade") { trade() } }
+                }
+        }
     }
 }
 
@@ -1171,6 +1362,8 @@ struct CenterWell: View {
     var openCounter: ((TradeOffer) -> Void)? = nil
     /// Reopens the final standings once the game has ended.
     var openResults: (() -> Void)? = nil
+    /// Every open offer at the table, as one list (1.0.6).
+    var openOffers: (() -> Void)? = nil
     /// Where the history chip's sheet grows out of it, on 26.
     var morphSpace: Namespace.ID? = nil
 
@@ -1189,7 +1382,12 @@ struct CenterWell: View {
                     AuctionBox(auction: auction)
                         // Room for the turn clock, which now rides above every
                         // phase of the well rather than vanishing under a bid.
-                        .padding(.top, state.turn?.endsAt == nil ? 0 : 26)
+                        // The clock hangs 6 down from this box's own top and
+                        // stands about 26 tall (a little more on the last
+                        // ten seconds' heartbeat), so 26 left the gavel's
+                        // line under its lower edge — plain to see once
+                        // auction-only (1.0.6) made every landing an auction.
+                        .padding(.top, state.turn?.endsAt == nil ? 0 : 36)
                 } else if state.isLobby {
                     VStack(spacing: 8) {
                         // A matchmade table waits undealt (TileView keeps every
@@ -1304,7 +1502,8 @@ struct CenterWell: View {
                                     ActionPanel(openProperties: { openProperties?() },
                                                 openTrade: openTrade,
                                                 openCounter: openCounter,
-                                                openResults: openResults)
+                                                openResults: openResults,
+                                                openOffers: openOffers)
                                         .frame(maxWidth: min(geo.size.width * 0.74, 470))
                                 }
                             }
@@ -1671,9 +1870,9 @@ private struct PlayerPod: View {
     /// this is.
     @State private var sweep: Double = 0
 
-    private var isTurn: Bool {
-        store.state?.isPlaying == true && store.state?.turn?.playerId == player.id
-    }
+    /// Never a seat that is out, though it may hold the turn while its
+    /// estate is auctioned (G5) — see `GameStore.onClockId`.
+    private var isTurn: Bool { store.onClockId == player.id }
 
     var body: some View {
         let P = Palette.current(scheme)

@@ -218,6 +218,16 @@ struct GameSettings: Codable, Equatable {
     /// Minutes on the whole game's clock (1.0.6): 0 for no limit, else 20, 30,
     /// 45 or 60. The richest player still in wins when it runs out.
     var timeLimit: Int?
+    /// What a bankrupt player's properties do (1.0.6, round 2): "release" —
+    /// back to the bank, unowned, as always — or "auction", one lot at a time.
+    /// Absent from an older server, which only ever releases them.
+    var bankruptProperties: String?
+    /// Every unowned property goes straight to auction when landed on; there
+    /// is no Buy step at all. The server keeps `auction` on whenever this is.
+    var auctionOnly: Bool?
+    /// The colour sets are dealt to new places on the board at each start.
+    /// The board itself arrives already shuffled in `map`; this is the rule.
+    var shuffleBoard: Bool?
 }
 
 struct MapData: Codable, Equatable {
@@ -229,6 +239,10 @@ struct MapData: Codable, Equatable {
     var layout: MapLayout
     var size: Int
     var groups: [String: [Int]]?            // group key -> tile indices
+    /// This layout is a shuffle of the printed board (round 2): true while a
+    /// shuffled game is on and on its ended state, false in the lobby. Older
+    /// servers never send it.
+    var shuffled: Bool?
 }
 
 struct MapLayout: Codable, Equatable {
@@ -386,6 +400,17 @@ struct AuctionState: Codable, Equatable {
     var leader: String?
     var inRace: [String]
     var endsAt: Double?
+    /// A lot from a bankrupt player's estate (1.0.6, round 2) — nil for an
+    /// ordinary auction, and from an older server, which has no other kind.
+    var estate: EstateLot?
+}
+
+/// Whose estate is under the hammer, and how much more of it is to come.
+struct EstateLot: Codable, Equatable {
+    /// The bankrupt player's name — not an id; the seat may be gone.
+    var from: String
+    /// Lots of this estate still to follow this one; 0 on its last.
+    var left: Int?
 }
 
 struct TradeSide: Codable, Equatable {

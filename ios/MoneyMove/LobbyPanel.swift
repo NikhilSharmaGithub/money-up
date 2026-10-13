@@ -10,6 +10,8 @@ struct LobbyPanel: View {
     @Environment(\.colorScheme) private var scheme
     let openSettings: () -> Void
     let openFriends: () -> Void
+    /// Somebody else's profile (1.0.6) — who you are about to sit down with.
+    var openProfile: (PlayerState) -> Void = { _ in }
 
     @State private var nameDraft = ""
 
@@ -61,10 +63,14 @@ struct LobbyPanel: View {
 
         // How hard the house plays and how long the game may run
         // (1.0.6): the host's to set, everybody's to read. Neither
-        // exists at a Play-now or cup table.
+        // exists at a Play-now or cup table. Nor do the three round-2
+        // rules beside them — what a bankrupt player's properties do,
+        // auction-only, the shuffled board — which a guest reads in the
+        // same summary, only when they are on.
         if store.state?.hasTableRules == true {
             if store.isHost {
                 TableRulesCard(editable: true)
+                TableTwistsCard(editable: true)
             } else {
                 TableRulesSummary()
             }
@@ -192,6 +198,54 @@ struct LobbyPanel: View {
         let canKick = store.isHost && p.id != store.meId && !isCup
 
         return HStack(spacing: 10) {
+            // Who they are is one button — the face, the name and a chevron
+            // that says it opens — kept apart from the host's own keys on
+            // the right, so a tap meant for one can never land on the other.
+            // This device's own seats, and a guest with no code, stay still.
+            if store.opensProfile(p) {
+                Button {
+                    openProfile(p)
+                } label: {
+                    HStack(spacing: 8) {
+                        identity(p, team: team, P)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(P.ink3)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens \(p.name)'s profile")
+            } else {
+                identity(p, team: team, P)
+                Spacer(minLength: 6)
+            }
+
+            if canCycleTeam {
+                Button("⇄") { store.setTeam(((p.team ?? -1) + 1) % teamCount, for: p.id) }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+            }
+            // The chair travels: a host can hand it to anyone at the table.
+            if store.isHost, p.id != store.meId, !(p.isBot ?? false), p.connected != false,
+               store.state?.quick != true {
+                Button("Host") { store.makeHost(p.id); Haptics.tap() }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+            }
+            if canKick {
+                Button("✕") { store.kick(p.id) }
+                    .buttonStyle(MMButtonStyle(kind: .ghost))
+            }
+        }
+        .padding(10)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+
+    /// The face and the two lines beside it: name and badges, then the
+    /// bankroll and the team.
+    private func identity(_ p: PlayerState, team: TeamInfo?, _ P: Palette) -> some View {
+        HStack(spacing: 10) {
             AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 34, emoji: p.avatar ?? "")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -221,27 +275,7 @@ struct LobbyPanel: View {
                     }
                 }
             }
-
-            Spacer(minLength: 6)
-
-            if canCycleTeam {
-                Button("⇄") { store.setTeam(((p.team ?? -1) + 1) % teamCount, for: p.id) }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-            }
-            // The chair travels: a host can hand it to anyone at the table.
-            if store.isHost, p.id != store.meId, !(p.isBot ?? false), p.connected != false,
-               store.state?.quick != true {
-                Button("Host") { store.makeHost(p.id); Haptics.tap() }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-            }
-            if canKick {
-                Button("✕") { store.kick(p.id) }
-                    .buttonStyle(MMButtonStyle(kind: .ghost))
-            }
         }
-        .padding(10)
-        .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
     private func emptySeatRow(_ P: Palette) -> some View {
@@ -360,6 +394,9 @@ struct QuickMatchPanel: View {
     /// allows, read-only for everybody else.
     let openSettings: () -> Void
     let openChat: () -> Void
+    /// Somebody else's profile (1.0.6): a stranger matchmaking sat you with
+    /// is exactly who you might want to look up before the dice.
+    var openProfile: (PlayerState) -> Void = { _ in }
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -671,9 +708,14 @@ struct QuickMatchPanel: View {
                         .lineLimit(1)
                 }
                 .frame(width: 54)
+                .contentShape(Rectangle())
+                // A seat here has no other tap, so the tap is the profile.
+                .onTapGesture { if store.opensProfile(p) { openProfile(p) } }
                 .transition(.scale.combined(with: .opacity))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(seatLabel(p, host: isHost, ready: ready))
+                .accessibilityAddTraits(store.opensProfile(p) ? .isButton : [])
+                .accessibilityHint(store.opensProfile(p) ? "Opens \(p.name)'s profile" : "")
             }
             ForEach(0..<max(0, seats - players.count), id: \.self) { _ in
                 VStack(spacing: 3) {

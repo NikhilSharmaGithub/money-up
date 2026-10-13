@@ -660,13 +660,14 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
 
     /**
      * POST /api/daily/claim, answered the way iOS reads it. [onDone] is handed
-     * what landed on success; on a refusal, the server's own sentence — a
-     * sign-in or rate-limit refusal is shown in its words; and both null when
-     * the day was already claimed, which is an eager client rather than a
-     * broken one, so the card simply catches up and says nothing. Only a
-     * request nothing answered is "Couldn't reach the server".
+     * what landed on success, and the step of the week's climb it paid (round
+     * 2's `cycleDay`; null from an older server); on a refusal, the server's
+     * own sentence — a sign-in or rate-limit refusal is shown in its words;
+     * and all null when the day was already claimed, which is an eager client
+     * rather than a broken one, so the card simply catches up and says
+     * nothing. Only a request nothing answered is "Couldn't reach the server".
      */
-    fun claimDaily(onDone: (paid: Int?, error: String?) -> Unit = { _, _ -> }) = viewModelScope.launch {
+    fun claimDaily(onDone: (paid: Int?, step: Int?, error: String?) -> Unit = { _, _, _ -> }) = viewModelScope.launch {
         val reply = api.postOrError("/api/daily/claim")
         val said = reply.said()
         val refused = said?.get("error").asString()
@@ -674,11 +675,11 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
         load("/api/wallet", Wallet.serializer()) { wallet = it }
         load("/api/daily", DailyView.serializer()) { daily = it }
         when {
-            reply.offline || said == null -> onDone(null, "Couldn't reach the server — try again.")
-            refused != null && already -> onDone(null, null)
-            refused != null -> onDone(null, refused)
-            !reply.ok -> onDone(null, "Couldn't reach the server — try again.")
-            else -> onDone(said?.get("amount").asInt() ?: 0, null)
+            reply.offline || said == null -> onDone(null, null, "Couldn't reach the server — try again.")
+            refused != null && already -> onDone(null, null, null)
+            refused != null -> onDone(null, null, refused)
+            !reply.ok -> onDone(null, null, "Couldn't reach the server — try again.")
+            else -> onDone(said?.get("amount").asInt() ?: 0, said?.get("cycleDay").asInt(), null)
         }
     }
 

@@ -369,6 +369,17 @@ private fun SettingsFace(
                 PanelTitle("Board")
             }
             BoardBoxes(store, game, can("mapId"), onOpenAll = onOpenAll, onShop = onShop)
+            // Under the boards it changes, because it is a thing done to the
+            // board rather than a rule of play. A Play-now or a cup table
+            // always plays the printed board, so the row is theirs to not have.
+            if (tableRules) {
+                Rule()
+                ToggleRow(
+                    "Shuffle the board",
+                    "The colour sets swap places at the start of each game — pricey streets can sit right after START.",
+                    s.shuffleBoard ?: false, can("shuffleBoard"),
+                ) { game.updateSettings(mapOf("shuffleBoard" to it)) }
+            }
         }
 
         SettingsCard {
@@ -470,11 +481,22 @@ private fun SettingsFace(
                 s.vacationCash ?: false, can("vacationCash"),
             ) { game.updateSettings(mapOf("vacationCash" to it)) }
             Rule()
+            // Auction-only forces auctions on, and auctions off takes it off
+            // again — the server keeps the pair from ever contradicting
+            // each other, so both switches read straight off the push.
+            val auctionOnly = s.auctionOnly ?: false
             ToggleRow(
                 "Auction", "Skipped properties go under the hammer instead of staying unsold.",
-                s.auction ?: true, can("auction"),
+                auctionOnly || (s.auction ?: true), can("auction"),
             ) { game.updateSettings(mapOf("auction" to it)) }
             Rule()
+            if (tableRules) {
+                ToggleRow(
+                    "Auction only", "No buying at the price — every unowned street goes straight to auction.",
+                    auctionOnly, can("auctionOnly"),
+                ) { game.updateSettings(mapOf("auctionOnly" to it)) }
+                Rule()
+            }
             ToggleRow(
                 "No rent while jailed", "Owners collect nothing while they sit in prison.",
                 s.noRentInPrison ?: false, can("noRentInPrison"),
@@ -485,6 +507,23 @@ private fun SettingsFace(
                 s.mortgage ?: true, can("mortgage"),
             ) { game.updateSettings(mapOf("mortgage" to it)) }
             Rule()
+            // Where a bankrupt player's streets go: back to the bank as they
+            // always have, or under the hammer one at a time. Play-now and
+            // cup tables always release them.
+            if (tableRules) {
+                val estates = if (s.auctionsEstates) "auction" else "release"
+                MenuRow(
+                    "Bankrupt properties",
+                    GameSettings.BANKRUPT_CHOICES.first { it.first == estates }.second,
+                    GameSettings.BANKRUPT_CHOICES.map { (wire, label) -> label to wire },
+                    estates, can("bankruptProperties"),
+                ) { game.updateSettings(mapOf("bankruptProperties" to it)) }
+                Caption(
+                    if (s.auctionsEstates) "A bankrupt player's streets are auctioned one at a time to everyone left."
+                    else "A bankrupt player's streets go back to the bank, unowned.",
+                )
+                Rule()
+            }
             ToggleRow(
                 "Even build", "Houses must be spread evenly across a colour set.",
                 s.evenBuild ?: true, can("evenBuild"),
