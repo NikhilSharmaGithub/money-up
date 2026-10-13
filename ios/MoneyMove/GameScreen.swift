@@ -117,6 +117,16 @@ struct GameScreen: View {
         open(.tradeOffer(next, seat: next.to))
     }
 
+    /// Tapping a seat opens a trade with it — from a seat of ours that is
+    /// still in the game. Somebody watching has no seat to trade from: `me`
+    /// is nil for them, which the old test read as "not bankrupt" and opened
+    /// a composer the server would only refuse.
+    private func canOfferTrade(to p: PlayerState) -> Bool {
+        guard store.state?.isPlaying == true, !store.isWatching,
+              let me = store.me, !me.isBankrupt else { return false }
+        return p.id != store.meId && !p.isBankrupt
+    }
+
     /// Seats on this device still in the game. More than one means "give up"
     /// is ambiguous — a pass & play phone has to say WHICH player is done."""
     private var aliveLocalSeats: [PlayerState] {
@@ -157,8 +167,7 @@ struct GameScreen: View {
                             // The strip stays out of the corners — those belong
                             // to the players' own pods.
                             PlayerStrip(sideInset: 196, onTapPlayer: { p in
-                                if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                                   store.me?.isBankrupt != true {
+                                if canOfferTrade(to: p) {
                                     open(.trade(from: store.activeId, to: p.id, give: [], want: []))
                                 }
                             })
@@ -215,8 +224,7 @@ struct GameScreen: View {
                             // to its new place while the shell below glides.
                             VStack(spacing: 0) {
                                 PlayerStrip(onTapPlayer: { p in
-                                    if store.state?.isPlaying == true, p.id != store.meId, !p.isBankrupt,
-                                       store.me?.isBankrupt != true {
+                                    if canOfferTrade(to: p) {
                                         open(.trade(from: store.activeId, to: p.id, give: [], want: []))
                                     }
                                 })
@@ -516,16 +524,27 @@ struct GameScreen: View {
         // The room code is something the bar says, not something to press,
         // so it is printed straight on the glass: the capsule of card it sat
         // in was a pane on the bar.
+        //
+        // A timed game puts its clock here too (1.0.6). On a phone there is
+        // room for one of the two, and mid-game the clock is the one the
+        // table needs: a game under way seats nobody new, and the code still
+        // rides the invite link on the bar's last key.
+        let clock = store.state.flatMap { $0.isPlaying ? $0.endsAt : nil }
         HStack(spacing: 6) {
             Circle()
                 .fill(store.connection == .connected ? P.good : P.gold)
                 .frame(width: 7, height: 7)
-            Text(store.roomId ?? "")
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
-                .foregroundStyle(glass.ink)
-                .kerning(1)
-                .lineLimit(1)
-                .fixedSize()
+            if clock == nil || hSize == .regular {
+                Text(store.roomId ?? "")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(glass.ink)
+                    .kerning(1)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if let clock {
+                GameClockChip(endsAt: clock, timeUp: store.state?.timeUp == true, glass: glass)
+            }
         }
         .padding(.horizontal, 4)
 
@@ -535,7 +554,8 @@ struct GameScreen: View {
         iconButton("bubble.left.and.bubble.right.fill", glass) { open(.chatLog(0), from: "chat.bar") }
             .modifier(MorphSource(id: "chat.bar", space: morphSpace))
             .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: 5, y: -4) }
-        if store.state?.isPlaying == true {
+        // Trades and deeds are a seat's business; somebody watching has none.
+        if store.state?.isPlaying == true, !store.isWatching {
             iconButton("arrow.left.arrow.right", glass) {
                 open(.tradePicker(from: store.activeId, give: []), from: "trade")
             }
@@ -863,6 +883,12 @@ struct PlayerStrip: View {
                     if p.isBot == true {
                         Text("BOT").font(.system(size: 7, weight: .black))
                             .foregroundStyle(second)
+                    }
+                    // Who you are sitting down with, while the table fills.
+                    // Once the dice roll the rail is about money and the
+                    // turn, and the level steps aside for them.
+                    if store.state?.isLobby == true, let level = p.level, level > 0 {
+                        LevelChip(level: level)
                     }
                     if let rank = ranks[p.id] {
                         rankBadge(rank, glass, P)
@@ -1203,6 +1229,14 @@ struct CenterWell: View {
                         Text("\(store.state?.winner?.name ?? "Nobody") wins!")
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
                             .foregroundStyle(P.ink)
+                        if state.endedOnTime {
+                            HStack(spacing: 4) {
+                                Art.icon(.clock, size: 12, tint: P.ink3)
+                                Text("Time's up — richest player wins")
+                                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(P.ink3)
+                            }
+                        }
                         // The result sheet is dismissable, so the well keeps a
                         // way back to it — otherwise the standings are gone.
                         if let openResults {
@@ -1279,6 +1313,14 @@ struct CenterWell: View {
                         .overlay(alignment: .bottomTrailing) {
                             if let openHistory {
                                 historyChip(openHistory, P)
+                            }
+                        }
+                        // Opposite the History chip: how many are watching
+                        // from the rail. The count only — never who.
+                        .overlay(alignment: .bottomLeading) {
+                            if let watching = state.spectators, watching > 0 {
+                                WatchersChip(count: watching)
+                                    .padding(10)
                             }
                         }
                         .overlay { DeckIntro(at: store.boardIntroAt) }
@@ -1831,7 +1873,10 @@ struct TurnClock: View {
 /// Somebody's connection went away and the table is holding their chair. The
 /// card carries the only two things the room needs: how long is left, and the
 /// button that buys them another minute. Never shown to the seat being waited
-/// on — that player is not the one who gets to vote themselves back in.
+/// on — that player is not the one who gets to vote themselves back in. Someone
+/// watching from the rail sees the row, because it explains why the table has
+/// gone quiet, but not the button: they have no say, and the server refuses
+/// every action from a watcher.
 struct AwaitingSeatsCard: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -1855,6 +1900,7 @@ struct AwaitingSeatsCard: View {
         let count = seat.grantedIds.count
         // A vote can't need fewer seats than have already clicked.
         let voters = max(seat.voterCount, count)
+        let watching = store.isWatching
 
         return VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 9) {
@@ -1867,7 +1913,9 @@ struct AwaitingSeatsCard: View {
                         .font(.system(size: 14, weight: .heavy, design: .rounded))
                         .foregroundStyle(P.ink)
                         .lineLimit(1)
-                    Text(seat.isVote
+                    Text(watching
+                         ? "The table is holding their seat for now."
+                         : seat.isVote
                          ? "Everyone still at the table has to agree now."
                          : "Any one of you can hand them another minute.")
                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
@@ -1884,22 +1932,24 @@ struct AwaitingSeatsCard: View {
                 voteBar(count: count, voters: voters, P)
             }
 
-            Button {
-                store.grantTime(seat.id)
-            } label: {
-                HStack(spacing: 8) {
-                    if let glyph = buttonGlyph(seat, agreed: agreed) {
-                        Art.icon(glyph, size: 18,
-                                 tint: (agreed ? MMButtonStyle.Kind.ghost : .gold).ink(P))
+            if !watching {
+                Button {
+                    store.grantTime(seat.id)
+                } label: {
+                    HStack(spacing: 8) {
+                        if let glyph = buttonGlyph(seat, agreed: agreed) {
+                            Art.icon(glyph, size: 18,
+                                     tint: (agreed ? MMButtonStyle.Kind.ghost : .gold).ink(P))
+                        }
+                        Text(buttonLabel(seat, agreed: agreed, count: count, voters: voters))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
-                    Text(buttonLabel(seat, agreed: agreed, count: count, voters: voters))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
                 }
+                .buttonStyle(MMButtonStyle(kind: agreed ? .ghost : .gold, big: true))
+                .disabled(agreed)
+                .opacity(agreed ? 0.75 : 1)
             }
-            .buttonStyle(MMButtonStyle(kind: agreed ? .ghost : .gold, big: true))
-            .disabled(agreed)
-            .opacity(agreed ? 0.75 : 1)
         }
         .padding(11)
         .background(P.goldSoft.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))

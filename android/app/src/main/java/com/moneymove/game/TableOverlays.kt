@@ -83,11 +83,16 @@ import androidx.compose.ui.unit.sp
  * nobody votes themselves back in. And only while the game is on, with the
  * player still gone — the moment they reconnect, or the chair is released,
  * the row goes. iOS: AwaitingSeatsCard in GameScreen.swift.
+ *
+ * Nor to anyone watching from the rail. The server sends the held seats to
+ * every socket at the table, watchers included, but a watcher holds no seat
+ * to vote with: the button would stay live, since none of their seats has
+ * clicked, and every tap would come back refused.
  */
 @Composable
 fun AwaitingSeats(store: GameStore, modifier: Modifier = Modifier) {
     val state = store.state
-    val seats = state?.takeIf { it.isPlaying }?.awaiting.orEmpty().filter { seat ->
+    val seats = state?.takeIf { it.isPlaying && !store.isSpectating }?.awaiting.orEmpty().filter { seat ->
         val who = state?.player(seat.id)
         !store.isLocal(seat.id) && who != null &&
             who.connected != true && !who.isBankrupt && !who.wasRemoved

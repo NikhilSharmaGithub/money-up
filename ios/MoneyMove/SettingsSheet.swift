@@ -63,6 +63,12 @@ struct SettingsSheet: View {
                     if !isQuick { teamsSection(P) }
                     styleSection(P)
                     moneySection(P)
+                    // Bot skill and game length (1.0.6). A Play-now table
+                    // plays normal house players with no clock, and a cup
+                    // table is set by the cup, so neither shows the rows.
+                    if store.state?.hasTableRules == true {
+                        TableRulesCard(editable: canEdit("botLevel") && canEdit("timeLimit"))
+                    }
                     rulesSection(P)
                 }
                 .padding(.horizontal, 14)

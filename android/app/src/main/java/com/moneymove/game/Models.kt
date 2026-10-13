@@ -84,6 +84,29 @@ data class GameState(
     val stats: Map<String, PlayerStats>? = null,
     /** End-of-game badges: player id -> title with its one-line reason. */
     val titles: Map<String, TitleInfo>? = null,
+    /**
+     * When the game clock runs out, epoch ms — a timed table's, set at the
+     * start. Not [TurnState.endsAt], which is still the per-turn shot clock:
+     * this one is the whole game's. Null everywhere a game has no clock, and
+     * from a server too old to run one.
+     */
+    val endsAt: Double? = null,
+    /**
+     * The clock has run out and the turn on the board is the last one. Stays
+     * true on the ended state of a timed game.
+     */
+    val timeUp: Boolean? = null,
+    /** Once ended: "time" when the clock decided it, "last" when everybody else went out. */
+    val endReason: String? = null,
+    /** When this game's dice started; null in the lobby. */
+    val startedAt: Double? = null,
+    /** Turns played so far — the number the Watch live list shows. */
+    val turnCount: Int? = null,
+    /**
+     * People watching without a seat. Distinct people, not sockets, and
+     * never a seated player — so a count of one is somebody else.
+     */
+    val spectators: Int? = null,
     val version: Int = 0,
 ) {
     fun player(id: String?): PlayerState? = id?.let { pid -> players.firstOrNull { it.id == pid } }
@@ -102,6 +125,19 @@ data class GameState(
         get() = isLobby && quick == true && (quickLobby != null || quickStartAt != null)
     val isPlaying: Boolean get() = status == "playing"
     val isEnded: Boolean get() = status == "ended"
+
+    /**
+     * The game clock to count down, while there is a game for it to run on.
+     * The server clears it in the lobby; the guard is for the beat between a
+     * push that ends the game and one that has not caught up.
+     */
+    val gameClock: Double? get() = endsAt?.takeIf { isPlaying }
+
+    /** The clock decided it — the result says "Time's up" rather than "last one standing". */
+    val endedOnClock: Boolean get() = isEnded && endReason == "time"
+
+    /** How many are watching from the rail. */
+    val watcherCount: Int get() = maxOf(0, spectators ?: 0)
 
     /**
      * What the waiting room counts down to: the end of the search while it
@@ -275,7 +311,43 @@ data class GameSettings(
     val teams: Int? = null,
     /** Seconds a human gets per turn before the table moves on; 0 = clock off. */
     val turnSeconds: Int? = null,
-)
+    /**
+     * How hard the house players the host added play: "easy", "normal" or
+     * "hard". Absent from an older server, which only ever had normal.
+     */
+    val botLevel: String? = null,
+    /** The game clock in minutes — 0, 20, 30, 45 or 60, where 0 is no clock. */
+    val timeLimit: Int? = null,
+) {
+    val botSkill: BotSkill get() = BotSkill.of(botLevel)
+
+    /** Minutes on the game clock; 0 for an untimed table and an older server. */
+    val gameMinutes: Int get() = timeLimit?.takeIf { it in GAME_LENGTHS } ?: 0
+
+    companion object {
+        /** The lengths the server accepts — anything else it refuses whole. */
+        val GAME_LENGTHS = listOf(0, 20, 30, 45, 60)
+
+        /** "Unlimited" or "30 min", as the lobby's menu and summary say it. */
+        fun gameLengthLabel(minutes: Int): String = if (minutes <= 0) "Unlimited" else "$minutes min"
+    }
+}
+
+/**
+ * How hard the house players the host added play. The server reads the
+ * setting for those seats only — never a person's seat it is covering, and
+ * never a Play-now table's house players, which always play normal.
+ */
+enum class BotSkill(val wire: String, val label: String, val blurb: String) {
+    EASY("easy", "Easy", "Bots buy carefully, bid low and never start a trade."),
+    NORMAL("normal", "Normal", "Bots play the way they always have."),
+    HARD("hard", "Hard", "Bots buy nearly everything, build fast and trade often.");
+
+    companion object {
+        /** Anything the server did not send, or sent and this build has not heard of, is normal. */
+        fun of(wire: String?): BotSkill = entries.firstOrNull { it.wire == wire } ?: NORMAL
+    }
+}
 
 @Serializable
 data class MapData(
@@ -383,7 +455,16 @@ data class PlayerState(
      * asked of the host, whose Start is their answer.
      */
     val ready: Boolean? = null,
+    /**
+     * The seat's level: a person's own (one and up), a house player's steady
+     * made-up one, and nought for a pass & play guest. Absent from an older
+     * server. Either way below one means no chip — see [shownLevel].
+     */
+    val level: Int? = null,
 ) {
+    /** The level worth a chip, or null for a guest and for an older server. */
+    val shownLevel: Int? get() = level?.takeIf { it > 0 }
+
     val isBankrupt: Boolean get() = bankrupt == true
     val isReady: Boolean get() = ready == true
     val inJail: Boolean get() = jail == true
@@ -596,6 +677,10 @@ data class PlayerStats(
     val biggestRentTile: String? = null,
     val laps: Int? = null,
     val leadShare: Int? = null,
+    /** This seat's own turns this game (1.0.6). */
+    val turns: Int? = null,
+    /** Colour sets this seat completed this game, each counted once (1.0.6). */
+    val setsCompleted: Int? = null,
 )
 
 /** One end-of-game badge: "Landlord — collected $4,320 in rent". */
@@ -689,6 +774,8 @@ data class PlayerResult(
      * being required.
      */
     val code: String = "",
+    /** The seat's level as the final state had it — nought for a guest and for older results. */
+    val level: Int = 0,
 ) {
     /**
      * What the standings column says for this seat. A removed seat was never
@@ -723,6 +810,7 @@ data class PlayerResult(
                     titleReason = state.titles?.get(p.id)?.reason,
                     stats = state.stats?.get(p.id),
                     code = p.code.orEmpty(),
+                    level = p.level ?: 0,
                 )
             }
         }
@@ -797,6 +885,61 @@ data class PublicRoom(
     val canSit: Boolean get() = joinable ?: (status != "playing" && players < maxPlayers)
     val isPlaying: Boolean get() = status == "playing"
 }
+
+/**
+ * `GET /api/live`: the public games being played right now, people first.
+ * Nothing in it leads back to anybody — no tokens, no seat ids, no codes —
+ * and `roomId` is only ever used to watch.
+ */
+@Serializable
+data class LiveGamesView(val games: List<LiveGame> = emptyList())
+
+@Serializable
+data class LiveGame(
+    val roomId: String = "",
+    val mapId: String? = null,
+    val mapName: String = "",
+    /** Every seat in turn order. */
+    val players: List<LivePlayer> = emptyList(),
+    val turnCount: Int = 0,
+    val startedAt: Double? = null,
+    /** The game clock, for a timed table. */
+    val endsAt: Double? = null,
+    /** How many are already watching. */
+    val watching: Int = 0,
+) {
+    /** The seats still playing, which is who the row is about. */
+    val standing: List<LivePlayer> get() = players.filter { !it.out }
+
+    /**
+     * "Asha, Ravi and 2 more" — the names a row has room for. Seats that are
+     * out are left off: a row is a reason to watch, and they are done.
+     */
+    fun namesLine(room: Int = 2): String {
+        val names = standing.ifEmpty { players }.map { it.name }
+        return when {
+            names.size <= room + 1 -> names.joinToString(", ").ifEmpty { "Players" }
+            else -> names.take(room).joinToString(", ") + " and ${names.size - room} more"
+        }
+    }
+
+    /** Whole minutes left on a timed table's clock, or null for an untimed one. */
+    fun minutesLeft(now: Long = System.currentTimeMillis()): Int? =
+        endsAt?.let { maxOf(0, kotlin.math.ceil((it - now) / 60_000.0).toInt()) }
+}
+
+@Serializable
+data class LivePlayer(
+    val name: String = "",
+    val flag: String = "",
+    val color: String = "#888888",
+    /** The equipped face, an emoji the player chose — user content, so it is drawn as itself. */
+    val avatar: String = "",
+    val level: Int = 0,
+    val bot: Boolean = false,
+    /** Bankrupt or removed. */
+    val out: Boolean = false,
+)
 
 /**
  * The quick-match waiting room's small talk, `/data/tips.json`: gameplay

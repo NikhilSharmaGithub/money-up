@@ -100,7 +100,25 @@ struct MeInfo: Decodable, Equatable {
     /// the server; this yes-or-no is all anybody is told about it.
     var appleRevocable: Bool?
 
+    // 1.0.6 — the player's own level, career and notification switches. All
+    // optional: an older server sends none of them and the card shows none.
+    var xp: Int?
+    var level: Int?
+    var levelFloor: Int?
+    var levelNext: Int?
+    var career: CareerInfo?
+    var prefs: NotificationPrefs?
+    /// The most recent level-up, from a game or a mission claim — the
+    /// fallback celebration for a phone that was not at the table when it
+    /// happened. See GameStore.noteLevelUp.
+    var lastLevelUp: LevelUp?
+
     var signedIn: Bool { provider != nil }
+
+    /// The level as the account card draws it, or nil from an older server.
+    var levelInfo: LevelInfo? {
+        LevelInfo.from(xp: xp, level: level, levelFloor: levelFloor, levelNext: levelNext)
+    }
 }
 
 @MainActor

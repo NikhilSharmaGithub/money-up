@@ -46,6 +46,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +135,9 @@ fun GameOverSheet(
     // Seats asked to be friends this sitting — from a standings row or from
     // a profile — so the row's button settles into its tick either way.
     var added by remember { mutableStateOf(emptySet<String>()) }
+    // The result card is being drawn and written; one at a time.
+    var sharingCard by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     MMSheet(
         onDismissRequest = onDismiss,
@@ -161,14 +165,49 @@ fun GameOverSheet(
                 ) {
                     Icon("trophy", size = 46.dp, modifier = Modifier.padding(top = 8.dp))
                     WinnerHeadline(state)
+                    // A timed game ends with everybody still solvent, so the
+                    // result says why it ended before anybody wonders.
+                    if (state.endedOnClock) TimesUpTag(explained = true)
+                    // What the game was worth to this player — XP, a level
+                    // crossed, a mission finished — up where it is read
+                    // first, and nothing at all for a game that did not count.
+                    GameProgress(store, account)
                     RematchAction(store, account, state, onDismiss)
                     // One tap out with the room code attached — the fastest way a
                     // finished game turns into the next one, and the only moment
                     // anybody wants to tell somebody.
                     // iOS's ghost big button — the sunken well — with its
                     // share arrow at the symbol's own fifteen points.
+                    //
+                    // The picture first — the podium as an image, for a chat
+                    // or a story — and the words with the link under it,
+                    // because a picture seats nobody.
+                    val drawing: (@Composable (Color) -> Unit)? = if (sharingCard) {
+                        { ink -> LandingSpinner(ink, 15.dp) }
+                    } else {
+                        null
+                    }
                     MMButton(
-                        resultShareLabel(store.iWon),
+                        "Share result",
+                        kind = BtnKind.PLAIN, big = true, icon = "image", iconSize = 15.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !sharingCard,
+                        lead = drawing,
+                    ) {
+                        if (sharingCard) return@MMButton
+                        sharingCard = true
+                        val card = ResultCardData.of(state, store::isLocal, store.iWon)
+                        val words = store.shareText
+                        scope.launch {
+                            val shared = ResultShare.share(context, card, words)
+                            sharingCard = false
+                            // No picture (no storage, nothing that takes an
+                            // image): the words still go.
+                            if (!shared) shareText(context, words) { store.showToast("Invite copied") }
+                        }
+                    }
+                    MMButton(
+                        if (store.isSpectating) "Share the game" else resultShareLabel(store.iWon),
                         kind = BtnKind.PLAIN, big = true, icon = GlyphFor.SHARE_RESULT, iconSize = 15.dp,
                         modifier = Modifier.fillMaxWidth(),
                     ) { shareText(context, store.shareText) { store.showToast("Invite copied") } }
@@ -208,7 +247,7 @@ fun GameOverSheet(
     profileOf?.let { seat ->
         key(seat.id) {
             PlayerProfileSheet(
-                store, account, seat,
+                store, account, ProfileSeed.of(seat),
                 onAsked = { added = added + seat.id },
             ) { profileOf = null }
         }
@@ -304,6 +343,9 @@ private fun RematchAction(store: GameStore, account: AccountStore, state: GameSt
         // views are spent.
         DoubleWinOffer(store, account, state)
         when {
+            // From the rail there is no next game to start: the players
+            // decide that, and anybody watching sees it happen on the board.
+            store.isSpectating -> Caption("You watched this one from the rail.")
             state.cup == true -> Row(
                 Modifier
                     .fillMaxWidth()
@@ -344,6 +386,78 @@ private fun RematchAction(store: GameStore, account: AccountStore, state: GameSt
         }
     }
 }
+
+// ── what it was worth ───────────────────────────────────────────────────────
+
+/**
+ * The game, in XP: what it added, the level bar it moved, and — when a level
+ * was crossed — the celebration, "Level 7!" with the coins it paid.
+ *
+ * Read from the server's `progress` event, which only comes for a game that
+ * counted, so a game that ended too soon simply has no such line rather than
+ * a "+0 XP" that reads as a bug. Folding it into the account is what moves
+ * the home screen's bar and marks the level-up as celebrated, so the Play tab
+ * does not throw the same party a second time; the knock and the chime are
+ * only for a level this phone has not celebrated before, so reopening the
+ * standings does not ring again.
+ */
+@Composable
+private fun GameProgress(store: GameStore, account: AccountStore) {
+    val note = store.progress ?: return
+    val p = P.current
+    LaunchedEffect(note) {
+        val news = account.noteProgress(note)
+        if (news) {
+            Haptics.turn()
+            SoundKit.gain()
+        }
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        note.levelUp?.let { LevelUpBanner(it) }
+        Panel(padding = 12.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon("star", size = 14.dp, tint = p.gold)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "+${grouped(note.xpGained)} XP",
+                    color = p.gold, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+                    style = TextStyle(fontFeatureSettings = "tnum"),
+                )
+                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (note.xpCapped) "Daily XP limit reached" else xpPartsLine(note.xpParts),
+                    color = if (note.xpCapped) p.bad else p.ink3,
+                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(9.dp))
+            LevelStrip(note.level, note.xp, note.levelFloor, note.levelNext)
+            if (note.missionsCompleted.isNotEmpty()) {
+                Spacer(Modifier.height(9.dp))
+                val n = note.missionsCompleted.size
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(missionGlyph(note.missionsCompleted.first()), size = 13.dp, tint = p.good)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (n == 1) "A daily mission is done — collect it on Play"
+                        else "$n daily missions are done — collect them on Play",
+                        color = p.good, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** "Played 20 · Win 30 · Turns 6" — the parts that made it up, the noughts left out. */
+private fun xpPartsLine(parts: XpParts): String = listOfNotNull(
+    parts.played.takeIf { it > 0 }?.let { "Played $it" },
+    parts.win.takeIf { it > 0 }?.let { "Win $it" },
+    parts.runnerUp.takeIf { it > 0 }?.let { "Runner-up $it" },
+    parts.turns.takeIf { it > 0 }?.let { "Turns $it" },
+).joinToString(" · ")
 
 /** A line under an answer, set straight on the sheet's glass, in its quiet ink. */
 @Composable
@@ -821,7 +935,7 @@ private fun AddFriendButton(name: String, done: Boolean, busy: Boolean, onClick:
 
 /** checkmark at eleven points, bold: two strokes, the short one first. */
 @Composable
-private fun CheckMark(tint: Color) {
+internal fun CheckMark(tint: Color) {
     Canvas(Modifier.size(11.dp)) {
         val u = size.width / 11f
         val tick = Path().apply {
@@ -839,7 +953,7 @@ private fun CheckMark(tint: Color) {
  * symbol is.
  */
 @Composable
-private fun PersonPlusMark(tint: Color) {
+internal fun PersonPlusMark(tint: Color) {
     // SF's person.badge.plus is the outline person — its head a ring and its
     // shoulders an open arc — with a solid plus beside it.
     Canvas(Modifier.size(width = 14.dp, height = 11.dp)) {
@@ -855,235 +969,6 @@ private fun PersonPlusMark(tint: Color) {
         val bar = 1.6f * u
         drawLine(tint, Offset(11.6f * u, 1.4f * u), Offset(11.6f * u, 6.2f * u), bar, StrokeCap.Round)
         drawLine(tint, Offset(9.2f * u, 3.8f * u), Offset(14f * u, 3.8f * u), bar, StrokeCap.Round)
-    }
-}
-
-// ── somebody's profile ──────────────────────────────────────────────────────
-
-/**
- * Somebody you just played, beyond tonight's numbers: their record, the
- * titles that keep landing on their seat, and the one thing worth doing about
- * them — asking to be friends, or saying yes to them having asked.
- *
- * The card is read afresh every time it opens, by the code the seat carried,
- * as this player — the standings can be minutes old, and a "Request sent"
- * from before they answered would be wrong the moment it showed. A house
- * player answers like anybody else: the server keeps their numbers steady
- * and their requests unanswered, and nothing here treats them differently.
- *
- * Its own short sheet, opened at its full height: there is nothing below the
- * button to drag up to.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PlayerProfileSheet(
-    store: GameStore,
-    account: AccountStore,
-    seat: PlayerResult,
-    onAsked: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val p = P.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var card by remember { mutableStateOf<PlayerProfile?>(null) }
-    var failed by remember { mutableStateOf<String?>(null) }
-    // What a tap has since made true, over what the card said as it loaded.
-    var relation by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-
-    LaunchedEffect(seat.code) {
-        val got = account.player(seat.code)
-        card = got.profile
-        failed = got.error
-    }
-
-    val name = card?.name?.ifBlank { null } ?: seat.name
-    val flag = card?.flag?.ifBlank { null } ?: seat.flag
-    val code = card?.code?.ifBlank { null } ?: seat.code
-
-    fun ask() {
-        if (busy) return
-        Haptics.tap()
-        busy = true
-        account.befriend(code, quiet = true) { error, accepted ->
-            busy = false
-            if (error != null) {
-                store.showToast(error, isError = true)
-            } else {
-                // They had already asked, so the add made the friendship.
-                relation = if (accepted) "friend" else "sent"
-                onAsked()
-                if (accepted) Haptics.turn()
-                store.showToast(if (accepted) "You and $name are now friends" else "Request sent")
-            }
-        }
-    }
-
-    fun accept() {
-        if (busy) return
-        Haptics.tap()
-        busy = true
-        account.answerFriend(code, accept = true) { error ->
-            busy = false
-            if (error != null) {
-                store.showToast(error, isError = true)
-            } else {
-                relation = "friend"
-                onAsked()
-                Haptics.turn()
-                store.showToast("You and $name are now friends")
-            }
-        }
-    }
-
-    MMSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Box(Modifier.fillMaxWidth()) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Grabber(Modifier.padding(top = 5.dp, bottom = 6.dp))
-                // Their face if they wear one, else their initial in the
-                // colour they played in tonight — the disc the standings drew.
-                AvatarDisc(name, seat.color, size = 72.dp, avatar = card?.avatar?.ifBlank { null } ?: seat.avatar)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        name,
-                        modifier = Modifier.weight(1f, fill = false),
-                        color = p.ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    // The flag they chose, theirs to show as it is.
-                    flag?.takeIf { it.isNotBlank() }?.let {
-                        Spacer(Modifier.width(8.dp))
-                        Text(it, fontSize = 20.sp, maxLines = 1, softWrap = false)
-                    }
-                }
-                val shown = card
-                when {
-                    shown != null -> ProfileRecord(
-                        shown,
-                        relation = relation ?: shown.relation,
-                        busy = busy,
-                        onAsk = ::ask,
-                        onAccept = ::accept,
-                    )
-                    failed != null -> Box(
-                        Modifier.fillMaxWidth().heightIn(min = 120.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            failed.orEmpty(),
-                            color = p.bad, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                    // Held at about the height the record will take, so the
-                    // sheet does not leap when it lands.
-                    else -> Box(
-                        Modifier.fillMaxWidth().heightIn(min = 120.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        LandingSpinner(quietInk(), 22.dp)
-                    }
-                }
-            }
-            // A sheet is a window of its own, so the answer to Add friend is
-            // drawn in this one or it would land under it — as the result
-            // sheet draws its own.
-            ToastPill(store, Modifier.align(Alignment.BottomCenter))
-        }
-    }
-}
-
-/**
- * The record itself: four numbers on a card, how long they have been at it,
- * up to three titles, and the button where the two of you stand.
- */
-@Composable
-private fun ProfileRecord(
-    card: PlayerProfile,
-    relation: String,
-    busy: Boolean,
-    onAsk: () -> Unit,
-    onAccept: () -> Unit,
-) {
-    val p = P.current
-    Column(
-        Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Panel(padding = 14.dp) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Tally(grouped(card.wins), "WINS", Modifier.weight(1f))
-                Tally(grouped(card.played), "GAMES", Modifier.weight(1f))
-                Tally("${card.winRate}%", "WIN RATE", Modifier.weight(1f))
-                // Coins, not dollars: these are what the wins paid into the
-                // wallet, so they wear no dollar sign.
-                Tally(grouped(card.winnings), "COINS WON", Modifier.weight(1f))
-            }
-        }
-        if (card.since > 0) Caption("Playing since ${clockText(card.since, "MMMyyyy", twentyFour = false)}")
-
-        val titles = card.titles.filter { it.title.isNotBlank() }.take(3)
-        if (titles.isNotEmpty()) {
-            // The shelf's columns: as many 132dp-or-wider as fit, each an
-            // equal share, so a long title is not squeezed to its first word.
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val columns = ((maxWidth + 8.dp) / (132.dp + 8.dp)).toInt().coerceIn(1, titles.size)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (row in titles.chunked(columns)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            for (t in row) TitleChip(t.title, t.count, Modifier.weight(1f))
-                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            }
-        }
-
-        val wide = Modifier.fillMaxWidth()
-        when (relation) {
-            // Your own card asks nothing of you.
-            "self" -> Unit
-            "friend" -> MMButton(
-                "Friends", modifier = wide, kind = BtnKind.PLAIN, big = true, enabled = false,
-                lead = { CheckMark(p.good) },
-            ) {}
-            // Settled until they answer, and faded so it reads as a state
-            // rather than a button; MMButton itself looks the same disabled.
-            "sent" -> Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                MMButton(
-                    "Request sent", modifier = wide.alpha(0.7f), kind = BtnKind.PLAIN, big = true, enabled = false,
-                    lead = { ink -> CheckMark(ink) },
-                ) {}
-                Caption("Waiting for them to say yes.")
-            }
-            "asked" -> Column(
-                Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                MMButton(
-                    "Accept request", modifier = wide, kind = BtnKind.GOLD, big = true, enabled = !busy,
-                    lead = { ink -> if (busy) LandingSpinner(ink, 18.dp) else PersonPlusMark(ink) },
-                ) { onAccept() }
-                Caption("They asked to be your friend.")
-            }
-            else -> MMButton(
-                "Add friend", modifier = wide, kind = BtnKind.PRIMARY, big = true, enabled = !busy,
-                lead = { ink -> if (busy) LandingSpinner(ink, 18.dp) else PersonPlusMark(ink) },
-            ) { onAsk() }
-        }
     }
 }
 

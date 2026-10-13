@@ -84,9 +84,12 @@ fun AppScaffold(
     billing: Billing,
     onTheme: (MMTheme) -> Unit,
     onAppearance: (MMAppearance) -> Unit,
+    /** Bumped when something outside the tabs — a tapped daily reminder — asks for home. */
+    homeAsked: Int = 0,
 ) {
     val p = P.current
     var tab by remember { mutableStateOf(Tab.PLAY) }
+    LaunchedEffect(homeAsked) { if (homeAsked > 0) tab = Tab.PLAY }
     // Versioned rather than seen-or-not, as on iOS: when the intro gains
     // something existing players should read, INTRO_VERSION goes up and it
     // shows once more.

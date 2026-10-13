@@ -1,4 +1,5 @@
-// Somebody else, opened from a result: what they have won, how long they have
+// Somebody else, opened from a result, a leaderboard row or the friends list:
+// their level, what they have won, what they do at a table, how long they have
 // been at it, and the one thing to do about them — ask to be friends.
 //
 // A seat's id is no use for this. Every other player's id reaches this phone
@@ -35,6 +36,10 @@ struct PlayerProfile: Decodable {
     var since: Double?
     /// "self" | "friend" | "sent" | "asked" | "none" — where the viewer stands.
     var relation: String?
+    /// Their level, and their lifetime numbers from counted games (1.0.6). A
+    /// house player answers in the same shape, so nothing here tells them apart.
+    var level: Int?
+    var career: CareerInfo?
     var error: String?
 }
 
@@ -61,6 +66,9 @@ struct PlayerProfileSheet: View {
                     header(P)
                     if let profile {
                         record(profile, P)
+                        if let career = profile.career {
+                            careerCard(career)
+                        }
                         action(P)
                     } else if let failure {
                         failed(failure, P)
@@ -98,6 +106,9 @@ struct PlayerProfileSheet: View {
     private var name: String { filled(profile?.name) ?? seat.name }
     private var flag: String { filled(profile?.flag) ?? seat.flag ?? "" }
     private var face: String { filled(profile?.avatar) ?? seat.avatar ?? "" }
+    /// The profile's level once it lands — it may have climbed since the seat
+    /// was filed — and the one the seat wore until then.
+    private var level: Int { profile?.level ?? seat.level ?? 0 }
 
     private func filled(_ text: String?) -> String? {
         guard let text, !text.isEmpty else { return nil }
@@ -118,6 +129,9 @@ struct PlayerProfileSheet: View {
                     .foregroundStyle(P.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+            }
+            if level > 0 {
+                LevelChip(level: level, size: .medium)
             }
         }
         .frame(maxWidth: .infinity)
@@ -154,6 +168,25 @@ struct PlayerProfileSheet: View {
                             TitleChip(title: badge.title, count: badge.count ?? 1)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// What they do at a table, game after game — the same seven numbers on
+    /// everybody's card. Counting started with 1.0.6, so an old hand's grid
+    /// can read lower than their wins; the caption says why rather than let
+    /// it look like a mistake.
+    private func careerCard(_ career: CareerInfo) -> some View {
+        MMCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                PanelTitle("Career")
+                CareerGrid(career: career)
+                if career.isEmpty {
+                    Text("Counted from their next finished game.")
+                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Palette.current(scheme).ink3)
+                        .frame(maxWidth: .infinity)
                 }
             }
         }

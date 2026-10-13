@@ -123,6 +123,20 @@ final class PushRegistrar {
         UIApplication.shared.registerForRemoteNotifications()
     }
 
+    /// A notification switch in Settings was turned on. That is the player's
+    /// own tap asking to be notified, so the one permission sheet is spent
+    /// there rather than waiting for the end of a game — and answers what the
+    /// system now says, for the card to show.
+    func askFromSettings() async -> UNAuthorizationStatus {
+        let centre = UNUserNotificationCenter.current()
+        let settings = await centre.notificationSettings()
+        guard settings.authorizationStatus == .notDetermined else { return settings.authorizationStatus }
+        UserDefaults.standard.set(true, forKey: Self.askedKey)
+        let granted = (try? await centre.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        if granted { UIApplication.shared.registerForRemoteNotifications() }
+        return granted ? .authorized : .denied
+    }
+
     /// APNs answered. The token is bytes; the server wants the hex.
     func received(deviceToken: Data) {
         send(deviceToken.map { String(format: "%02x", $0) }.joined())

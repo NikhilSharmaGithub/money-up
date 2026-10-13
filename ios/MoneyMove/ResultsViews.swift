@@ -57,6 +57,11 @@ struct ResultStandingsCard: View {
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(P.ink)
                 .lineLimit(1)
+            // The level the seat wore at the end — already counting this
+            // game, since the final state is built after the XP is added.
+            if let level = r.level, level > 0 {
+                LevelChip(level: level)
+            }
             Spacer()
             // A game can end while a seat is still in the red —
             // the worth prints in the danger colour, never green.

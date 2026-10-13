@@ -15,6 +15,12 @@ import { TITLE_NAMES } from './game.js';
 import { RENT_PRICE } from './boards.js';
 import { cleanText, cleanFlag, isAllMasked } from './banter.js';
 import { writeFileAtomic, readJsonStore } from './storage.js';
+import {
+  levelFor, levelInfo, gameXp, seedXp, houseLevel, houseCareer, LEVEL_UP_COINS, MISSION_XP, GAME_XP_PER_DAY,
+  CAREER_KEYS, favoriteBoard, foldCareer,
+  missionKinds, missionOf, missionProgress, MISSION_COINS, MISSION_BONUS_COINS,
+  weekKey, weekResetsAt,
+} from './progression.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Render's filesystem is wiped on every deploy — point DATA_DIR at a
@@ -65,6 +71,15 @@ function load() {
       }
       // Likewise flags written before cleanFlag existed.
       if (p.flag) p.flag = cleanFlag(p.flag);
+      // Levels arrived after most of these people had been playing for
+      // months. Rather than start a veteran at level 1 beside somebody who
+      // installed the app this morning, a profile with no XP on file is
+      // credited for the games and wins it already has, once, here — and
+      // the level that lands on counts as paid, so nobody is handed a pile
+      // of level-up coins for the day the feature shipped. Done at load,
+      // before any game can end, so this game's win is never counted twice.
+      if (p.xp === undefined) p.xp = seedXp(p);
+      p.levelPaid ??= levelFor(p.xp);
     }
     for (const txn of raw.redeemed || []) redeemed.add(txn);
     for (const [key, thread] of Object.entries(raw.dms || {})) {
@@ -220,6 +235,10 @@ export function profileFor(token, { name, flag } = {}) {
   // counter animation on both clients hangs off. A wallet that predates the
   // field starts at nought; it is a watermark, not a lifetime statistic.
   p.earned ??= 0;
+  // A profile born today starts at level 1 with nothing to pay for it. (One
+  // that predates levels was credited at load — see load().)
+  p.xp ??= 0;
+  p.levelPaid ??= levelFor(p.xp);
   // The coin economy was rescaled 50x when paid packs arrived; old wallets
   // are converted once so nobody's balance silently shrinks in value.
   if (p.econ !== ECON_VERSION) {
@@ -368,6 +387,13 @@ export function awardWin(token, amount, note, { placing = false, daily = false }
   if (p && !placing) {
     p.wins = (p.wins || 0) + 1;
     p.winnings = (p.winnings || 0) + coins;
+    // And this week's, for the weekly board. A tally from an older week is
+    // simply last week's: it starts over at the first win of the new one,
+    // and the board ignores it until then (see leaderboardFor).
+    const week = weekKey();
+    if (p.weekly?.week !== week) p.weekly = { week, wins: 0, winnings: 0 };
+    p.weekly.wins += 1;
+    p.weekly.winnings += coins;
   }
   appendLedger({
     at: Date.now(),
@@ -605,8 +631,8 @@ function yesterdayKey() {
 }
 
 /** When the next claim opens — the coming server-local midnight. */
-function nextMidnight() {
-  const d = new Date();
+function nextMidnight(when = Date.now()) {
+  const d = new Date(when);
   d.setHours(24, 0, 0, 0);
   return d.getTime();
 }
@@ -664,6 +690,9 @@ export function claimDaily(token) {
   }
   d.streak = d.last === yesterdayKey() ? d.streak + 1 : 1;
   d.last = today;
+  // The moment, not just the day: the daily reminder rings about a day after
+  // this, which is about the time of day this player tends to turn up.
+  d.at = Date.now();
   const amount = dailyAmount(d.streak);
   credit(p, amount);
   appendLedger({
@@ -830,17 +859,72 @@ export function adsDayTotals(now = Date.now()) {
  * profileFor, so there is no profile to rank.
  */
 export function leaderboardView(limit = 50) {
-  return [...profiles.values()]
-    .filter((p) => (p.wins || 0) > 0)
-    .sort((a, b) => (b.wins || 0) - (a.wins || 0) || (b.winnings || 0) - (a.winnings || 0))
-    .slice(0, limit)
-    .map((p) => ({
-      code: p.code,
-      name: p.name || 'Player',
-      flag: p.flag || '',
-      wins: p.wins || 0,
-      winnings: p.winnings || 0,
-    }));
+  return leaderboardFor({ limit }).top;
+}
+
+const BOARD_SCOPES = ['all', 'week', 'friends'];
+
+/**
+ * One of the three boards, as the caller sees it.
+ *
+ *   all      lifetime wins, everybody who has one — the board there always was
+ *   week     wins since Monday 00:00 UTC, everybody who has one this week
+ *   friends  the caller and their friends by lifetime wins, a friend with no
+ *            wins included: a board of three people you know, two of them on
+ *            nought, is still a board worth looking at
+ *
+ * Ties go to the bigger purse, then alphabetically, so two looks at the same
+ * standings never disagree about who is above whom. `you` is the caller's own
+ * place — their rank in the whole ordering, not just the top slice, or null
+ * when they are not on this board at all — and their row in `top` says
+ * `you: true`. No token, no `you`. Rows carry codes and totals only, the same
+ * public fields this board has always printed, plus the level chip.
+ */
+export function leaderboardFor({ scope = 'all', token = '', limit = 50, now = Date.now() } = {}) {
+  const which = BOARD_SCOPES.includes(scope) ? scope : 'all';
+  const viewer = token ? profiles.get(token) || null : null;
+  let entries;
+  if (which === 'friends') {
+    if (!viewer) return { scope: which, top: [], you: null };
+    const friends = (viewer.friends || []).map((c) => profiles.get(byCode.get(c))).filter(Boolean);
+    entries = [viewer, ...friends.filter((f) => f !== viewer && !blockedEitherWay(viewer, f))]
+      .map((p) => ({ p, wins: p.wins || 0, winnings: p.winnings || 0 }));
+  } else if (which === 'week') {
+    const week = weekKey(now);
+    entries = [...profiles.values()]
+      .filter((p) => p.weekly?.week === week && p.weekly.wins > 0)
+      .map((p) => ({ p, wins: p.weekly.wins, winnings: p.weekly.winnings || 0 }));
+  } else {
+    entries = [...profiles.values()]
+      .filter((p) => (p.wins || 0) > 0)
+      .map((p) => ({ p, wins: p.wins || 0, winnings: p.winnings || 0 }));
+  }
+  entries.sort((a, b) => b.wins - a.wins || b.winnings - a.winnings
+    || (a.p.name || '').localeCompare(b.p.name || '') || a.p.code.localeCompare(b.p.code));
+
+  const row = ({ p, wins, winnings }) => ({
+    code: p.code,
+    name: p.name || 'Player',
+    flag: p.flag || '',
+    level: levelFor(p.xp || 0),
+    wins,
+    winnings,
+    ...(viewer && p === viewer ? { you: true } : {}),
+  });
+  let you = null;
+  if (viewer) {
+    const at = entries.findIndex((e) => e.p === viewer);
+    const mine = which === 'week'
+      ? (viewer.weekly?.week === weekKey(now) ? viewer.weekly.wins || 0 : 0)
+      : viewer.wins || 0;
+    you = { rank: at >= 0 ? at + 1 : null, wins: mine };
+  }
+  return {
+    scope: which,
+    ...(which === 'week' ? { week: weekKey(now), resetsAt: weekResetsAt(now) } : {}),
+    top: entries.slice(0, Math.max(1, Math.min(200, Math.floor(limit) || 50))).map(row),
+    you,
+  };
 }
 
 // ------------------------------------------------------------ achievements --
@@ -1531,6 +1615,8 @@ export function playerView(rawCode, viewerToken) {
       titles: topTitles(p.titleCounts),
       since: p.firstPlayed || p.created || p.seen || 0,
       relation: relationTo(viewer, p.code),
+      level: levelFor(p.xp || 0),
+      career: careerView(p),
     };
   }
 
@@ -1538,14 +1624,357 @@ export function playerView(rawCode, viewerToken) {
   const asked = viewer?.botWants?.find((w) => w.code === code) || null;
   const card = houseCards.get(code) || asked;
   if (!card) return nobody;
+  const stats = houseStats(code);
   return {
     code,
     name: card.name || 'Player',
     flag: card.flag || '',
     avatar: card.avatar || '',
-    ...houseStats(code),
+    ...stats,
     relation: asked ? 'sent' : 'none',
+    // The same chip it wore at the table (GameRoom.seatLevel), and a career
+    // scaled to the games its card already claims.
+    level: houseLevel(code),
+    career: houseCareer(code, stats.games),
   };
+}
+
+// ------------------------------------------------------------- progression --
+//
+// Levels, the career card, daily missions, the player's own switches and the
+// daily reminder. The sums are progression.js's; what lives here is the book:
+// who has how much, what has already been paid, and the rule that nothing is
+// paid twice.
+//
+// Two kinds of payout come out of this section, both outside the daily
+// ceiling on table coins (TABLE_COINS_PER_DAY) because both have bounds of
+// their own — a level is reached once and the XP games pay towards levels
+// has a daily ceiling (GAME_XP_PER_DAY), and a day has three missions and
+// one bonus. Both go through credit() and the ledger like every other coin.
+
+/** A pass & play guest: a chair on somebody else's phone, not a person. */
+const isGuestToken = (t) => /_p\d+$/.test(String(t || ''));
+
+/**
+ * Add XP and pay for every level it crosses: LEVEL_UP_COINS each, written to
+ * the ledger as provider 'level', once per level for the life of the profile.
+ * `levelPaid` is the watermark that makes it once — it only ever rises, and
+ * it is saved in the same write as the coins it paid for, so neither a retry
+ * nor a restart can pay a level again.
+ */
+function addXp(p, amount, now = Date.now()) {
+  const gained = Math.max(0, Math.floor(Number(amount) || 0));
+  const from = levelFor(p.xp || 0);
+  p.xp = (p.xp || 0) + gained;
+  const to = levelFor(p.xp);
+  p.levelPaid = Math.max(1, Math.floor(Number(p.levelPaid) || from));
+  let coins = 0;
+  while (p.levelPaid < to) {
+    p.levelPaid++;
+    credit(p, LEVEL_UP_COINS);
+    coins += LEVEL_UP_COINS;
+    appendLedger({
+      at: now,
+      provider: 'level',
+      packId: null,
+      usd: 0,
+      coins: LEVEL_UP_COINS,
+      token: p.token,
+      txn: `level:${p.code}:${p.levelPaid}`,
+      note: `reached level ${p.levelPaid}`,
+    });
+  }
+  const levelUp = to > from ? { from, to, coins } : null;
+  // Kept for a client that was not listening when it happened — a phone that
+  // was in a pocket when the game ended reads it off /api/me instead.
+  if (levelUp) p.lastLevelUp = { ...levelUp, at: now };
+  return { gained, levelUp };
+}
+
+/** The level a seat wears at the table: 0 for a guest, 1 at the least for anybody else. */
+export function levelOfToken(token) {
+  if (!token || isGuestToken(token)) return 0;
+  return levelFor(profiles.get(token)?.xp || 0);
+}
+
+/** The public half of a career: the counters, and the board played most. */
+function careerView(p) {
+  const c = p?.career || {};
+  const out = {};
+  for (const key of CAREER_KEYS) out[key] = Math.max(0, Math.floor(Number(c[key]) || 0));
+  out.favoriteBoard = favoriteBoard(c.boards);
+  return out;
+}
+
+/** Today's mission book, rolled over the moment the calendar day turns. */
+function missionBook(p, now = Date.now()) {
+  const day = dayKey(now);
+  if (p.missions?.day !== day) p.missions = { day, progress: {}, claimed: [], bonus: false };
+  p.missions.progress ??= {};
+  p.missions.claimed ??= [];
+  return p.missions;
+}
+
+/**
+ * One finished game, for one person at the table: XP up to the day's
+ * ceiling (and any level it reaches), the career counters, and today's
+ * missions. The caller has
+ * already decided the game counts — only games that pass the anti-farm rule
+ * come here (see recordTransitions in index.js).
+ *
+ * `game` names the game, and a profile remembers the last ten it was paid
+ * for: the transition that calls this happens once per game, but "once" is a
+ * promise worth keeping in the book as well as in the caller. A guest seat
+ * and a token with no profile get nothing — the same rule as karma, so a
+ * game still settling after its owner deleted themselves cannot mint them
+ * back. Returns what happened, for the 'progress' event, or null.
+ */
+export function recordGameProgress(token, {
+  game = '', won = false, runnerUp = false, turns = 0, stats = {}, mapId = '', now = Date.now(),
+} = {}) {
+  if (!token || isGuestToken(token)) return null;
+  const p = profiles.get(token);
+  if (!p) return null;
+  const key = String(game || '').slice(0, 80);
+  p.progressGames ??= [];
+  if (key) {
+    if (p.progressGames.includes(key)) return null;
+    p.progressGames.push(key);
+    if (p.progressGames.length > 10) p.progressGames.splice(0, p.progressGames.length - 10);
+  }
+
+  const xp = gameXp({ won, runnerUp, turns });
+  // Held to the day's ceiling the way table coins are (see GAME_XP_PER_DAY):
+  // the game that crosses it pays the part that fits, and the games after it
+  // pay none. The day is the one the missions below are booked on. Only the
+  // XP stops — the career and the missions still count the game, since
+  // neither pays anything a day does not already bound.
+  const day = dayKey(now);
+  const sofar = p.xpDay?.day === day ? Math.max(0, Math.floor(Number(p.xpDay.xp) || 0)) : 0;
+  const paid = Math.max(0, Math.min(xp.total, GAME_XP_PER_DAY - sofar));
+  p.xpDay = { day, xp: sofar + paid };
+  const { levelUp } = addXp(p, paid, now);
+  p.career = foldCareer(p.career, stats, mapId);
+
+  const book = missionBook(p, now);
+  const completed = [];
+  for (const kind of missionKinds(p.code, book.day)) {
+    const target = missionOf(kind).target;
+    const before = Math.floor(book.progress[kind] || 0);
+    const add = missionProgress(kind, stats, won);
+    if (!add || before >= target) continue;
+    // Held at the target: past it is nothing more to show or to pay.
+    book.progress[kind] = Math.min(target, before + add);
+    if (book.progress[kind] >= target) completed.push(kind);
+  }
+  save();
+  return {
+    // What was added, and what the game was worth before the ceiling: the
+    // parts always add up to the latter, so a client can show both.
+    xpGained: paid, xpParts: xp.parts, xpCapped: paid < xp.total,
+    ...levelInfo(p.xp), levelUp, missionsCompleted: completed,
+  };
+}
+
+/**
+ * Today's missions, as the card draws them. Read-only and no minting, the
+ * walletOf rule: the home screen asks on every visit. A token with no profile
+ * yet is shown the three its code will be dealt, at nought — the code is
+ * derived from the token, so they are the same three it will play for.
+ */
+export function missionsView(token, now = Date.now()) {
+  const p = token ? profiles.get(token) : null;
+  const day = dayKey(now);
+  const code = p?.code || (token ? codeFor(token) : '');
+  const book = p?.missions?.day === day ? p.missions : { progress: {}, claimed: [], bonus: false };
+  const missions = missionKinds(code, day).map((kind) => {
+    const m = missionOf(kind);
+    const progress = Math.min(m.target, Math.max(0, Math.floor(book.progress?.[kind] || 0)));
+    return {
+      id: kind, kind, title: m.title, target: m.target, progress,
+      coins: MISSION_COINS, xp: MISSION_XP,
+      done: progress >= m.target,
+      claimed: (book.claimed || []).includes(kind),
+    };
+  });
+  const allDone = missions.every((m) => m.done);
+  return {
+    day,
+    resetsAt: nextMidnight(now),
+    // Progress counts for everybody; only a signed-in account can claim, the
+    // daily reward's rule and for the daily reward's reason (see dailyView).
+    signedIn: !!p?.login,
+    missions,
+    bonus: { coins: MISSION_BONUS_COINS, ready: allDone && !book.bonus, claimed: !!book.bonus },
+  };
+}
+
+/**
+ * Claim one finished mission (`id` is its kind) or the bonus for all three.
+ *
+ * Idempotent: a mission already claimed answers ok with `duplicate: true` and
+ * pays nothing, so a retried request or a second tab sees success rather
+ * than an error, and the balance in the reply is the true one either way.
+ * The claim and the payout happen in one synchronous step, so two requests
+ * racing each other cannot both get past the check.
+ */
+export function claimMission(token, rawId, now = Date.now()) {
+  const p = token ? profiles.get(token) : null;
+  if (!p?.login) return { error: 'Sign in to claim mission rewards', needsLogin: true };
+  const id = String(rawId || '').slice(0, 32);
+  const book = missionBook(p, now);
+  const view = () => missionsView(token, now);
+  const reply = (awarded, levelUp = null, extra = {}) => ({
+    ok: true, id, awarded, ...extra,
+    coins: p.coins, earned: p.earned || 0,
+    ...levelInfo(p.xp), levelUp,
+    missions: view(),
+  });
+
+  if (id === 'bonus') {
+    if (book.bonus) return reply({ coins: 0, xp: 0 }, null, { duplicate: true });
+    if (!view().missions.every((m) => m.done)) return { error: 'Finish all three missions first' };
+    book.bonus = true;
+    credit(p, MISSION_BONUS_COINS);
+    appendLedger({
+      at: now, provider: 'mission', packId: 'bonus', usd: 0, coins: MISSION_BONUS_COINS, token,
+      txn: `mission:${book.day}:${p.code}:bonus`, note: 'all three daily missions',
+    });
+    save();
+    return reply({ coins: MISSION_BONUS_COINS, xp: 0 });
+  }
+
+  const kinds = missionKinds(p.code, book.day);
+  // Usually a card left open across midnight: yesterday's mission is gone,
+  // and the reply carries today's so the card can redraw at once.
+  if (!kinds.includes(id)) return { error: 'That mission is not one of today\'s', missions: view() };
+  if (book.claimed.includes(id)) return reply({ coins: 0, xp: 0 }, null, { duplicate: true });
+  const m = missionOf(id);
+  if ((book.progress[id] || 0) < m.target) return { error: 'That mission is not finished yet' };
+  book.claimed.push(id);
+  credit(p, MISSION_COINS);
+  appendLedger({
+    at: now, provider: 'mission', packId: id, usd: 0, coins: MISSION_COINS, token,
+    txn: `mission:${book.day}:${p.code}:${id}`, note: m.title,
+  });
+  const { levelUp } = addXp(p, MISSION_XP, now);
+  save();
+  return reply({ coins: MISSION_COINS, xp: MISSION_XP }, levelUp);
+}
+
+// ------------------------------------------------------------ preferences --
+// The player's own switches. Both start on, and an absent field reads as on,
+// so every profile that predates them behaves exactly as it did.
+const PREF_KEYS = ['dailyReminder', 'inviteAlerts'];
+
+const prefsView = (p) => ({
+  dailyReminder: p?.prefs?.dailyReminder !== false,
+  inviteAlerts: p?.prefs?.inviteAlerts !== false,
+});
+
+/** Read-only, like every other GET: asking does not make a profile. */
+export const prefsOf = (token) => prefsView(token ? profiles.get(token) : null);
+
+/** JSON booleans, and the strings and digits a form or a hand-written client might send for them. */
+function asSwitch(v) {
+  if (v === true || v === 'true' || v === 1 || v === '1') return true;
+  if (v === false || v === 'false' || v === 0 || v === '0') return false;
+  return null;
+}
+
+/**
+ * Change either switch, or both; a field left out keeps its value. Anything
+ * that is not a yes or a no is refused outright rather than read as one — a
+ * typo must not quietly switch somebody's notifications off.
+ */
+export function setPrefs(token, changes = {}) {
+  if (!token) return { error: 'Missing identity' };
+  const wanted = {};
+  for (const key of PREF_KEYS) {
+    if (changes?.[key] === undefined) continue;
+    const v = asSwitch(changes[key]);
+    if (v == null) return { error: `${key} must be true or false` };
+    wanted[key] = v;
+  }
+  const p = profileFor(token);
+  if (!p) return { error: 'Missing identity' };
+  p.prefs = { ...prefsView(p), ...wanted };
+  save();
+  return { ok: true, ...p.prefs };
+}
+
+// --------------------------------------------------------- daily reminder --
+// One buzz a day, about a day after the last claim, to somebody who would
+// lose a streak by forgetting. The rules, in the order they are checked:
+//
+//   · signed in — only an account can claim, so only an account is reminded
+//   · the reminder switch is on, a phone is registered, and not banned
+//   · seen in the last week — a player who has stopped opening the app is not
+//     chased by it every day for the rest of their life
+//   · the coin is there to collect: not claimed today
+//   · not reminded today, and not in the last twenty hours
+//   · and it is that player's time of day: between twenty and twenty-four
+//     hours on from their last claim (or, with no claim on file, their last
+//     reminder or their last visit), counted in whole days from it. The
+//     server does not know anybody's timezone; the hour they last claimed at
+//     is the best guess there is of an hour they are awake.
+//
+// The scheduler in index.js runs this every ten minutes, which visits each
+// four-hour window more than twenty times — plenty to catch everybody once.
+export const DAILY_REMINDER_TEXT = 'Your daily coins are ready — keep your streak going';
+const HOUR_MS = 60 * 60 * 1000;
+export const REMINDER_RULES = { gapMs: 20 * HOUR_MS, windowFromMs: 20 * HOUR_MS, lapseMs: 7 * DAY_MS };
+
+/**
+ * When this profile last claimed, to the millisecond if it claimed since that
+ * was written down. An older claim only has its day on file; the middle of
+ * that day is the least wrong guess at when in it.
+ */
+function lastClaimAt(p) {
+  if (Number.isFinite(p.daily?.at)) return p.daily.at;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(p.daily?.last || ''));
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12).getTime() : null;
+}
+
+/** Whether this profile should be reminded at `now`. See the rules above. */
+export function reminderDue(p, now = Date.now()) {
+  if (!p?.login || !p.push?.length) return false;
+  if (p.prefs?.dailyReminder === false) return false;
+  if (bans.has(p.token)) return false;
+  if (!p.seen || now - p.seen > REMINDER_RULES.lapseMs) return false;
+  const today = dayKey(now);
+  if (p.daily?.last === today) return false;
+  const last = p.reminded;
+  if (last?.day === today) return false;
+  if (last?.at && now - last.at < REMINDER_RULES.gapMs) return false;
+  const anchor = lastClaimAt(p) ?? last?.at ?? p.seen;
+  const since = now - anchor;
+  if (since < REMINDER_RULES.windowFromMs) return false;
+  return since % DAY_MS >= REMINDER_RULES.windowFromMs;
+}
+
+/**
+ * Send every reminder that is due. `send` is the push sender
+ * (sendTurnPush in production, a stand-in in the tests) — passed in rather
+ * than imported because push.js already reads this module, and a sender a
+ * test can swap is the whole of what a test needs. A profile is marked
+ * reminded before its push goes, so one that throws is not retried every ten
+ * minutes for the rest of the window. Returns how many were sent.
+ */
+export function runDailyReminders(send, now = Date.now()) {
+  let sent = 0;
+  for (const p of profiles.values()) {
+    if (!reminderDue(p, now)) continue;
+    p.reminded = { at: now, day: dayKey(now) };
+    sent++;
+    try {
+      send(p.token, DAILY_REMINDER_TEXT, { collapseId: 'daily', kind: 'daily' });
+    } catch (err) {
+      console.warn('reminder: send failed —', err?.message);
+    }
+  }
+  if (sent) save();
+  return sent;
 }
 
 // ----------------------------------------------------------------- notices --
@@ -1949,6 +2378,7 @@ export function meView(token) {
     return {
       code: '', name: '', flag: '', coins: 0, karma: KARMA_MAX, provider: null, email: '', picture: '',
       appleRevocable: false,
+      ...levelInfo(0), career: careerView(null), prefs: prefsView(null), lastLevelUp: null,
     };
   }
   const p = profileFor(token);
@@ -1966,6 +2396,13 @@ export function meView(token) {
     // account can revoke Apple access on its own, or the app has to ask the
     // player to sign in with Apple once more so there is something to revoke.
     appleRevocable: stored.login?.provider === 'apple' && !!stored.appleRefresh?.token,
+    // The level chip and its bar: xp, level, levelFloor, levelNext.
+    ...levelInfo(stored.xp || 0),
+    // The same career anybody else sees on this player's card.
+    career: careerView(stored),
+    prefs: prefsView(stored),
+    // The newest level-up, for a client that missed the 'progress' event.
+    lastLevelUp: stored.lastLevelUp || null,
   };
 }
 

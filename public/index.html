@@ -248,6 +248,10 @@
          until the server has actually said there is something to collect. -->
     <div class="landing-card daily-card hidden" id="dailyCard"></div>
 
+    <!-- Today's three missions, under the coins they sit beside. app.js fills
+         it from /api/missions and keeps it hidden until the server answers. -->
+    <div class="landing-card missions-card hidden" id="missionsCard"></div>
+
     <!-- The cup. Drawn only when the server says tournaments are on; a server
          with them off answers `enabled: false` and this stays empty. -->
     <div class="landing-card cup-card hidden" id="cupCard"></div>
@@ -264,6 +268,9 @@
         <button id="storeBtn" class="btn store-btn" data-ico="bag">Store <span id="coinChip" class="coin-chip" data-ico="coin">0</span></button>
         <span id="karmaChip" class="karma-chip hidden" title="Karma — leaving a live game costs 1" data-ico="heart">100 karma</span>
       </div>
+      <!-- Your level and how far into it you are. A tap opens your own
+           profile, career and all. app.js paints it from /api/me. -->
+      <button id="levelRow" class="level-row hidden" type="button" title="Your level — tap for your profile"></button>
       <label class="field">
         <span>Your nickname</span>
         <span class="name-row">
@@ -288,6 +295,10 @@
       <div id="publicRooms" class="public-rooms"></div>
       <div id="recentGames" class="recent-games"></div>
     </div>
+
+    <!-- Public games being played right now, a tap from the rail. app.js
+         fills it from /api/live and keeps it hidden until the server answers. -->
+    <div class="landing-card live-card hidden" id="liveCard"></div>
 
     <!-- A summary and a door. Your code, how many are on, and the room
          behind it — see openFriendsModal in social.js. -->
@@ -393,6 +404,12 @@
         <button id="soundBtn" class="icon-btn" title="Toggle sound" aria-label="Toggle sound"></button>
         <button id="leaveBtn" class="icon-btn" title="Leave game" aria-label="Leave game" data-ico="door"></button>
       </div>
+      <!-- Facts about the whole table, under its toolbar: the game clock at
+           a timed table, and how many people are watching. -->
+      <div id="tableChips" class="table-chips hidden">
+        <span id="gameClock" class="table-chip glass game-clock hidden" role="timer" aria-live="off"></span>
+        <span id="watchCount" class="table-chip glass watch-count hidden"></span>
+      </div>
     </div>
 
     <div id="shareCard" class="panel share">
@@ -420,6 +437,13 @@
       </div>
       <div id="chatList" class="chat-list"><div class="empty" data-ico="chat">Say hi</div></div>
       <div class="emote-row" id="emoteRow"></div>
+      <!-- Quick chat: the eight one-tap lines, a scrolling row right above
+           the field. app.js fills it. -->
+      <div class="phrase-row" id="phraseRow" role="group" aria-label="Quick chat"></div>
+      <!-- Somebody watching from the rail reads the chat but has no voice in
+           it — the server refuses a watcher's line — so the composer gives
+           way to this. -->
+      <div class="watch-note"><span data-ico="eye"></span> You are watching — the chat is the players'.</div>
       <form id="chatForm" class="chat-form">
         <input id="chatInput" maxlength="200" placeholder="Say something…" autocomplete="off" />
         <button class="icon-btn send" type="submit">➤</button>

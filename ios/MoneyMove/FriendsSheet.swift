@@ -28,6 +28,8 @@ struct FriendsSheet: View {
     @State private var adding = false
     @State private var dmFriend: FriendEntry?
     @State private var loaded = false
+    /// Whose profile is open — a friend's, or somebody asking to be one.
+    @State private var profileOf: PlayerResult?
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -40,6 +42,12 @@ struct FriendsSheet: View {
                     list(P)
                 }
                 .padding(16)
+            }
+            // Hung on the scroll view rather than beside the message sheet
+            // below: two sheets on one view is one more than SwiftUI promises
+            // to present.
+            .sheet(item: $profileOf) { seat in
+                PlayerProfileSheet(seat: seat).environmentObject(store)
             }
             .navigationTitle("Friends")
             .navigationBarTitleDisplayMode(.inline)
@@ -190,16 +198,25 @@ struct FriendsSheet: View {
                     PanelTitle("Wants to be friends (\(requests.count))")
                     ForEach(requests) { r in
                         HStack(spacing: 11) {
-                            face(r, tint: P.gold, P)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(r.name)
-                                    .font(.system(size: 14.5, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(P.ink)
-                                    .lineLimit(1)
-                                Text("asked to be friends · \(r.code)")
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(P.ink3)
+                            // Who is asking, one tap away — a request is the
+                            // moment it matters most who somebody is.
+                            Button { openProfile(r) } label: {
+                                HStack(spacing: 11) {
+                                    face(r, tint: P.gold, P)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(r.name)
+                                            .font(.system(size: 14.5, weight: .heavy, design: .rounded))
+                                            .foregroundStyle(P.ink)
+                                            .lineLimit(1)
+                                        Text("asked to be friends · \(r.code)")
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(P.ink3)
+                                    }
+                                }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Opens \(r.name)'s profile")
                             Spacer(minLength: 4)
                             Button("Accept") { Task { await answer(r, yes: true) } }
                                 .buttonStyle(MMButtonStyle(kind: .gold))
@@ -351,29 +368,38 @@ struct FriendsSheet: View {
 
         return VStack(spacing: 9) {
             HStack(spacing: 11) {
-                ZStack {
-                    Circle().fill(P.sunken)
-                    if face.isEmpty { Art.icon(.people, size: 18, tint: P.ink3) }
-                    else { Text(face).font(.system(size: 20)) }
-                }
-                .frame(width: 40, height: 40)
-                .overlay(Circle().stroke(status.tint.opacity(entry.status == nil ? 0 : 0.55), lineWidth: 1.5))
+                // The face and the name are the way into their profile —
+                // their level, their record, their career.
+                Button { openProfile(entry) } label: {
+                    HStack(spacing: 11) {
+                        ZStack {
+                            Circle().fill(P.sunken)
+                            if face.isEmpty { Art.icon(.people, size: 18, tint: P.ink3) }
+                            else { Text(face).font(.system(size: 20)) }
+                        }
+                        .frame(width: 40, height: 40)
+                        .overlay(Circle().stroke(status.tint.opacity(entry.status == nil ? 0 : 0.55), lineWidth: 1.5))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
-                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(P.ink)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(status.label)
-                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                            .foregroundStyle(status.tint)
-                        Text(entry.code)
-                            .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(P.ink3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.name)
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                .foregroundStyle(P.ink)
+                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                Text(status.label)
+                                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(status.tint)
+                                Text(entry.code)
+                                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(P.ink3)
+                            }
+                        }
+                        Spacer(minLength: 4)
                     }
+                    .contentShape(Rectangle())
                 }
-                Spacer(minLength: 4)
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens \(entry.name)'s profile")
 
                 Menu {
                     // A submenu is the confirmation: two deliberate taps, and
@@ -443,7 +469,18 @@ struct FriendsSheet: View {
                 Button {
                     Haptics.tap()
                     dismiss()
-                    store.join(roomId: roomId)
+                    // A game already running is watched through the
+                    // watcher's door: no "game already started" refusal on
+                    // the way in, and no chance of being dealt into a
+                    // rematch nobody asked to play. A table this device
+                    // still has a seat at is that seat, not the rail.
+                    if let ours = store.unfinishedGames.first(where: { $0.roomId == roomId }) {
+                        store.resume(ours)
+                    } else if started {
+                        store.watch(roomId: roomId)
+                    } else {
+                        store.join(roomId: roomId)
+                    }
                     // Sitting down in their lobby is a new table; watching
                     // a game already running is not, and gets no break.
                     // The break waits for this sheet to finish closing —
@@ -462,6 +499,12 @@ struct FriendsSheet: View {
         .padding(11)
         .background(P.sunken, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+
+    private func openProfile(_ entry: FriendEntry) {
+        Haptics.tap()
+        profileOf = PlayerResult.card(code: entry.code, name: entry.name, flag: entry.flag,
+                                      avatar: entry.avatar, level: nil)
     }
 
     // MARK: - the wire

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -104,8 +105,17 @@ fun AccountCard(account: AccountStore, store: GameStore, modifier: Modifier = Mo
                     }
                 }
             }
+            Spacer(Modifier.height(11.dp))
+            AccountLevel(me)
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // A level is the device's, signed in or not, so the bar is
+                // here from the first game — and a reason to keep the wallet
+                // it belongs to by signing in.
+                if (me != null && me.code.isNotBlank()) {
+                    AccountLevel(me)
+                    Spacer(Modifier.height(3.dp))
+                }
                 Text(
                     "Sign in to collect your daily coins",
                     color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
@@ -147,6 +157,16 @@ internal fun signInWithGoogleTapped(context: Context, account: AccountStore, sto
             outcome.error?.let { store.showToast(it, isError = true) }
         }
     }
+}
+
+/**
+ * The player's level on their own card: the chip, the bar toward the next
+ * one, and the XP still to go. The bar moves the moment a game or a mission
+ * adds XP, because the account folds those in before it re-reads /api/me.
+ */
+@Composable
+private fun AccountLevel(me: MeView) {
+    LevelStrip(me.level, me.xp, me.levelFloor, me.levelNext)
 }
 
 @Composable

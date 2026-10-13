@@ -42,6 +42,9 @@ struct LandingView: View {
     /// a request is the one thing here that somebody else is waiting on.
     @State private var friendRequests: [FriendEntry] = []
     @State private var publicRooms: [PublicRoom] = []
+    /// Games the Watch live card is already offering. A game in play listed
+    /// here too would be the same table twice, with less said about it.
+    @State private var liveRooms: Set<String> = []
     @State private var storeItems: [StoreItem] = []
     @State private var dmFriend: FriendEntry?
     @State private var rollingName = false
@@ -168,6 +171,13 @@ struct LandingView: View {
         .onReceive(NotificationCenter.default.publisher(for: .mmAccountChanged)) { _ in
             Task { await refreshMe() }
         }
+        // A tapped daily reminder: back to Play, where the reward card is. A
+        // cold start lands there anyway; this is for a warm one on another tab.
+        .onReceive(NotificationCenter.default.publisher(for: .mmOpenHome)) { _ in
+            guard tab != .play else { return }
+            lastTab = tab
+            tab = .play
+        }
     }
 
     /// Shared page chrome: scrolling column of cards over the felt.
@@ -202,15 +212,20 @@ struct LandingView: View {
         // server has said Google is set up, the card offers none.
         DailyRewardCard(onSignIn: authConfig?.googleReady == true ? { Task { await googleSignInTapped() } } : nil,
                         signingIn: signingIn)
+        // The day's three jobs, beside the day's coins: both are reasons to
+        // open the app today, and both reset at the same midnight.
+        MissionsCard(onSignIn: authConfig?.googleReady == true ? { Task { await googleSignInTapped() } } : nil,
+                     signingIn: signingIn)
         // The other way to a couple of coins, and a much quieter one: it draws
         // nothing until the server turns ads on, and nothing again once the
         // day's views are spent. It never plays by itself.
         FreeCoinsOffer()
         quickPlayCard(P)
         playCard(P, busy: busy)
-        // Below the ways in, where the browsing starts — who is winning, then
-        // whose table you can walk into.
+        // Below the ways in, where the browsing starts — who is winning, what
+        // is being played right now, then whose table you can walk into.
         LeaderboardCard(myCode: me?.code)
+        WatchLiveCard(onList: { liveRooms = $0 })
         publicRoomsCard(P)
     }
 
@@ -497,6 +512,19 @@ struct LandingView: View {
         // A table still running is the only thing here worth acting on, so it
         // keeps the top; everything the player has ever won sits under it.
         AchievementsShelf()
+        // The same career grid other people see on this player's profile —
+        // counted from 1.0.6 on, so it stays away until there is something in it.
+        if let career = me?.career, !career.isEmpty {
+            MMCard(padding: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 6) {
+                        Art.icon(.chart, size: 13, tint: P.ink3)
+                        PanelTitle("Your career")
+                    }
+                    CareerGrid(career: career)
+                }
+            }
+        }
         if store.matchHistory.isEmpty {
             if store.unfinishedGames.isEmpty {
                 MMCard(padding: 22) {
@@ -595,6 +623,7 @@ struct LandingView: View {
         themeCard(P)
         appearanceCard(P)
         soundCard(P)
+        NotificationPrefsCard(signedIn: me?.signedIn == true)
         // After the preferences, before the plumbing — the way back into the
         // six cards a new player is shown, then the same rules the web
         // client's help modal reads out.
@@ -1209,20 +1238,32 @@ struct LandingView: View {
     /// list is empty a Group collapses to nothing, an empty view never runs its
     /// task, and the card could then never appear at all.
     private func publicRoomsCard(_ P: Palette) -> some View {
-        VStack(spacing: 0) {
-            if !publicRooms.isEmpty {
+        let rooms = publicRooms.filter { !($0.isPlaying && liveRooms.contains($0.id)) }
+        return VStack(spacing: 0) {
+            if !rooms.isEmpty {
                 MMCard(padding: 16) {
                     VStack(alignment: .leading, spacing: 10) {
                         PanelTitle("Public rooms")
                         VStack(spacing: 8) {
-                            ForEach(publicRooms) { room in
+                            ForEach(rooms) { room in
                                 Button {
-                                    store.join(roomId: room.id)
                                     // A seat is a new table; a full lobby
                                     // or a game in play is only somewhere
                                     // to watch, and nobody sits through a
-                                    // break to watch.
-                                    if room.canSit { InterstitialAd.beforeGame() }
+                                    // break to watch. Watching goes in by
+                                    // the watcher's door, which never seats
+                                    // anybody by accident when a chair frees.
+                                    // A table this device still has a seat
+                                    // at is a seat to go back to, not a
+                                    // game to watch.
+                                    if let ours = store.unfinishedGames.first(where: { $0.roomId == room.id }) {
+                                        store.resume(ours)
+                                    } else if room.canSit {
+                                        store.join(roomId: room.id)
+                                        InterstitialAd.beforeGame()
+                                    } else {
+                                        store.watch(roomId: room.id)
+                                    }
                                 } label: {
                                     HStack(spacing: 10) {
                                         // The list carries games already under
@@ -1345,39 +1386,50 @@ struct LandingView: View {
     @ViewBuilder private func accountCard(_ P: Palette) -> some View {
         if let me, me.signedIn {
             MMCard(padding: 12) {
-                HStack(spacing: 11) {
-                    profilePhoto(me, size: 44, P: P)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(me.name?.isEmpty == false ? me.name! : "Player")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                            .foregroundStyle(P.ink)
-                            .lineLimit(1)
-                        Text(me.email?.isEmpty == false ? me.email! : "Signed in with \(me.provider == "apple" ? "Apple" : "Google")")
-                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(P.ink3)
-                            .lineLimit(1)
-                        HStack(spacing: 10) {
-                            HStack(spacing: 3) {
-                                Art.icon(.coin, size: 11)
-                                Text("\(me.coins ?? 0)")
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 11) {
+                        profilePhoto(me, size: 44, P: P)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(me.name?.isEmpty == false ? me.name! : "Player")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                .foregroundStyle(P.ink)
+                                .lineLimit(1)
+                            Text(me.email?.isEmpty == false ? me.email! : "Signed in with \(me.provider == "apple" ? "Apple" : "Google")")
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(P.ink3)
+                                .lineLimit(1)
+                            HStack(spacing: 10) {
+                                HStack(spacing: 3) {
+                                    Art.icon(.coin, size: 11)
+                                    Text("\(me.coins ?? 0)")
+                                }
+                                HStack(spacing: 3) {
+                                    Art.icon(.heart, size: 11)
+                                    Text("\(me.karma ?? 0)")
+                                }
+                                Text(me.code ?? "")
                             }
-                            HStack(spacing: 3) {
-                                Art.icon(.heart, size: 11)
-                                Text("\(me.karma ?? 0)")
-                            }
-                            Text(me.code ?? "")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(P.ink2)
                         }
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(P.ink2)
+                        Spacer()
+                        Button("Sign out") { Task { await signOut() } }
+                            .buttonStyle(MMButtonStyle(kind: .ghost))
                     }
-                    Spacer()
-                    Button("Sign out") { Task { await signOut() } }
-                        .buttonStyle(MMButtonStyle(kind: .ghost))
+                    if let level = store.myLevel {
+                        LevelStrip(info: level)
+                    }
                 }
             }
         } else {
             MMCard(padding: 12) {
                 VStack(spacing: 8) {
+                    // Every finished game counts towards a level, signed in
+                    // or not — only the coins wait behind an account.
+                    if let level = store.myLevel {
+                        LevelStrip(info: level)
+                            .padding(.bottom, 4)
+                    }
                     Text("Sign in to collect your daily coins")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .foregroundStyle(P.ink3)
@@ -1454,6 +1506,8 @@ struct LandingView: View {
 
     private func refreshMe() async {
         me = try? await store.fetchJSON("/api/me?token=\(store.token)", raw: true)
+        // The level for the account card, and a level-up this phone missed.
+        store.noteMe(me)
     }
 
     private func loadAuthConfig() async {

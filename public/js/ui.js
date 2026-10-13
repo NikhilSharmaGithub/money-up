@@ -9,6 +9,7 @@ import { sfx } from './sound.js';
 import { api } from './net.js';
 import { configureAdNetwork, playNetworkAd } from './ads.js';
 import { noteWallet, setCoins } from './coins.js';
+import { drawResultCard, sharePicture, canSharePicture } from './sharecard.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -32,7 +33,7 @@ const money = (n) => {
  * typed one comes out as a coloured emoji on half the phones reading it. It
  * paints with currentColor, so it takes whatever ink it is printed in.
  */
-const TICK = `<svg class="ico tick" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+export const TICK = `<svg class="ico tick" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
   <path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 // ─────────────────────────────────────────────────────────────── toasts ──
@@ -410,6 +411,11 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
     card.classList.toggle('teamed', !!team);
 
     const tags = [];
+    // The level is who somebody is before the dice start and after they stop,
+    // so it rides the seat in the lobby and on the final standings. Mid-game
+    // the row is busy telling you who is next and who is in jail, and the
+    // level is not news there.
+    if (state.status !== 'playing' && p.level > 0) tags.push(levelChip(p.level, 'seat'));
     if (team) tags.push(`<i class="tag team" style="background:${team.color}22;color:${team.color}">${escapeHtml(team.name)}</i>`);
     if (p.isBot) tags.push('<i class="tag bot">BOT</i>');
     if (state.hostId === p.id) tags.push('<i class="tag host">HOST</i>');
@@ -671,7 +677,7 @@ export function renderRightPanel(state, meId, el, actions) {
   // no deed changed.
   const sig = state.status === 'lobby'
     ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${state.map.id}:${state.players.length}:${quickSig(state)}`
-    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}`;
+    : `game:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}${me ? '' : `:w${state.spectators || 0}`}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
   // A lobby repaints under whoever is typing their name — somebody sat
@@ -1160,6 +1166,9 @@ function paintPieces(el, token) {
 function lookPanel(state, meId) {
   const me = state.players.find((p) => p.id === meId);
   pieceColor = me?.color || '#888';
+  // Nobody to dress: somebody watching from the rail, or at a full table,
+  // has no piece on this board for a name, a colour or a flag to go on.
+  if (!me) return '';
   return `<div class="panel">
       <div class="panel-title">Your look</div>
       <input id="nameField" class="name-field" value="${escapeHtml(me?.name || '')}" maxlength="16" placeholder="Nickname" />
@@ -1255,7 +1264,7 @@ function wireSettingInputs(root, actions) {
     input.onchange = () => {
       const key = input.dataset.set;
       let value = input.type === 'checkbox' ? input.checked : input.value;
-      if (['maxPlayers', 'startingCash', 'turnSeconds'].includes(key)) value = Number(value);
+      if (['maxPlayers', 'startingCash', 'turnSeconds', 'timeLimit'].includes(key)) value = Number(value);
       sfx.click();
       actions.settings({ [key]: value });
     };
@@ -1348,6 +1357,7 @@ function renderQuickLobby(state, meId, el, actions) {
         ${state.players.map((p) => `<div class="quick-seat">
           <span class="avatar sm ${p.avatar ? 'has-skin' : ''}" style="background:${p.color}">${escapeHtml(p.avatar || (p.name[0] || '?').toUpperCase())}</span>
           <span class="qs-name">${escapeHtml(p.name)}</span>
+          ${levelChip(p.level, 'seat')}
           ${p.id === meId ? '<i class="tag you">YOU</i>' : ''}
           ${seatNote(p)}
         </div>`).join('')}
@@ -1377,6 +1387,73 @@ const turnClockOptions = (current) => {
   const n = Math.floor(Number(current) || 0);
   return TURN_CLOCKS.includes(n) ? TURN_CLOCKS : [...TURN_CLOCKS, n].sort((a, b) => a - b);
 };
+
+// How well the house players the host adds play (1.0.6). The words under the
+// picker change with it, because "Hard" means nothing until it says what a
+// hard bot does differently — and those are the things a player will notice.
+const BOT_LEVELS = [
+  { id: 'easy', name: 'Easy', desc: 'House players buy cautiously, bid low and never start a trade' },
+  { id: 'normal', name: 'Normal', desc: 'House players play the way they always have' },
+  { id: 'hard', name: 'Hard', desc: 'House players buy almost everything, race to three houses and bid close to value' },
+];
+/** The table's bot skill, read as normal from a server that has never heard of it. */
+const botLevelOf = (state) => BOT_LEVELS.find((b) => b.id === state.settings?.botLevel) || BOT_LEVELS[1];
+
+// The whole game's clock, in minutes; 0 is no clock at all. A server sends
+// only these five, so there is no odd value to keep the way the turn clock does.
+const GAME_LENGTHS = [0, 20, 30, 45, 60];
+const gameLengthLabel = (n) => (n ? `${n} min` : 'Unlimited');
+
+/**
+ * Bot skill and game length as two lobby rows. A Play-now table keeps the
+ * bots and the clock it was matched under, and a cup sets its own table, so
+ * neither row is drawn at either (the server refuses both there anyway).
+ * Everybody but the host reads them switched off, the way every other row
+ * in this panel reads.
+ */
+function tableClockRows(state, dis) {
+  if (state.quick || state.cup) return '';
+  const bots = botLevelOf(state);
+  const minutes = Number(state.settings.timeLimit) || 0;
+  return `
+      <div class="setting stacked">
+        <span class="s-icon">${icon('robot')}</span>
+        <div class="s-body">
+          <div class="s-name">Bot skill</div>
+          <div class="s-desc">${bots.desc}</div>
+          <div class="chat-channels seg3 bot-seg" role="radiogroup" aria-label="Bot skill">${BOT_LEVELS.map((b) => `
+            <button type="button" role="radio" data-bot="${b.id}" class="${b.id === bots.id ? 'on' : ''}"
+              aria-checked="${b.id === bots.id}" ${dis}>${b.name}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="setting">
+        <span class="s-icon">${icon('clock')}</span>
+        <div class="s-body"><div class="s-name">Game length</div>
+          <div class="s-desc">${minutes
+            ? 'When the clock runs out, the richest player wins'
+            : 'Play on until one player is left standing'}</div></div>
+        <select data-set="timeLimit" ${dis}>
+          ${GAME_LENGTHS.map((n) => `<option value="${n}" ${minutes === n ? 'selected' : ''}>${gameLengthLabel(n)}</option>`).join('')}
+        </select>
+      </div>`;
+}
+
+/**
+ * The lobby headline's half-line about how this game will be played, for
+ * the people who cannot open the settings: the clock, and a bot skill other
+ * than the usual when there are bots to have it.
+ */
+function lobbyTerms(state) {
+  if (state.quick || state.cup) return '';
+  const parts = [];
+  const minutes = Number(state.settings?.timeLimit) || 0;
+  if (minutes) parts.push(`${minutes}-minute game`);
+  const bots = botLevelOf(state);
+  const hasBots = state.settings?.allowBots || state.players.some((p) => p.isBot);
+  if (bots.id !== 'normal' && hasBots) parts.push(`${bots.name} bots`);
+  return parts.map((p) => ` · ${p}`).join('');
+}
 
 function renderSettings(state, meId, el, actions) {
   const isHost = state.hostId === meId;
@@ -1444,6 +1521,7 @@ function renderSettings(state, meId, el, actions) {
             `<option value="${n}" ${Number(state.settings.turnSeconds) === n ? 'selected' : ''}>${clockOptionLabel(n)}</option>`).join('')}
         </select>
       </div>
+      ${tableClockRows(state, dis)}
     </div>
 
     <div class="panel">
@@ -1460,6 +1538,17 @@ function renderSettings(state, meId, el, actions) {
   `;
 
   wireSettingInputs(el, actions);
+  // The lozenge moves when the state says it has, not under the finger: a
+  // refused change sends no new state, and a lozenge moved ahead of the
+  // server would be left sitting on a skill the table does not have.
+  el.querySelectorAll('[data-bot]').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = () => {
+      if (b.classList.contains('on')) return;
+      sfx.click();
+      actions.settings({ botLevel: b.dataset.bot });
+    };
+  });
   wireLookPanel(state, meId, el, actions);
   // A cup fixes its own board; the server refuses the change either way.
   paintBoards(state, el, meId, actions, isHost && !state.cup);
@@ -1620,6 +1709,24 @@ function deadlockPanel(state, meId) {
     </div>`;
 }
 
+/**
+ * The side panel for somebody with no seat at the table — a watcher (1.0.6),
+ * or anyone who arrived at a game already under way. "Your properties" with
+ * nothing in it told them to go and buy a street they had no way to buy;
+ * this says what they are looking at instead, and how to leave it.
+ */
+function watchPanelHTML(state) {
+  const others = Math.max(0, (Number(state.spectators) || 0) - 1);
+  return `<div class="panel watch-panel">
+      <div class="panel-title">${icon('eye')} Watching</div>
+      <div class="dim small">${state.status === 'ended'
+        ? 'This game is over. The standings are on the board and in the result sheet.'
+        : 'Every move here is live. Nothing on the board is yours to touch, and the players only see how many people are watching, not who.'}</div>
+      ${others ? `<div class="dim small wp-count">${others === 1 ? 'One other person is' : `${others} other people are`} watching too</div>` : ''}
+      <button class="btn ghost small wide" id="watchHome" type="button">${icon('door')} Back to home</button>
+    </div>`;
+}
+
 function renderMyStuff(state, meId, el, actions) {
   const me = state.players.find((p) => p.id === meId);
   // Once the game is over — or this seat is out of it — the deed buttons only
@@ -1678,13 +1785,13 @@ function renderMyStuff(state, meId, el, actions) {
       <button class="btn small wide" style="margin-top:8px" data-cancel="${t.id}">Cancel offer</button>
     </div>`).join('')}
 
-    <div class="panel">
+    ${me ? `<div class="panel">
       <div class="panel-title">Your properties</div>
       ${mine.length ? sections : `<div class="empty">${
-        isOut(me || {}) ? `Your deeds went back to the bank. You are watching from the rail now ${icon('eye')}`
+        isOut(me) ? `Your deeds went back to the bank. You are watching from the rail now ${icon('eye')}`
           : state.status === 'ended' ? 'You finished with nothing on the board.'
           : 'Nothing owned yet — land on a street and buy it.'}</div>`}
-    </div>
+    </div>` : watchPanelHTML(state)}
 
     ${state.settings.vacationCash ? `<div class="panel pot">
       <div class="panel-title">Vacation pot</div>
@@ -1694,9 +1801,13 @@ function renderMyStuff(state, meId, el, actions) {
     ${state.status === 'ended' && !state.cup
       ? (state.quick
         ? `<button class="btn primary wide wrap" id="againBtn">${icon('replay')} Play again</button>`
-        : `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again</button>`)
+        // A rematch is the seated players' to call; from the rail the
+        // server would only answer that this game is being watched.
+        : me ? `<button class="btn primary wide wrap" id="rematchBtn">${icon('replay')} Play again</button>` : '')
       : ''}
   `;
+  const watchHome = $('#watchHome', el);
+  if (watchHome) watchHome.onclick = () => { sfx.click(); actions.goHome?.(); };
 
   el.querySelectorAll('[data-open]').forEach((row) => {
     row.onclick = (e) => {
@@ -1992,6 +2103,16 @@ export function renderCenter(state, meId, actions) {
           <div class="quick-count">Starting in <b id="quickCount">…</b></div>
           ${tableTalkHTML()}`;
       }
+    } else if (actions.isWatching?.() && !state.cup) {
+      // Somebody who came to watch a game that has since gone back to its
+      // lobby — a rematch — may sit down in the next one, while there is a
+      // chair. Only through the ordinary door: watching never turns into a
+      // seat by itself.
+      const open = seated < seats;
+      actionEl.innerHTML = `${open
+        ? `<button class="btn primary big" id="cSit">${icon('people')} Take a seat</button>` : ''}
+        <div class="waiting">${icon('eye')} You are watching${open ? '' : ' — every seat is taken'}</div>`;
+      on('#cSit', () => actions.takeSeat?.());
     } else {
       actionEl.innerHTML = state.hostId === meId
         ? `<button class="btn primary big" id="cStart">${icon('dice')} Start Game</button>`
@@ -2017,7 +2138,7 @@ export function renderCenter(state, meId, actions) {
         <div class="room-code">${quick ? `${icon('bolt')} Quick Play`
           : state.cup ? `${icon('trophy')} Cup match`
           : `Room <b>${escapeHtml(state.id)}</b>`}</div>
-        <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}</div>
+        <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}${lobbyTerms(state)}</div>
         ${state.quickRoll?.parts?.length
           // The board is already on the line above, so this picks up the rules.
           ? `<div class="lobby-rolled">${escapeHtml(state.quickRoll.parts.slice(1).join(' · '))}</div>` : ''}
@@ -2048,9 +2169,10 @@ export function renderCenter(state, meId, actions) {
         : ''}
       ${state.cup ? `<div class="cup-note dim small">${icon('trophy')} A cup match is played once — the bracket has your result.</div>` : ''}`;
     const won = winnerLabel(state);
-    statusEl.innerHTML = won
+    statusEl.innerHTML = (won
       ? `<div class="win-line" style="color:${won.color}">${icon('trophy')} ${escapeHtml(won.name)} wins!</div>`
-      : '<div class="win-line">Game over</div>';
+      : '<div class="win-line">Game over</div>')
+      + (endedOnTime(state) ? `<div class="dim small time-up">${icon('clock')} Time's up — the richest player won</div>` : '');
     on('#cStandings', () => showGameOver(state, meId, actions));
     on('#cHome', () => actions.goHome?.());
     // A matchmade table breaks up when it ends, and the server refuses to
@@ -2451,6 +2573,95 @@ function paintTurnClock() {
 
   // Nothing to count — stop the ticker until a turn arrives that has an end.
   if (secs === null && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+}
+
+// ─────────────────────────────────────────────────────────── game clock ──
+// A timed game (1.0.6) carries the moment its whole clock runs out, `endsAt`,
+// beside the turn's own. It is counted down here between pushes for the same
+// reason the turn clock is, and capped the same way, at the game's length, so
+// a device running minutes slow cannot show more time than the table has.
+// It is only ever a reading: the game ends when the server says it has.
+const gameClock = { endsAt: null, total: 0, timeUp: false };
+let gameClockTimer = null;
+
+/**
+ * The chips under the table's toolbar: the game clock at a timed table, and
+ * how many people are watching. Both are facts about the whole table, so
+ * everybody sees them, watchers included.
+ */
+export function syncTableChips(state) {
+  const playing = state?.status === 'playing';
+  gameClock.endsAt = playing && Number(state.endsAt) > 0 ? Number(state.endsAt) : null;
+  gameClock.timeUp = playing && !!state.timeUp;
+  gameClock.total = Math.max(0, Number(state?.settings?.timeLimit) || 0) * 60000;
+  paintGameClock();
+  if (gameClock.endsAt && !gameClockTimer) gameClockTimer = setInterval(paintGameClock, 500);
+
+  const eye = $('#watchCount');
+  if (eye) {
+    const n = Math.max(0, Math.floor(Number(state?.spectators) || 0));
+    // Compared by the count rather than by innerHTML, which the browser
+    // re-serialises and so never reads back as the string it was handed.
+    if (eye.dataset.n !== String(n)) {
+      eye.dataset.n = String(n);
+      eye.innerHTML = n ? `${icon('eye')}<b>${n}</b> watching` : '';
+    }
+    eye.classList.toggle('hidden', !n);
+    eye.title = n === 1 ? 'One person is watching this table' : `${n} people are watching this table`;
+  }
+  paintChipRow();
+}
+
+/** Seconds left on the game, or null when this table plays without a clock. */
+function gameClockSeconds() {
+  if (!gameClock.endsAt) return null;
+  let left = gameClock.endsAt - Date.now();
+  if (gameClock.total) left = Math.min(left, gameClock.total);
+  return Math.max(0, Math.ceil(left / 1000));
+}
+
+function paintGameClock() {
+  const el = $('#gameClock');
+  const secs = gameClockSeconds();
+  if (secs === null) {
+    if (gameClockTimer) { clearInterval(gameClockTimer); gameClockTimer = null; }
+    if (el) {
+      el.classList.add('hidden');
+      el.classList.remove('warm', 'last');
+      el.innerHTML = '';
+      el.dataset.t = '';
+    }
+    paintChipRow();
+    return;
+  }
+  if (!el) return;
+  // At the whistle the turn being played is the last one; the chip says so
+  // rather than sitting on 0:00 as if the clock had stuck.
+  const last = gameClock.timeUp || secs === 0;
+  const words = last ? 'Last turn' : minSec(secs);
+  if (el.dataset.t !== words) {
+    el.dataset.t = words;
+    el.innerHTML = `${icon('clock')}<b>${words}</b>`;
+  }
+  el.classList.remove('hidden');
+  el.classList.toggle('warm', !last && secs <= 120);
+  el.classList.toggle('last', last);
+  el.title = last ? 'Time is up — the richest player wins when this turn ends'
+    : 'Game clock — when it runs out, the richest player wins';
+  paintChipRow();
+}
+
+/** The row hides itself when neither chip has anything to say. */
+function paintChipRow() {
+  const row = $('#tableChips');
+  if (!row) return;
+  const any = [...row.children].some((c) => !c.classList.contains('hidden'));
+  row.classList.toggle('hidden', !any);
+}
+
+/** Whether a finished game was decided on the clock rather than by the last one standing. */
+export function endedOnTime(state) {
+  return state?.status === 'ended' && state.endReason === 'time';
 }
 
 // ──────────────────────────────────────────── holding a dropped chair ──
@@ -4127,6 +4338,16 @@ const STAT_COLS = [
   ['Lead %', (s) => `${s.leadShare || 0}%`],
 ];
 
+/**
+ * The final standings, in the order the sheet prints them: everyone still
+ * standing by what they were worth, then the bankrupt. The share picture
+ * reads the same list, so it can never put a different player on the podium.
+ */
+function finalStandings(state) {
+  return [...(state.players || [])].sort((a, b) =>
+    Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
+}
+
 function statsTableHTML(state, rank) {
   if (!state.stats) return ''; // an older server kept no diary
   const rows = rank.map((p) => {
@@ -4150,8 +4371,7 @@ function statsTableHTML(state, rank) {
  * the server that ended it.
  */
 export function reportCardHTML(state, meId) {
-  const rank = [...(state.players || [])].sort((a, b) =>
-    Number(a.bankrupt) - Number(b.bankrupt) || b.netWorth - a.netWorth);
+  const rank = finalStandings(state);
   const medals = ['medalGold', 'medalSilver', 'medalBronze'];
   // Once any row carries the chevron, every row keeps its slot, so the money
   // column still lines up down the card.
@@ -4275,6 +4495,68 @@ const PROFILE_ACTIONS = {
 };
 
 /**
+ * "Lv 12" — the level as a chip, wherever a player is named: a seat, a row on
+ * the leaderboard, a profile, your own card on the landing. A drawn star, not
+ * an emoji, so it is the same chip on every platform. Nothing at all for 0 or
+ * a missing level: that is a pass & play guest, or a server from before
+ * levels, and a "Lv 0" would read as a beginner rather than as nobody.
+ */
+export function levelChip(level, cls = '') {
+  const n = Math.floor(Number(level) || 0);
+  if (n < 1) return '';
+  return `<span class="lv-chip${cls ? ` ${cls}` : ''}" title="Level ${n}">${icon('star')}Lv ${n}</span>`;
+}
+
+/**
+ * Table money in a tile a thumb wide. Rent adds up over a career, and seven
+ * digits in a tile sized for three pushed the grid off a phone — so past a
+ * hundred thousand it is rounded to the thousand, and past a million to a
+ * tenth of one. The exact sum is in the tile's title.
+ */
+function compactMoney(n) {
+  const v = Math.max(0, Math.round(Number(n) || 0));
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (v >= 1e5) return `$${Math.round(v / 1e3)}k`;
+  return money(v);
+}
+
+/**
+ * The career grid on a profile: what they have done at the tables, counted
+ * from 1.0.6 on. Older games were never broken down this way, so a veteran's
+ * grid can be all zeroes under forty wins — the line under the heading says
+ * why rather than letting the zeroes look like a broken card.
+ */
+function careerHTML(career) {
+  if (!career || typeof career !== 'object') return '';
+  const num = (v) => (Number(v) || 0).toLocaleString('en-US');
+  const tiles = [
+    ['Streets bought', num(career.streetsBought)],
+    ['Houses built', num(career.housesBuilt)],
+    ['Rent collected', compactMoney(career.rentCollected), money(career.rentCollected)],
+    ['Biggest rent', compactMoney(career.biggestRent), money(career.biggestRent)],
+    ['Auctions won', num(career.auctionsWon)],
+    ['Trades', num(career.tradesCompleted)],
+  ];
+  const fav = career.favoriteBoard;
+  const empty = !fav && ['streetsBought', 'housesBuilt', 'rentCollected', 'biggestRent',
+    'auctionsWon', 'tradesCompleted'].every((k) => !Number(career[k]));
+  const games = Number(fav?.games) || 0;
+  return `<p class="sub pp-label">Career</p>
+    ${empty ? `<p class="pp-note">Nothing on the books yet — the career grid fills in
+      from the next finished game.</p>` : ''}
+    <div class="ach-tiles career">
+      ${tiles.map(([label, value, exact]) => `<div class="ach-tile"${exact ? ` title="${escapeHtml(exact)}"` : ''}>
+        <b>${escapeHtml(value)}</b><span>${label}</span></div>`).join('')}
+    </div>
+    <div class="pp-fav">
+      <span class="pp-fav-ico">${icon('map', 16, 'solo')}</span>
+      <span class="pp-fav-label">Favourite board</span>
+      ${fav ? `<b>${escapeHtml(fav.name || fav.id || 'Classic')}</b>
+        <i>${games} game${games === 1 ? '' : 's'}</i>` : '<b class="dim">None yet</b>'}
+    </div>`;
+}
+
+/**
  * Somebody you have just played, from the result sheet: who they are, what
  * they have won, and a way to ask them to be friends.
  *
@@ -4284,12 +4566,17 @@ const PROFILE_ACTIONS = {
  * appearing would read as a tap that did nothing. It never decides for itself
  * who is a person: the server answers for every seat it put a code on, and
  * the sheet draws whatever comes back.
+ *
+ * The same sheet opens off a leaderboard row and a friend's row, and each of
+ * those hands its own way back and says where it goes (`backLabel`), so the
+ * button never promises a result sheet to somebody who came from Friends.
  */
-export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
+export function openPlayerProfile(seat, { onBack, token: viewer, backLabel } = {}) {
   const code = String(seat?.code || '');
   if (!code) return;
   const token = viewer || walletToken();
   const back = onBack || closeModal;
+  const backText = onBack ? backLabel || 'Back to the results' : 'Close';
   const face = (avatar, name) => `<span class="avatar pp-face ${avatar ? 'has-skin' : ''}"
       style="background:${seat.color || 'var(--red)'}">${escapeHtml(avatar || (String(name || '?')[0] || '?').toUpperCase())}</span>`;
 
@@ -4298,12 +4585,12 @@ export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
       ${face(seat.avatar, seat.name)}
       <div class="pp-who">
         <h2><b>${escapeHtml(seat.name || 'Player')}</b>${seat.flag ? `<span class="pp-flag">${escapeHtml(seat.flag)}</span>` : ''}</h2>
-        <p class="sub">&nbsp;</p>
+        <p class="sub">${levelChip(seat.level) || '&nbsp;'}</p>
       </div>
     </div>
     <div id="ppBody"><div class="pp-state">${icon('replay', 22, 'spin')}<p>Looking them up…</p></div></div>
     <div class="modal-actions">
-      <button class="btn ghost" id="ppBack">${onBack ? 'Back to the results' : 'Close'}</button>
+      <button class="btn ghost" id="ppBack">${escapeHtml(backText)}</button>
       <span id="ppAction"></span>
     </div>`, (root) => {
     const sheet = $('.modal', root);
@@ -4364,11 +4651,13 @@ export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
         const rate = games ? `${Math.round((wins / games) * 100)}%` : '—';
         const since = Number(d.since) || 0;
         const name = d.name || seat.name || 'Player';
+        // The level leads the line under the name, ahead of how long they
+        // have been playing: it is the one number that says both at once.
         $('#ppHead', root).innerHTML = `${face(d.avatar, name)}
           <div class="pp-who">
             <h2><b>${escapeHtml(name)}</b>${d.flag ? `<span class="pp-flag">${escapeHtml(d.flag)}</span>` : ''}</h2>
-            <p class="sub">${since ? `Playing since ${escapeHtml(new Date(since)
-              .toLocaleDateString(undefined, { month: 'short', year: 'numeric' }))}` : 'New to the tables'}</p>
+            <p class="sub">${levelChip(d.level ?? seat.level)}<span>${since ? `Playing since ${escapeHtml(new Date(since)
+              .toLocaleDateString(undefined, { month: 'short', year: 'numeric' }))}` : 'New to the tables'}</span></p>
           </div>`;
         const tiles = [
           ['Wins', wins.toLocaleString('en-US')],
@@ -4384,7 +4673,8 @@ export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
           ${titles.length ? `<p class="sub">Titles they wear most</p>
             <div class="pp-titles">${titles.map((t) => `<span class="pp-title">
               ${icon(TITLE_ART[t.title] || 'sparkle', 14)}<b>${escapeHtml(t.title)}</b>${
-              Number(t.count) > 1 ? `<i>×${Number(t.count)}</i>` : ''}</span>`).join('')}</div>` : ''}`;
+              Number(t.count) > 1 ? `<i>×${Number(t.count)}</i>` : ''}</span>`).join('')}</div>` : ''}
+          ${careerHTML(d.career)}`;
         paintAction(d.relation);
       })
       .catch((err) => {
@@ -4401,36 +4691,305 @@ export function openPlayerProfile(seat, { onBack, token: viewer } = {}) {
 // The same rows on the landing card and in the sheet behind it, so the top
 // five you tapped are the top five you land on. `winnings` is a purse of
 // coins, not table money — it wears the coin, not a dollar sign.
+//
+// Three boards share the rows: everyone's lifetime wins, this week's, and
+// you and your friends. Every row opens that player's profile.
 const MEDALS = ['medalGold', 'medalSilver', 'medalBronze'];
+
+export const LEADER_SCOPES = [
+  { id: 'all', label: 'All time' },
+  { id: 'week', label: 'This week' },
+  { id: 'friends', label: 'Friends' },
+];
+const isScope = (s) => LEADER_SCOPES.some((x) => x.id === s);
+
+/**
+ * The three boards as a segmented control: the chat's channel picker, one
+ * side wider. Each button carries its scope; the caller wires the taps.
+ */
+export function leaderTabsHTML(scope) {
+  return `<div class="chat-channels seg3 lb-tabs" role="tablist" aria-label="Leaderboard">${LEADER_SCOPES.map((s) => `
+    <button type="button" role="tab" data-scope="${s.id}" class="${s.id === scope ? 'on' : ''}"
+      aria-selected="${s.id === scope}">${s.label}</button>`).join('')}</div>`;
+}
+
+// Each board read is kept for half a minute, so going from a row to its
+// profile and back — or flicking between tabs — does not ask the server the
+// same question again and redraw a list that has not changed.
+const BOARD_TTL = 30000;
+const boardCache = new Map();
+
+/** One board, as /api/leaderboard answers it. The token only marks your row. */
+export function fetchLeaderboard(scope, token, { fresh = false } = {}) {
+  const which = isScope(scope) ? scope : 'all';
+  const key = `${which}:${token || ''}`;
+  const hit = boardCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < BOARD_TTL) return Promise.resolve(hit.data);
+  const query = `scope=${which}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  return fetch(api(`/api/leaderboard?${query}`))
+    .then((r) => r.json())
+    .then((data) => {
+      boardCache.set(key, { at: Date.now(), data });
+      return data;
+    });
+}
+
+/** "in 3 days", "in 5 hours" — how long the weekly board has left. */
+function resetsIn(at) {
+  const ms = Number(at) - Date.now();
+  if (!(ms > 0)) return 'any minute';
+  const hours = Math.round(ms / 3600000);
+  if (hours >= 36) { const d = Math.round(hours / 24); return `in ${d} day${d === 1 ? '' : 's'}`; }
+  if (hours >= 1) return `in ${hours} hour${hours === 1 ? '' : 's'}`;
+  return 'within the hour';
+}
+
+/** The line under the tabs: what this board counts, and for the week, when it ends. */
+export function leaderNote(scope, data) {
+  if (scope === 'week') {
+    return `Wins since Monday. Resets Monday${data?.resetsAt ? ` — ${resetsIn(data.resetsAt)}` : ''}.`;
+  }
+  if (scope === 'friends') return 'You and your friends, by wins over all time.';
+  return 'Every player who has taken a table, most wins first. The purse is the coins those wins paid out.';
+}
+
+/** What an empty board says, which is different for each of the three. */
+export function leaderEmpty(scope) {
+  if (scope === 'week') return 'No wins yet this week — the first table to finish opens it.';
+  if (scope === 'friends') return 'Swap friend codes with somebody and the two of you are on it.';
+  return 'Nobody has won a game yet.';
+}
+
+/**
+ * Where you stand when your own row is not among the ones shown: the server
+ * ranks you against the whole board, not just the fifty it sends.
+ */
+export function leaderYouHTML(scope, data, shown) {
+  const you = data?.you;
+  if (!you) return '';
+  const wins = Number(you.wins) || 0;
+  if (you.rank && you.rank <= shown) return '';
+  if (you.rank) {
+    return `<div class="lb-you">You are <b>#${Number(you.rank).toLocaleString('en-US')}</b> with
+      ${wins} ${wins === 1 ? 'win' : 'wins'}${scope === 'week' ? ' this week' : ''}.</div>`;
+  }
+  return `<div class="lb-you">${scope === 'week'
+    ? 'Win a game this week and you are on it.'
+    : 'Win a game and you are on it.'}</div>`;
+}
 
 export function leaderRowsHTML(rows, myCode = '') {
   return (rows || []).map((r, i) => {
     const wins = Number(r.wins) || 0;
-    return `<div class="lb-row ${myCode && r.code === myCode ? 'me' : ''}">
-      <span class="lb-rank">${MEDALS[i] ? icon(MEDALS[i], 18) : i + 1}</span>
+    const mine = !!r.you || (!!myCode && r.code === myCode);
+    const name = r.name || 'Player';
+    // A friends board ranks people with no wins at all, and a gold medal on
+    // a nought is a prize for nothing — the medals go to winners only.
+    const rank = MEDALS[i] && wins > 0 ? icon(MEDALS[i], 18) : i + 1;
+    return `<div class="lb-row ${mine ? 'me' : ''} ${r.code ? 'tap' : ''}" ${r.code
+      ? `data-code="${escapeHtml(r.code)}" role="button" tabindex="0" aria-label="${escapeHtml(name)}'s profile"` : ''}>
+      <span class="lb-rank">${rank}</span>
       <span class="lb-flag">${escapeHtml(r.flag || '')}</span>
-      <span class="lb-name">${escapeHtml(r.name || 'Player')}${
-        myCode && r.code === myCode ? '<i class="tag you">YOU</i>' : ''}</span>
+      <span class="lb-name"><span class="lb-n">${escapeHtml(name)}</span>${levelChip(r.level)}${
+        mine ? '<i class="tag you">YOU</i>' : ''}</span>
       <span class="lb-wins">${wins}<i>${wins === 1 ? 'win' : 'wins'}</i></span>
       <span class="lb-cash">${icon('coin', 12)}${(Number(r.winnings) || 0).toLocaleString('en-US')}</span>
     </div>`;
   }).join('');
 }
 
-/** The whole table — fifty deep, and it scrolls rather than growing. */
-export function openLeaderboardModal(rows, myCode = '') {
+/**
+ * Makes every row of a board open its player's profile. `onBack` is handed
+ * on to the profile, so a sheet opened over the board can put the board back
+ * where it was; the landing card has nothing under it to go back to. It is
+ * called with the list's scroll offset at the tap: the profile replaces the
+ * sheet, so by the time Back is pressed the list it would be read from is
+ * gone, and a detached list always says 0.
+ */
+export function wireLeaderRows(root, rows, { token, onBack, backLabel } = {}) {
+  root.querySelectorAll('.lb-row.tap[data-code]').forEach((el) => {
+    const row = (rows || []).find((r) => r.code === el.dataset.code);
+    if (!row) return;
+    const open = () => {
+      sfx.click();
+      const y = root.scrollTop;
+      openPlayerProfile({ code: row.code, name: row.name, flag: row.flag, level: row.level },
+        { token, onBack: onBack && (() => onBack(y)), backLabel });
+    };
+    el.onclick = open;
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    };
+  });
+}
+
+/**
+ * The whole board — fifty deep, and it scrolls rather than growing — with
+ * the three tabs across the top. `scope` picks the tab it opens on, and
+ * `scrollTop` puts the list back where it was when a profile hands the sheet
+ * back. `onScope` tells whoever opened it which tab the reader ended on, so
+ * the landing card can follow them.
+ */
+export function openLeaderboardModal(token, scope = 'all', { scrollTop = 0, onScope } = {}) {
+  let current = isScope(scope) ? scope : 'all';
+  let seq = 0;
   openModal(`
     <h2>${icon('trophy')} Leaderboard</h2>
-    <p class="sub">Every player who has taken a table, most wins first. The purse
-      is the coins those wins paid out.</p>
-    <div class="lb-list tall">${rows?.length
-      ? leaderRowsHTML(rows, myCode)
-      : '<div class="empty small">Nobody has won a game yet.</div>'}</div>
+    ${leaderTabsHTML(current)}
+    <p class="sub lb-sub" id="lbSub">${escapeHtml(leaderNote(current))}</p>
+    <div class="lb-list tall" id="lbList"></div>
+    <div id="lbYou"></div>
     <div class="modal-actions"><button class="btn ghost" id="lbClose">Close</button></div>`,
   (root) => {
     $('#lbClose', root).onclick = closeModal;
-    // Your own row is the one you came to find — put it on screen.
-    root.querySelector('.lb-row.me')?.scrollIntoView({ block: 'center' });
+    const list = $('#lbList', root);
+    const load = (first) => {
+      const mine = ++seq;
+      // Only a tab that has to wait shows the spinner; one already read
+      // paints in the same frame and would only flash it.
+      const wait = setTimeout(() => {
+        if (mine === seq) list.innerHTML = `<div class="pp-state">${icon('replay', 22, 'spin')}<p>Loading…</p></div>`;
+      }, 120);
+      fetchLeaderboard(current, token)
+        .then((data) => {
+          clearTimeout(wait);
+          if (mine !== seq || !list.isConnected) return;
+          const rows = Array.isArray(data?.top) ? data.top : [];
+          $('#lbSub', root).textContent = leaderNote(current, data);
+          list.innerHTML = rows.length ? leaderRowsHTML(rows)
+            : `<div class="empty small">${escapeHtml(leaderEmpty(current))}</div>`;
+          $('#lbYou', root).innerHTML = leaderYouHTML(current, data, rows.length);
+          const at = current;
+          wireLeaderRows(list, rows, {
+            token,
+            backLabel: 'Back to the leaderboard',
+            onBack: (y) => openLeaderboardModal(token, at, { scrollTop: y, onScope }),
+          });
+          if (first && scrollTop) list.scrollTop = scrollTop;
+          else {
+            // Your own row is the one you came to find — put it in the middle
+            // of the list. Only the list scrolls: scrollIntoView would scroll
+            // the sheet as well and push the tabs off the top of it.
+            const me = list.querySelector('.lb-row.me');
+            list.scrollTop = 0;
+            if (me) {
+              const at = me.getBoundingClientRect().top - list.getBoundingClientRect().top;
+              list.scrollTop = Math.max(0, at - (list.clientHeight - me.offsetHeight) / 2);
+            }
+          }
+        })
+        .catch(() => {
+          clearTimeout(wait);
+          if (mine !== seq || !list.isConnected) return;
+          list.innerHTML = `<div class="pp-state">${icon('warning', 22, 'solo')}
+            <p>Could not load the leaderboard — try again in a moment.</p></div>`;
+        });
+    };
+    root.querySelectorAll('.lb-tabs [data-scope]').forEach((b) => {
+      b.onclick = () => {
+        if (b.dataset.scope === current) return;
+        sfx.click();
+        current = b.dataset.scope;
+        root.querySelectorAll('.lb-tabs [data-scope]').forEach((x) => {
+          x.classList.toggle('on', x === b);
+          x.setAttribute('aria-selected', String(x === b));
+        });
+        onScope?.(current);
+        load(false);
+      };
+    });
+    load(true);
+  });
+}
+
+// ───────────────────────────────────────────────────────── watch live ──
+// Public games being played right now (GET /api/live, 1.0.6), a tap from the
+// rail. The list is public by construction — boards, names, flags, colours,
+// how far in — and carries no tokens and no friend codes; the room code it
+// does carry is the one the All rooms list has always shown.
+
+// The list is read off a public endpoint rather than a table this browser
+// sits at, so a seat's colour is only printed into a style when it is a
+// plain hex colour — the only kind the server hands out.
+const liveColour = (c) => (/^#[0-9a-f]{3,8}$/i.test(String(c || '')) ? c : '#888888');
+
+/** "Asha, Ravi & 2 more" — the table, by who is still in it. */
+function liveNames(players) {
+  const names = players.filter((p) => !p.out).map((p) => p.name);
+  if (!names.length) return 'Everyone is out';
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 2).join(', ')} & ${names.length - 2} more`;
+}
+
+/** How far in a game is, as a watcher would ask it. */
+function liveProgress(g) {
+  const turns = Math.max(0, Math.floor(Number(g.turnCount) || 0));
+  const parts = [turns ? `Turn ${turns}` : 'Just started'];
+  const ends = Number(g.endsAt) || 0;
+  if (ends) {
+    const mins = Math.ceil((ends - Date.now()) / 60000);
+    parts.push(mins > 0 ? `${icon('clock')} ${mins} min left` : `${icon('clock')} Last turn`);
+  }
+  const watching = Math.max(0, Math.floor(Number(g.watching) || 0));
+  if (watching) parts.push(`${icon('eye')} ${watching}`);
+  return parts.join('<span class="live-sep">·</span>');
+}
+
+/**
+ * One row per game. A game this browser still has a seat at — walked away
+ * from, the house covering the chair — is offered back as a seat rather
+ * than as something to watch: watching your own game from the rail while a
+ * bot plays your hand would be a strange way to come back to it.
+ */
+export function liveRowsHTML(games, mine = new Set()) {
+  return games.map((g) => {
+    const players = Array.isArray(g.players) ? g.players : [];
+    const faces = players.slice(0, 4).map((p) => `<span class="avatar xs${p.out ? ' out' : ''}"
+      style="background:${liveColour(p.color)}">${escapeHtml(p.avatar || (String(p.name || '?')[0] || '?').toUpperCase())}</span>`).join('');
+    // A phone shows three of the four faces (the stylesheet hides the
+    // fourth), so "+N" is written for both and each screen picks the one that
+    // counts the players it is actually not showing.
+    const more = [[4, 'wide'], [3, 'narrow']].map(([n, cls]) => (players.length > n
+      ? `<span class="live-more ${cls}">+${players.length - n}</span>` : '')).join('');
+    const own = mine.has(g.roomId);
+    return `<button class="live-row" type="button" data-live="${escapeHtml(g.roomId)}"
+        title="${own ? 'Back to your seat at this table' : `Watch this game on ${escapeHtml(g.mapName || 'its board')}`}">
+      <span class="live-faces">${faces}${more}</span>
+      <span class="live-main">
+        <span class="live-map">${escapeHtml(g.mapName || 'A board')}</span>
+        <span class="live-who">${escapeHtml(liveNames(players))}</span>
+      </span>
+      <span class="live-side">
+        <i class="pr-tag ${own ? 'open' : 'watch'}">${own ? 'Your seat' : `${icon('eye')} Watch`}</i>
+        <span class="live-turn">${liveProgress(g)}</span>
+      </span>
+    </button>`;
+  }).join('');
+}
+
+/** Each row opens its game: `onPick(roomId)`. */
+export function wireLiveRows(root, onPick) {
+  root.querySelectorAll('[data-live]').forEach((b) => {
+    b.onclick = () => { sfx.click(); onPick(b.dataset.live); };
+  });
+}
+
+export const LIVE_EMPTY = 'No public games right now';
+
+/** Every game on the list, in a sheet — the landing card only shows three. */
+export function openLiveModal(games, { mine = new Set(), onPick } = {}) {
+  openModal(`
+    <h2>${icon('eye')} Watch live</h2>
+    <p class="sub">Public games being played right now. Watching is read-only, and the
+      players only see how many people are watching, not who.</p>
+    <div class="live-list tall">${games.length ? liveRowsHTML(games, mine)
+      : `<div class="empty small">${LIVE_EMPTY}</div>`}</div>
+    <div class="modal-actions"><button class="btn ghost" id="liveClose">Close</button></div>`,
+  (root) => {
+    $('#liveClose', root).onclick = closeModal;
+    // The sheet goes first, so the table opens on its own rather than
+    // under a list of games nobody is looking at any more.
+    wireLiveRows(root, (id) => { closeModal(); onPick?.(id); });
   });
 }
 
@@ -5098,11 +5657,16 @@ export function wonGame(state, meId) {
 /** One line worth pasting: the number, the game, and a way to come and take it. */
 function resultLine(state, meId) {
   const link = roomInviteLink();
+  // Somebody who only watched lost nothing to anybody, so "off us" would be
+  // a story about a game they were never in.
+  const seated = state.players?.some((p) => p.id === meId);
   const team = state.winningTeam != null ? winnerLabel(state) : null;
   if (team && wonGame(state, meId)) return `${team.name} won on MoneyMove and I was on it — beat us: ${link}`;
+  if (team && !seated) return `${team.name} won on MoneyMove — play the next one: ${link}`;
   if (team) return `${team.name} won it off us on MoneyMove — come and take it back: ${link}`;
   const winner = state.players?.find((p) => p.id === state.winner?.id);
   if (winner && winner.id === meId) return `I won ${money(winner.netWorth)} on MoneyMove — beat me: ${link}`;
+  if (winner && !seated) return `${winner.name} won ${money(winner.netWorth)} on MoneyMove — play the next one: ${link}`;
   if (winner) return `${winner.name} won ${money(winner.netWorth)} off us on MoneyMove — come and take it back: ${link}`;
   return `Nobody walked away with it on MoneyMove — try your luck: ${link}`;
 }
@@ -5129,13 +5693,59 @@ async function shareResult(text) {
   }
 }
 
+// ───────────────────────────────────────────── the result, as a picture ──
+/**
+ * What the share picture says, frozen from the finished state: the same
+ * standings the sheet prints, the winner the heading names, and where this
+ * seat came — nothing for a table that was only watched.
+ */
+function resultShareData(state, meId) {
+  const rank = finalStandings(state);
+  if (!rank.length) return null;
+  const mine = rank.findIndex((p) => p.id === meId);
+  return {
+    mapName: state.map?.name || '',
+    winner: winnerLabel(state),
+    podium: rank.slice(0, 3).map((p) => ({
+      name: p.name, color: p.color, avatar: p.avatar || '', flag: p.flag || '',
+      worth: p.netWorth, bankrupt: !!p.bankrupt,
+    })),
+    placing: mine >= 0 ? { rank: mine + 1, of: rank.length } : null,
+    won: mine >= 0 && wonGame(state, meId),
+    onTime: endedOnTime(state),
+  };
+}
+
+// The picture of the ending on screen, drawn once however often the sheet is
+// opened over it, and drawn again only if the result itself changes.
+let picture = { key: '', drawing: null };
+
+function pictureFor(state, meId) {
+  const data = resultShareData(state, meId);
+  if (!data) return Promise.reject(new Error('no result'));
+  const key = JSON.stringify(data);
+  if (picture.key !== key || !picture.drawing) {
+    const drawing = drawResultCard({ ...data, date: new Date() });
+    picture = { key, drawing };
+    // A failed draw is not kept, so the next tap tries again.
+    drawing.catch(() => { if (picture.drawing === drawing) picture = { key: '', drawing: null }; });
+  }
+  return picture.drawing;
+}
+
 export function showGameOver(state, meId, actions) {
   const won = winnerLabel(state);
+  const seated = state.players?.some((p) => p.id === meId);
+  // A browser that cannot hand a file to a share sheet saves the picture
+  // instead, and the button says that is what it will do.
+  const pictureLabel = canSharePicture() ? 'Share result' : 'Save picture';
   openModal(`
     <div class="go-crown">${icon('trophy')}</div>
     <h2 class="go-title" style="color:${won?.color || '#fff'}">${escapeHtml(won?.name || 'Nobody')} wins!</h2>
+    ${endedOnTime(state) ? `<p class="go-timeup">${icon('clock')} Time's up — the richest player won</p>` : ''}
     ${worthChartSVG(state)}
     ${reportCardHTML(state, meId)}
+    <div class="go-xp hidden" id="goXp"></div>
     <div class="modal-actions go-actions">
       ${doubleWinHTML(state, meId)}
       ${state.cup
@@ -5147,9 +5757,14 @@ export function showGameOver(state, meId, actions) {
         // would tell the room the seats were never strangers.
         ? `<button class="btn primary big wrap" id="gNewTable">${icon('replay')} Play again</button>
            <div class="dim small go-wait">Finds you a fresh table.</div>`
-        : `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again</button>
-           <div class="dim small go-wait">Whoever presses first hosts the next one.</div>`}
-      <button class="btn wide wrap" id="gShare">${icon('globe')} Share your result</button>
+        // A rematch is the seated players' to call; somebody watching has
+        // only the way home and the share.
+        : seated ? `<button class="btn primary big wrap" id="gAgain">${icon('replay')} Play again</button>
+           <div class="dim small go-wait">Whoever presses first hosts the next one.</div>` : ''}
+      <div class="row-2 go-share">
+        <button class="btn wrap" id="gPicture" type="button">${icon('picture')} ${pictureLabel}</button>
+        <button class="btn wrap" id="gShare" type="button">${icon('globe')} Share link</button>
+      </div>
       <div class="row-2">
         <button class="btn ghost" id="gHome">${icon('door')} Back to home</button>
         <button class="btn ghost" id="gClose">Stay on this board</button>
@@ -5164,9 +5779,139 @@ export function showGameOver(state, meId, actions) {
     if (fresh) fresh.onclick = () => { sfx.click(); closeModal(); actions.newTable?.(); };
     const share = $('#gShare', root);
     if (share) share.onclick = () => { sfx.click(); shareResult(resultLine(state, meId)); };
+    const pic = $('#gPicture', root);
+    // Drawn once the sheet has finished arriving — a canvas painted in the
+    // middle of its entrance would stall it — so that by the time the button
+    // is pressed the share sheet can open on the tap itself. A browser lets
+    // a share sheet open only that close to the tap that asked for it.
+    const early = setTimeout(() => { pictureFor(state, meId).catch(() => {}); }, 650);
+    if (pic) {
+      pic.onclick = async () => {
+        clearTimeout(early);
+        sfx.click();
+        pic.disabled = true;
+        try {
+          const how = await sharePicture(await pictureFor(state, meId));
+          if (how === 'saved') toast('Picture saved — post it wherever your friends are');
+        } catch {
+          toast('That picture would not draw — Share link still works', 'error');
+        } finally {
+          pic.disabled = false;
+        }
+      };
+    }
     wireDoubleWin(root, meId, state);
     wireProfileRows(root, state, () => showGameOver(state, meId, actions), meId);
+    paintGameXp($('#goXp', root));
   });
+}
+
+// ──────────────────────────────────────────────────────── levels & missions ──
+/**
+ * The ten daily missions, by kind: the drawing each one wears, and its name
+ * for the places that only have the kind to go on (the `progress` event lists
+ * kinds). The card itself prints the title the server sends.
+ */
+export const MISSIONS = {
+  playGames: { art: 'people', title: 'Play 2 games' },
+  winGame: { art: 'trophy', title: 'Win a game' },
+  buyStreets: { art: 'house', title: 'Buy 6 streets' },
+  buildHouses: { art: 'crane', title: 'Build 4 houses' },
+  collectRent: { art: 'cash', title: 'Collect $1,500 in rent' },
+  completeSet: { art: 'deeds', title: 'Complete a colour set' },
+  winAuction: { art: 'gavel', title: 'Win an auction' },
+  completeTrade: { art: 'trade', title: 'Complete a trade' },
+  rollDoubles: { art: 'dice', title: 'Roll 3 doubles' },
+  lapsBoard: { art: 'start', title: 'Lap the board 3 times' },
+};
+
+/** How far through the current level a player is, 0…1, from the server's four numbers. */
+export function levelFraction({ xp, levelFloor, levelNext } = {}) {
+  const span = Number(levelNext) - Number(levelFloor);
+  if (!(span > 0)) return 0;
+  return Math.min(1, Math.max(0, (Number(xp) - Number(levelFloor)) / span));
+}
+
+// What the server said the game just finished was worth to this player — the
+// `progress` event — kept so the result sheet can show it however many times
+// it is redrawn (a profile opened off it hands it back).
+let lastProgress = null;
+
+/**
+ * Hands the result sheet the game's XP, or null to forget it when a new game
+ * starts. If the sheet is already up, its strip fills in on the spot.
+ */
+export function noteGameProgress(progress) {
+  lastProgress = progress || null;
+  const slot = document.querySelector('#modalRoot #goXp');
+  if (slot) paintGameXp(slot);
+}
+
+/**
+ * The strip on the result sheet: the level, the bar filling from where it
+ * stood before the game to where it stands now, and what the game paid. A
+ * game that crossed a level starts the bar from empty — it is a new level's
+ * bar — and the celebration says the rest.
+ */
+function paintGameXp(slot) {
+  const p = lastProgress;
+  if (!p) { slot.innerHTML = ''; slot.classList.add('hidden'); return; }
+  const gained = Math.max(0, Number(p.xpGained) || 0);
+  const level = Number(p.level) || 1;
+  const now = levelFraction(p);
+  const before = p.levelUp ? 0 : levelFraction({ ...p, xp: (Number(p.xp) || 0) - gained });
+  const toGo = Math.max(0, (Number(p.levelNext) || 0) - (Number(p.xp) || 0));
+  const done = (Array.isArray(p.missionsCompleted) ? p.missionsCompleted : [])
+    .map((kind) => MISSIONS[kind]?.title).filter(Boolean);
+  slot.innerHTML = `
+    <div class="go-xp-row">
+      ${levelChip(level)}
+      <span class="xp-track" role="progressbar" aria-label="Progress to level ${level + 1}"
+        aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(now * 100)}"><i style="width:${(before * 100).toFixed(1)}%"></i></span>
+      <b class="go-xp-gain">+${gained} XP</b>
+    </div>
+    <div class="go-xp-sub">${p.xpCapped
+      ? (gained ? 'Daily XP limit reached — this game paid what was left of it'
+        : 'Daily XP limit reached — games pay XP again after midnight')
+      : `${toGo.toLocaleString('en-US')} XP to Lv ${level + 1}`}</div>
+    ${done.length ? `<div class="go-xp-missions">${icon('target', 15)}<span>Mission done: ${
+      escapeHtml(done.join(', '))} — the reward is waiting on the home screen</span></div>` : ''}`;
+  slot.classList.remove('hidden');
+  // One frame at the old width, then the climb, so the bar is seen to fill.
+  const bar = slot.querySelector('.xp-track i');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (bar) bar.style.width = `${(now * 100).toFixed(1)}%`;
+  }));
+}
+
+/**
+ * "Level 7!" — a medallion that drops in at the top of whatever is on screen
+ * (the result sheet, usually), with the coins the level paid. It is a banner
+ * rather than a sheet because it lands on top of one: the results are what
+ * the player is reading, and this is news about them, not instead of them.
+ * The coins themselves fly in from the wallet read the caller makes.
+ */
+export function celebrateLevelUp(up) {
+  const to = Math.floor(Number(up?.to) || 0);
+  if (to < 2) return;
+  const coins = Math.max(0, Number(up.coins) || 0);
+  document.querySelector('.levelup')?.remove();
+  const el = document.createElement('div');
+  el.className = 'levelup glass';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `<span class="lu-badge">${icon('star', null, 'solo')}<b>${to}</b></span>
+    <span class="lu-text"><b>Level ${to}!</b><span>${coins
+      ? `${icon('coin', 14)} +${coinWord(coins)}` : 'A new level'}</span></span>`;
+  document.body.appendChild(el);
+  const leave = () => {
+    if (el.classList.contains('out')) return;
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 380);
+  };
+  el.onclick = leave;
+  sfx.setComplete();
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) confetti(2200);
+  setTimeout(leave, 3800);
 }
 
 // ──────────────────────────────────────────────────────────── card popup ──

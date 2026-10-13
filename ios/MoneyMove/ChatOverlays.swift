@@ -167,7 +167,8 @@ struct ChatLogSheet: View {
                             // what the channel is for instead.
                             Text(channel == "team"
                                  ? "Only your team can read this channel. Plan away."
-                                 : "Nothing said yet — tap a reaction below or type to start.")
+                                 : store.isWatching ? "Nothing said at this table yet."
+                                 : "Nothing said yet — tap a phrase or a reaction below, or type to start.")
                                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                                 .foregroundStyle(P.ink3)
                                 .multilineTextAlignment(.center)
@@ -195,22 +196,43 @@ struct ChatLogSheet: View {
                 }
             }
 
+            if store.isWatching {
+                // Somebody on the rail reads the table's talk but has no voice
+                // in it — the server refuses a watcher's line — so there is no
+                // composer to offer, only the reason there isn't one.
+                watcherNote(P)
+            } else {
+                composer(P)
+            }
+        }
+        .task { await store.refreshSafety() }
+        // A pick can't outlive its team channel: handing the composer to a
+        // seat with no team while "Team only" is up would show an empty room.
+        .onChange(of: speakingSeat) { _, seat in
+            if channel == "team", !store.hasTeamChat(for: seat) { channel = "all" }
+        }
+    }
+
+    @ViewBuilder
+    private func composer(_ P: Palette) -> some View {
+        VStack(spacing: 0) {
             if !rulesAgreed {
                 CommunityRulesCard()
                     .padding(.horizontal, 12)
                     .padding(.top, 6)
             }
-            // The composer is two pieces of glass, the reactions and the text
-            // field, held in one container: glass cannot sample glass, and on
-            // 26 the container is what lets the two read as one family rather
-            // than two strangers stacked up.
+            // The composer is pieces of glass — the quick phrases, the
+            // reactions and the text field — held in one container: glass
+            // cannot sample glass, and on 26 the container is what lets them
+            // read as one family rather than strangers stacked up.
             MMGlassContainer(spacing: 6) {
                 VStack(spacing: 0) {
+                    quickChatStrip(P)
                     emoteRow(P)
                     seatSwitcher(P)
                     // Free text waits until the rules have been read and agreed
-                    // to. The reactions don't: they are a fixed set nobody can
-                    // abuse.
+                    // to. The reactions and the quick phrases don't: they are a
+                    // fixed set nobody can abuse.
                     inputBar(P)
                         .disabled(!rulesAgreed)
                         .opacity(rulesAgreed ? 1 : 0.45)
@@ -224,12 +246,42 @@ struct ChatLogSheet: View {
                     .padding(.bottom, 6)
             }
         }
-        .task { await store.refreshSafety() }
-        // A pick can't outlive its team channel: handing the composer to a
-        // seat with no team while "Team only" is up would show an empty room.
-        .onChange(of: speakingSeat) { _, seat in
-            if channel == "team", !store.hasTeamChat(for: seat) { channel = "all" }
+    }
+
+    /// The eight quick phrases (1.0.6), on a strip of the same glass as the
+    /// reactions under it: wells in that glass, in the glass's own ink, so
+    /// they flip with the material. A phrase goes out on the channel and as
+    /// the seat the composer is set to, exactly as typed text would.
+    private func quickChatStrip(_ P: Palette) -> some View {
+        let glass = BackdropKind.sheet.settledGlass(P)
+        return QuickChatRow(well: glass.ink.opacity(0.08),
+                            ink: glass.label(increaseContrast: contrast == .increased)) { phrase in
+            store.sendChat(phrase, channel: channel, as: speakingSeat)
         }
+        .clipShape(Capsule())
+        .sheetGlass(on: .sheet, in: Capsule(), floats: false)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        // Eight clear of the reactions, with theirs: inside the container's
+        // six, two capsules any closer would run together into one.
+        .padding(.bottom, 4)
+    }
+
+    /// In place of the composer for somebody watching from the rail.
+    private func watcherNote(_ P: Palette) -> some View {
+        HStack(spacing: 8) {
+            Art.icon(.eye, size: 15, tint: P.ink3)
+            Text("You're watching — only the players at the table can chat.")
+                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(P.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(P.rule, lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     /// One chip per local seat, shown only when the phone holds more than
@@ -810,9 +862,27 @@ struct GameOverSheet: View {
 
                     winnerHeadline(P)
 
-                    rematchAction(P)
+                    // Decided on the clock: nobody was knocked out, so the
+                    // standings below read as the board did at the whistle,
+                    // and this says why the richest seat is the winner.
+                    if store.state?.endedOnTime == true {
+                        TimeUpNote()
+                    }
 
+                    if store.isWatching {
+                        watcherAction(P)
+                    } else {
+                        rematchAction(P)
+                    }
+
+                    // The picture of the result, then the link — the picture
+                    // is for showing off, the link for getting a rematch.
+                    ShareResultButton()
                     shareAction()
+
+                    // What the game paid towards the next level — nothing at
+                    // all for a game too short to count, or one only watched.
+                    GameProgressCard()
 
                     worthChartCard(P)
 
@@ -912,6 +982,11 @@ struct GameOverSheet: View {
     /// it lands at this table in a browser with no install in the way. The
     /// room code is public by design; no token ever rides along.
     private var shareText: String {
+        // Somebody who only watched has no table to bring a friend back to
+        // and no score to settle — the game itself is the invitation.
+        if store.isWatching {
+            return "Just watched \(winnerLabel) win a game of MoneyMove — play me: https://www.moneymove.live/"
+        }
         let room = store.roomId ?? ""
         let link = "https://www.moneymove.live/?room=\(room)"
         guard iWon else {
@@ -928,11 +1003,33 @@ struct GameOverSheet: View {
             HStack(spacing: 8) {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 15, weight: .bold))
-                Text(iWon ? "Brag about it" : "Share the table")
+                Text(iWon ? "Brag about it" : store.isWatching ? "Share the game" : "Share the table")
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+    }
+
+    /// Somebody who watched this one from the rail has no seat to run back —
+    /// the server refuses a watcher's rematch — but a game just watched is
+    /// the best advert there is for playing one. So the offer is a table of
+    /// their own, through Play now, with the break every new table takes.
+    private func watcherAction(_ P: Palette) -> some View {
+        VStack(spacing: 5) {
+            MMIconButton(.dice, "Play a game", kind: .primary, big: true) {
+                Haptics.tap()
+                dismiss()
+                store.leaveRoom()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    store.quickPlay()
+                    InterstitialAd.beforeGame()
+                }
+            }
+            Text("You watched this one. Play now finds you a table of your own.")
+                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+                .multilineTextAlignment(.center)
+        }
     }
 
     /// The table is already assembled — running it back is one tap, and it

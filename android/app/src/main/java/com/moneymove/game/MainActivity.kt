@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,6 +54,14 @@ class MainActivity : ComponentActivity() {
      */
     private var noticesOpen by mutableStateOf(false)
     private var cupRoomOpen by mutableStateOf(false)
+
+    /**
+     * Asks the tabs for home — the daily reminder's tap, which should land
+     * on the Play tab where the daily reward card is. A count rather than a
+     * flag, so the same ask twice is two asks: the second tap of the day
+     * after the player has wandered off to Store still takes them home.
+     */
+    private var homeAsked by mutableIntStateOf(0)
 
     /**
      * The system's notification prompt, for the end of a finished game (see
@@ -149,6 +158,14 @@ class MainActivity : ComponentActivity() {
             // with the friend's name on it, is where the player says yes.
             PushAbout.Kind.INVITE -> messaging.refreshInvite()
             PushAbout.Kind.NOTICE -> noticesOpen = true
+            // Home, where the daily reward card is, asked afresh so the
+            // card is up with its Collect button rather than yesterday's
+            // countdown. A player at a table stays there; home is what they
+            // find when they leave it.
+            PushAbout.Kind.DAILY -> {
+                homeAsked++
+                account.refresh()
+            }
         }
     }
 
@@ -221,6 +238,7 @@ class MainActivity : ComponentActivity() {
                     onNoticesClosed = { noticesOpen = false },
                     cupRoomOpen = cupRoomOpen,
                     onCupRoomClosed = { cupRoomOpen = false },
+                    homeAsked = homeAsked,
                 )
             }
         }
@@ -291,6 +309,8 @@ class MainActivity : ComponentActivity() {
                         PushAbout.Kind.CUP -> CupStore.shared(store).resume()
                         PushAbout.Kind.INVITE -> messaging.refreshInvite()
                         PushAbout.Kind.NOTICE -> messaging.refreshNotices()
+                        // Already looking at the app: the card catches up.
+                        PushAbout.Kind.DAILY -> account.refresh()
                     }
                 }
             }
@@ -371,12 +391,14 @@ private fun Root(
     onNoticesClosed: () -> Unit,
     cupRoomOpen: Boolean,
     onCupRoomClosed: () -> Unit,
+    homeAsked: Int,
 ) {
     val p = P.current
     Box(Modifier.fillMaxSize().background(p.page)) {
         AppScaffold(
             store = store, account = account, messaging = messaging, billing = billing,
             onTheme = onTheme, onAppearance = onAppearance,
+            homeAsked = homeAsked,
         )
     }
 

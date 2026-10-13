@@ -180,6 +180,10 @@ private fun Dock(
     }
 
     DockSurface(backdrop, modifier) {
+        // From the rail the dock has nothing to offer but what it is: a
+        // table being watched, and by how many.
+        if (store.isSpectating) WatchingLine(state)
+
         // Incoming offers, the ones set aside, and the one this phone sent.
         TradeDock(store)
 
@@ -849,8 +853,10 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
     // The panel itself stands on the page, and its controls are panes of glass
     // over it. The cards in it are paper, and say so ([OnPaper]), so a
     // control on a seat is told there is a card behind it, not the page.
+    val watching = store.isSpectating
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (store.isHost) {
+        if (watching) OnPaper { WatchingLine(state) }
+        if (store.isHost && !watching) {
             MarkButton("Start Game", BtnKind.PRIMARY, onClick = { store.start() }) { PlayTriangle(13.dp, it) }
         } else {
             Row(
@@ -864,6 +870,11 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
         }
 
         if (cup) OnPaper { CupBanner(state) }
+
+        // What the host has set that changes the game itself — the house's
+        // skill and the clock — said where everybody sitting down reads it,
+        // not only behind Game settings.
+        if (!cup && state.quick != true) TableTerms(state.settings)
 
         // A cup fixes its own board, so a cup table has no boxes to show.
         if (!cup) LobbyBoards(store, account)
@@ -896,7 +907,71 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
             MarkButton("Balance teams", BtnKind.GHOST, onClick = { store.balanceTeams() }) { SwapArrows(20.dp, it) }
         }
 
-        OnPaper { YourLook(store, account, state) }
+        // Somebody watching has no seat to dress.
+        if (!watching) OnPaper { YourLook(store, account, state) }
+    }
+}
+
+/**
+ * "Watching live · 3 watching": the one line that tells somebody on the rail
+ * why nothing here answers their thumb. The count is everybody watching,
+ * this phone included, as the server counts them.
+ */
+@Composable
+private fun WatchingLine(state: GameState) {
+    val p = P.current
+    val count = state.watcherCount
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon("eye", size = 17.dp, tint = p.ink2)
+        Text(
+            if (count > 1) "Watching live · $count watching" else "Watching live",
+            modifier = Modifier.weight(1f),
+            color = p.ink2, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+/**
+ * The house's skill and the game's clock, as two small chips under Start —
+ * only when the host has moved one off its default, because "Normal bots ·
+ * Unlimited" on every table would be two chips of nothing. The full rows,
+ * locked for everybody but the host, are behind Game settings.
+ */
+@Composable
+private fun TableTerms(settings: GameSettings) {
+    val skill = settings.botSkill
+    val minutes = settings.gameMinutes
+    if (skill == BotSkill.NORMAL && minutes == 0) return
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (skill != BotSkill.NORMAL) TermChip("robot", "${skill.label} bots")
+        if (minutes > 0) TermChip("hourglass", "$minutes-minute game")
+    }
+}
+
+@Composable
+private fun TermChip(glyph: String, text: String) {
+    val p = P.current
+    Row(
+        Modifier
+            .clip(MMShapes.pill)
+            .background(p.sunken)
+            .border(1.dp, p.rule, MMShapes.pill)
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(glyph, size = 14.dp, tint = p.ink2)
+        Text(text, color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -1095,6 +1170,9 @@ private fun LobbySeat(store: GameStore, state: GameState, player: PlayerState, t
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 SeatTags(player, state.hostId, store.meId)
+                // Who you are about to play, at a glance: a house player
+                // wears its steady made-up level, a guest none.
+                LevelChip(player.shownLevel, compact = true)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MoneyText(player.money, fontSize = 12.5.sp)

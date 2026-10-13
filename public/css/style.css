@@ -1406,7 +1406,7 @@ select option {
     .friend, .fm-code, .dm-msg, .cd-tiles > div, .cd-next, .cd-round, .cup-ladder li, .poster-when,
     .poster-rules li, .poster-rungs .rung, .intro-points, .leave-choice, .ach-tile, .ach-row,
     .prop-row, .quick-seat, .rolled-chip, .flag-picker, .piece-chip, .one-away, .alert,
-    .pp-title, .fm-notify) {
+    .pp-title, .fm-notify, .go-xp, .pp-fav) {
   --ink-2: var(--paper-ink-2);
   --ink-3: var(--paper-ink-3);
 }
@@ -2465,7 +2465,10 @@ html[data-smart-banner="yes"] .app-ctas { display: none; }
 
 /* ---- leaderboard: five on the landing, fifty in the sheet ---- */
 .leader-card { margin-top: 14px; padding: 18px; }
-.lb-list { display: grid; gap: 5px; margin-top: 10px; text-align: left; }
+/* The column is held to the card's width, as the missions' is: sized by its
+   rows, a long name and its level chip would push the wins and the coins off
+   the right edge instead of the name taking the ellipsis. */
+.lb-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; margin-top: 10px; text-align: left; }
 .lb-list.tall { max-height: 54vh; overflow-y: auto; margin-top: 0; }
 .lb-row {
   display: flex; align-items: center; gap: 9px;
@@ -2560,6 +2563,337 @@ html[data-smart-banner="yes"] .app-ctas { display: none; }
   color: var(--ink-3); text-align: center; font-size: 13px;
 }
 .pp-state p { margin: 0; }
+
+/* ─────────────────────────────────────────── levels, missions and careers ──
+   The 1.0.6 progression: a level chip wherever a player is named, a bar
+   across the level on the landing and the result sheet, the day's three
+   missions under the daily coins, and a career grid on every profile. */
+
+/* "Lv 12": the level as a chip. It wears the table's accent rather than the
+   gold, because gold already means coins everywhere in this app, and a level
+   is not money. The star is ink, so it follows the chip's colour. */
+.lv-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; font-weight: 850; line-height: 1.2; letter-spacing: .2px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--red-ink);
+  background: color-mix(in srgb, var(--red) 13%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--red) 42%, transparent);
+  border-radius: var(--r-pill); padding: 1px 7px 1px 5px;
+}
+.lv-chip .ico { width: 10px; height: 10px; }
+/* On a seat it sits with the HOST and YOU tags, so it takes their size. */
+.lv-chip.seat { font-size: 8.5px; padding: 1px 5px 1px 4px; gap: 2px; }
+.lv-chip.seat .ico { width: 8px; height: 8px; }
+.pp-who .sub { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+
+/* The bar across a level: a track in the rule colour and a fill in the
+   accent. The fill travels, so a bar redrawn after a game is seen to climb. */
+.xp-track {
+  flex: 1; min-width: 40px; height: 7px; border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--ink) 10%, transparent); overflow: hidden;
+}
+.xp-track i {
+  display: block; height: 100%; border-radius: inherit; background: var(--red);
+  transition: width .9s var(--ease);
+}
+
+/* Your own level, in the landing card: chip, bar, and what is left of it.
+   Paper like the rows below it, and a tap opens your profile. */
+.level-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 10px 0 14px; padding: 9px 12px; cursor: pointer; font: inherit; text-align: left;
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  color: var(--ink); transition: border-color .15s, background .15s;
+}
+.level-row:hover { border-color: var(--red); background: var(--red-soft); }
+.level-row .lv-chip { font-size: 12px; padding: 2px 9px 2px 7px; }
+.level-row .lv-chip .ico { width: 12px; height: 12px; }
+.lr-num { flex: none; font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.lr-num b { color: var(--ink-2); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* The result sheet's strip: what this game paid, on a card of its own like
+   the chart and the standings above it. */
+.go-xp {
+  margin-top: 14px; padding: 11px 13px; text-align: left;
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: var(--r);
+}
+.go-xp-row { display: flex; align-items: center; gap: 10px; }
+.go-xp-row .lv-chip { font-size: 12px; padding: 2px 9px 2px 7px; }
+.go-xp-row .lv-chip .ico { width: 12px; height: 12px; }
+.go-xp-gain { flex: none; font-size: 14px; font-weight: 900; color: var(--red-deep); font-variant-numeric: tabular-nums; }
+.go-xp-sub { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
+.go-xp-missions {
+  display: flex; align-items: center; gap: 7px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--rule); font-size: 12px; font-weight: 650; color: var(--ink-2);
+}
+.go-xp-missions .ico { flex: none; color: var(--gold); }
+
+/* "Level 7!": a medallion of glass that drops in at the top of the screen,
+   over the result sheet it is news about. It is Regular glass — it lands on
+   anything — and a tap puts it away early. */
+.levelup {
+  position: fixed; z-index: 92; left: 50%; top: calc(18px + env(safe-area-inset-top));
+  display: flex; align-items: center; gap: 13px;
+  padding: 10px 22px 10px 10px; border-radius: var(--r-pill); cursor: pointer;
+  color: var(--glass-ink);
+  transform: translateX(-50%);
+  animation: levelIn .62s var(--pop) both;
+}
+.levelup.out { animation: levelOut .36s var(--ease) forwards; }
+@keyframes levelIn { from { transform: translateX(-50%) translateY(-26px) scale(.7); opacity: 0; } }
+@keyframes levelOut { to { transform: translateX(-50%) translateY(-18px) scale(.9); opacity: 0; } }
+/* The badge is a solid plate, not glass: it is the one thing on the banner
+   whose colour is its meaning. */
+.lu-badge {
+  position: relative; flex: none; width: 48px; height: 48px; border-radius: 50%;
+  display: grid; place-items: center; color: color-mix(in srgb, var(--on-red) 30%, transparent);
+  background: var(--red); box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), var(--shadow-sm);
+}
+.lu-badge .ico { width: 40px; height: 40px; }
+.lu-badge b {
+  position: absolute; inset: 0; display: grid; place-items: center; padding-top: 3px;
+  font-size: 17px; font-weight: 900; color: var(--on-red); font-variant-numeric: tabular-nums;
+}
+.lu-text { display: flex; flex-direction: column; line-height: 1.2; }
+.lu-text > b { font-size: 19px; font-weight: 900; letter-spacing: -.2px; }
+.lu-text > span { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 750; color: var(--ink-2); }
+@media (prefers-reduced-motion: reduce) {
+  .levelup, .levelup.out { animation-duration: .01ms; }
+  .xp-track i { transition: none; }
+}
+
+/* ---- the day's three missions, under the daily coins ---- */
+/* Gold while there is something to claim, like the daily card; plain the
+   rest of the time, and quieter still once the day is done. */
+.missions-card { margin-bottom: 14px; padding: 16px 18px; text-align: left; }
+.missions-card.ready {
+  border-color: var(--gold);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--gold) 16%, transparent);
+}
+.missions-card .dc-mark { background: var(--red-soft); color: var(--red-deep); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.missions-card .dc-mark.quiet { background: var(--paper-2); color: var(--ink-3); border-color: var(--rule); }
+.mc-count {
+  flex: none; font-size: 12.5px; font-weight: 850; color: var(--ink-2);
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: 99px; padding: 3px 10px; font-variant-numeric: tabular-nums;
+}
+/* One column the width of the card, never of its longest row: an implicit
+   column grows to fit "Collect $1,500 in rent" whole, and the reward is
+   pushed off the card's edge on a phone instead of the title giving way. */
+.mc-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 12px; }
+.mc-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: var(--r-sm); padding: 8px 10px;
+}
+.mc-row.done:not(.claimed) { border-color: var(--gold); background: var(--gold-soft); }
+.mc-row.claimed { opacity: .62; }
+.mc-ico { flex: none; width: 28px; height: 28px; display: grid; place-items: center; color: var(--ink-2); }
+.mc-ico .ico { width: 20px; height: 20px; }
+.mc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.mc-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mc-title b {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 750; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mc-title i {
+  flex: none; font-style: normal; font-size: 11px; font-weight: 800; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.mc-bar { display: block; height: 5px; border-radius: var(--r-pill); overflow: hidden; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.mc-bar i { display: block; height: 100%; border-radius: inherit; background: var(--red); transition: width .6s var(--ease); }
+.mc-row.done .mc-bar i { background: var(--gold); }
+.mc-reward {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; font-weight: 850; color: var(--gold); font-variant-numeric: tabular-nums;
+}
+.mc-reward i { font-style: normal; font-weight: 750; font-size: 10.5px; color: var(--ink-3); margin-left: 4px; }
+.mc-claimed { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 800; color: var(--good); }
+.mc-claimed .ico { width: 13px; height: 13px; }
+.mc-row .btn.tiny { flex: none; }
+.mc-row.bonus { border-style: dashed; }
+.mc-row.bonus.done:not(.claimed), .mc-row.bonus:has(.btn.gold) { border-style: solid; }
+
+/* ---- the leaderboard's three boards ---- */
+/* The chat's channel picker with a third side: the lozenge is a third of the
+   track, and each side has a keyframe of its own so the stretch plays on
+   every trip, whichever two sides it travels between. */
+.chat-channels.seg3::after { width: calc((100% - 4px) / 3); }
+.chat-channels.seg3:has(> :nth-child(3).on)::after { translate: 200% 0; animation-name: glassSegC; }
+@keyframes glassSegC { 50% { scale: 1.12 1; } }
+.lb-tabs { display: grid; width: 100%; margin: 0 0 10px; }
+.lb-tabs button { padding: 5px 8px; font-size: 11.5px; white-space: nowrap; }
+.modal .lb-tabs { margin-top: 12px; }
+.modal .lb-sub { margin: 0 0 12px; }
+.lb-note { font-size: 11.5px; color: var(--ink-3); text-align: left; margin: -2px 0 2px; }
+.lb-you { margin-top: 9px; font-size: 12px; color: var(--ink-2); text-align: left; }
+.lb-you b { color: var(--ink); font-weight: 850; font-variant-numeric: tabular-nums; }
+.lb-friends { margin-top: 10px; }
+.lb-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-name .lv-chip { font-size: 9.5px; padding: 1px 6px 1px 4px; }
+.lb-name .lv-chip .ico { width: 9px; height: 9px; }
+/* A row opens its player, so it answers a pointer the way the rooms do. */
+.lb-row.tap { cursor: pointer; transition: border-color .15s, background .15s; }
+.lb-row.tap:hover { border-color: var(--red); }
+.lb-row.tap:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+@media (max-width: 420px) {
+  .lb-row { gap: 7px; padding: 7px 8px; }
+  .lb-cash { min-width: 0; }
+}
+
+/* A friend's name, and a request's, open the profile. */
+.friend-who.tap { cursor: pointer; border-radius: var(--r-6); }
+.friend-who.tap:hover b { color: var(--red-deep); text-decoration: underline; text-underline-offset: 2px; }
+.friend-who.tap:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+/* ---- the career grid on a profile ---- */
+/* Under the tiles the tiles' own margin is the gap; under the titles, which
+   carry none, the heading brings its own. */
+.pp-label { margin: 0 0 9px !important; }
+.pp-titles + .pp-label { margin-top: 16px !important; }
+.pp-note { margin: -4px 0 10px; font-size: 12px; color: var(--ink-3); }
+.ach-tiles.career { margin-bottom: 9px; }
+.ach-tiles.career .ach-tile { padding: 10px 6px; }
+.ach-tiles.career .ach-tile b { font-size: 17px; }
+.pp-fav {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 4px;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: var(--r); padding: 10px 12px; font-size: 13px; color: var(--ink);
+}
+.pp-fav-ico { flex: none; color: var(--ink-3); display: grid; place-items: center; }
+.pp-fav-label {
+  flex: 1; min-width: 0; font-size: 10.5px; font-weight: 700; color: var(--ink-3);
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.pp-fav b { font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-fav i { flex: none; font-style: normal; font-size: 11.5px; font-weight: 700; color: var(--ink-3); }
+
+/* ─────────────────────────────────────────────── the tables, 1.0.6 ──
+   Bot skill and the game clock in the lobby, the clock and the watchers
+   over the felt, quick chat under the chat, the Watch live card, and the
+   result as a picture. */
+
+/* A row whose control is wider than the rail has room for beside its words
+   puts it under them: the bot skill's three sides need the panel's width. */
+.setting.stacked { align-items: flex-start; }
+.setting.stacked .s-icon { margin-top: 1px; }
+.bot-seg { display: grid; width: 100%; margin: 8px 0 1px; }
+.bot-seg button { padding: 5px 8px; font-size: 11.5px; }
+/* Everyone but the host reads the picker switched off, like every other row
+   in the panel: the side that is on stays lit, nothing answers a pointer. */
+.bot-seg button:disabled { cursor: default; }
+.bot-seg:has(button:disabled) { opacity: .78; }
+
+/* "Time's up" — the game ended on the clock, on the result sheet and in the
+   well under the winner's line. */
+.go-timeup {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: -4px 0 10px; font-size: 13px; font-weight: 750; color: var(--ink-2);
+}
+.go-timeup .ico, .time-up .ico { color: var(--gold); }
+.center-panel .time-up { margin-top: 4px; text-wrap: balance; }
+.center-panel .time-up .ico { width: 1.1em; height: 1.1em; vertical-align: -.2em; margin-right: 3px; }
+
+/* The chips under the table's toolbar — the web's top bar, where the phones
+   carry the same clock: the game clock and the watchers. They take a line of
+   their own, so the toolbar never has to make room. Glass, like the toolbar
+   above them, but glass that never refracts: two small chips are not worth a
+   blur of their own. */
+.table-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
+.table-chip {
+  --glass-blur: 0px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 11px 4px 8px; border-radius: var(--r-pill);
+  font-size: 12.5px; font-weight: 750; line-height: 1.2;
+  color: var(--glass-ink); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.table-chip .ico { width: 15px; height: 15px; flex: none; }
+.table-chip b { font-weight: 900; }
+/* The last two minutes run warm, and the last turn is the alarm's own red. */
+.game-clock.warm { color: var(--glass-gold-ink); }
+.game-clock.warm b { animation: clockPulse 1.2s ease-in-out infinite; }
+.game-clock.last { color: var(--glass-bad-ink); }
+
+/* Someone with no seat: what they are looking at, and the way out. */
+.watch-panel .dim.small { line-height: 1.45; }
+.watch-panel .wp-count { margin-top: 6px; }
+.watch-panel .btn { margin-top: 10px; }
+
+/* Quick chat: a scrolling row of keys of the same Regular glass as the
+   reactions — they are said, like a reaction, so they are pressed like one. */
+.phrase-row {
+  display: flex; gap: 4px; margin-top: 6px; padding: 2px 1px 4px;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  transition: opacity .2s var(--ease);
+}
+.phrase-row::-webkit-scrollbar { display: none; }
+.emote.phrase {
+  flex: none; font-size: 12px; font-weight: 750; padding: 6px 10px; white-space: nowrap;
+  border-radius: var(--r-pill);
+}
+.emote.phrase:hover { translate: 0 -1px; scale: 1.03; }
+.phrase-row.resting { opacity: .45; }
+.phrase-row.resting .phrase { cursor: default; }
+
+/* Somebody with no seat reads the chat with no composer under it. */
+.watch-note { display: none; align-items: center; gap: 6px; margin-top: 9px; font-size: 12px; color: var(--ink-3); }
+body:is(.watching, .seatless) .watch-note { display: flex; }
+body:is(.watching, .seatless) :is(#chatForm, #emoteRow, #phraseRow, #addLocalBtn) { display: none; }
+
+/* ---- watch live, on the landing ---- */
+.live-card { margin-top: 14px; padding: 18px; }
+.live-title { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--bad);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent);
+  animation: blink 1.6s infinite;
+}
+/* One column that may be narrower than its rows' words: a row's name and
+   players are cut with an ellipsis rather than pushing the sheet off a phone. */
+.live-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; text-align: left; }
+.live-list.tall { max-height: 56vh; overflow-y: auto; overflow-x: hidden; }
+.live-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
+  background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: var(--r-sm); padding: 9px 11px; font: inherit; font-size: 13px; text-align: left;
+  color: var(--ink); cursor: pointer; transition: border-color .15s, background .15s;
+}
+.live-row:hover { border-color: var(--red); background: var(--red-soft); }
+.live-row:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+/* The table as a stack of faces, overlapping like players round a board. */
+.live-faces { flex: none; display: flex; align-items: center; padding-left: 5px; }
+.live-faces .avatar.xs { margin-left: -5px; box-shadow: 0 0 0 2px var(--paper-2); font-size: 9.5px; }
+.live-faces .avatar.out { opacity: .4; }
+.live-more { margin-left: 3px; font-size: 10.5px; font-weight: 800; color: var(--ink-3); }
+/* The count of the rest comes in two sizes, one for four faces and one for
+   the three a phone has room for; each screen shows the one that matches. */
+.live-more.narrow { display: none; }
+.live-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.live-map, .live-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-map { font-weight: 750; }
+.live-who { font-size: 11.5px; color: var(--ink-3); }
+.live-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.live-turn {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; font-weight: 700; color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.live-turn .ico { width: 11px; height: 11px; }
+.live-sep { margin: 0 2px; opacity: .6; }
+.pr-tag.watch { color: var(--red-deep); display: inline-flex; align-items: center; gap: 3px; }
+.pr-tag.watch .ico { width: 10px; height: 10px; }
+.modal .live-list { margin: 4px 0 6px; }
+@media (max-width: 420px) {
+  .live-row { gap: 8px; padding: 8px 9px; }
+  .live-faces .avatar.xs:nth-child(n+4) { display: none; }
+  .live-more.wide { display: none; }
+  .live-more.narrow { display: inline; }
+}
+
+/* The two shares on the result sheet, side by side: the picture and the link. */
+.go-share { margin-top: 2px; }
 
 /* ─────────────────────────────────────────────────────────── app shell ── */
 .app {

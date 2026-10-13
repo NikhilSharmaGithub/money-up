@@ -17,57 +17,16 @@ struct LobbyPanel: View {
         let P = Palette.current(scheme)
         ScrollView {
             VStack(spacing: 10) {
-                if store.isHost {
-                    Button("▶  Start Game") { store.start() }
-                        .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                if store.isWatching {
+                    // On the rail at a table in its lobby — a rematch of the
+                    // game being watched, or a full table that has not dealt
+                    // yet. Nothing below is theirs to press, so the panel is
+                    // only who is sitting down, and the way to join them.
+                    watcherCard(P)
+                    seatList(P)
                 } else {
-                    HStack(spacing: 8) {
-                        ProgressView().tint(P.red).scaleEffect(0.8)
-                        Text("waiting for the host…")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(P.ink3)
-                    }
-                    .padding(.top, 2)
+                    seatedLobby(P)
                 }
-
-                if isCup { cupBanner(P) }
-
-                // The board, as three boxes with a drawing of each. Shown to
-                // everyone, not just the host: a guest still wants to know
-                // where they are sitting — they simply cannot change it.
-                if !isCup {
-                    MMCard { BoardBoxes(canEdit: store.isHost) }
-                }
-
-                // A cup table is set by the cup: two chairs, one board, no
-                // house players, and a second seat on this device would be
-                // sitting in your opponent's chair. The server refuses all of
-                // it; this is so nobody is invited to try.
-                if !isCup, store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
-                    MMIconButton(.people, "Add player on this device", kind: .ghost, big: true) {
-                        store.addLocalPlayer()
-                    }
-                }
-
-                // Invite from the Social tab makes a table and asks one friend
-                // to it; this is how the rest are asked to the same table. A
-                // cup match already has both its players.
-                if !isCup {
-                    MMIconButton(.people, "Invite friends", kind: .ghost, big: true) { openFriends() }
-                }
-
-                if !isCup {
-                    MMIconButton(.toolbox, "Game settings", kind: .ghost, big: true) { openSettings() }
-                }
-
-                seatList(P)
-
-                if store.isHost, teamCount > 0 {
-                    Button("⇄  Balance teams") { store.balanceTeams() }
-                        .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
-                }
-
-                appearanceSection(P)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
@@ -75,6 +34,111 @@ struct LobbyPanel: View {
         .scrollBounceBehavior(.basedOnSize)
         .onAppear { nameDraft = store.me?.name ?? store.nickname }
     }
+
+    @ViewBuilder
+    private func seatedLobby(_ P: Palette) -> some View {
+        if store.isHost {
+            Button("▶  Start Game") { store.start() }
+                .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().tint(P.red).scaleEffect(0.8)
+                Text("waiting for the host…")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink3)
+            }
+            .padding(.top, 2)
+        }
+
+        if isCup { cupBanner(P) }
+
+        // The board, as three boxes with a drawing of each. Shown to
+        // everyone, not just the host: a guest still wants to know
+        // where they are sitting — they simply cannot change it.
+        if !isCup {
+            MMCard { BoardBoxes(canEdit: store.isHost) }
+        }
+
+        // How hard the house plays and how long the game may run
+        // (1.0.6): the host's to set, everybody's to read. Neither
+        // exists at a Play-now or cup table.
+        if store.state?.hasTableRules == true {
+            if store.isHost {
+                TableRulesCard(editable: true)
+            } else {
+                TableRulesSummary()
+            }
+        }
+
+        // A cup table is set by the cup: two chairs, one board, no
+        // house players, and a second seat on this device would be
+        // sitting in your opponent's chair. The server refuses all of
+        // it; this is so nobody is invited to try.
+        if !isCup, store.state?.players.count ?? 0 < store.state?.settings.maxPlayers ?? 0 {
+            MMIconButton(.people, "Add player on this device", kind: .ghost, big: true) {
+                store.addLocalPlayer()
+            }
+        }
+
+        // Invite from the Social tab makes a table and asks one friend
+        // to it; this is how the rest are asked to the same table. A
+        // cup match already has both its players.
+        if !isCup {
+            MMIconButton(.people, "Invite friends", kind: .ghost, big: true) { openFriends() }
+        }
+
+        if !isCup {
+            MMIconButton(.toolbox, "Game settings", kind: .ghost, big: true) { openSettings() }
+        }
+
+        seatList(P)
+
+        if store.isHost, teamCount > 0 {
+            Button("⇄  Balance teams") { store.balanceTeams() }
+                .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
+        }
+
+        appearanceSection(P)
+    }
+
+    /// What somebody watching sees in a lobby: that they are watching, and —
+    /// while a chair is free — the ordinary door, which walks the socket off
+    /// the rail and sits it down like any other join.
+    private func watcherCard(_ P: Palette) -> some View {
+        let free = emptySeats > 0 && !isCup
+        let next = playedBefore ? "They're setting up the next game" : "Waiting for the host to start"
+        return VStack(spacing: 9) {
+            HStack(spacing: 8) {
+                Art.icon(.eye, size: 17, tint: P.ink2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("You're watching this table")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink)
+                    Text(free ? "\(next) — there's a seat free." : "\(next).")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            if free, let room = store.roomId {
+                MMIconButton(.dice, "Take a seat", kind: .primary, big: true) {
+                    Haptics.tap()
+                    store.join(roomId: room)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(P.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
+    }
+
+    /// Whether this table has dealt a game before, so a watcher is not told
+    /// about "the next game" at one that has never had a first. The server
+    /// zeroes its turn count only when a game starts, so in a lobby it is
+    /// above zero only after a game has been played here.
+    private var playedBefore: Bool { (store.state?.turnCount ?? 0) > 0 }
 
     private var teamCount: Int { store.state?.settings.teams ?? 0 }
 
@@ -136,6 +200,9 @@ struct LobbyPanel: View {
                         .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(P.ink)
                         .lineLimit(1)
+                    // A pass & play guest has no level and sends 0; so does
+                    // an older server, by sending nothing.
+                    if let level = p.level, level > 0 { LevelChip(level: level) }
                     if p.id == store.state?.hostId { tag("HOST", P.gold) }
                     if p.isBot == true { tag("BOT", P.ink3) }
                     if p.id == store.meId { tag("YOU", P.red) }
@@ -462,6 +529,12 @@ struct QuickMatchPanel: View {
             }
             MMIconButton(.chat, "Chat with the table", kind: .ghost, big: true) { openChat() }
                 .overlay(alignment: .topTrailing) { unreadBadge(P).offset(x: -8, y: -7) }
+            // A hello in one tap (1.0.6): the moment strangers most want to
+            // say something is the one they least want to type it in. Only
+            // for somebody seated — a watcher's line would be refused.
+            if store.state?.player(store.meId) != nil {
+                QuickChatRow(well: P.card, ink: P.ink2) { store.sendChat($0) }
+            }
         }
     }
 
@@ -580,6 +653,14 @@ struct QuickMatchPanel: View {
                                 readyTick(P)
                                     .offset(x: 4, y: -3)
                                     .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        // The level rides the avatar's foot: a seat is too
+                        // narrow to give it a line of its own.
+                        .overlay(alignment: .bottomLeading) {
+                            if let level = p.level, level > 0 {
+                                LevelChip(level: level, compact: true)
+                                    .offset(x: -6, y: 2)
                             }
                         }
                         .animation(.spring(duration: 0.3, bounce: 0.4), value: ready)

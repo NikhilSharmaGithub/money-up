@@ -105,9 +105,9 @@ fun CenterWell(
                 store, auction,
                 Modifier
                     .align(Alignment.Center)
-                    // Room for the turn clock, which rides above every phase
-                    // of the well rather than vanishing under a bid.
-                    .padding(top = if (state.turn?.endsAt == null) 0.dp else 26.dp),
+                    // Room for the clocks, which ride above every phase of
+                    // the well rather than vanishing under a bid.
+                    .padding(top = if (hasClockRow(state)) 26.dp else 0.dp),
             )
 
             state.isLobby -> LobbyWell(state, Modifier.align(Alignment.Center))
@@ -124,14 +124,27 @@ fun CenterWell(
         // included — so the clock is a fixture of the table. It hangs off the
         // whole well rather than the dice, because an auction replaces the
         // dice and the clock must not blink out with them.
+        //
+        // A timed table's game clock rides beside it, the whole game's time
+        // next to this turn's, and an eye counts whoever is watching from the
+        // rail. One row, so the three never stack down into the dice.
         if (state.isPlaying) {
-            TurnClock(
-                state.turn?.endsAt,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 6.dp),
-            )
+            Row(
+                Modifier.align(Alignment.TopCenter).padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                GameClock(state.gameClock, timeUp = state.timeUp == true)
+                TurnClock(state.turn?.endsAt)
+                WatchersChip(state.watcherCount)
+            }
         }
     }
 }
+
+/** Whether anything rides the top of the well — the auction box makes room for it. */
+private fun hasClockRow(state: GameState): Boolean =
+    state.turn?.endsAt != null || state.gameClock != null || state.watcherCount > 0
 
 // ── in play ────────────────────────────────────────────────────────────────
 
@@ -487,6 +500,9 @@ private fun EndedWell(store: GameStore, state: GameState, showResults: Boolean, 
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon("trophy", size = 36.dp)
+        // Decided on the clock: say so first, or "Asha wins!" reads as
+        // though everybody else went bankrupt.
+        if (state.endedOnClock) TimesUpTag()
         Text(
             "$who wins!",
             color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,

@@ -91,6 +91,34 @@ object Art {
             // The sheet in front, with two lines of text cut out of it.
             GlyphPart("M14.4 10h11.2a2.4 2.4 0 0 1 2.4 2.4v13.2a2.4 2.4 0 0 1-2.4 2.4H14.4a2.4 2.4 0 0 1-2.4-2.4V12.4a2.4 2.4 0 0 1 2.4-2.4zM15.8 15.4v2.2h8.4v-2.2zM15.8 20.4v2.2h8.4v-2.2z", fill = INK, evenOdd = true),
         ),
+        // The level mark: a five-point star, its points rounded by a stroke
+        // of the same ink so it sits with the set's soft corners rather than
+        // reading as a sheriff's badge. Ink, so the chip can wear it in gold.
+        "star" to listOf(
+            GlyphPart(
+                "M16 3.3L19.35 12.29L28.93 12.7L21.42 18.66L23.99 27.9L16 22.6L8.01 27.9L10.58 18.66L3.07 12.7L12.65 12.29Z",
+                fill = INK, stroke = INK, strokeWidth = 2.2f, cap = 1, join = 1,
+            ),
+        ),
+        // The game clock: an hourglass with most of its sand still on top,
+        // so it reads as time running rather than time gone. The turn clock
+        // keeps its dial; two dials side by side would be one clock twice.
+        "hourglass" to listOf(
+            GlyphPart("M7 4.4h18M7 27.6h18", fill = null, stroke = INK, strokeWidth = 2.8f, cap = 1),
+            GlyphPart(
+                "M9.6 4.4v3.4c0 3.4 3.1 5.9 6.4 8.2c-3.3 2.3-6.4 4.8-6.4 8.2v3.4h12.8v-3.4c0-3.4-3.1-5.9-6.4-8.2c3.3-2.3 6.4-4.8 6.4-8.2V4.4",
+                fill = null, stroke = INK, strokeWidth = 2.4f, cap = 1, join = 1,
+            ),
+            GlyphPart("M12.4 9.4h7.2c-.8 1.6-2.1 2.8-3.6 3.9c-1.5-1.1-2.8-2.3-3.6-3.9z", fill = INK, alpha = 0.55f),
+            GlyphPart("M11.8 25.2c.4-2.5 2.3-4.2 4.2-5.6c1.9 1.4 3.8 3.1 4.2 5.6z", fill = INK),
+        ),
+        // A picture: the result card is shared as one, and the text share
+        // beside it keeps the arrow — so the two buttons say which is which.
+        "image" to listOf(
+            GlyphPart("M6.4 6h19.2a2.4 2.4 0 0 1 2.4 2.4v15.2a2.4 2.4 0 0 1-2.4 2.4H6.4A2.4 2.4 0 0 1 4 23.6V8.4A2.4 2.4 0 0 1 6.4 6z", fill = INK, alpha = 0.32f),
+            GlyphPart("M6.6 23.6l6.6-8.2 4.6 5.4 3.1-3.6 4.6 6.4z", fill = INK),
+            GlyphPart("M19.2 11.8a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0z", fill = INK),
+        ),
     )
 
     /** Whether this country's flag is one of the ones actually drawn. */

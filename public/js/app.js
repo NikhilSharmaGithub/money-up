@@ -12,7 +12,10 @@ import {
   openLeaveModal, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
-  cupSettledLine, noteDeviceSeat, winnerLabel, wonGame,
+  cupSettledLine, noteDeviceSeat, winnerLabel, wonGame, TICK,
+  levelChip, levelFraction, MISSIONS, celebrateLevelUp, noteGameProgress, openPlayerProfile,
+  leaderTabsHTML, fetchLeaderboard, leaderNote, leaderEmpty, leaderYouHTML, wireLeaderRows,
+  syncTableChips, liveRowsHTML, wireLiveRows, openLiveModal, LIVE_EMPTY,
 } from './ui.js';
 import { icon } from './icons.js';
 import { sfx, setEnabled, isEnabled, unlock } from './sound.js';
@@ -76,6 +79,10 @@ let lastLogAt = 0;
 let lastTurnId = null;
 let winnerShown = false;
 let removedShown = false;
+// This tab came to watch (1.0.6): it joins with `spectate: true`, sits in no
+// chair, and the address says so (`?watch=1`), so a reload keeps it on the
+// rail rather than sitting it down at a table that has gone back to its lobby.
+let watching = false;
 // The status of the last state rendered. The deal-in flourish belongs to a
 // kick-off actually watched — a lobby turning into a game across two pushes —
 // never to a reconnect or a mid-game join, whose first state is already
@@ -137,6 +144,16 @@ const actions = {
   ready: (on = true) => socket?.emit('ready', on),
   // The lobby's "Chat with the table": the same dock the chat button opens.
   openChat: () => openChatDock(),
+  // Watching (1.0.6). A watched game that goes back to its lobby — a rematch
+  // — may be sat down at, through the ordinary door: the same room, joined
+  // without `spectate`, which is a fresh socket and a fresh join.
+  isWatching: () => watching,
+  takeSeat: () => {
+    if (!roomId || !watching) return;
+    takeNickname();
+    history.replaceState({}, '', `/room/${roomId}`);
+    boot();
+  },
   rematch: emit('rematch'),
   makeHost: (id) => socket.emit('makeHost', { id }),
   // A matchmade table breaks up when it ends — going again means finding
@@ -149,7 +166,7 @@ const actions = {
   // A finished board is a dead end without a way off it, so the result sheet
   // and the well can both send you home.
   goHome: () => {
-    forgetGame(roomId);
+    if (!watching) forgetGame(roomId);
     goHome();
   },
 };
@@ -172,9 +189,11 @@ function showLanding() {
   fetch(api('/api/ads/config')).then((r) => r.json()).then(setAdsConfig).catch(() => {});
   refreshProfileChip();
   refreshDaily();
+  refreshMissions();
   watchCup();
   refreshLeaderboard();
   watchPublicRooms();
+  watchLive();
   initGoogleSignIn();
   initSocial(socialHooks());
 }
@@ -275,6 +294,22 @@ function untilText(at) {
     .map((n) => String(n).padStart(2, '0')).join(':');
 }
 
+/**
+ * Every "Sign in to collect" on the landing — the daily coins, the missions —
+ * leads to the same place: the sign-in row, scrolled into view.
+ */
+function pointAtSignIn() {
+  sfx.click();
+  const row = $('#authRow');
+  row?.classList.remove('hidden');
+  row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Google's own button is the only thing that can start the flow, so
+  // point at it rather than pretending this button is it.
+  const btn = row?.querySelector('#googleSignIn div[role=button], #googleSignIn div');
+  btn?.classList.add('nudge');
+  setTimeout(() => btn?.classList.remove('nudge'), 1600);
+}
+
 function paintDaily(d) {
   const card = $('#dailyCard');
   if (!card) return;
@@ -307,19 +342,7 @@ function paintDaily(d) {
       </div>
       <button class="btn wide wrap" id="dailySignIn">${icon('key', 15)} Sign in to collect</button>`;
     const go = $('#dailySignIn');
-    if (go) {
-      go.onclick = () => {
-        sfx.click();
-        const row = $('#authRow');
-        row?.classList.remove('hidden');
-        row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Google's own button is the only thing that can start the flow, so
-        // point at it rather than pretending this button is it.
-        const btn = row?.querySelector('#googleSignIn div[role=button], #googleSignIn div');
-        btn?.classList.add('nudge');
-        setTimeout(() => btn?.classList.remove('nudge'), 1600);
-      };
-    }
+    if (go) go.onclick = pointAtSignIn;
     return;
   }
   card.innerHTML = d.claimable
@@ -423,33 +446,336 @@ async function claimDaily() {
   }
 }
 
-// ---- the leaderboard -----------------------------------------------------
-// Public by construction on the server's side: friend codes and lifetime
-// totals. Five rows here, all fifty behind "See all".
-let myCode = '';
+// ---- daily missions ------------------------------------------------------
+// Three small jobs a day, dealt by the server from this player's code and the
+// day, beside the daily coins. Progress counts for everybody; claiming the
+// coins needs an account — the daily reward's door. The card is only ever
+// drawn from what the server last said, and a claim answers with the whole
+// card already updated, so a retry or a second tab can never show a reward
+// twice.
+let missionsTimer = null;
+// A claim on its way, so a second tap on another row waits its turn instead
+// of racing the first answer to the repaint.
+let missionsBusy = false;
 
-function refreshLeaderboard() {
+function stopMissionsClock() {
+  clearTimeout(missionsTimer);
+  missionsTimer = null;
+}
+
+/** "7h 12m", "12m" — the wait until midnight's new missions, said briefly. */
+function untilShort(at) {
+  const mins = Math.max(1, Math.ceil((at - Date.now()) / 60000));
+  return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+}
+
+/** "$600/$1,500" for the rent mission; everything else is counted in ones. */
+function missionCount(m) {
+  const n = (v) => (m.kind === 'collectRent'
+    ? `$${(Number(v) || 0).toLocaleString('en-US')}` : String(Number(v) || 0));
+  return `${n(m.progress)}/${n(m.target)}`;
+}
+
+function paintMissions(d) {
+  const card = $('#missionsCard');
+  if (!card) return;
+  stopMissionsClock();
+  const list = Array.isArray(d?.missions) ? d.missions : [];
+  // A server from before missions, or one that did not answer: no card at all.
+  if (!list.length) { card.classList.add('hidden'); return; }
+
+  const signedIn = d.signedIn !== false;
+  const bonus = d.bonus || {};
+  const done = list.filter((m) => m.done).length;
+  // The reward side of a row: a Claim plate when there is something to
+  // take, the way in when there is something to take but no account to put
+  // it in, a tick once it is taken, and otherwise what it will pay.
+  const reward = (id, { claimed, ready, coins, xp }) => {
+    if (claimed) return `<span class="mc-claimed">${TICK} Claimed</span>`;
+    if (ready && signedIn) return `<button class="btn gold tiny" type="button" data-claim="${escapeHtml(id)}">Claim</button>`;
+    if (ready) return '<button class="btn tiny" type="button" data-signin>Sign in to claim</button>';
+    return `<span class="mc-reward">${icon('coin', 13)}${Number(coins) || 0}${xp ? `<i>+${Number(xp)} XP</i>` : ''}</span>`;
+  };
+  const row = (m) => {
+    const pct = Math.min(100, Math.round(((Number(m.progress) || 0) / Math.max(1, Number(m.target) || 1)) * 100));
+    return `<div class="mc-row ${m.done ? 'done' : ''} ${m.claimed ? 'claimed' : ''}">
+      <span class="mc-ico">${icon(MISSIONS[m.kind]?.art || 'target', 18, 'solo')}</span>
+      <span class="mc-main">
+        <span class="mc-title"><b>${escapeHtml(m.title || MISSIONS[m.kind]?.title || 'Mission')}</b><i>${missionCount(m)}</i></span>
+        <span class="mc-bar"><i style="width:${pct}%"></i></span>
+      </span>
+      ${reward(m.id, { claimed: m.claimed, ready: m.done, coins: m.coins, xp: m.xp })}
+    </div>`;
+  };
+  const claimable = signedIn && (list.some((m) => m.done && !m.claimed) || bonus.ready);
+  const allTaken = list.every((m) => m.claimed) && bonus.claimed;
+  const resets = Number(d.resetsAt) || 0;
+
+  card.classList.toggle('ready', !!claimable);
+  card.classList.toggle('done', allTaken);
+  card.innerHTML = `<div class="dc-head">
+      <span class="dc-mark ${allTaken ? 'quiet' : ''}">${icon('target', 22, 'solo')}</span>
+      <div class="dc-body">
+        <div class="dc-title">Daily missions</div>
+        <div class="dc-sub">${allTaken ? 'All done for today'
+          : signedIn ? 'Three for today, and a bonus for all three'
+          : 'Your progress counts already — sign in to claim the coins'}${
+          resets ? ` · new ones in <b id="missionsClock">${untilShort(resets)}</b>` : ''}</div>
+      </div>
+      <span class="mc-count" title="${done} of ${list.length} done">${done}/${list.length}</span>
+    </div>
+    <div class="mc-list">
+      ${list.map(row).join('')}
+      <div class="mc-row bonus ${bonus.claimed ? 'claimed' : ''}">
+        <span class="mc-ico">${icon('sparkle', 18, 'solo')}</span>
+        <span class="mc-main">
+          <span class="mc-title"><b>All three</b><i>${done}/${list.length}</i></span>
+          <span class="mc-bar"><i style="width:${Math.round((done / list.length) * 100)}%"></i></span>
+        </span>
+        ${reward('bonus', { claimed: bonus.claimed, ready: bonus.ready, coins: bonus.coins })}
+      </div>
+    </div>`;
+  card.classList.remove('hidden');
+
+  card.querySelectorAll('[data-claim]').forEach((b) => {
+    b.onclick = () => claimMission(b.dataset.claim, b);
+  });
+  card.querySelectorAll('[data-signin]').forEach((b) => { b.onclick = pointAtSignIn; });
+
+  // Midnight deals a new three: the label counts down a minute at a time,
+  // and the card asks again once the day has turned.
+  if (resets) {
+    const tick = () => {
+      const el = $('#missionsClock');
+      if (!el) return stopMissionsClock();
+      if (resets - Date.now() <= 0) { stopMissionsClock(); refreshMissions(); return undefined; }
+      el.textContent = untilShort(resets);
+      missionsTimer = setTimeout(tick, Math.min(60000, Math.max(1000, resets - Date.now() + 1500)));
+      return undefined;
+    };
+    missionsTimer = setTimeout(tick, Math.min(60000, Math.max(1000, resets - Date.now() + 1500)));
+  }
+}
+
+function refreshMissions() {
+  fetch(api(`/api/missions?token=${encodeURIComponent(token)}`))
+    .then((r) => (r.ok ? r.json() : null))
+    .then(paintMissions)
+    .catch(() => paintMissions(null));
+}
+
+async function claimMission(id, btn) {
+  if (missionsBusy) return;
+  missionsBusy = true;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(api('/api/missions/claim'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, id }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.ok) {
+      // Each refusal still leaves the card true: a stale card across
+      // midnight comes back with today's missions to draw, and anything
+      // else is asked for again.
+      if (res.status === 401) toast('Sign in first — mission rewards need an account');
+      else toast(out.error || 'Could not claim that one — try again', 'error');
+      if (out.missions) paintMissions(out.missions);
+      else refreshMissions();
+      return;
+    }
+    // A repeat (a retry, the other tab) answers success with nothing paid:
+    // the card catches up and nothing is thrown at the counter.
+    const paid = Number(out.awarded?.coins) || 0;
+    if (!out.duplicate && paid > 0) {
+      sfx.gain();
+      toast(id === 'bonus'
+        ? `+${coinWord(paid)} — all three missions done`
+        : `+${coinWord(paid)} and +${Number(out.awarded?.xp) || 0} XP`);
+    }
+    noteWallet(out);
+    if (out.missions) paintMissions(out.missions);
+    else refreshMissions();
+    paintLevel(out);
+    if (out.levelUp) {
+      celebrateLevelUp(out.levelUp);
+      noteLevelSeen(myCode, out.levelUp.to);
+    }
+    // The landing's other readers of /api/me (the profile menu's numbers)
+    // should not go on quoting the level from before the claim.
+    fetchMe(true);
+  } catch {
+    toast('Could not reach the server — try again in a moment', 'error');
+  } finally {
+    missionsBusy = false;
+    if (btn?.isConnected) btn.disabled = false;
+  }
+}
+
+// ---- your level ----------------------------------------------------------
+// The level row in the landing card: the chip, the bar across the level, and
+// how much is left of it. Painted from /api/me on every visit and from every
+// mission claim, which both carry the same four numbers.
+
+function paintLevel(d) {
+  const row = $('#levelRow');
+  // A server from before levels says nothing about them, and the row stays put.
+  if (!row || !(Number(d?.level) >= 1)) return;
+  const level = Math.floor(Number(d.level));
+  const toGo = Math.max(0, (Number(d.levelNext) || 0) - (Number(d.xp) || 0));
+  row.innerHTML = `${levelChip(level)}
+    <span class="xp-track" role="progressbar" aria-label="Progress to level ${level + 1}"
+      aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(levelFraction(d) * 100)}"><i
+      style="width:${(levelFraction(d) * 100).toFixed(1)}%"></i></span>
+    <span class="lr-num"><b>${toGo.toLocaleString('en-US')} XP</b> to Lv ${level + 1}</span>`;
+  row.classList.remove('hidden');
+}
+
+// The highest level this browser has already cheered, per friend code. A
+// level-up is told twice — live, by the `progress` event at the end of the
+// game, and afterwards as `lastLevelUp` on /api/me for a player who was not
+// there to hear it — and must only be celebrated once. Levels only go up, so
+// the level itself is the mark; no clock on either side has to agree.
+const LEVEL_SEEN_KEY = 'moneymove:levelSeen';
+
+function levelSeenMap() {
+  try {
+    const all = JSON.parse(safeGet(localStorage, LEVEL_SEEN_KEY) || '{}');
+    return all && typeof all === 'object' ? all : {};
+  } catch { return {}; }
+}
+
+function noteLevelSeen(code, level) {
+  const n = Math.floor(Number(level) || 0);
+  if (!code || n < 1) return;
+  const all = levelSeenMap();
+  if ((Number(all[code]) || 0) >= n) return;
+  all[code] = n;
+  // Every seat this browser has played as keeps an entry; a dozen is plenty.
+  const keep = Object.fromEntries(Object.entries(all).slice(-12));
+  safeSet(localStorage, LEVEL_SEEN_KEY, JSON.stringify(keep));
+}
+
+/**
+ * The fallback half: a level reached in a game this browser left before it
+ * ended, or on another device, is cheered on the next visit to the landing —
+ * once. A browser that has never seen this player only cheers a fresh one
+ * (the last day and a half); otherwise anything up to a week old still counts
+ * as news.
+ */
+function catchUpLevelUp(me) {
+  const code = me?.code;
+  if (!code || !(Number(me.level) >= 1)) return;
+  const seen = Number(levelSeenMap()[code]) || 0;
+  const up = me.lastLevelUp;
+  const age = Date.now() - (Number(up?.at) || 0);
+  const news = !!up && Number(up.to) > seen && age < (seen ? 7 * 864e5 : 1.5 * 864e5);
+  noteLevelSeen(code, me.level);
+  if (news) celebrateLevelUp(up);
+}
+
+$('#levelRow')?.addEventListener('click', async () => {
+  sfx.click();
+  let me = await fetchMe();
+  // A first visit can ask before /api/profile has handed this browser a
+  // code; one fresh read settles it.
+  if (!me?.code) me = await fetchMe(true);
+  if (!me?.code) { toast('Could not reach the server — try again in a moment', 'error'); return; }
+  openPlayerProfile({ code: me.code, name: me.name || nickname, flag: me.flag || myFlag, level: me.level },
+    { token });
+});
+
+// ---- the leaderboard -----------------------------------------------------
+// Public by construction on the server's side: friend codes and totals. Five
+// rows here, all fifty behind "See all", on whichever of the three boards —
+// all time, this week, friends — the reader last picked. Every row opens
+// that player's profile.
+let myCode = '';
+const LB_SCOPE_KEY = 'moneymove:lbScope';
+let lbScope = ['all', 'week', 'friends'].includes(safeGet(localStorage, LB_SCOPE_KEY))
+  ? safeGet(localStorage, LB_SCOPE_KEY) : 'all';
+// Which read the card is waiting on, so a slow answer for a tab the reader
+// has already left does not paint over the one they are looking at.
+let lbSeq = 0;
+
+function pickLeaderScope(scope) {
+  lbScope = scope;
+  safeSet(localStorage, LB_SCOPE_KEY, scope);
+}
+
+function refreshLeaderboard({ fresh = true } = {}) {
   const card = $('#leaderCard');
   if (!card) return;
+  const scope = lbScope;
+  const mine = ++lbSeq;
   Promise.all([
-    fetch(api('/api/leaderboard')).then((r) => r.json()),
+    fetchLeaderboard(scope, token, { fresh }),
     fetchMe(),
   ]).then(([data, me]) => {
+    if (mine !== lbSeq) return;
     const top = Array.isArray(data?.top) ? data.top : [];
-    myCode = me?.code || '';
-    card.innerHTML = `
-      <div class="fc-head">
-        <span class="panel-title" style="margin:0">${icon('trophy')} Leaderboard</span>
-        ${top.length > 5 ? '<button class="btn tiny" id="lbAll" type="button">See all</button>' : ''}
-      </div>
-      ${top.length
-        ? `<div class="lb-list">${leaderRowsHTML(top.slice(0, 5), myCode)}</div>`
-        : `<div class="empty small">Nobody has won a game yet — the first table to
-            finish opens this list.</div>`}`;
+    myCode = me?.code || myCode;
+    const shown = top.slice(0, 5);
+    // The frame — the title and the tabs — is drawn once, so the lozenge
+    // travels between tabs rather than being redrawn under the finger.
+    if (!card.querySelector('#lbBody')) {
+      card.innerHTML = `
+        <div class="fc-head">
+          <span class="panel-title" style="margin:0">${icon('trophy')} Leaderboard</span>
+          <button class="btn tiny hidden" id="lbAll" type="button">See all</button>
+        </div>
+        ${leaderTabsHTML(scope)}
+        <div id="lbBody"></div>`;
+      card.querySelectorAll('.lb-tabs [data-scope]').forEach((b) => {
+        b.onclick = () => {
+          if (b.dataset.scope === lbScope) return;
+          sfx.click();
+          pickLeaderScope(b.dataset.scope);
+          paintLeaderTabs(card);
+          refreshLeaderboard({ fresh: false });
+        };
+      });
+    }
+    paintLeaderTabs(card);
+    const all = card.querySelector('#lbAll');
+    all.classList.toggle('hidden', top.length <= 5);
+    all.onclick = () => {
+      sfx.click();
+      openLeaderboardModal(token, lbScope, {
+        // The sheet's tabs move the card's with them, so closing it leaves
+        // the landing on the board that was being read.
+        onScope: (s) => { pickLeaderScope(s); paintLeaderTabs(card); refreshLeaderboard({ fresh: false }); },
+      });
+    };
+    const lonely = scope === 'friends' && top.length <= 1;
+    card.querySelector('#lbBody').innerHTML = `
+      ${scope === 'week' ? `<div class="lb-note">${escapeHtml(leaderNote(scope, data))}</div>` : ''}
+      ${shown.length
+        ? `<div class="lb-list">${leaderRowsHTML(shown, myCode)}</div>`
+        : `<div class="empty small">${escapeHtml(leaderEmpty(scope))}</div>`}
+      ${leaderYouHTML(scope, data, shown.length)}
+      ${lonely ? `<button class="btn small wide lb-friends" id="lbFriends" type="button">${icon('people')} Add a friend</button>` : ''}`;
+    wireLeaderRows(card.querySelector('#lbBody'), shown, { token });
+    const friendsBtn = card.querySelector('#lbFriends');
+    if (friendsBtn) friendsBtn.onclick = () => { sfx.click(); openFriendsModal(); };
     card.classList.remove('hidden');
-    const all = $('#lbAll');
-    if (all) all.onclick = () => { sfx.click(); openLeaderboardModal(top, myCode); };
-  }).catch(() => { /* server nap — the landing keeps its other cards */ });
+  }).catch(() => {
+    // A server nap on the first read leaves the card hidden, as it always
+    // has. After a tab change the old rows would be sitting under the new
+    // tab's name, so they make way for the truth instead.
+    const body = mine === lbSeq && card.querySelector('#lbBody');
+    if (body) body.innerHTML = '<div class="empty small">Could not load this board — try again in a moment.</div>';
+  });
+}
+
+/** Puts the lozenge on whichever board is picked. */
+function paintLeaderTabs(card) {
+  card.querySelectorAll('.lb-tabs [data-scope]').forEach((x) => {
+    const on = x.dataset.scope === lbScope;
+    x.classList.toggle('on', on);
+    x.setAttribute('aria-selected', String(on));
+  });
 }
 
 // ---- sign in with Google (only when the server has a client id) ----------
@@ -477,6 +803,11 @@ async function refreshProfileChip() {
   if (!chip) return;
   const me = await fetchMe(true);
   if (!me) return;
+  // The level belongs to everybody who has played, signed in or not, so it
+  // is painted before the chip decides whether there is an account to show.
+  if (me.code) myCode = me.code;
+  paintLevel(me);
+  catchUpLevelUp(me);
   if (!me.provider) {
     chip.classList.add('hidden');
     menu.classList.add('hidden');
@@ -502,6 +833,7 @@ async function refreshProfileChip() {
         </span>
       </div>
       <div class="pm-row"><span>Friend code</span><b>${escapeText(me.code || '')}</b></div>
+      ${Number(me.level) >= 1 ? `<div class="pm-row"><span>Level</span><b>${levelChip(me.level)}</b></div>` : ''}
       <div class="pm-row"><span>Coins</span><b>${Number(me.coins) || 0}</b></div>
       <div class="pm-row"><span>Karma</span><b>${Number(me.karma) || 0}</b></div>
       <div class="pm-row"><span>Signed in with</span><b>${me.provider === 'apple' ? 'Apple' : 'Google'}</b></div>
@@ -531,6 +863,10 @@ async function refreshProfileChip() {
       $('#authRow')?.classList.remove('hidden');
       toast('Signed out — your seat, coins and friends stay with this device');
       refreshProfileChip();
+      // The daily coins and the missions are only claimable with an
+      // account, so both cards go back to asking for one.
+      refreshDaily();
+      refreshMissions();
     };
   };
   // A tap anywhere else folds the menu away.
@@ -571,6 +907,10 @@ function initGoogleSignIn() {
               $('#authStatus').textContent = `Signed in as ${out.name || 'you'} · code ${out.code || ''}`;
               toast('Signed in with Google');
               refreshProfileChip();
+              // Whoever came here from "Sign in to claim" should find the
+              // Claim button waiting on both cards, not the same ask again.
+              refreshDaily();
+              refreshMissions();
             } else {
               toast(out.error || 'Sign-in failed', 'error');
             }
@@ -614,7 +954,21 @@ function loadRoomList() {
       $('#prPlayNow').onclick = () => $('#quickBtn').click();
       return;
     }
-    el.innerHTML = '<div class="pr-title">All rooms</div>' + rooms.map((r) => {
+    // A game in play that the Watch live card is already offering is not
+    // offered twice. Whatever is left that cannot be sat down at is watched
+    // from the rail — unless this browser holds a seat there, in which case
+    // it is the ordinary door back to that seat.
+    const listed = rooms.filter((r) => r.joinable || r.status !== 'playing' || !liveIds.has(r.id));
+    if (!listed.length) {
+      el.innerHTML = `<div class="pr-title">All rooms</div>
+        <div class="empty small">No table is waiting for players right now — every game on is
+          under Watch live. <button class="link-btn" id="prPlayNow" type="button">Play now</button>
+          opens a new one.</div>`;
+      $('#prPlayNow').onclick = () => $('#quickBtn').click();
+      return;
+    }
+    const mine = new Set(readGames().map((g) => g.id));
+    el.innerHTML = '<div class="pr-title">All rooms</div>' + listed.map((r) => {
       const playing = r.status === 'playing';
       const label = r.joinable ? 'Join' : playing ? 'In progress' : 'Full';
       const title = r.joinable ? `Take a seat at ${r.map}`
@@ -629,7 +983,10 @@ function loadRoomList() {
         </span>
       </button>`;
     }).join('');
-    el.querySelectorAll('[data-room]').forEach((c) => { c.onclick = () => go(c.dataset.room); });
+    el.querySelectorAll('[data-room]').forEach((c) => {
+      const r = listed.find((x) => x.id === c.dataset.room);
+      c.onclick = () => (r && !r.joinable && !mine.has(r.id) ? watchGame(r.id) : go(c.dataset.room));
+    });
   }).catch(() => {});
 }
 
@@ -645,6 +1002,88 @@ function watchPublicRooms() {
 function go(id) {
   history.pushState({}, '', `/room/${id}`);
   boot();
+}
+
+/** To a table as a watcher (1.0.6): the same page, from the rail. */
+function watchGame(id) {
+  history.pushState({}, '', `/room/${id}?watch=1`);
+  boot();
+}
+
+// ---- watch live ------------------------------------------------------------
+// The busiest public games right now, a tap from the rail (GET /api/live). The
+// card shows the first three and a sheet has the rest. It is polled while the
+// landing is on screen and only then: a list of games in play goes stale in
+// seconds, and a page nobody is looking at has no business asking.
+let liveTimer = null;
+// The room codes the card last offered, so the All rooms list can leave the
+// same games out rather than listing them twice.
+let liveIds = new Set();
+let liveGames = [];
+// An older server has no list. Once it has said so, the card stays away.
+let liveMissing = false;
+
+function stopLive() {
+  clearInterval(liveTimer);
+  liveTimer = null;
+}
+
+function watchLive() {
+  stopLive();
+  if (liveMissing) return;
+  loadLive();
+  liveTimer = setInterval(loadLive, 12000);
+}
+
+/** A game on the list: watched, or — where this browser holds a seat — rejoined. */
+function openLiveGame(id) {
+  const mine = readGames().some((g) => g.id === id);
+  if (mine) return resumeGame(id);
+  unlock();
+  takeNickname();
+  return watchGame(id);
+}
+
+function loadLive() {
+  const card = $('#liveCard');
+  if (!card) return;
+  fetch(api('/api/live')).then((r) => {
+    if (r.status === 404) { liveMissing = true; stopLive(); throw new Error('no live list'); }
+    return r.json();
+  }).then((d) => {
+    const games = Array.isArray(d?.games) ? d.games.filter((g) => g && typeof g.roomId === 'string') : [];
+    liveGames = games;
+    liveIds = new Set(games.map((g) => g.roomId));
+    const mine = new Set(readGames().map((g) => g.id));
+    const shown = games.slice(0, 3);
+    const html = `
+      <div class="fc-head">
+        <span class="panel-title live-title">${icon('eye')} Watch live${games.length ? '<i class="live-dot" aria-hidden="true"></i>' : ''}</span>
+        ${games.length > shown.length ? `<button class="btn tiny" id="liveAll" type="button">See all ${games.length}</button>` : ''}
+      </div>
+      ${shown.length
+        ? `<div class="live-list">${liveRowsHTML(shown, mine)}</div>`
+        : `<div class="empty small">${LIVE_EMPTY}</div>`}`;
+    // Every twelve seconds the same list comes back more often than not, and
+    // a row repainted under a finger mid-tap loses the tap.
+    if (card.dataset.html !== html) {
+      card.dataset.html = html;
+      card.innerHTML = html;
+      wireLiveRows(card, openLiveGame);
+      const all = card.querySelector('#liveAll');
+      if (all) {
+        all.onclick = () => {
+          sfx.click();
+          openLiveModal(liveGames, { mine: new Set(readGames().map((g) => g.id)), onPick: openLiveGame });
+        };
+      }
+    }
+    card.classList.remove('hidden');
+  }).catch(() => {
+    // A blip keeps whatever is already on screen; a first read that fails
+    // leaves the card where it was — hidden.
+    if (liveMissing) card.classList.add('hidden');
+  });
 }
 
 $('#nickInput').addEventListener('change', (e) => {
@@ -878,6 +1317,10 @@ function boot() {
   $('#cardPopup').classList.add('hidden');
 
   const match = location.pathname.match(/^\/room\/([a-z0-9]+)/i);
+  watching = !!match && new URLSearchParams(location.search).get('watch') === '1';
+  document.body.classList.toggle('watching', watching);
+  // Whether there is a chair is the next state's to say, not the last table's.
+  document.body.classList.remove('seatless');
   if (!match) {
     resuming = false;
     // Reached via browser Back mid-game: release the seat properly (a held
@@ -913,7 +1356,9 @@ function boot() {
   offersShown.clear();
   // Nothing on the landing is on screen any more — stop polling for it.
   clearInterval(roomsTimer);
+  stopLive();
   stopDailyClock();
+  stopMissionsClock();
   stopSocial();
   // …all but the invites, which matter most right here at a table.
   watchInvites(socialHooks());
@@ -926,6 +1371,7 @@ function boot() {
   lastStatus = null;
   winnerShown = false;
   removedShown = false;
+  forgetProgress();
 
   if (socket) socket.close();
   socket = connect();
@@ -950,9 +1396,17 @@ function boot() {
     // has nothing to press.
     socket.emit('join', {
       roomId, token, name: nickname || 'Player', flag: myFlag, proto: PROTO, canReady: true,
+      // A watcher's every reconnect goes back through the rail's door, never
+      // the seat's: the server never turns one into the other by itself.
+      ...(watching ? { spectate: true } : {}),
     });
   });
   socket.on('you', (d) => { meId = d.playerId; });
+  socket.on('progress', (d) => {
+    if (!d || d.roomId !== roomId) return;
+    pendingProgress = d;
+    if (resultsUp) presentProgress();
+  });
   onState(socket, (s) => {
     // First state after a (re)join is history, not news: seed the one-shot
     // trackers so the last card doesn't pop again and old log lines and the
@@ -984,10 +1438,18 @@ function boot() {
   socket.on('toast', (t) => toast(t.message, t.type));
   // No seat left (started, or full). You are still shown the table, so say that
   // out loud — a bare red "Game already started" reads as a failed navigation.
-  socket.on('joinFailed', (d) => toast(
-    d.spectate ? `${d.message} — you're watching this table` : d.message,
-    d.spectate ? 'info' : 'error',
-  ));
+  socket.on('joinFailed', (d) => {
+    // Only one thing turns a watcher away: a table that is no longer there
+    // (or a ban). No state is coming to sit on, so it goes home and says
+    // why rather than leaving an empty board under an error.
+    if (watching && !d?.spectate) {
+      toast(d?.message || 'That game has finished', 'error');
+      goHome({ replace: true });
+      return;
+    }
+    toast(d.spectate ? `${d.message} — you're watching this table` : d.message,
+      d.spectate ? 'info' : 'error');
+  });
   // Closing the socket on purpose — every Leave, every room switch — reports
   // 'io client disconnect' too, and that is no lost connection.
   socket.on('disconnect', (reason) => {
@@ -1052,6 +1514,7 @@ function render() {
   safe('center', () => renderCenter(table, meId, actions));
   safe('dice', () => renderDice(state));
   safe('clock', () => syncTurnClock(state, meId));
+  safe('tableChips', () => syncTableChips(state));
   safe('modals', () => syncOpenModals(state));
   safe('log', () => {
     // Both feeds read the log as it is shown: a line the walk caused is
@@ -1091,6 +1554,10 @@ function render() {
   // removed from play — the clock ran out on this seat. A quit is the player's
   // own doing, so it never gets the "your time ran out" story.
   const meNow = state.players.find((p) => p.id === meId);
+  // No chair at this table — watching from the rail, or turned away from a
+  // full one. The server drops a line from somebody with no seat, so the
+  // chat's composer gives way to a note saying whose chat it is.
+  document.body.classList.toggle('seatless', !meNow);
   // Noted from the first state, not at the end, so a second window at this
   // table has already said who it is before either result sheet draws.
   noteDeviceSeat(meNow?.code);
@@ -1115,7 +1582,12 @@ function render() {
     forgetGame(roomId);
     recordMatch(state);
   }
-  if (state.status !== 'ended') { winnerShown = false; matchSavedFor = null; }
+  if (state.status !== 'ended') {
+    winnerShown = false;
+    matchSavedFor = null;
+    // A rematch's lobby: the last ending's XP strip must not ride into the next one.
+    if (resultsUp || pendingProgress) forgetProgress();
+  }
 }
 
 /** Long enough for the piece to finish walking to whatever caused the card. */
@@ -1395,7 +1867,7 @@ function prime(s) {
   // fanfare of a game somebody else watched end.
   if (s.status === 'ended' && !winnerShown) {
     winnerShown = true;
-    setTimeout(() => { if (state?.status === 'ended') showGameOver(state, meId, actions); }, 700);
+    setTimeout(showResults, 700);
     setTimeout(refreshWallet, 1200);
   }
 }
@@ -1658,6 +2130,47 @@ function voice(e) {
   if (e.ended) announceWinner(after);
 }
 
+// ───────────────────────────────────────────────── what the game was worth ──
+// At the end of a counted game the server tells each player, on their own
+// sockets only, what it paid them: XP, perhaps a level and its coins, and
+// the missions it finished (the `progress` event). It comes a moment after
+// the final state, which is before the result sheet is up — the ending is
+// still being played out on the board, and a "Level 7!" there would give
+// the result away. So it waits here until the sheet it belongs on is shown.
+let pendingProgress = null;
+// The result sheet for this ending has been put up, so news can go straight on.
+let resultsUp = false;
+
+/** The result sheet, and whatever the game was worth riding in with it. */
+function showResults() {
+  if (state?.status !== 'ended') return;
+  showGameOver(state, meId, actions);
+  resultsUp = true;
+  presentProgress();
+}
+
+function presentProgress() {
+  const p = pendingProgress;
+  if (!p) return;
+  pendingProgress = null;
+  noteGameProgress(p);
+  const code = state?.players?.find((x) => x.id === meId)?.code || myCode;
+  if (p.levelUp) {
+    celebrateLevelUp(p.levelUp);
+    // Heard live, so the landing's /api/me read must not cheer it again.
+    noteLevelSeen(code, p.levelUp.to);
+    // The level's coins are in the wallet already; this read flies them in.
+    setTimeout(refreshWallet, 700);
+  }
+}
+
+/** A new game, a new table, home: whatever the last ending was worth is spent. */
+function forgetProgress() {
+  pendingProgress = null;
+  resultsUp = false;
+  noteGameProgress(null);
+}
+
 /**
  * The end of the game, heard once: the winner's fanfare pours coins and
  * throws confetti; everyone else hears the table cheer. The result sheet
@@ -1674,7 +2187,7 @@ function announceWinner(after) {
       : !!state.winner && state.winner.id === meId;
     sfx.win(mine);
     if (mine) confetti();
-    setTimeout(() => { if (state?.status === 'ended') showGameOver(state, meId, actions); }, 700);
+    setTimeout(showResults, 700);
     // did the win pay out? the wallet knows
     setTimeout(refreshWallet, 1200);
   }, after);
@@ -1969,14 +2482,21 @@ function renderRecentGames() {
   });
 }
 
-/** Drops the socket, clears the board and puts the landing back on screen. */
-function goHome() {
-  history.pushState({}, '', '/');
+/**
+ * Drops the socket, clears the board and puts the landing back on screen.
+ * `replace` is for a table that turned out not to be there: Back should not
+ * walk into it a second time.
+ */
+function goHome({ replace = false } = {}) {
+  history[replace ? 'replaceState' : 'pushState']({}, '', '/');
+  watching = false;
+  document.body.classList.remove('watching', 'seatless');
   closeModal();
   $('#cardPopup').classList.add('hidden');
   if (socket) { socket.close(); socket = null; }
   state = null;
   roomId = null;
+  forgetProgress();
   offersShown.clear();
   if (document.body.classList.contains('chat-open')) closeChatDock();
   seenChatId = null;
@@ -2010,13 +2530,17 @@ $('#leaveBtn').addEventListener('click', () => {
     });
     return;
   }
-  forgetGame(roomId);
+  // A watcher leaves the rail, not a game: the same table may still be on
+  // the Continue shelf from a seat this browser holds there.
+  if (!watching) forgetGame(roomId);
   goHome();
 });
 
-// Closing the tab mid-game gets the browser's own "are you sure".
+// Closing the tab mid-game gets the browser's own "are you sure" — but only
+// from a seat. A watcher has nothing to lose by going, and the leave button
+// already lets them go without asking.
 window.addEventListener('beforeunload', (e) => {
-  if (state?.status !== 'playing') return;
+  if (state?.status !== 'playing' || watching || !state.players?.some((p) => p.id === meId)) return;
   rememberGame();
   e.preventDefault();
   e.returnValue = '';
@@ -2031,6 +2555,36 @@ emoteRow.innerHTML = REACTIONS.map((e) =>
 emoteRow.querySelectorAll('.emote').forEach((b) => {
   b.onclick = () => { sfx.click(); actions.chat(b.textContent, chatChannel); };
 });
+
+// Quick chat (1.0.6): eight things people say at a table, one tap each, sent
+// as an ordinary chat line — the server's chat is unchanged, and the table
+// reads it exactly as if it had been typed. The same eight, in the same order,
+// on the iPhone and Android, so a "GG" means the same thing from every client.
+//
+// They wait for each other: the chat has no rate limit of its own on the
+// server, so a row of one-tap buttons is the one place a finger could flood a
+// table, and the pause below is what stops it. Resting, the chips step back
+// rather than vanish — the row stays where the hand expects it.
+const PHRASES = ['Good luck!', 'Nice move!', 'Want to trade?', 'Ouch!', 'So close!', 'Hurry up!', 'Thanks!', 'GG'];
+const PHRASE_REST = 2500;
+let phraseSentAt = 0;
+let phraseTimer = null;
+const phraseRow = $('#phraseRow');
+if (phraseRow) {
+  phraseRow.innerHTML = PHRASES.map((p) =>
+    `<button class="emote phrase" type="button" title="Send “${p}” to the table">${p}</button>`).join('');
+  phraseRow.querySelectorAll('.phrase').forEach((b) => {
+    b.onclick = () => {
+      if (Date.now() - phraseSentAt < PHRASE_REST) return;
+      phraseSentAt = Date.now();
+      sfx.click();
+      actions.chat(b.textContent, chatChannel);
+      phraseRow.classList.add('resting');
+      clearTimeout(phraseTimer);
+      phraseTimer = setTimeout(() => phraseRow.classList.remove('resting'), PHRASE_REST);
+    };
+  });
+}
 
 $('#chatForm').addEventListener('submit', (e) => {
   e.preventDefault();

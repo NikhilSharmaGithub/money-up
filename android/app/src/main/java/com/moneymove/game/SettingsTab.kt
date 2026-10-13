@@ -175,6 +175,11 @@ fun SettingsTab(
                 }
             }
 
+            // Beside the sound, as iOS keeps it: the two pushes somebody
+            // might want off on their own, held on the server so they hold
+            // on every phone this account is on.
+            NotificationsPanel(store, account)
+
             // After the preferences, before the fine print — the way back into
             // the six cards a new player is shown, then the rules themselves.
             // The row is Welcome.kt's and presses with the default indication,
@@ -922,6 +927,90 @@ private fun SoundPanel(on: Boolean, onChange: (Boolean) -> Unit) {
             Spacer(Modifier.width(40.dp))
             MMSwitch(on)
         }
+    }
+}
+
+// ── notifications ──────────────────────────────────────────────────────────
+
+/**
+ * The daily reward reminder and friends' invites, each a switch — bound to
+ * the server's /api/prefs rather than kept on this phone, because the server
+ * is what decides whether to send either one. The daily reminder is only
+ * ever sent to a signed-in player, so the caption says that to anybody who
+ * is not; an invite switched off still arrives as the banner in the app.
+ *
+ * Android's own switch for the whole app sits above both: with notifications
+ * off for MoneyMove, neither of these can reach the phone, and the card says
+ * so rather than leaving two bright switches that do nothing.
+ */
+@Composable
+private fun NotificationsPanel(store: GameStore, account: AccountStore) {
+    val p = P.current
+    val context = LocalContext.current
+    val prefs = account.shownPrefs
+    val signedIn = account.me?.provider != null
+    val systemOn = remember { androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() }
+    LaunchedEffect(Unit) { account.loadPrefs() }
+
+    fun flip(daily: Boolean? = null, invites: Boolean? = null) {
+        Haptics.tap()
+        account.setPrefs(dailyReminder = daily, inviteAlerts = invites) { error ->
+            if (error != null) store.showToast(error, isError = true)
+        }
+    }
+
+    Panel(padding = 16.dp) {
+        SectionLabel("Notifications")
+        Spacer(Modifier.height(4.dp))
+        PrefSwitchRow(
+            "Daily reward reminder",
+            if (signedIn) "A nudge once a day when your daily coins are ready."
+            else "A nudge once a day when your daily coins are ready — sign in on Play to get it.",
+            on = prefs.dailyReminder,
+        ) { flip(daily = it) }
+        Rule()
+        PrefSwitchRow(
+            "Friend invites",
+            "When a friend asks you to their table. Off, the invite still shows in the app.",
+            on = prefs.inviteAlerts,
+        ) { flip(invites = it) }
+        if (!systemOn) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Notifications are off for MoneyMove in Android's settings, so neither can reach this phone.",
+                color = p.bad, fontSize = 11.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/**
+ * One switch with its name and its caption — the whole row is the control,
+ * as [SoundPanel]'s is, so a screen reader hears one switch with its name.
+ */
+@Composable
+private fun PrefSwitchRow(title: String, caption: String, on: Boolean, onChange: (Boolean) -> Unit) {
+    val p = P.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = ROW_MIN)
+            .toggleable(
+                value = on,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text(caption, color = p.ink3, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.width(24.dp))
+        MMSwitch(on)
     }
 }
 

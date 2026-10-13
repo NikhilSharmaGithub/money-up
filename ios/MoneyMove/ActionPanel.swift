@@ -165,6 +165,13 @@ struct ActionPanel: View {
     @ViewBuilder
     private func phases(_ P: Palette) -> some View {
         VStack(spacing: 8) {
+            // Somebody on the rail: said once, at the top of the dock, so the
+            // rows under it read as the table's news rather than as buttons
+            // that have stopped working.
+            if store.isWatching, store.state?.isLobby == false {
+                WatchingLine(glass: glass)
+            }
+
             firstIncomingTrade
 
             // The header stays put across a change of phase — it is the same
@@ -226,11 +233,14 @@ struct ActionPanel: View {
             // Anyone can call the next game — the chair goes to whoever asks
             // for it first. Except a cup match, which is played once and is
             // already recorded in the bracket.
-            if store.state?.cup != true {
+            // …and nobody watching from the rail: the server refuses a
+            // watcher's rematch, and the result sheet offers them a table of
+            // their own instead.
+            if store.state?.cup != true, !store.isWatching {
                 MMIconButton(.replay, "Play again",
                              kind: .primary, big: true) { store.rematch() }
             }
-            if !store.isHost, store.state?.cup != true {
+            if !store.isHost, store.state?.cup != true, !store.isWatching {
                 Text("Whoever presses first hosts the next one.")
                     .font(.system(size: 12.5, weight: .medium, design: .rounded))
                     .foregroundStyle(ink(true))

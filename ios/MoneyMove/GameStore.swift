@@ -54,6 +54,11 @@ final class GameStore: ObservableObject {
         // deletion, and go asking the server to sign the brand-new identity
         // out of something it never signed in to.
         UserDefaults.standard.removeObject(forKey: GameStore.appleUserKey)
+        // A new identity starts again at level one, and its first level-up is
+        // news even if the deleted account had celebrated higher ones.
+        UserDefaults.standard.removeObject(forKey: GameStore.levelSeenKey)
+        myLevel = nil
+        lastProgress = nil
         refreshWallet()
     }
     @AppStorage("mm.flag") var flag: String = ""
@@ -101,6 +106,11 @@ final class GameStore: ObservableObject {
     private var chatPrimed = false
     @Published var meId: String = ""
     @Published var roomId: String?
+    /// This socket came to watch (1.0.6): it joined with `spectate: true`,
+    /// holds no seat, and says so again on every reconnect. Only ever set by
+    /// watch(roomId:); every other way in clears it. See `isWatching` for the
+    /// wider question of whether there is a seat here at all.
+    @Published private(set) var spectating = false
     @Published var connection: SocketIOClient.Status = .disconnected
     @Published var toast: ToastMessage?
     @Published var cardPopup: LastCard?
@@ -419,6 +429,25 @@ final class GameStore: ObservableObject {
     }
     @Published var coinCredit: CoinCredit?
 
+    // MARK: - levels & missions (1.0.6)
+    //
+    // The behaviour lives in Progression.swift; only what an extension cannot
+    // hold — stored state — is declared here.
+
+    /// This player's own level as last heard: from /api/me, from the end of a
+    /// counted game, or from a mission claim. Nil until one of them answers.
+    @Published var myLevel: LevelInfo?
+    /// What the last counted game paid this device, for the result sheet. It
+    /// names its room, and a fresh deal clears it, so a rematch that turns out
+    /// too short to count never shows the previous game's XP.
+    @Published var lastProgress: ProgressEvent?
+    /// "Level 7!" — up for a few seconds in the toast window, over any sheet.
+    @Published var levelUpNews: LevelUpNews?
+    /// Bumped whenever the day's missions may have moved — a counted game, a
+    /// claim. The missions card reloads on it.
+    @Published var missionsStamp = 0
+    var levelUpTask: Task<Void, Never>?
+
     /// The watermark this session has already shown. Nil until the first read,
     /// which is what keeps the app from throwing coins at the screen for a
     /// wallet it is merely seeing for the first time.
@@ -539,7 +568,7 @@ final class GameStore: ObservableObject {
             // …and the first state it sends is where everything stands, not
             // a replay of what happened while we were away.
             primed = false
-            socket.emit("join", [[
+            var payload: [String: Any] = [
                 "roomId": roomId,
                 "token": token,
                 "name": nickname.isEmpty ? "Player" : nickname,
@@ -551,7 +580,12 @@ final class GameStore: ObservableObject {
                 // client that never says so as always ready, so a table is
                 // never left waiting on a phone that cannot press it.
                 "canReady": true,
-            ] as [String: Any]])
+            ]
+            // A watcher says so on every reconnect too. Leaving it off would
+            // walk a dropped watcher through the ordinary door, which seats
+            // anybody it can — and a lobby-stage rematch has empty chairs.
+            if spectating { payload["spectate"] = true }
+            socket.emit("join", [payload])
         }
     }
 
@@ -560,6 +594,8 @@ final class GameStore: ObservableObject {
         case "you":
             if let dict = args.first as? [String: Any], let pid = dict["playerId"] as? String {
                 meId = pid
+                // The server's own word that this socket is on the rail.
+                if dict["spectator"] as? Bool == true { spectating = true }
             }
         case "state":
             guard let dict = args.first as? NSDictionary else { return }
@@ -581,6 +617,15 @@ final class GameStore: ObservableObject {
             }
         case "joinFailed":
             if let dict = args.first as? [String: Any], let msg = dict["message"] as? String {
+                // Only one thing turns a watcher away: a table that is no
+                // longer there (or a ban). There is no state coming to sit
+                // on, so it goes home and says why rather than leaving the
+                // player on a spinner under an error.
+                if self.spectating, dict["spectate"] as? Bool != true {
+                    leaveRoom()
+                    showToast(msg, isError: true)
+                    return
+                }
                 // A table with no seat left still sends its state a beat later,
                 // so the player lands on a board they simply cannot touch. Say
                 // out loud that they are watching — the same line the web
@@ -590,6 +635,13 @@ final class GameStore: ObservableObject {
                           isError: !spectating, glyph: spectating ? .eye : nil)
                 joinError = spectating ? nil : msg
             }
+        case "progress":
+            // XP, a level-up and the missions a counted game moved — sent to
+            // this player's own sockets only, right after the final state.
+            guard let dict = args.first as? [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: dict),
+                  let progress = try? JSONDecoder().decode(ProgressEvent.self, from: data) else { return }
+            noteProgress(progress)
         default:
             break
         }
@@ -744,6 +796,16 @@ final class GameStore: ObservableObject {
             Haptics.tap()
         }
 
+        // A timed game's clock ran out with somebody mid-turn: that turn is the
+        // last, and a double no longer earns another roll. The log says it,
+        // but the log is murmur in the well — this is worth saying out loud,
+        // once, as it happens. A game the clock ended outright goes straight
+        // to its result sheet, which says "Time's up" itself.
+        if !priming, new.isPlaying, new.timeUp == true, old?.timeUp != true {
+            showToast("Time's up — this is the last turn", glyph: .clock)
+            Haptics.warn()
+        }
+
         // turn banner — when the turn passes to someone new
         if new.isPlaying, let turnId = new.turn?.playerId, turnId != lastTurnPlayer {
             lastTurnPlayer = turnId
@@ -770,6 +832,9 @@ final class GameStore: ObservableObject {
             // rematch runs back through lobby → playing, so it re-floors here.
             logFloor = (old ?? new).log.last?.at ?? 0
             timedOut = false
+            // The XP card belongs to the game that paid it. A rematch keeps
+            // the room's code, so the room alone cannot tell the two apart.
+            lastProgress = nil
             SoundKit.shared.shuffleDeal()
             // A game this device is playing, counted once. Guarded on a seat
             // of ours being at the table: a game this device is only watching
@@ -1410,13 +1475,18 @@ final class GameStore: ObservableObject {
     func openInvite(_ url: URL) {
         guard let linked = Self.linkedRoom(in: url.absoluteString) else { return }
         let code = Self.roomCode(from: linked)
-        guard !code.isEmpty, code != roomId else { return }
+        // …unless this device is only watching that table: an invite to it
+        // is an invitation to sit down, and join() takes the socket off the
+        // rail first.
+        guard !code.isEmpty, code != roomId || spectating else { return }
         // A link can arrive while this device sits at another table; join()
         // walks out of that one first.
         join(roomId: code)
     }
 
-    func join(roomId id: String) {
+    /// Sit down at a table — or, with `spectate`, only watch it. Watching goes
+    /// through `watch(roomId:)`, which says why it is a different door.
+    func join(roomId id: String, spectate: Bool = false) {
         SoundKit.shared.warmUp()
         guard let url = serverURL else { return showToast("Set a valid server URL", isError: true) }
         let target = id.lowercased().trimmingCharacters(in: .whitespaces)
@@ -1426,11 +1496,17 @@ final class GameStore: ObservableObject {
         // rooms on the server, both tables' states would come down it and the
         // board would flip between them, the guests would stay seated at the
         // old table, and the old game would never be written up as left.
-        if let current = roomId, current != target { leaveRoom() }
+        //
+        // Swapping the rail for a chair at the same table counts as leaving
+        // too: the server walks a watching socket out before it can sit down,
+        // and this side has to forget the watcher's state with it.
+        if let current = roomId, current != target || spectating != spectate { leaveRoom() }
         joinError = nil
         quickSearching = false
+        spectating = spectate
         roomId = target
-        lastRoom = target
+        // A table only watched is not one to offer back as "Continue game".
+        if !spectate { lastRoom = target }
         resumeCheck = nil
         // A new table starts with only this seat on the device; continueGame()
         // reads the old count before calling in, so it keeps its guests.
@@ -1634,6 +1710,7 @@ final class GameStore: ObservableObject {
         quickTask?.cancel()
         quickSearching = false
         roomId = nil
+        spectating = false
         state = nil
         joinError = nil
         timedOut = false
@@ -1735,6 +1812,9 @@ final class GameStore: ObservableObject {
     /// seat, so a pass & play device speaks for every seat it holds — otherwise
     /// the vote could never complete on a phone with two players on it.
     func grantTime(_ playerId: String) {
+        // A watcher's meId is still in localIds, so without this the rail
+        // would cast a vote the server can only answer with a red toast.
+        guard !isWatching else { return }
         for seat in localIds where seat != playerId {
             emitAs(seat, "grantTime", [["id": playerId]])
         }

@@ -132,7 +132,9 @@ function post(deviceToken, payload) {
  * With one addition, for an invite: its kind and its table ride beside `aps`
  * as custom keys, which is where an iPhone app reads a tapped notification's
  * extras from. A tap then puts the invite banner up at once instead of
- * waiting for the next poll. Everything else is sent exactly as before.
+ * waiting for the next poll. The daily reminder carries its kind the same
+ * way, so a tap can take the player to the home screen where the coin is.
+ * Everything else is sent exactly as before.
  */
 function sendToApple(profileToken, devices, text, opts = {}) {
   if (!pushReady) {
@@ -152,7 +154,7 @@ function sendToApple(profileToken, devices, text, opts = {}) {
       },
       ...(about.kind === 'invite'
         ? { kind: 'invite', ...(about.roomId ? { roomId: about.roomId } : {}) }
-        : {}),
+        : about.kind === 'daily' ? { kind: 'daily' } : {}),
     },
   };
 
@@ -568,14 +570,18 @@ async function deliverFcm(profileToken, device, message) {
 //   cup:last:<room>              cup     index.js sweepCupNoShows — three minutes left
 //   cup:<cup>:r<n>:draw | :soon  cup     tournament.js remindersDue — the draw, the warning
 //   cup:<cup>:done               cup     tournament.js remindersDue — how it ended
+//   daily                        daily   index.js reminder scheduler (social.js runDailyReminders)
 //
 // Nothing sends for a DM or a friend request yet; when something does, the
 // id's first word says which, and both ring on the social channel.
 //
 // The three channel ids are the Android app's own — it creates exactly these,
-// and a message naming any other lands on its fallback channel instead.
+// and a message naming any other lands on its fallback channel instead. The
+// daily reminder rides the social one: it is a nudge, like an invite, and a
+// fourth channel would be one an app already in the store does not have.
 const CHANNELS = {
   turn: 'turns', cup: 'cup', invite: 'social', notice: 'social', dm: 'social', friend: 'social',
+  daily: 'social',
 };
 
 /** kind, collapse id, and the room or cup a tap should open, all as strings. */
@@ -584,7 +590,7 @@ function describe({ collapseId, kind, roomId, cupId } = {}) {
   const parts = id.split(':');
   let k = kind && CHANNELS[kind] ? kind : '';
   if (!k) {
-    if (id === 'invite' || id === 'notice') k = id;
+    if (id === 'invite' || id === 'notice' || id === 'daily') k = id;
     else if (parts[0] === 'dm' || parts[0] === 'friend') k = parts[0];
     else if (parts[0] === 'cup') k = 'cup';
     else k = 'turn';

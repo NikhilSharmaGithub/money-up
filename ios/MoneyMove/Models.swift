@@ -55,6 +55,23 @@ struct GameState: Codable, Equatable {
     var stats: [String: PlayerStats]?
     /// End-of-game badges: player id -> title with its one-line reason.
     var titles: [String: TitleInfo]?
+    /// The game clock of a timed table (1.0.6), epoch ms. Nil for an untimed
+    /// table, in the lobby, at Play-now and cup tables — and from an older
+    /// server. Not `turn.endsAt`, which is still each turn's own shot clock.
+    var endsAt: Double?
+    /// The clock has run out and the turn on the board is the last one. Stays
+    /// true on the ended state of a timed game.
+    var timeUp: Bool?
+    /// Only once the game has ended: "time" when it was decided on the clock,
+    /// "last" when everybody else went out.
+    var endReason: String?
+    /// When this game's dice started; nil in the lobby.
+    var startedAt: Double?
+    /// Turns played so far — the number the Watch live list shows.
+    var turnCount: Int?
+    /// How many people are watching without a seat: distinct identities, never
+    /// a seated player. 0 or absent when nobody is.
+    var spectators: Int?
     var version: Int
 
     func player(_ id: String?) -> PlayerState? {
@@ -89,6 +106,9 @@ struct GameState: Codable, Equatable {
     }
     var isPlaying: Bool { status == "playing" }
     var isEnded: Bool { status == "ended" }
+    /// The game was settled by the clock rather than by everybody else going
+    /// out — a timed table, or a cup match decided at its whistle.
+    var endedOnTime: Bool { isEnded && endReason == "time" }
 }
 
 /// The house rules a Quick Play table rolled for itself.
@@ -192,6 +212,12 @@ struct GameSettings: Codable, Equatable {
     var teams: Int?
     /// Seconds a human gets per turn before the table moves on; 0 = clock off.
     var turnSeconds: Int?
+    /// How the house players the host added play (1.0.6): "easy", "normal" or
+    /// "hard". Absent from an older server, which only ever plays normal.
+    var botLevel: String?
+    /// Minutes on the whole game's clock (1.0.6): 0 for no limit, else 20, 30,
+    /// 45 or 60. The richest player still in wins when it runs out.
+    var timeLimit: Int?
 }
 
 struct MapData: Codable, Equatable {
@@ -275,6 +301,10 @@ struct PlayerState: Codable, Equatable, Identifiable {
     /// Pressed Ready in a Play-now lobby. False everywhere else; older
     /// servers never send it.
     var ready: Bool?
+    /// The seat's level (1.0.6): a person's own, a house player's stable one
+    /// from its code, 0 for a pass & play guest. Absent from an older server,
+    /// and both absent and 0 mean the same thing — no chip.
+    var level: Int?
 
     var isBankrupt: Bool { bankrupt ?? false }
     var inJail: Bool { jail ?? false }
@@ -423,6 +453,10 @@ struct PlayerStats: Codable, Equatable {
     var biggestRentTile: String? = nil
     var laps: Int? = nil
     var leadShare: Int? = nil
+    /// This seat's own turns, and the colour sets it completed — the two
+    /// counters the daily missions read off a finished game (1.0.6).
+    var turns: Int? = nil
+    var setsCompleted: Int? = nil
 }
 
 /// One end-of-game badge: "Landlord — collected $4,320 in rent".
@@ -450,6 +484,9 @@ struct PlayerResult: Codable, Equatable, Identifiable {
     var title: String?
     var titleReason: String?
     var stats: PlayerStats?
+    /// The level the seat wore when the game ended. Optional, so results
+    /// saved before levels existed still decode.
+    var level: Int?
 
     /// What the standings column says for this seat. A removed seat was never
     /// actually bankrupted — don't say it was.
@@ -480,7 +517,8 @@ struct PlayerResult: Codable, Equatable, Identifiable {
                          isBot: (p.isBot ?? false) || p.id.hasPrefix("bot:"),
                          title: state.titles?[p.id]?.title,
                          titleReason: state.titles?[p.id]?.reason,
-                         stats: state.stats?[p.id])
+                         stats: state.stats?[p.id],
+                         level: p.level)
         }
     }
 }

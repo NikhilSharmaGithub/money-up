@@ -321,8 +321,11 @@ private fun ColumnScope.ChatTab(
                 // An empty column of nothing reads as broken; say what the
                 // channel is for instead, near the top where a line would be.
                 Text(
-                    if (channel == "team") "Only your team can read this channel. Plan away."
-                    else "Nothing said yet — tap a reaction below or type to start.",
+                    when {
+                        channel == "team" -> "Only your team can read this channel. Plan away."
+                        store.isSpectating -> "Nothing said yet."
+                        else -> "Nothing said yet — tap a reaction below or type to start."
+                    },
                     // Straight on the sheet's glass, where ink3 is too faint
                     // to read at night; see quietInk.
                     color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
@@ -331,6 +334,14 @@ private fun ColumnScope.ChatTab(
                 )
             }
         }
+    }
+
+    // Somebody watching from the rail reads the table but has no voice at
+    // it — the server refuses a watcher's every line — so instead of a
+    // composer that would only bounce, the foot of the sheet says so.
+    if (store.isSpectating) {
+        WatchingFoot()
+        return
     }
 
     if (!agreed) {
@@ -346,6 +357,12 @@ private fun ColumnScope.ChatTab(
         store.sendChat(emote, channel, seat)
         Haptics.tap()
     }
+
+    // The words people say most, one tap each — live before the rules for
+    // the reactions' reason, and spoken by the same seat as everything below.
+    QuickChatRow(store, onSend = { phrase ->
+        if (store.sendQuickChat(phrase, channel, seat)) Haptics.tap()
+    })
 
     // One chip per seat on this device, shown only when it holds more than
     // one — everything below it speaks as whoever is picked.
@@ -386,6 +403,27 @@ private fun ColumnScope.ChatTab(
             color = quietInk(), fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        )
+    }
+}
+
+/** The sheet's foot for somebody watching: what the eye means, where the composer would be. */
+@Composable
+private fun WatchingFoot() {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 6.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon("eye", size = 15.dp, tint = quietInk())
+        Spacer(Modifier.width(7.dp))
+        Text(
+            "You're watching — only the players can chat.",
+            color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
         )
     }
 }

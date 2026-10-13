@@ -64,6 +64,37 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     var boards: BoardsView? by mutableStateOf(null)
         private set
 
+    /** Today's three missions and the bonus, as the server last dealt them. */
+    var missions: MissionsView? by mutableStateOf(null)
+        private set
+
+    /**
+     * Every leaderboard tab as it was last read. The all-time one is also
+     * [leaderboard], which every screen that predates the tabs still reads.
+     */
+    var standings: Map<LeaderScope, LeaderboardView> by mutableStateOf(emptyMap())
+        private set
+
+    /**
+     * The two notification switches, as the server holds them — null until
+     * asked. Settings reads [shownPrefs], which falls back to the copy /api/me
+     * carried and then to both on, so the switches never draw a guess as off.
+     */
+    var playerPrefs: PlayerPrefs? by mutableStateOf(null)
+        private set
+
+    val shownPrefs: PlayerPrefs get() = playerPrefs ?: me?.prefs ?: PlayerPrefs()
+
+    /**
+     * A level-up this phone has not celebrated yet — a mission claim that
+     * crossed one, or one /api/me says happened while the app was not at the
+     * table. The Play tab draws it and hands it back through
+     * [levelUpShown] and [dismissLevelUp]. The one a finished game brings is
+     * celebrated on the result sheet instead, from the `progress` event.
+     */
+    var levelUpToShow: LevelUp? by mutableStateOf(null)
+        private set
+
     var auth: AuthConfig? by mutableStateOf(null)
         private set
     var ads: AdsConfig? by mutableStateOf(null)
@@ -148,9 +179,12 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
     /** Everything a fresh launch, or a pull-to-refresh, wants. */
     fun refresh() {
         if (auth == null) loadPublic("/api/auth/config", AuthConfig.serializer()) { auth = it }
-        load("/api/me", MeView.serializer()) { me = it }
+        load("/api/me", MeView.serializer()) { adoptMe(it) }
         load("/api/wallet", Wallet.serializer()) { wallet = it }
         load("/api/daily", DailyView.serializer()) { daily = it }
+        // The missions sit under the daily coin and move with every game, so
+        // they are asked whenever the rest of home is.
+        refreshMissions()
         // The shelf is not a shop thing. Which boards may be dealt is the
         // first question the lobby asks, and a player who taps Play and never
         // opens the Store used to arrive at a table with no answer to it.
@@ -207,10 +241,10 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
                 onBlocked(it.blocked.toSet())
             }
             load("/api/me", MeView.serializer()) {
-                me = it
+                adoptMe(it)
                 if (it.code.isNotBlank()) onMyCode(it.code)
             }
-            loadPublic("/api/leaderboard", LeaderboardView.serializer()) { leaderboard = it.top }
+            loadLeaderboard(LeaderScope.ALL)
         }
 
     /**
@@ -236,7 +270,193 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
 
     fun refreshHistory() {
         load("/api/achievements", Achievements.serializer()) { achievements = it }
-        loadPublic("/api/leaderboard", LeaderboardView.serializer()) { leaderboard = it.top }
+        loadLeaderboard(LeaderScope.ALL)
+    }
+
+    // ── levels, missions and the boards (1.0.6) ───────────────────────────
+
+    /**
+     * One leaderboard tab. Asked with the token, which only marks this
+     * player's own row and fills `you` — the board itself is public. A miss
+     * keeps whatever the tab last showed: a board that blanks on a blip reads
+     * as everybody's wins being wiped.
+     */
+    fun loadLeaderboard(scope: LeaderScope) = viewModelScope.launch {
+        val body = api.get("/api/leaderboard", mapOf("scope" to scope.wire)) ?: return@launch
+        val view = runCatching { MMJson.decodeFromString(LeaderboardView.serializer(), body) }.getOrNull()
+            ?: return@launch
+        standings = standings + (scope to view)
+        if (scope == LeaderScope.ALL) leaderboard = view.top
+    }
+
+    /** GET /api/missions — progress is tracked for everybody, signed in or not. */
+    fun refreshMissions() {
+        load("/api/missions", MissionsView.serializer()) { missions = it }
+    }
+
+    /**
+     * POST /api/missions/claim, for one mission's id or "bonus".
+     *
+     * The server is idempotent about it — a retry, a second tab, a tap that
+     * landed twice all answer ok with nothing paid — so a repeat comes back
+     * as a success worth nought, and [onDone] plays no coins for it. Every
+     * answer that carries the card, success or a stale card refused across
+     * midnight, redraws the card from it rather than from a second request.
+     * The wallet and the level move from the reply itself, at once, and are
+     * then re-read: the coins on the account card should not lag the tap by
+     * a round trip.
+     */
+    fun claimMission(id: String, onDone: (MissionClaim) -> Unit = {}) = viewModelScope.launch {
+        val reply = api.postOrError("/api/missions/claim", mapOf("id" to id))
+        val said = reply.said()
+        val card = said?.get("missions")?.let {
+            runCatching { MMJson.decodeFromJsonElement(MissionsView.serializer(), it) }.getOrNull()
+        }
+        if (card != null) missions = card
+        if (reply.offline || said == null) {
+            onDone(MissionClaim(error = "Couldn't reach the server — try again."))
+            return@launch
+        }
+        if (!reply.ok) {
+            if (card == null) refreshMissions()
+            onDone(
+                MissionClaim(
+                    error = said["error"].asString() ?: "That didn't go through — try again.",
+                    needsLogin = said["needsLogin"].asBool() == true,
+                ),
+            )
+            return@launch
+        }
+        val awarded = said["awarded"].obj()
+        val paid = awarded?.get("coins").asInt() ?: 0
+        val xp = awarded?.get("xp").asInt() ?: 0
+        val levelUp = said["levelUp"].obj()?.let {
+            runCatching { MMJson.decodeFromJsonElement(LevelUp.serializer(), it) }.getOrNull()
+        }
+        said["coins"].asInt()?.let { balance ->
+            wallet = wallet?.let { w -> w.copy(coins = balance, earned = said["earned"].asInt() ?: w.earned) }
+        }
+        me = me?.let { m ->
+            m.copy(
+                xp = said["xp"].asInt() ?: m.xp,
+                level = said["level"].asInt() ?: m.level,
+                levelFloor = said["levelFloor"].asInt() ?: m.levelFloor,
+                levelNext = said["levelNext"].asInt() ?: m.levelNext,
+            )
+        }
+        // A claim's ten XP can cross a level, and this is the screen to say so.
+        if (levelUp != null && levelUp.to > levelSeen()) levelUpToShow = levelUp
+        if (card == null) refreshMissions()
+        load("/api/wallet", Wallet.serializer()) { wallet = it }
+        load("/api/me", MeView.serializer()) { adoptMe(it) }
+        onDone(MissionClaim(paid = paid, xp = xp, levelUp = levelUp))
+    }
+
+    /**
+     * A finished game's `progress`, folded in: the account card's level and
+     * bar move at once, the level-up it celebrates on the result sheet is
+     * marked as seen so home does not celebrate it a second time, and the
+     * missions, the wallet (a level-up pays) and the profile are re-read.
+     * True when the level-up in it is one this phone had not celebrated yet.
+     */
+    fun noteProgress(note: ProgressNote): Boolean {
+        me = me?.copy(xp = note.xp, level = note.level, levelFloor = note.levelFloor, levelNext = note.levelNext)
+        val news = note.levelUp?.let { up -> (up.to > levelSeen()).also { levelUpShown(up) } } == true
+        // The Play tab must not throw a party the result sheet already threw.
+        if (news && (levelUpToShow?.to ?: 0) <= (note.levelUp?.to ?: 0)) levelUpToShow = null
+        refreshMissions()
+        load("/api/wallet", Wallet.serializer()) { wallet = it }
+        load("/api/me", MeView.serializer()) { adoptMe(it) }
+        return news
+    }
+
+    /** A level-up celebration has gone up: never again for this level on this phone. */
+    fun levelUpShown(up: LevelUp) {
+        if (up.to > levelSeen()) prefs.putInt(KEY_LEVEL_SEEN, up.to)
+    }
+
+    /** The Play tab's celebration has finished. */
+    fun dismissLevelUp() {
+        levelUpToShow = null
+    }
+
+    /** The highest level celebrated on this phone, or -1 before the first look. */
+    private fun levelSeen(): Int = prefs.int(KEY_LEVEL_SEEN, -1)
+
+    /**
+     * Every /api/me lands here, so a level-up that happened somewhere this
+     * phone was not — a game it was not connected for when it ended — is
+     * celebrated once on the way past, as the server's doc asks.
+     *
+     * Once by level, not by time: a level is only ever crossed once, so the
+     * highest one celebrated is a mark that cannot be fooled by a phone's
+     * clock. The first look on a fresh install only celebrates a level-up
+     * from the last few days; anything older is history, and the mark is
+     * simply set to where the player stands.
+     */
+    private fun adoptMe(view: MeView) {
+        me = view
+        if (view.code.isBlank()) return
+        val seen = levelSeen()
+        val up = view.lastLevelUp
+        val recent = up != null && System.currentTimeMillis() - up.at.toLong() < LEVEL_UP_FRESH_MS
+        val owed = up != null && up.to > maxOf(seen, 0) && (seen >= 0 || recent)
+        when {
+            owed -> if (levelUpToShow?.to != up?.to) levelUpToShow = up
+            seen < view.level -> prefs.putInt(KEY_LEVEL_SEEN, view.level)
+        }
+    }
+
+    /** GET /api/prefs — read, never creating a profile. */
+    fun loadPrefs() {
+        load("/api/prefs", PlayerPrefs.serializer()) { playerPrefs = it }
+    }
+
+    /** Changes go one at a time, so two quick flips cannot land in the wrong order. */
+    private val prefsLock = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * One switch flipped. Shown at once, as a switch has to be, and put back
+     * if the server would not take it — [onDone] then carries the sentence
+     * to say so. The reply is the whole truth afterwards, both switches.
+     */
+    fun setPrefs(
+        dailyReminder: Boolean? = null,
+        inviteAlerts: Boolean? = null,
+        onDone: (String?) -> Unit = {},
+    ) = viewModelScope.launch {
+        val before = shownPrefs
+        playerPrefs = before.copy(
+            dailyReminder = dailyReminder ?: before.dailyReminder,
+            inviteAlerts = inviteAlerts ?: before.inviteAlerts,
+        )
+        prefsLock.lock()
+        try {
+            val change = buildMap<String, Any?> {
+                dailyReminder?.let { put("dailyReminder", it) }
+                inviteAlerts?.let { put("inviteAlerts", it) }
+            }
+            val reply = api.postOrError("/api/prefs", change)
+            val said = reply.said()
+            if (reply.ok && said != null) {
+                playerPrefs = PlayerPrefs(
+                    dailyReminder = said["dailyReminder"].asBool() ?: shownPrefs.dailyReminder,
+                    inviteAlerts = said["inviteAlerts"].asBool() ?: shownPrefs.inviteAlerts,
+                )
+                onDone(null)
+            } else {
+                // Only the switch this call moved goes back; another flip
+                // made since keeps its own fate.
+                val now = shownPrefs
+                playerPrefs = now.copy(
+                    dailyReminder = if (dailyReminder != null) before.dailyReminder else now.dailyReminder,
+                    inviteAlerts = if (inviteAlerts != null) before.inviteAlerts else now.inviteAlerts,
+                )
+                onDone(reply.refusal(said))
+            }
+        } finally {
+            prefsLock.unlock()
+        }
     }
 
     // ── the board shelf ────────────────────────────────────────────────────
@@ -543,9 +763,11 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             if (!quiet) notice = null
-            load("/api/me", MeView.serializer()) { me = it }
+            load("/api/me", MeView.serializer()) { adoptMe(it) }
             load("/api/wallet", Wallet.serializer()) { wallet = it }
             load("/api/daily", DailyView.serializer()) { daily = it }
+            // Signing in is what turns "Sign in to claim" into Claim.
+            refreshMissions()
             onDone(SignInOutcome(
                 signedIn = true,
                 name = said?.get("name").asString()?.takeIf { it.isNotBlank() },
@@ -570,8 +792,9 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
             onDone("Couldn't sign out — check your connection and try again.")
             return@launch
         }
-        load("/api/me", MeView.serializer()) { me = it }
+        load("/api/me", MeView.serializer()) { adoptMe(it) }
         load("/api/daily", DailyView.serializer()) { daily = it }
+        refreshMissions()
         onDone(null)
     }
 
@@ -1022,6 +1245,12 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
         social = null
         daily = null
         achievements = null
+        missions = null
+        standings = emptyMap()
+        playerPrefs = null
+        levelUpToShow = null
+        // A new person starts at level one; the mark is theirs to set.
+        prefs.putInt(KEY_LEVEL_SEEN, -1)
         notice = null
         invited = emptySet()
         boards = null
@@ -1090,6 +1319,12 @@ class AccountStore(app: Application) : AndroidViewModel(app) {
 
         /** How long a claim keeps asking while Google's callback is late. */
         const val CLAIM_PATIENCE_MS = 15_000L
+
+        /** The highest level this phone has celebrated. */
+        const val KEY_LEVEL_SEEN = "mm.levelSeen"
+
+        /** How old a level-up a fresh install still celebrates. */
+        const val LEVEL_UP_FRESH_MS = 3L * 24 * 60 * 60 * 1000
     }
 }
 

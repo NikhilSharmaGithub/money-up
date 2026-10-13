@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider may hand to another app: the one folder in the
+     cache the result card is written to (ResultShare), and nothing else —
+     not the rest of the cache, and none of the app's own files. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>

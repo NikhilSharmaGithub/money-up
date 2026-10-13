@@ -145,10 +145,10 @@ class MoneyMoveMessagingService : FirebaseMessagingService() {
  * arrive in [RemoteMessage.getData] or as the extras of the intent a tapped
  * notification opens the app with. push.js (fcmMessage) sends, all strings:
  *
- *  - `kind`: "turn", "invite", "notice" or "cup". The server also knows
- *    "dm" and "friend", which nothing sends yet; for those, and for anything
- *    newer than this build, a tap opens the app and goes nowhere in
- *    particular.
+ *  - `kind`: "turn", "invite", "notice", "cup" or "daily" (the daily
+ *    reward reminder, 1.0.6). The server also knows "dm" and "friend",
+ *    which nothing sends yet; for those, and for anything newer than this
+ *    build, a tap opens the app and goes nowhere in particular.
  *  - `roomId`: the table — the one whose turn it is, the one a friend is
  *    asking the player to, or the cup table whose door has opened.
  *  - `cupId`: the cup, for a cup push that is not about a table yet — the
@@ -162,7 +162,12 @@ data class PushAbout(
     val cup: String? = null,
     val tag: String? = null,
 ) {
-    enum class Kind(val wire: String) { TURN("turn"), INVITE("invite"), NOTICE("notice"), CUP("cup") }
+    enum class Kind(val wire: String) {
+        TURN("turn"), INVITE("invite"), NOTICE("notice"), CUP("cup"),
+
+        /** The once-a-day nudge that the daily coins are ready; a tap opens home. */
+        DAILY("daily"),
+    }
 
     /** The same keys again, for a notification this app draws itself. */
     fun extras(): Bundle = Bundle().apply {
@@ -232,7 +237,9 @@ object PushChannels {
 
     fun of(about: PushAbout?): String = when (about?.kind) {
         PushAbout.Kind.CUP -> CUP
-        PushAbout.Kind.INVITE, PushAbout.Kind.NOTICE -> SOCIAL
+        // The daily reminder is a nudge, like an invite — the server names
+        // the social channel for it too, so the two agree.
+        PushAbout.Kind.INVITE, PushAbout.Kind.NOTICE, PushAbout.Kind.DAILY -> SOCIAL
         else -> TURNS
     }
 
@@ -253,7 +260,8 @@ object PushChannels {
                 // A friend asking, or a note from MoneyMove: worth a sound,
                 // never worth covering what somebody is doing.
                 NotificationChannel(SOCIAL, "Invites and notes", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "A friend asking you to their table, and notes written to you."
+                    description = "A friend asking you to their table, notes written to you, and the " +
+                        "reminder that your daily coins are ready."
                 },
             ),
         )

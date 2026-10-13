@@ -24,8 +24,9 @@ import {
   bumpKarma, creditPurchase, ledgerView, adminCredit, setKarma,
   banByCode, unbanByCode, isBanned, bansView, tokenForCode, codeForToken,
   ownedTally, dataFiles,
-  dailyView, claimDaily, leaderboardView, achievementsView, recordTitle, noteTurns,
+  dailyView, claimDaily, leaderboardFor, achievementsView, recordTitle, noteTurns,
   registerPushDevice, realCounts, roomOf,
+  levelOfToken, recordGameProgress, missionsView, claimMission, prefsOf, setPrefs, runDailyReminders,
   loginOf, takeAppleRefresh, appleSubjectLinkedElsewhere, forgetAppleSubject,
   appleLoginVerified, passAppleRefreshOn, dropUnverifiedAppleLogins, flushSocial,
 } from './social.js';
@@ -249,7 +250,11 @@ app.post('/api/invite', (req, res) => {
     req.body?.code, req.body?.roomId);
   if (result.error) return res.status(400).json(result);
   const { token: theirToken, ...safe } = result;
-  if (!safe.throttled) {
+  // A friend who switched invite alerts off still gets the invite — the
+  // banner is there the next time they look — just not the buzz. The reply
+  // says nothing about it either way: whether somebody silenced their phone
+  // is theirs to know, not the inviter's.
+  if (!safe.throttled && prefsOf(theirToken).inviteAlerts) {
     const invite = inviteFor(theirToken);
     sendTurnPush(theirToken, `${invite?.name || 'A friend'} invited you to a game — tap to join`,
       { collapseId: 'invite', kind: 'invite', roomId: invite?.roomId });
@@ -467,8 +472,104 @@ app.post('/api/daily/claim', (req, res) => {
 });
 
 // ---- leaderboard & shelf -------------------------------------------------
-/** Public by construction: friend codes and lifetime totals, nothing else. */
-app.get('/api/leaderboard', (_req, res) => res.json({ top: leaderboardView() }));
+/**
+ * Public by construction: friend codes, totals and levels, nothing else.
+ * `scope` is all (the default, and the only board an old client knows to
+ * ask for — it still finds `top` where it always was), week or friends; the
+ * optional token only marks the caller's own row and fills `you`, and a
+ * friends board without one is empty. See leaderboardFor.
+ */
+app.get('/api/leaderboard', (req, res) => {
+  res.json(leaderboardFor({
+    scope: String(req.query.scope || 'all').slice(0, 12),
+    token: String(req.query.token || '').slice(0, 64),
+  }));
+});
+
+// ---- watch live -----------------------------------------------------------
+/** The most games the watch-live list ever names. */
+const LIVE_GAMES_MAX = 20;
+
+/**
+ * The games anybody may watch right now (F7): public tables mid-game with at
+ * least one person at them who still has the app open, most people first.
+ *
+ * Public by construction, like the leaderboard. A table is listed by its
+ * room code — the thing a watcher joins with — and each seat by what every
+ * watcher would read off the board anyway: name, flag, colour, avatar,
+ * level. No tokens, no aliases, no friend codes. Private tables are never
+ * listed (their code is an invitation, and the host did not send one to
+ * everybody), and neither are cup tables, which are watched from the
+ * bracket. A Play-now table's house players are passing as people at that
+ * table, and are passing as people here too: `bot` is false for every seat
+ * at one, exactly as the table's own state says.
+ */
+function liveGames() {
+  const list = [];
+  for (const room of rooms.values()) {
+    if (room.status !== 'playing' || room.settings?.isPrivate || room.cupMatch) continue;
+    const people = room.present.length;
+    if (!people) continue;
+    list.push({ room, people });
+  }
+  list.sort((a, b) => b.people - a.people
+    || (b.room.startedAt || 0) - (a.room.startedAt || 0)
+    || (a.room.id < b.room.id ? -1 : 1));
+  return list.slice(0, LIVE_GAMES_MAX).map(({ room }) => ({
+    roomId: room.id,
+    mapId: room.map?.id || '',
+    mapName: room.map?.name || '',
+    players: room.players.map((p) => ({
+      name: p.name,
+      flag: p.flag || '',
+      color: p.color,
+      avatar: p.avatar || '',
+      level: room.seatLevel(p),
+      bot: room.quick ? false : !!p.isBot,
+      out: !!p.bankrupt,
+    })),
+    turnCount: room.turnCount || 0,
+    startedAt: room.startedAt || room.createdAt,
+    endsAt: room.endsAt || null,
+    watching: spectatorsOf(room),
+  }));
+}
+
+app.get('/api/live', (_req, res) => {
+  res.json({ games: liveGames() });
+});
+
+// ---- daily missions -------------------------------------------------------
+// The GET is a read-only peek like /api/daily; the claim is the action, and
+// it pays through the ledger as provider 'mission'. Progress is added when a
+// game ends (recordTransitions), never by a client.
+app.get('/api/missions', (req, res) => {
+  const token = String(req.query.token || '').slice(0, 64);
+  if (!token) return res.status(400).json({ error: 'Missing identity' });
+  res.json(missionsView(token));
+});
+
+app.post('/api/missions/claim', (req, res) => {
+  const result = claimMission(String(req.body?.token || '').slice(0, 64), req.body?.id);
+  // The daily reward's codes: not signed in is 401, so the card can offer
+  // the way in. An already-claimed mission is not an error at all — it
+  // answers ok with `duplicate: true`, which is what makes a retry safe.
+  if (result.needsLogin) return res.status(401).json(result);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// ---- the player's own switches -------------------------------------------
+app.get('/api/prefs', (req, res) => {
+  res.json(prefsOf(String(req.query.token || '').slice(0, 64)));
+});
+
+app.post('/api/prefs', (req, res) => {
+  const { token, ...changes } = req.body || {};
+  const result = setPrefs(String(token || '').slice(0, 64), changes);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
 
 /** Only ever your own shelf — the token is a secret, so that's all it opens. */
 app.get('/api/achievements', (req, res) => {
@@ -1043,6 +1144,10 @@ function recordTransitions(room) {
   if (room.status === 'playing' && prev !== 'playing') {
     stats.gamesStarted++;
     saveStats();
+    // A name for this one game, distinct from the table's: a rematch is the
+    // same room and a new game, and XP is paid once per game per person
+    // (recordGameProgress keeps the names it has paid for).
+    room.progressGame = `${room.id}:${Date.now()}`;
     // One coin, one game — and this is the one moment a game begins, which
     // makes it the one place a pass is spent. Not at start(), which a rematch
     // walks through again, and not at the moment the board was picked, which
@@ -1101,6 +1206,48 @@ function recordTransitions(room) {
     }
     for (const p of room.players) {
       if (!p.isBot) noteTurns(p.id, turns);
+    }
+    // XP, the career card and today's missions, for every person at the
+    // table — winners, losers and anyone who walked out, whose numbers are
+    // still the room's — and under the same rules as the purse: a game that
+    // was never really played moves none of it, and the XP has a daily
+    // ceiling (GAME_XP_PER_DAY, kept by recordGameProgress) the way the
+    // coins do. Guests and house players are turned away inside. Each
+    // person's own sockets are told what it came to once the final state has
+    // gone out, so the results screen is up before a "Level 7!" lands on it.
+    if (playedOut) {
+      const told = [];
+      for (const p of room.players) {
+        if (p.isBot) continue;
+        // This runs inside a state broadcast, like the net-worth walk above:
+        // one person's book refusing must not cost the table its last frame,
+        // nor the people after them their XP.
+        try {
+          const s = room.stats?.[p.id] || {};
+          const result = recordGameProgress(p.id, {
+            game: room.progressGame || `${room.id}:${room.createdAt}`,
+            won: winnerIds.has(p.id),
+            runnerUp: p.id === runnerUp?.id,
+            // The seat's own turns; a room from before they were counted
+            // shares the table's out evenly.
+            turns: s.turns ?? Math.round(turns / Math.max(1, room.players.length)),
+            stats: s,
+            mapId: room.map?.id,
+          });
+          if (result) told.push([p.id, result]);
+        } catch (err) {
+          console.error('progress: could not record a game —', err.message);
+        }
+      }
+      if (told.length) {
+        setImmediate(() => {
+          for (const [pid, result] of told) {
+            for (const sid of seatsOf.get(room.id)?.get(pid) || []) {
+              io.to(sid).emit('progress', { roomId: room.id, ...result });
+            }
+          }
+        });
+      }
     }
     // The other book, and the one the owner actually asked for: which real
     // humans played on which calendar day. Public codes only, deduped by
@@ -1189,10 +1336,14 @@ app.get('/api/admin/data', (req, res) => {
   // Where coins come from and where they go. Mints are read off the ledger
   // (wins only started writing entries when this shipped); the burn is the
   // replacement price of every cosmetic sitting in a wallet.
-  const flows = { wins: 0, purchases: 0, grants: 0, burned: 0 };
+  // Rewards — the daily coin, ad views, missions and level-ups — are minted
+  // for turning up rather than paid for, and used to be counted as purchases.
+  const flows = { wins: 0, purchases: 0, grants: 0, rewards: 0, burned: 0 };
+  const REWARDS = new Set(['daily', 'ads', 'mission', 'level']);
   for (const e of ledger) {
     if (e.provider === 'win') flows.wins += e.coins;
     else if (e.provider === 'admin') flows.grants += e.coins;
+    else if (REWARDS.has(e.provider)) flows.rewards += e.coins;
     else flows.purchases += e.coins;
   }
   const tally = ownedTally();
@@ -1501,6 +1652,7 @@ app.post('/api/admin/close-room', (req, res) => {
   rooms.delete(id);
   socketsOf.delete(id);
   seatsOf.delete(id);
+  watchersOf.delete(id);
   lastStatus.delete(id);
   audit('close-room', id, '');
   console.log(`admin: closed room ${id}`);
@@ -1583,6 +1735,27 @@ const ROLLOVER_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const rooms = new Map();
 const socketsOf = new Map();  // roomId -> Set(socketId)
 const seatsOf = new Map();    // roomId -> Map(playerId -> Set(socketId))
+// Sockets that came only to watch (join with `spectate: true`) — never in
+// seatsOf, so nothing that counts, notifies or reaps seats ever sees them.
+const watchersOf = new Map(); // roomId -> Map(socketId -> token)
+
+/**
+ * How many people are watching a table without a seat at it: everyone who
+ * came to watch, and everyone the old door turned into a spectator (a full
+ * table, a game already under way). People, not sockets — a phone and a tab
+ * on one identity watch as one — and never a player, out of the game or not:
+ * somebody knocked out who stays to see how it ends is still at the table.
+ */
+function spectatorsOf(room) {
+  const who = new Set();
+  for (const [pid, sids] of seatsOf.get(room.id) || []) {
+    if (sids.size && !room.player(pid)) who.add(pid);
+  }
+  for (const token of watchersOf.get(room.id)?.values() || []) {
+    if (!room.player(token)) who.add(token);
+  }
+  return who.size;
+}
 
 /**
  * Rooms live in memory, and making one costs a client a single message: a
@@ -1636,6 +1809,11 @@ function getRoom(id) {
   // The room says who it was whenever it hands the code out, so a profile
   // opened from the results screen can still answer once the table is gone.
   room.hooks.botCard = (code, card) => noteBotCard(code, card);
+  // The level chip every seat wears. Read on every serialise, which is one
+  // map lookup — the room keeps no wallets and must not start caching one.
+  room.hooks.levelOf = (token) => levelOfToken(token);
+  // The watcher count on the state — the room keeps no sockets of its own.
+  room.hooks.spectators = () => spectatorsOf(room);
   // Boards are stock. The wallet is read at the moment of the tap rather than
   // cached on the room, because a board bought mid-lobby has to be usable in
   // the same breath — the shop closes and the board is right there.
@@ -1753,6 +1931,26 @@ if (process.env.MM_QUICK_MS) {
     console.log('quick: lobby clocks from MM_QUICK_MS', GameRoom.QUICK);
   } catch (err) {
     console.error('quick: MM_QUICK_MS is not JSON — keeping the house clocks', err.message);
+  }
+}
+
+/**
+ * The game clock's minute and its last-turn allowance, shortened the same way
+ * for a test that has to watch a twenty-minute game run out:
+ * MM_CLOCK_MS='{"minuteMs":50,"graceMs":2000}'. Only GameRoom.CLOCK's own
+ * names, only as positive numbers, never under ten milliseconds.
+ */
+if (process.env.MM_CLOCK_MS) {
+  try {
+    const asked = JSON.parse(process.env.MM_CLOCK_MS);
+    for (const [k, v] of Object.entries(asked || {})) {
+      if (typeof GameRoom.CLOCK[k] === 'number' && Number.isFinite(Number(v)) && Number(v) >= 10) {
+        GameRoom.CLOCK[k] = Number(v);
+      }
+    }
+    console.log('clock: game clock from MM_CLOCK_MS', GameRoom.CLOCK);
+  } catch (err) {
+    console.error('clock: MM_CLOCK_MS is not JSON — keeping real minutes', err.message);
   }
 }
 
@@ -2003,8 +2201,8 @@ function sweepCupNoShows() {
       : m.decideAt;
     if (whistle && now >= whistle && room?.status === 'playing') {
       const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));
-      const standing = room.players.filter((p) => !p.bankrupt)
-        .sort((a, b) => worth(b) - worth(a));
+      // The same ranking a timed game is decided by — see GameRoom.rankByWorth.
+      const standing = room.rankByWorth();
       const behind = standing[standing.length - 1];
       if (behind && standing.length > 1) {
         console.log(`cup: ${m.roomId} ran into the next round — decided on net worth`);
@@ -2074,6 +2272,20 @@ function cupTick() {
 setInterval(() => {
   try { cupTick(); } catch (e) { console.warn('cup tick:', e.message); }
 }, 5000).unref?.();
+
+// The daily reminder: every ten minutes, a look for anybody whose daily coin
+// is waiting at about the hour they usually collect it — see reminderDue in
+// social.js for the whole rule. MM_REMINDER_MS shortens the beat for a test
+// that cannot wait ten minutes; a second is the floor, so a typo cannot turn
+// it into a busy loop.
+const REMINDER_EVERY_MS = Math.max(1000, Math.floor(Number(process.env.MM_REMINDER_MS)) || 10 * 60 * 1000);
+setInterval(() => {
+  try {
+    runDailyReminders((token, text, opts) => sendTurnPush(token, text, opts));
+  } catch (e) {
+    console.warn('reminders:', e.message);
+  }
+}, REMINDER_EVERY_MS).unref?.();
 
 // Reap idle rooms every couple of minutes — bots playing to an empty
 // theatre burn a timer a second for nobody.
@@ -2154,8 +2366,7 @@ setInterval(() => {
       // both entrants were voided with no net-worth decision at all. Decide
       // it properly: whoever is ahead when the lights go out goes through.
       if (room.cupMatch) {
-        const worth = (p) => (p.bankrupt ? 0 : room.netWorth(p));
-        const standing = room.players.filter((p) => !p.bankrupt).sort((a, b) => worth(b) - worth(a));
+        const standing = room.rankByWorth();
         if (standing.length > 1) {
           console.log(`cup: ${id} went quiet — decided on net worth`);
           room.quit(standing[standing.length - 1].id);
@@ -2176,6 +2387,7 @@ setInterval(() => {
       rooms.delete(id);
       socketsOf.delete(id);
       seatsOf.delete(id);
+      watchersOf.delete(id);
     }
   }
 }, 2 * 60 * 1000);
@@ -2183,6 +2395,9 @@ setInterval(() => {
 io.on('connection', (socket) => {
   let room = null;
   let playerId = null;
+  // Came to watch (join with `spectate: true`): holds no seat, and no action
+  // from this socket reaches the room — see guard.
+  let spectating = false;
 
   const fail = (message) => socket.emit('toast', { type: 'error', message });
   const ok = (res) => {
@@ -2230,10 +2445,22 @@ io.on('connection', (socket) => {
     if (!room) return;
     const left = room;
     const leaver = playerId;
+    const watched = spectating;
     room = null;
     playerId = null;
+    spectating = false;
     socket.leave(left.id);
     socketsOf.get(left.id)?.delete(socket.id);
+    // A watcher never held a seat, so there is none to release and nobody to
+    // mark as gone — even when the identity watching is also a player here,
+    // on another device, whose chair must not be emptied by this goodbye.
+    // The table only hears that the watcher count moved.
+    if (watched) {
+      const before = spectatorsOf(left);
+      watchersOf.get(left.id)?.delete(socket.id);
+      if (rooms.get(left.id) === left && spectatorsOf(left) !== before) left.push();
+      return;
+    }
     if (releaseSeat(left.id, leaver, socket.id) > 0) return;
     clearPresence(leaver);
     left.removePlayer(leaver);
@@ -2248,6 +2475,7 @@ io.on('connection', (socket) => {
       rooms.delete(left.id);
       socketsOf.delete(left.id);
       seatsOf.delete(left.id);
+      watchersOf.delete(left.id);
     }
   };
 
@@ -2274,7 +2502,7 @@ io.on('connection', (socket) => {
   // button. Silence means one that does not, and that seat counts as ready
   // throughout, so nobody at a mixed table waits on a button that isn't there.
   socket.on('join', safely('join', ({
-    roomId, token, name, flag, proto, canReady,
+    roomId, token, name, flag, proto, canReady, spectate,
   } = {}) => {
     if (!roomId || !token) return fail('Missing room or identity');
     // The banned find out at the door, plainly — no seat, no spectating.
@@ -2283,14 +2511,18 @@ io.on('connection', (socket) => {
     }
     roomId = String(roomId).toLowerCase().slice(0, 12);
     const asked = String(token).slice(0, 64);
+    const watching = spectate === true;
     // One socket, one seat. A client that reuses its socket to go somewhere
     // else — the iOS invite banner and "Join their table" both do, mid-game —
     // used to stay in the old room as well: both rooms' states arrived on
     // one socket, and the old seat was never released, so it stayed
     // "connected" for ever with no grace and no house cover, shot-clocked
     // out with a karma penalty, and the room behind it never reaped. The same
-    // room under the same name is a reconnect, and stays one.
-    if (room && (room.id !== roomId || playerId !== asked)) leaveRoom();
+    // room under the same name is a reconnect, and stays one. Switching
+    // between watching and playing is not: it is a different door, and the
+    // socket goes out through the one it came in by first.
+    if (room && (room.id !== roomId || playerId !== asked || spectating !== watching)) leaveRoom();
+    if (watching) return watch(roomId, asked, proto);
     // A code nobody holds opens a fresh room — an invite to a table that has
     // since closed lands somewhere — so it costs what a createRoom costs. A
     // cup table rebuilt after a restart is the cup's, and always opens.
@@ -2371,6 +2603,63 @@ io.on('connection', (socket) => {
   }));
 
   /**
+   * Watch a table from the rail (F7): join with `spectate: true`.
+   *
+   * Nobody is seated, nothing is claimed, and nobody is told "that seat is
+   * taken" — a watcher asked to watch, so no joinFailed. The one exception is
+   * a table that is not there: watching never opens a room (a link to a game
+   * that has since finished must not leave an empty table behind it), so
+   * that answers joinFailed, and says why.
+   *
+   * The state a watcher receives is cut for nobody: every id in it is an
+   * alias, including the watcher's own if they happen to be playing here on
+   * another device, so no client can mistake the rail for a chair. And it is
+   * pushed to the whole table rather than sent to this socket alone, because
+   * the watcher count everyone else sees has just changed.
+   */
+  const watch = (roomId, asked, proto) => {
+    const target = rooms.get(roomId);
+    if (!target) {
+      return socket.emit('joinFailed', { message: 'That game has finished', spectate: false });
+    }
+    if (Number(proto) >= 2 && deltaOf.size < MAX_TRACKED) {
+      deltaOf.set(socket.id, deltaOf.get(socket.id) || {});
+    } else {
+      deltaOf.delete(socket.id);
+    }
+    // A socket already watching this table is a re-sent join, and only needs
+    // the whole state again.
+    if (room === target && spectating) {
+      const track = deltaOf.get(socket.id);
+      sendFullState(socket.id, room, new Set(),
+        stateFor(room.serializeFor(new Set(), frozenBase(room, track)), room, new Set()), track);
+      return;
+    }
+    room = target;
+    playerId = asked;
+    spectating = true;
+    const before = spectatorsOf(target);
+    socket.join(roomId);
+    socketsOf.get(roomId)?.add(socket.id);
+    const watchers = watchersOf.get(roomId) || watchersOf.set(roomId, new Map()).get(roomId);
+    watchers.set(socket.id, asked);
+    socket.emit('you', { playerId: asked, roomId, spectator: true });
+    const track = deltaOf.get(socket.id);
+    // Only a count that moved is worth telling the whole table about — a
+    // second tab on the same identity, or a player watching their own game,
+    // changes nothing anyone else can see, and a join is cheap to repeat.
+    if (spectatorsOf(target) === before) {
+      sendFullState(socket.id, room, new Set(),
+        stateFor(room.serializeFor(new Set(), frozenBase(room, track)), room, new Set()), track);
+      return;
+    }
+    // A delta socket starting over gets a whole state from this push: it has
+    // nothing of this room's to diff against (see sendPatch).
+    if (track) track.lean = null;
+    room.push();
+  };
+
+  /**
    * The client's way of saying it lost the thread — a patch arrived for a
    * version it doesn't hold, or a feed anchor didn't match. Answer with the
    * whole state, but only so often: a confused client shouldn't be able to
@@ -2391,6 +2680,11 @@ io.on('connection', (socket) => {
 
   const guard = (fn) => safely('action', (...args) => {
     if (!room || !playerId) return fail('Join a room first');
+    // A watcher has no hands. Checked here, at the one door every action
+    // comes through, rather than trusted to the client hiding its buttons —
+    // the token watching may well be a seated player's, and nothing sent
+    // from the rail may be played in that seat's name.
+    if (spectating) return fail('You are watching this game');
     room.lastSeen = Date.now();
     return fn(...args);
   });

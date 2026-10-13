@@ -103,7 +103,9 @@ function seedPeople() {
 const SECRETS = ['asha.private@example.com', 'asha-face.png', 'google-subject-asha', 'apple-refresh-secret',
   'apple-subject-asha', ASHA.token, '4321'];
 
-const PROFILE_KEYS = ['code', 'name', 'flag', 'avatar', 'wins', 'games', 'winnings', 'titles', 'since', 'relation'].sort();
+// `level` and `career` since 1.0.6 — their insides are held by test/progression.mjs.
+const PROFILE_KEYS = ['code', 'name', 'flag', 'avatar', 'wins', 'games', 'winnings', 'titles', 'since', 'relation',
+  'level', 'career'].sort();
 const HOUSE = /^H0[0-9A-F]{4}$/;
 
 // ----------------------------------------------------------------- server --
@@ -386,7 +388,10 @@ async function main() {
     PASS(Array.isArray(p.titles) && p.titles.length <= 2
       && p.titles.every((t) => typeof t.title === 'string' && t.count >= 1 && t.count <= p.games),
     'at most two titles from the real book', short(p.titles));
-    PASS(!/bot|house/i.test(r1.text.replace(houseName, '')), 'and nothing in it says what it is');
+    // `housesBuilt` is a career field every card carries, a person's included,
+    // so it says nothing about who this is.
+    PASS(!/bot|house/i.test(r1.text.replace(houseName, '').replace(/"housesBuilt"/g, '')),
+      'and nothing in it says what it is');
     houseCard = p;
 
     const unseen = ['H00000', 'H0FFFF', 'H01234'].find((c) => c !== houseCode);

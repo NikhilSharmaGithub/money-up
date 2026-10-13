@@ -1384,6 +1384,9 @@ export const adminPageHTML = `<!doctype html>
       // A streak claim is not a sale, and saying "bought" about it made the
       // busiest line on a quiet server read like revenue.
       else if (e.provider === 'daily') txt = '<b>' + esc(e.code || '?') + '</b> claimed ' + coins + ' <span class="dim">· daily reward' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
+      // Missions and level-ups are rewards too, and get the same plain verb.
+      else if (e.provider === 'mission') txt = '<b>' + esc(e.code || '?') + '</b> claimed ' + coins + ' <span class="dim">· mission' + (e.note ? ' — ' + esc(e.note) : '') + '</span>';
+      else if (e.provider === 'level') txt = '<b>' + esc(e.code || '?') + '</b> earned ' + coins + ' <span class="dim">· ' + esc(e.note || 'level up') + '</span>';
       else txt = '<b>' + esc(e.code || '?') + '</b> bought ' + esc(e.packId || 'coins') + ' <span class="dim">· ' + esc(e.provider) + (e.usd > 0 ? ' · ' + fmtUsd(e.usd) : '') + '</span>';
       evts.push({ at: e.at, kind: 'coin', html: txt });
     });
@@ -1963,10 +1966,11 @@ export const adminPageHTML = `<!doctype html>
     swap('wallets', html);
 
     var f = e.flows || {};
-    var max = Math.max(f.wins || 0, f.purchases || 0, f.grants || 0, f.burned || 0);
+    var max = Math.max(f.wins || 0, f.purchases || 0, f.grants || 0, f.rewards || 0, f.burned || 0);
     document.getElementById('flows').innerHTML =
       hbar('minted by wins', f.wins || 0, max, '#4fd98b', fmtNum(f.wins) + ' coins') +
       hbar('minted by purchases', f.purchases || 0, max, '#7ba0f2', fmtNum(f.purchases) + ' coins') +
+      hbar('minted by rewards', f.rewards || 0, max, '#b38cf0', fmtNum(f.rewards || 0) + ' coins') +
       hbar('minted by admin', f.grants || 0, max, '#e3a93c', fmtNum(f.grants) + ' coins') +
       hbar('burned in the store', f.burned || 0, max, '#e06c5f', fmtNum(f.burned) + ' coins');
 

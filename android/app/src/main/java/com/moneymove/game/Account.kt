@@ -26,6 +26,184 @@ data class MeView(
     val email: String = "",
     val picture: String = "",
     val appleRevocable: Boolean = false,
+
+    // ── 1.0.6: who this player is becoming ────────────────────────────────
+    //
+    // An older server sends none of these, so every one has the default an
+    // unknown token gets from a new server: level one, nothing earned yet,
+    // both switches on. The account card then simply draws a fresh player.
+
+    /** Total experience, only ever rising. */
+    val xp: Int = 0,
+    val level: Int = 1,
+    /** The XP at which this level started. */
+    val levelFloor: Int = 0,
+    /** The XP at which the next one starts. */
+    val levelNext: Int = 100,
+    /** Their own career, exactly as somebody else would read it on their card. */
+    val career: Career? = null,
+    /** The two switches Settings shows, as the server holds them. */
+    val prefs: PlayerPrefs? = null,
+    /**
+     * The newest level-up, from a game or a mission claim, for a phone that
+     * was not at the table when it happened. Celebrated once, by its level.
+     */
+    val lastLevelUp: LevelUp? = null,
+) {
+    /** How far through this level the XP bar is, nought to one. */
+    val levelFraction: Float get() = levelProgress(xp, levelFloor, levelNext)
+
+    /** XP still to earn before the next level, never below nought. */
+    val xpToNext: Int get() = maxOf(0, levelNext - xp)
+}
+
+/**
+ * The XP bar's fill: `(xp − floor) / (next − floor)`, as the server's doc
+ * puts it — clamped, because a bar drawn past its end or before its start
+ * is a bar that looks broken, and a server mid-deploy can send a floor and
+ * a next that briefly disagree with the XP between them.
+ */
+fun levelProgress(xp: Int, floor: Int, next: Int): Float {
+    val span = next - floor
+    if (span <= 0) return 0f
+    return ((xp - floor).toFloat() / span).coerceIn(0f, 1f)
+}
+
+/** One level crossed: `{ from, to, coins }`, and when, on the copy /api/me keeps. */
+@Serializable
+data class LevelUp(
+    val from: Int = 0,
+    val to: Int = 0,
+    /** What was actually paid — five a level. */
+    val coins: Int = 0,
+    /** Epoch ms. Absent on the copy a game or a claim answers with. */
+    val at: Double = 0.0,
+)
+
+/**
+ * The `progress` socket event: what the game that just ended was worth to
+ * this player. Sent to their own sockets only, right after the final state,
+ * and only for a game that counted — so its absence is not an error, it is a
+ * game that ended too soon to move anything.
+ */
+@Serializable
+data class ProgressNote(
+    val roomId: String = "",
+    /** What was actually added, after the daily ceiling. */
+    val xpGained: Int = 0,
+    /** What the game was worth part by part, before the ceiling. */
+    val xpParts: XpParts = XpParts(),
+    /** The day's 600 cut this game short (or to nothing). */
+    val xpCapped: Boolean = false,
+    val xp: Int = 0,
+    val level: Int = 1,
+    val levelFloor: Int = 0,
+    val levelNext: Int = 100,
+    /** Null when no level was crossed. */
+    val levelUp: LevelUp? = null,
+    /** Mission kinds this game pushed over the line — the card is worth a fresh look. */
+    val missionsCompleted: List<String> = emptyList(),
+) {
+    val levelFraction: Float get() = levelProgress(xp, levelFloor, levelNext)
+}
+
+@Serializable
+data class XpParts(val played: Int = 0, val win: Int = 0, val runnerUp: Int = 0, val turns: Int = 0)
+
+/**
+ * A player's lifetime numbers from 1.0.6 on — the career grid on a profile.
+ * `biggestRent` is a record, not a sum; everything else adds up game by game.
+ */
+@Serializable
+data class Career(
+    val streetsBought: Int = 0,
+    val housesBuilt: Int = 0,
+    val rentCollected: Int = 0,
+    val biggestRent: Int = 0,
+    val auctionsWon: Int = 0,
+    val tradesCompleted: Int = 0,
+    val doubles: Int = 0,
+    /** The board they have played most, or null before their first counted game. */
+    val favoriteBoard: FavoriteBoard? = null,
+) {
+    /** Nothing counted yet — the grid says so rather than drawing a wall of noughts. */
+    val isEmpty: Boolean
+        get() = streetsBought == 0 && housesBuilt == 0 && rentCollected == 0 && biggestRent == 0 &&
+            auctionsWon == 0 && tradesCompleted == 0 && favoriteBoard == null
+}
+
+@Serializable
+data class FavoriteBoard(val id: String = "", val name: String = "", val games: Int = 0)
+
+/**
+ * The player's own switches on the server — GET and POST /api/prefs. Both
+ * default to on, which is also what the server answers for a token it has
+ * never seen.
+ */
+@Serializable
+data class PlayerPrefs(
+    /** The once-a-day push when the daily coins are ready. */
+    val dailyReminder: Boolean = true,
+    /** A friend's invite pushes to this phone. Off, the invite still shows in the app. */
+    val inviteAlerts: Boolean = true,
+)
+
+// ── daily missions ──────────────────────────────────────────────────────────
+
+/**
+ * One of today's three — GET /api/missions. `id` is the kind (a day never
+ * deals two of one kind), and `progress` never runs past `target`.
+ */
+@Serializable
+data class Mission(
+    val id: String = "",
+    val kind: String = "",
+    val title: String = "",
+    val target: Int = 1,
+    val progress: Int = 0,
+    val coins: Int = 0,
+    val xp: Int = 0,
+    val done: Boolean = false,
+    val claimed: Boolean = false,
+) {
+    /** How full the mission's bar is, nought to one. */
+    val fraction: Float get() = if (target <= 0) 1f else (progress.toFloat() / target).coerceIn(0f, 1f)
+}
+
+/** The fourth reward: all three done, five more coins and no XP. */
+@Serializable
+data class MissionBonus(val coins: Int = 0, val ready: Boolean = false, val claimed: Boolean = false)
+
+@Serializable
+data class MissionsView(
+    /** The server's calendar day these were dealt for. */
+    val day: String = "",
+    /** Server midnight in epoch ms, when the three are dealt again. */
+    val resetsAt: Double = 0.0,
+    /** Claiming needs an account; progress does not. */
+    val signedIn: Boolean = false,
+    val missions: List<Mission> = emptyList(),
+    val bonus: MissionBonus = MissionBonus(),
+) {
+    /** How many of the three are done, for the card's header. */
+    val doneCount: Int get() = missions.count { it.done }
+
+    /** Something on the card is waiting to be collected. */
+    val anythingToClaim: Boolean
+        get() = signedIn && (missions.any { it.done && !it.claimed } || bonus.ready)
+}
+
+/**
+ * What a claim came to, read from POST /api/missions/claim. `paid` and `xp`
+ * are what THIS claim moved — both nought on a repeat, which is a success
+ * that plays no coins. `error` is the server's own sentence when it said no.
+ */
+data class MissionClaim(
+    val paid: Int = 0,
+    val xp: Int = 0,
+    val levelUp: LevelUp? = null,
+    val error: String? = null,
+    val needsLogin: Boolean = false,
 )
 
 @Serializable
@@ -82,12 +260,46 @@ data class LeaderRow(
     val code: String = "",
     val name: String = "",
     val flag: String = "",
+    /** Their level, or nought from a server too old to send one — no chip then. */
+    val level: Int = 0,
     val wins: Int = 0,
     val winnings: Int = 0,
+    /** Only ever on the caller's own row, and only when the board was asked with a token. */
+    val you: Boolean = false,
 )
 
+/**
+ * One board — GET /api/leaderboard?scope=all|week|friends. An old server
+ * answers every scope with the all-time `top` and nothing else, which reads
+ * here as an all-time board whatever was asked; the tabs then show the same
+ * fifty three times rather than nothing.
+ */
 @Serializable
-data class LeaderboardView(val top: List<LeaderRow> = emptyList())
+data class LeaderboardView(
+    val top: List<LeaderRow> = emptyList(),
+    val scope: String = "all",
+    /** "2026-W42", on the weekly board only. */
+    val week: String? = null,
+    /** Next Monday 00:00 UTC in epoch ms, on the weekly board only. */
+    val resetsAt: Double? = null,
+    /** Where the caller stands on this board, or null when they were not asked about. */
+    val you: LeaderYou? = null,
+)
+
+/**
+ * The caller's place on a board. `rank` is in the whole ordering, so it can
+ * be well below the fifty that are listed, and null when they are not on this
+ * board at all; `wins` is for this board's scope.
+ */
+@Serializable
+data class LeaderYou(val rank: Int? = null, val wins: Int = 0)
+
+/** The three boards the leaderboard has tabs for, in the tabs' order. */
+enum class LeaderScope(val wire: String, val label: String) {
+    ALL("all", "All time"),
+    WEEK("week", "This week"),
+    FRIENDS("friends", "Friends"),
+}
 
 /**
  * Somebody else's public card — GET /api/player, which a finished game's
@@ -115,6 +327,10 @@ data class PlayerProfile(
     /** Epoch ms of their first game. A Double because that is what arrives. */
     val since: Double = 0.0,
     val relation: String = "none",
+    /** Their level; nought from an older server, which draws no chip. */
+    val level: Int = 0,
+    /** Their career from 1.0.6 on, or null from an older server. */
+    val career: Career? = null,
 ) {
     /**
      * Games played, never fewer than the wins. The server promises as much,

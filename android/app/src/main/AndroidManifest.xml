@@ -111,6 +111,20 @@
             </intent-filter>
         </activity>
 
+        <!-- The result card on its way to another app (ResultShare). The
+             share sheet's pick gets a content:// link it may read once,
+             granted on the intent itself; nothing is exported, and only the
+             cache folder in xml/shared_files is reachable through it. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
+
         <!-- The cup's reminders: the fifteen-minute warning, the door
              opening and the last call, set by the app itself for as long as
              the server cannot push to this phone — they stand down the moment

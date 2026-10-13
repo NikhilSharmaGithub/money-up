@@ -6,7 +6,9 @@
 import { api } from './net.js';
 import { escapeHtml } from './board.js';
 import { icon } from './icons.js';
-import { openDmModal, confirmModal, openModal, closeModal } from './ui.js';
+import {
+  openDmModal, confirmModal, openModal, closeModal, openPlayerProfile,
+} from './ui.js';
 
 let myToken = '';
 
@@ -373,6 +375,27 @@ function paintNotify() {
 }
 
 /**
+ * A friend's name opens their profile — their level, their wins, their
+ * career — over the friends sheet, and Back puts the sheet up again. A
+ * request opens the same way, which is the moment it matters most: whoever
+ * is asking is somebody to look at before saying yes.
+ */
+function wireProfiles(root, people) {
+  root.querySelectorAll('[data-profile]').forEach((el) => {
+    const who = people.find((p) => p.code === el.dataset.profile);
+    if (!who) return;
+    const open = () => openPlayerProfile(
+      { code: who.code, name: who.name, flag: who.flag, avatar: who.avatar, level: who.level },
+      { token: myToken, onBack: () => openFriendsModal(), backLabel: 'Back to friends' },
+    );
+    el.onclick = open;
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    };
+  });
+}
+
+/**
  * Requests, above the list.
  *
  * Adding somebody used to put you straight on their list, on the grounds
@@ -387,7 +410,8 @@ function paintRequests() {
   el.innerHTML = `${requests.length ? `<div class="chart-label">Wants to be friends (${requests.length})</div>
       ${requests.map((r) => `<div class="friend req">
           <span class="friend-flag">${r.avatar || r.flag ? escapeHtml(r.avatar || r.flag) : icon('people', 16, 'solo')}</span>
-          <span class="friend-who"><b>${escapeHtml(r.name)}</b>
+          <span class="friend-who tap" data-profile="${escapeHtml(r.code)}" role="button" tabindex="0"
+            title="${escapeHtml(r.name)}'s profile"><b>${escapeHtml(r.name)}</b>
             <span class="friend-status off">asked to be friends <i>${escapeHtml(r.code)}</i></span></span>
           <button class="btn tiny primary" data-yes="${escapeHtml(r.code)}">Accept</button>
           <button class="icon-btn tiny-x" data-no="${escapeHtml(r.code)}" title="Decline">✕</button>
@@ -400,6 +424,7 @@ function paintRequests() {
           <button class="icon-btn tiny-x" data-no="${escapeHtml(r.code)}" title="Take it back">✕</button>
         </div>`).join('')}` : ''}`;
 
+  wireProfiles(el, requests);
   el.querySelectorAll('[data-yes]').forEach((b) => {
     b.onclick = async () => {
       await post('/api/friends/accept', { token: myToken, code: b.dataset.yes }).catch(() => {});
@@ -499,7 +524,8 @@ function paintFriendList() {
       <span class="friend-flag ${s.cls}">${f.avatar || f.flag
       ? escapeHtml(f.avatar || f.flag)
       : icon('people', 16, 'solo')}</span>
-      <span class="friend-who">
+      <span class="friend-who tap" data-profile="${escapeHtml(f.code)}" role="button" tabindex="0"
+        title="${escapeHtml(f.name)}'s profile">
         <b>${escapeHtml(f.name)}</b>
         <span class="friend-status ${s.cls}">${s.label} <i>${escapeHtml(f.code)}</i></span>
       </span>
@@ -517,6 +543,7 @@ function paintFriendList() {
     </div>`;
   }).join('');
 
+  wireProfiles(el, friends);
   el.querySelectorAll('[data-chat]').forEach((b) => {
     b.onclick = () => openDmModal(myToken, b.dataset.chat, b.dataset.name);
   });

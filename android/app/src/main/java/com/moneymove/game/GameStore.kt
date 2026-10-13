@@ -129,6 +129,16 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     var showGameOver: Boolean by mutableStateOf(false)
 
     /**
+     * What the game that just ended was worth to this player — the server's
+     * `progress` event, sent to this player's own sockets right after the
+     * final state, and only for a game that counted. The result sheet reads
+     * it for the XP line and the level-up; it goes the moment the table is
+     * anything but that finished game.
+     */
+    var progress: ProgressNote? by mutableStateOf(null)
+        private set
+
+    /**
      * This device's seat was taken out by the clock — drives the full-screen
      * explainer. Raised on the push that does it; cleared when the player
      * chooses to stay and watch, when the seat is back in play, or when the
@@ -315,6 +325,39 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     var publicRooms: List<PublicRoom> by mutableStateOf(emptyList())
         private set
 
+    /**
+     * The public games being played right now, as [pollLiveGames] last read
+     * them — null until the first answer, so the Watch live card can tell
+     * "still asking" from "nobody is playing".
+     */
+    var liveGames: List<LiveGame>? by mutableStateOf(null)
+        private set
+
+    /**
+     * This connection came to watch (Watch live): it joined with `spectate`,
+     * holds no seat, and every id in its state is an alias — so nothing on
+     * screen may offer it a move. Cleared by leaving and by any ordinary join.
+     */
+    var watching: Boolean by mutableStateOf(false)
+        private set
+
+    /**
+     * Not at this table as a player: watching from the rail, or seated by
+     * nobody — the older path that turns a join into a spectator when the
+     * table is full or already playing. Either way there is nothing to roll,
+     * trade, chat or rematch with, and the server refuses all of it.
+     */
+    val isSpectating: Boolean
+        get() = watching || state?.let { s -> s.players.isNotEmpty() && s.players.none { isLocal(it.id) } } == true
+
+    /**
+     * When the next quick-chat phrase may go (1.0.6). One tap sends a whole
+     * line, so a thumb resting on the row could fill the table's chat in a
+     * second; the row waits [QuickChat.COOLDOWN_MS] between phrases instead.
+     */
+    var quickChatReadyAt: Long by mutableStateOf(0L)
+        private set
+
     enum class Connection { DISCONNECTED, CONNECTING, CONNECTED }
 
     /**
@@ -475,7 +518,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     val canAddLocalPlayer: Boolean
         get() {
             val s = state ?: return false
-            return roomId != null && s.isLobby && s.cup != true && s.players.size < s.settings.maxPlayers
+            return roomId != null && !isSpectating && s.isLobby && s.cup != true && s.players.size < s.settings.maxPlayers
         }
 
     /** Seat another person at this table, from this device, as "Player N". */
@@ -701,6 +744,12 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         get() {
             val link = Prefs.roomLink(roomId.orEmpty())
             val s = state
+            // Somebody who only watched did not lose, and the table's link
+            // would only take a friend to the same rail — so it is the game
+            // that gets shared, and the site.
+            if (s != null && isSpectating) {
+                return "${s.winnerLabel} just won a game of MoneyMove on ${s.map.name.ifBlank { "the board" }} — play me: ${Prefs.SITE}"
+            }
             return if (s != null && localSeatWon(s)) "I won ${money(winningWorth)} on MoneyMove — beat me: $link"
             else "${s?.winnerLabel ?: "Somebody"} just took me down on MoneyMove — get me back: $link"
         }
@@ -727,7 +776,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     /** A seat chip opens a trade with that player — while there is a game and both of you are in it. */
     fun canTradeWith(player: PlayerState): Boolean {
         val s = state ?: return false
-        return s.isPlaying && player.id != meId && player.id != activeId &&
+        return s.isPlaying && !isSpectating && player.id != meId && player.id != activeId &&
             !player.isBankrupt && me?.isBankrupt != true
     }
 
@@ -735,7 +784,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * Whether "Play again" belongs on this finished table. Not at a cup table:
      * a cup match is played once, and the bracket already has the result.
      */
-    val canRematch: Boolean get() = state?.isEnded == true && state?.cup != true
+    val canRematch: Boolean get() = state?.isEnded == true && state?.cup != true && !isSpectating
 
     // Who may press what in a lobby — the server's own gates, so no button is
     // offered that would come back refused.
@@ -760,7 +809,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * The host fills an empty chair with a house player, except at a cup
      * table, and at a Play-now table, which fills its own.
      */
-    val canAddBot: Boolean get() = isHost && state?.cup != true && state?.quick != true
+    val canAddBot: Boolean get() = isHost && !watching && state?.cup != true && state?.quick != true
 
     /** A name can still change: the server only listens in the lobby. */
     val canRename: Boolean get() = state?.isLobby == true
@@ -829,17 +878,46 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         join(room)
     }
 
-    /** Sits down at `room`; false when we were already there and connected. */
-    private fun join(room: String): Boolean {
+    /**
+     * Watch a live game from the rail (Watch live): the table as everybody at
+     * it sees it, read-only. Nobody is seated and nothing is claimed — the
+     * server sees to that — and the table is never offered back as one to
+     * continue, because there was no seat in it to go back to.
+     *
+     * Unless this device still has a seat there. A game stepped away from
+     * keeps running with a bot in the chair, so it stays in Public rooms and
+     * Watch live as a game in play; through the rail its own player would get
+     * a read-only view of it while the house went on playing for them. That
+     * tap goes back to the seat instead, guests and all, the way the Continue
+     * card does.
+     */
+    fun watch(room: String) {
+        val id = room.trim().lowercase().take(12)
+        val kept = unfinishedGames.firstOrNull { it.roomId == id }
+        when {
+            kept != null -> resume(kept)
+            id.isNotEmpty() && prefs.lastRoom == id -> continueGame()
+            else -> join(id, spectate = true)
+        }
+    }
+
+    /**
+     * Sits down at `room` — or, with `spectate`, stands at its rail. False
+     * when we were already there, in the same way, and connected: watching a
+     * table and then asking to play at it is a different door, so that is a
+     * fresh join and never an early return.
+     */
+    private fun join(room: String, spectate: Boolean = false): Boolean {
         val id = room.trim().lowercase().take(12)
         if (id.isEmpty()) return false
-        if (roomId == id && socket?.isConnected == true) return false
-        val sameTable = roomId == id
+        if (roomId == id && socket?.isConnected == true && watching == spectate) return false
+        val sameTable = roomId == id && watching == spectate
         leave(quiet = true)
         // Guests sit at one particular table. A join to another one takes
         // them out with it; a reconnect to the same one keeps them seated,
-        // along with the team lines only their connections heard.
-        if (!sameTable) {
+        // along with the team lines only their connections heard. Nobody
+        // brings a guest to the rail.
+        if (!sameTable || spectate) {
             closeGuests()
             offersShown = emptySet()
         }
@@ -847,8 +925,14 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         resetTable()
         if (sameTable) guestTeamChat = heardByGuests
         roomId = id
-        prefs.lastRoom = id
-        prefs.lastGuests = guests.size
+        watching = spectate
+        // Continue offers the last table back on the next launch. A table
+        // only watched has no seat to come back to, and a join on it there
+        // would walk in as a player — so the rail leaves that alone.
+        if (!spectate) {
+            prefs.lastRoom = id
+            prefs.lastGuests = guests.size
+        }
         joinError = null
         resumeCheck = null
         quitRoom = null
@@ -863,7 +947,15 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         val mine = ++session
         s.on("you") { d ->
             val pid = d?.get("playerId").asString() ?: return@on
-            onTable(mine) { meId = pid }
+            // The server says which door this socket came through. A watch
+            // answered without `spectator` went through the ordinary one — a
+            // server from before Watch live, which may well have seated us —
+            // and the screen follows what the server did, not what we asked.
+            val rail = (d?.get("spectator") as? JsonPrimitive)?.content?.toBoolean() == true
+            onTable(mine) {
+                meId = pid
+                if (watching && !rail) watching = false
+            }
         }
         s.on("state") { d ->
             if (d == null) return@on
@@ -891,6 +983,14 @@ class GameStore(app: Application) : AndroidViewModel(app) {
                 showToast(msg, error)
             }
         }
+        s.on("progress") { d ->
+            if (d == null) return@on
+            val note = runCatching { MMJson.decodeFromJsonElement(ProgressNote.serializer(), d) }.getOrNull()
+                ?: return@on
+            // Only about the table on screen: a late one from a table already
+            // left would hang last night's XP on tonight's result.
+            onTable(mine) { if (note.roomId.isBlank() || note.roomId.equals(roomId, ignoreCase = true)) progress = note }
+        }
         s.on("joinFailed") { d ->
             if (d == null) return@on
             val msg = d["message"].asString() ?: return@on
@@ -899,6 +999,17 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             // they are watching rather than leaving them to work it out.
             val spectating = (d["spectate"] as? JsonPrimitive)?.content?.toBoolean() == true
             onTable(mine) {
+                // Asked to watch a table that is no longer there — the game
+                // finished between the list and the tap. There is nothing to
+                // wait on, so back to the tabs, saying why, and the list
+                // forgets it rather than offering it again.
+                if (watching && !spectating) {
+                    val gone = roomId
+                    leave()
+                    liveGames = liveGames?.filter { it.roomId != gone }
+                    showToast(msg, isError = true)
+                    return@onTable
+                }
                 showToast(
                     if (spectating) "$msg — you're watching this table" else msg,
                     isError = !spectating,
@@ -928,7 +1039,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
     private fun sendJoin() {
         val room = roomId ?: return
-        socket?.emit("join", JSONObject(mapOf(
+        val payload = mutableMapOf<String, Any?>(
             "roomId" to room,
             "token" to token,
             "name" to nickname.ifBlank { "Player" },
@@ -936,12 +1047,19 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             // Say we can stitch diffs and the table stops re-sending the board
             // thirty times a minute. Silence keeps the old contract.
             "proto" to StateMirror.PROTOCOL_VERSION,
+        )
+        if (watching) {
+            // The rail, on every (re)connect: a reconnect that forgot to say
+            // so would go through the ordinary door and could take a seat.
+            payload["spectate"] = true
+        } else {
             // This seat has an "I'm ready" button. A seat that never says so
             // is counted ready by the server, so a Play-now table never waits
             // on a phone that has no button to press. The guests' joins leave
             // it off on purpose: a pass & play seat has no Ready of its own.
-            "canReady" to true,
-        )))
+            payload["canReady"] = true
+        }
+        socket?.emit("join", JSONObject(payload))
     }
 
     /**
@@ -1104,20 +1222,25 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         dropJourneys()
         if (!quiet) {
             val room = roomId
+            val watched = watching
             closeGuests()
             resetTable()
             offersShown = emptySet()
             readingScreens.clear()
             roomId = null
+            watching = false
             joinError = null
             resumeCheck = null
             quitRoom = null
             // Continue points at this table only while it is still one to
             // continue; a lobby, a finished game, or a table left for good
-            // leaves nothing behind.
-            val kept = unfinishedGames.firstOrNull { it.roomId == room }
-            prefs.lastRoom = kept?.roomId.orEmpty()
-            prefs.lastGuests = kept?.guests ?: 0
+            // leaves nothing behind. Walking away from the rail changes
+            // nothing about it: the table being pointed at is another one.
+            if (!watched) {
+                val kept = unfinishedGames.firstOrNull { it.roomId == room }
+                prefs.lastRoom = kept?.roomId.orEmpty()
+                prefs.lastGuests = kept?.guests ?: 0
+            }
         }
         connection = Connection.DISCONNECTED
     }
@@ -1180,6 +1303,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         reliefPopup = null
         turnBanner = null
         showGameOver = false
+        progress = null
         timedOut = false
         unreadChat = 0
         holdUntil = 0L
@@ -1235,6 +1359,31 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         while (true) {
             publicRooms = loadPublicRooms()
             delay(8_000)
+        }
+    }
+
+    /**
+     * The games worth watching, once (`GET /api/live`). Null for a read that
+     * failed, so a list already on screen stays rather than blinking empty on
+     * one dropped request; an answer of nobody is an empty list.
+     */
+    suspend fun loadLiveGames(): List<LiveGame>? {
+        val body = api.getPublic("/api/live") ?: return null
+        return runCatching { MMJson.decodeFromString(LiveGamesView.serializer(), body).games }.getOrNull()
+    }
+
+    /**
+     * Keeps [liveGames] fresh every fifteen seconds for as long as the caller
+     * runs it — hung off the Play tab, like [pollPublicRooms]. A game's turn
+     * count moves faster than that, but nobody picks a table to watch by the
+     * turn it is on.
+     */
+    suspend fun pollLiveGames() {
+        while (true) {
+            loadLiveGames()?.let { liveGames = it }
+            // The first failed read still has to end the "looking" state.
+            if (liveGames == null) liveGames = emptyList()
+            delay(15_000)
         }
     }
 
@@ -1406,6 +1555,8 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         if (!next.isEnded) {
             gameOverJob?.cancel()
             showGameOver = false
+            // A rematch is a new game; last game's XP is not its news.
+            progress = null
         }
 
         noteOffers(old, next)
@@ -2203,6 +2354,18 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     fun sendChat(text: String, channel: String = "all", seat: String? = null) =
         emitAs(localOr(seat), "chat", text, channel)
 
+    /**
+     * One of the quick-chat phrases, as an ordinary line. False — and nothing
+     * sent — while the row is still cooling down from the last one.
+     */
+    fun sendQuickChat(text: String, channel: String = "all", seat: String? = null): Boolean {
+        val now = System.currentTimeMillis()
+        if (!QuickChat.ready(quickChatReadyAt, now)) return false
+        quickChatReadyAt = now + QuickChat.COOLDOWN_MS
+        sendChat(text, channel, seat)
+        return true
+    }
+
     /** `from` picks which of this device's seats proposes; the active one otherwise. */
     fun proposeTrade(to: String, give: TradeSide, get: TradeSide, from: String? = null) =
         emitAs(localOr(from, activeId), "trade:propose", JSONObject(mapOf(
@@ -2910,6 +3073,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         if (roomId != null) {
             leave(quiet = true)
             roomId = null
+            watching = false
             resetTable()
             closeGuests()
         }

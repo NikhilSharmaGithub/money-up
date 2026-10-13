@@ -101,6 +101,12 @@ fun HistoryTab(account: AccountStore, game: GameStore) {
 
             Shelf(account.achievements, games = played.size)
 
+            // The career under the shelf: the same grid a friend sees on this
+            // player's card. Only once something is on it — it was only ever
+            // counted from 1.0.6, and the shelf above already says "nothing
+            // yet" better than a grid of noughts would.
+            account.me?.career?.takeIf { !it.isEmpty }?.let { CareerCard(it) }
+
             if (played.isEmpty()) {
                 if (unfinished.isEmpty()) EmptyHistory()
             } else {

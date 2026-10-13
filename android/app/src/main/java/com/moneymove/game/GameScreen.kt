@@ -664,7 +664,9 @@ private fun Dock(store: GameStore, state: GameState, floor: Dp, modifier: Modifi
 @Composable
 private fun TableBar(store: GameStore, modifier: Modifier = Modifier) {
     val p = P.current
-    val playing = store.state?.isPlaying == true
+    // Trading and your streets are a player's doors; from the rail there is
+    // nobody to trade as and nothing of yours to look at.
+    val playing = store.state?.isPlaying == true && !store.isSpectating
     val context = LocalContext.current
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -1030,6 +1032,9 @@ private fun SeatChip(store: GameStore, state: GameState, player: PlayerState, ra
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                     SeatTags(player, state.hostId, store.meId, fontSize = 7.sp, showYou = false)
+                    // Levels are for sizing up the table before it starts;
+                    // once the dice roll, the rank and the money say more.
+                    if (state.isLobby) LevelChip(player.shownLevel, compact = true)
                     rank?.let { RankBadge(it) }
                     if (isNext && !isTurn) NextTag(store.isLocal(player.id))
                 }

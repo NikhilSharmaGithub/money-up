@@ -797,6 +797,45 @@ async function main() {
     PASS(!leaked.length && !/PRIVATE KEY/.test(all), 'none of them logs any part of the key', `${leaked.length} line(s)`);
     await Promise.all([F, R, B64, BR, T, G].map((s) => stop(s.child)));
   }
+
+  // The rules for who is reminded and when are test/progression.mjs's; this
+  // holds the two requests themselves to what Google and Apple are sent.
+  section('the daily reminder');
+  {
+    const at = Date.now();
+    const DORA = { name: 'Dora', token: `dev-dora-${hex(6)}`, code: code() };
+    const D1 = phone('d1');
+    const DI = iphone();
+    const day = (when) => {
+      const d = new Date(when);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    // Signed in, two phones, and a daily coin waiting since this hour two days ago.
+    const seed = [{
+      token: DORA.token, code: DORA.code, name: DORA.name, flag: '', seen: at - 60000, created: at, friends: [],
+      login: { provider: 'google', subject: 'google-Dora', at },
+      push: [{ device: D1, platform: 'android', at }, { device: DI, platform: 'ios', at }],
+      daily: { last: day(at - 45 * 3600000), streak: 2, at: at - 45 * 3600000 },
+    }];
+    const Rm = await startServer('reminder', {
+      FCM_SERVICE_ACCOUNT: JSON.stringify(account()),
+      APNS_KEY: apnsPem.replace(/\n/g, '\\n'),
+      APNS_KEY_ID: APNS_KID,
+      APNS_TEAM_ID: APNS_TEAM,
+      APNS_HOST: `http://127.0.0.1:${apns.address().port}`,
+      MM_REMINDER_MS: '1000',
+    }, { seed });
+    const body = 'Your daily coins are ready — keep your streak going';
+    const sent = await until(() => lastTo(D1, withText('daily coins')));
+    checkMessage('FCM gets kind daily, on the social channel, collapsed under "daily"', sent, D1, body,
+      { kind: 'daily', collapseId: 'daily', channel: 'social' });
+    checkApns('the iPhone gets it with kind daily beside aps, for the tap', await until(() => apnsTo(DI).at(-1)), body, 'daily',
+      { kind: 'daily' });
+    await sleep(2200);   // two more beats of the scheduler
+    PASS(sendsTo(D1).length === 1 && apnsTo(DI).length === 1, 'and once each, however many times the scheduler looks',
+      `${sendsTo(D1).length} + ${apnsTo(DI).length}`);
+    await stop(Rm.child);
+  }
 }
 
 const watchdog = setTimeout(() => {

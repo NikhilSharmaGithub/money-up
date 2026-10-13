@@ -49,13 +49,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// A notification was tapped. A friend's invite carries `kind: "invite"`
     /// beside the alert, and it opens on the invite banner rather than on a
-    /// table: the banner's Join is still the yes. Every other kind only ever
-    /// needed the app opened, which the tap has already done.
+    /// table: the banner's Join is still the yes. The daily reminder carries
+    /// `kind: "daily"` and opens on the home screen's Play tab, where the
+    /// reward card it is about sits. Every other kind only ever needed the app
+    /// opened, which the tap has already done.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
-        if response.notification.request.content.userInfo["kind"] as? String == "invite" {
+        switch response.notification.request.content.userInfo["kind"] as? String {
+        case "invite":
             Task { @MainActor in InviteWatch.shared.notificationArrived() }
+        case "daily":
+            Task { @MainActor in NotificationCenter.default.post(name: .mmOpenHome, object: nil) }
+        default:
+            break
         }
         completionHandler()
     }
@@ -124,6 +131,19 @@ private struct ToastLayer: View {
             CoinFlightLayer()
             toast
         }
+        // A level crossed is announced up here for the same reason: it lands
+        // as the result sheet comes up, and a banner under the sheet is one
+        // nobody sees. Below the coin counter, which may be counting its coins.
+        .overlay(alignment: .top) {
+            if let news = store.levelUpNews {
+                LevelUpBanner(news: news)
+                    .padding(.top, 52)
+                    .padding(.horizontal, 24)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    .id(news.id)
+            }
+        }
+        .animation(.spring(duration: 0.45, bounce: 0.3), value: store.levelUpNews)
         .animation(.spring(duration: 0.35), value: store.toast)
         .environment(\.mmGlassQuality, governor.level)
     }
@@ -291,6 +311,14 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: UIApplication.willEnterForegroundNotification)) { _ in
             Task { await inviteWatch.load() }
+        }
+        // The daily reminder was tapped. On the home screen the landing turns
+        // to its Play tab by itself; at a table, nobody is pulled out of a
+        // game for a coin — they are told where it is waiting instead.
+        .onReceive(NotificationCenter.default.publisher(for: .mmOpenHome)) { _ in
+            if store.roomId != nil {
+                store.showToast("Your daily coins are waiting on the home screen", glyph: .coin)
+            }
         }
         .animation(.easeInOut(duration: 0.25), value: store.roomId == nil)
         .overlay { cardPopupOverlay }

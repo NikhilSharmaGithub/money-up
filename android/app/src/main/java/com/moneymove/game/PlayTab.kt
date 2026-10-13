@@ -36,6 +36,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.runtime.key
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -140,6 +144,13 @@ fun PlayTab(
     // drawn while the list is empty, and an effect inside something that
     // never composes never starts — so the card could never appear at all.
     LaunchedEffect(Unit) { store.pollPublicRooms() }
+    // The games being played right now, for Watch live — on the tab for the
+    // same reason, and it stops with the tab.
+    LaunchedEffect(Unit) { store.pollLiveGames() }
+    // Whose profile is open over the tab — a leaderboard row's. Raised here,
+    // beside the leaderboard's own sheet, so it opens over the fifty and
+    // closes back onto them.
+    var profileOf by remember { mutableStateOf<ProfileSeed?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -158,16 +169,25 @@ fun PlayTab(
                 BrandHeader(boards = account.boards?.boards?.size)
                 ContinueCard(store)
                 AccountCard(account, store)
+                // A level crossed somewhere this tab was not looking — a
+                // mission claim, or a game whose ending this phone missed.
+                account.levelUpToShow?.let { up -> key(up.to) { LevelUpMoment(up, account) } }
                 // Coins first, then the table: collecting is a two-second
                 // errand and the reward reads as part of who you are.
                 DailyCard(account, store)
+                // Today's three, right under today's coin: the other errand
+                // worth opening the app for.
+                MissionsCard(account, store)
                 // The other way to a couple of coins, and a much quieter one:
                 // nothing at all until the server turns ads on, and nothing
                 // again once the day's views are spent.
                 FreeCoinsOffer(account, store)
                 QuickPlayCard(store, account)
                 PrivateTableCard(store, account)
-                LeaderboardCard(account)
+                LeaderboardCard(account) { profileOf = it }
+                // Somebody else's game, from the rail: the browsing that
+                // ends in watching rather than in a seat.
+                WatchLiveCard(store)
                 PublicRoomsCard(store, account)
             }
         }
@@ -179,6 +199,34 @@ fun PlayTab(
             HouseAdBreak(account.adRequestCoins) { played -> gate.complete(played) }
         }
     }
+
+    profileOf?.let { seed ->
+        key(seed.code) { PlayerProfileSheet(store, account, seed) { profileOf = null } }
+    }
+}
+
+/**
+ * The level-up the Play tab owes: the banner, the knock and the chime, for
+ * six seconds, until it is tapped away, or until the tab is left. It is
+ * marked as celebrated the moment it goes up, so the next /api/me cannot
+ * queue it again behind it.
+ */
+@Composable
+private fun LevelUpMoment(up: LevelUp, account: AccountStore) {
+    LaunchedEffect(up.to) {
+        account.levelUpShown(up)
+        Haptics.turn()
+        SoundKit.gain()
+        delay(6_000)
+        account.dismissLevelUp()
+    }
+    // Seen is seen: leaving the tab mid-celebration does not leave it queued
+    // to go off again, knock and all, the next time Play is opened.
+    DisposableEffect(up.to) { onDispose { account.dismissLevelUp() } }
+    LevelUpBanner(
+        up,
+        Modifier.clickable(onClickLabel = "Dismiss") { account.dismissLevelUp() },
+    )
 }
 
 // ── the brand ──────────────────────────────────────────────────────────────
@@ -945,20 +993,38 @@ private fun PrivateTableCard(store: GameStore, account: AccountStore) {
 // ── who is winning ─────────────────────────────────────────────────────────
 
 /**
- * iOS's LeaderboardCard: the lifetime table of who has actually won the most
- * games, ever — the five that matter on the card, and the whole fifty a tap
- * away. Standing thirty-first is still a standing, so a player outside the
- * five gets their own row underneath rather than news they have to go and
- * look for. Nothing at all until the board has arrived.
+ * iOS's LeaderboardCard, with its three boards: all time, this week, and
+ * just you and your friends. The five that matter on the card and the whole
+ * fifty a tap away; standing thirty-first is still a standing, so a player
+ * outside the five gets their own row underneath — or, below the fifty
+ * listed, a line with their place — rather than news they have to go and
+ * look for. Every row opens that player's profile.
+ *
+ * Nothing at all until the all-time board has arrived. The tab picked is
+ * kept for as long as the app is open, so a player who reads the weekly
+ * board comes back to it.
  */
 @Composable
-private fun LeaderboardCard(account: AccountStore) {
-    val top = account.leaderboard
-    if (top.isEmpty()) return
+private fun LeaderboardCard(account: AccountStore, onOpen: (ProfileSeed) -> Unit) {
+    if (account.leaderboard.isEmpty() && account.standings[LeaderScope.ALL] == null) return
     val p = P.current
     var showAll by remember { mutableStateOf(false) }
+    var scope by remember { mutableStateOf(leaderScopeShown) }
+    fun pick(next: LeaderScope) {
+        if (next == scope) return
+        Haptics.tap()
+        SoundKit.click()
+        scope = next
+        leaderScopeShown = next
+    }
+    // Each tab asks again as it is shown, so this week's board is this
+    // week's and a friend's first win turns up without a restart.
+    LaunchedEffect(scope) { if (scope != LeaderScope.ALL) account.loadLeaderboard(scope) }
+    val view = boardFor(account, scope)
+    val top = view?.top.orEmpty()
     val myCode = account.me?.code?.takeIf { it.isNotBlank() }
-    val mine = myCode?.let { c -> top.indexOfFirst { it.code == c }.takeIf { it >= 0 } }
+    fun isMe(row: LeaderRow) = row.you || (myCode != null && row.code == myCode)
+    val mine = top.indexOfFirst(::isMe).takeIf { it >= 0 }
 
     LandingCard(padding = 16.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -974,42 +1040,203 @@ private fun LeaderboardCard(account: AccountStore) {
             }
         }
         Spacer(Modifier.height(10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            top.take(5).forEachIndexed { rank, entry ->
-                LeaderboardRow(rank, entry, isMe = myCode != null && entry.code == myCode)
+        LeaderTabs(scope, ::pick)
+        Spacer(Modifier.height(10.dp))
+        if (scope == LeaderScope.WEEK) {
+            WeekResets(view?.resetsAt)
+            Spacer(Modifier.height(8.dp))
+        }
+        when {
+            view == null -> Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+                LandingSpinner(p.ink3, 18.dp)
             }
-            if (mine != null && mine >= 5) {
-                Box(Modifier.fillMaxWidth().padding(vertical = 1.dp).height(1.dp).background(p.rule))
-                LeaderboardRow(mine, top[mine], isMe = true)
+            top.isEmpty() -> EmptyBoard(scope)
+            else -> Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                top.take(5).forEachIndexed { rank, entry ->
+                    LeaderboardRow(rank, entry, isMe = isMe(entry), scope = scope, onOpen = onOpen)
+                }
+                if (mine != null && mine >= 5) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 1.dp).height(1.dp).background(p.rule))
+                    LeaderboardRow(mine, top[mine], isMe = true, scope = scope, onOpen = onOpen)
+                }
+                if (mine == null) YourPlace(view.you, scope)
             }
         }
         // Inside the card rather than after it, so that whatever the sheet
         // leaves behind in the layout costs the tab's spacing nothing.
-        if (showAll) LeaderboardSheet(top, myCode) { showAll = false }
+        if (showAll) {
+            LeaderboardSheet(
+                account, scope,
+                onScope = ::pick,
+                onOpen = onOpen,
+            ) { showAll = false }
+        }
     }
+}
+
+/**
+ * The tab the leaderboard was last left on, for as long as the app is open —
+ * the card is recomposed from scratch every time the Play tab is, and a
+ * player who reads the weekly board should come back to it.
+ */
+private var leaderScopeShown: LeaderScope = LeaderScope.ALL
+
+/**
+ * A board as last read — and the all-time one from the list every screen
+ * kept before the tabs, so an older server's answer still fills it.
+ */
+private fun boardFor(account: AccountStore, scope: LeaderScope): LeaderboardView? =
+    account.standings[scope]
+        ?: if (scope == LeaderScope.ALL && account.leaderboard.isNotEmpty()) LeaderboardView(top = account.leaderboard)
+        else null
+
+/**
+ * The three boards as one segmented control, paper on paper: a sunken track
+ * and the chosen one raised out of it on the card's own fill, as iOS's
+ * segmented picker sits on a card. Each segment is a tab to a screen reader.
+ */
+@Composable
+private fun LeaderTabs(current: LeaderScope, onPick: (LeaderScope) -> Unit) {
+    val p = P.current
+    val track = RoundedCornerShape(11.dp)
+    val lozenge = RoundedCornerShape(8.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(track)
+            .background(p.sunken)
+            .border(1.dp, p.rule, track)
+            .padding(3.dp)
+            .selectableGroup(),
+    ) {
+        for (scope in LeaderScope.entries) {
+            val on = scope == current
+            Box(
+                Modifier
+                    .weight(1f)
+                    .then(if (on) Modifier.shadow(2.dp, lozenge, clip = false) else Modifier)
+                    .clip(lozenge)
+                    .background(if (on) p.card else Color.Transparent)
+                    .then(if (on) Modifier.border(1.dp, p.rule, lozenge) else Modifier)
+                    .selectable(selected = on, role = Role.Tab) { onPick(scope) }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    scope.label,
+                    color = if (on) p.ink else p.ink3,
+                    fontSize = 12.5.sp, fontWeight = if (on) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** "Resets Monday · in 2 days" — the weekly board's one line of small print. */
+@Composable
+private fun WeekResets(resetsAt: Double?) {
+    val p = P.current
+    val left = resetsAt?.let { it.toLong() - System.currentTimeMillis() }?.takeIf { it > 0 }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon("replay", size = 12.dp, tint = p.ink3)
+        Spacer(Modifier.width(5.dp))
+        Text(
+            "Resets Monday" + (left?.let { " · in ${roughly(it)}" } ?: ""),
+            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+/** "2 days", "5 hours", "20 minutes" — a reset is days away, not seconds. */
+private fun roughly(ms: Long): String {
+    val mins = ms / 60_000
+    val hours = mins / 60
+    val days = hours / 24
+    return when {
+        days >= 1 -> "$days day${if (days == 1L) "" else "s"}"
+        hours >= 1 -> "$hours hour${if (hours == 1L) "" else "s"}"
+        else -> "${maxOf(1, mins)} minute${if (mins == 1L) "" else "s"}"
+    }
+}
+
+/** A board with nobody on it yet, in words that say what would put somebody there. */
+@Composable
+private fun EmptyBoard(scope: LeaderScope) {
+    val p = P.current
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (scope == LeaderScope.FRIENDS) SfMark("person.2.fill", 24.dp, p.ink3) else Icon("trophy", size = 24.dp, alpha = 0.6f)
+        Text(
+            when (scope) {
+                LeaderScope.ALL -> "No wins yet — the first one puts you on top."
+                LeaderScope.WEEK -> "Nobody has won this week yet. Be the first."
+                LeaderScope.FRIENDS -> "Add friends on Social to see how you stack up."
+            },
+            color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * Where this player stands when they are not among the rows listed: their
+ * place in the whole ordering, or what would put them on the board.
+ */
+@Composable
+private fun YourPlace(you: LeaderYou?, scope: LeaderScope) {
+    you ?: return
+    val p = P.current
+    val line = when {
+        you.rank != null ->
+            "You're #${grouped(you.rank)} with ${you.wins} win${if (you.wins == 1) "" else "s"}"
+        scope == LeaderScope.WEEK -> "Win a game this week to get on this board"
+        scope == LeaderScope.ALL -> "Win a game to get on the board"
+        else -> return
+    }
+    Text(
+        line,
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        color = p.ink2, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        textAlign = TextAlign.Center,
+    )
 }
 
 /**
  * The whole fifty. iOS opens it at half height with a grabber, the title in
  * the middle and Done on the right; and deep down the list your own row is
  * the one you opened it for, so it is brought on screen rather than left for
- * you to scroll to.
+ * you to scroll to. The tabs are here too, and the same tab: switching in
+ * the sheet switches the card under it.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun LeaderboardSheet(entries: List<LeaderRow>, myCode: String?, onDismiss: () -> Unit) {
+private fun LeaderboardSheet(
+    account: AccountStore,
+    scope: LeaderScope,
+    onScope: (LeaderScope) -> Unit,
+    onOpen: (ProfileSeed) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val p = P.current
     val sheet = rememberModalBottomSheetState()
-    val scope = rememberCoroutineScope()
+    val coroutines = rememberCoroutineScope()
     val density = LocalDensity.current
     val finder = remember { BringIntoViewRequester() }
-    val mine = myCode?.let { c -> entries.indexOfFirst { it.code == c } } ?: -1
+    val view = boardFor(account, scope)
+    val entries = view?.top.orEmpty()
+    val myCode = account.me?.code?.takeIf { it.isNotBlank() }
+    fun isMe(row: LeaderRow) = row.you || (myCode != null && row.code == myCode)
+    val mine = entries.indexOfFirst(::isMe)
 
     fun close() {
-        scope.launch { sheet.hide() }.invokeOnCompletion { onDismiss() }
+        coroutines.launch { sheet.hide() }.invokeOnCompletion { onDismiss() }
     }
 
-    LaunchedEffect(mine) {
+    LaunchedEffect(mine, scope) {
         if (mine < 8) return@LaunchedEffect
         delay(300)
         // Asking for a band either side of the row, not just the row, is
@@ -1062,20 +1289,34 @@ private fun LeaderboardSheet(entries: List<LeaderRow>, myCode: String?, onDismis
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            LandingCard(padding = 4.dp) { LeaderTabs(scope, onScope) }
             // Straight on the sheet's glass, above the card: the glass's quiet
             // ink, since ink3 all but vanishes on the platter at night.
             Text(
-                "Every game these players have ever won. Only wins get you on the board.",
+                when (scope) {
+                    LeaderScope.ALL -> "Every game these players have ever won. Only wins get you on the board."
+                    LeaderScope.WEEK -> "Wins since Monday, midnight UTC. The board starts again every week."
+                    LeaderScope.FRIENDS -> "You and your friends, by wins — everyone is on it, wins or not."
+                },
                 color = quietInk(), fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
             )
             LandingCard(padding = 14.dp) {
-                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    entries.forEachIndexed { rank, entry ->
-                        LeaderboardRow(
-                            rank, entry,
-                            isMe = myCode != null && entry.code == myCode,
-                            modifier = if (rank == mine) Modifier.bringIntoViewRequester(finder) else Modifier,
-                        )
+                when {
+                    view == null -> Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+                        LandingSpinner(p.ink3, 18.dp)
+                    }
+                    entries.isEmpty() -> EmptyBoard(scope)
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        entries.forEachIndexed { rank, entry ->
+                            LeaderboardRow(
+                                rank, entry,
+                                isMe = isMe(entry),
+                                scope = scope,
+                                onOpen = onOpen,
+                                modifier = if (rank == mine) Modifier.bringIntoViewRequester(finder) else Modifier,
+                            )
+                        }
+                        if (mine < 0) YourPlace(view.you, scope)
                     }
                 }
             }
@@ -1083,17 +1324,33 @@ private fun LeaderboardSheet(entries: List<LeaderRow>, myCode: String?, onDismis
     }
 }
 
-/** One line of the table, iOS's LeaderboardRow: the podium gets its metal, everyone below it their number. */
+/**
+ * One line of the table, iOS's LeaderboardRow: the podium gets its metal,
+ * everyone below it their number. The whole row opens the player's profile,
+ * and carries the chevron that says so.
+ */
 @Composable
-private fun LeaderboardRow(rank: Int, entry: LeaderRow, isMe: Boolean, modifier: Modifier = Modifier) {
+private fun LeaderboardRow(
+    rank: Int,
+    entry: LeaderRow,
+    isMe: Boolean,
+    scope: LeaderScope,
+    onOpen: (ProfileSeed) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val p = P.current
     val shape = RoundedCornerShape(12.dp)
+    val opens = entry.code.isNotBlank()
     Row(
         modifier
             .fillMaxWidth()
             .clip(shape)
             .background(if (isMe) p.goldSoft else p.sunken)
             .border(if (isMe) 1.5.dp else 1.dp, if (isMe) p.gold else p.rule, shape)
+            .clickable(enabled = opens, onClickLabel = "Open ${entry.name.ifBlank { "this player" }}'s profile") {
+                Haptics.tap()
+                onOpen(ProfileSeed.of(entry))
+            }
             .padding(horizontal = 9.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1123,6 +1380,10 @@ private fun LeaderboardRow(rank: Int, entry: LeaderRow, isMe: Boolean, modifier:
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                if (entry.level > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    LevelChip(entry.level, compact = true)
+                }
                 if (isMe) {
                     Spacer(Modifier.width(6.dp))
                     Text(
@@ -1137,12 +1398,12 @@ private fun LeaderboardRow(rank: Int, entry: LeaderRow, isMe: Boolean, modifier:
                 }
             }
             Text(
-                money(entry.winnings) + " won, all-time",
+                money(entry.winnings) + if (scope == LeaderScope.WEEK) " won this week" else " won, all-time",
                 color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.width(26.dp))
+        Spacer(Modifier.width(18.dp))
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 "${entry.wins}",
@@ -1152,6 +1413,10 @@ private fun LeaderboardRow(rank: Int, entry: LeaderRow, isMe: Boolean, modifier:
                 if (entry.wins == 1) "WIN" else "WINS",
                 color = p.ink3, fontSize = 7.5.sp, fontWeight = FontWeight.Black, letterSpacing = 0.8.sp,
             )
+        }
+        if (opens) {
+            Spacer(Modifier.width(8.dp))
+            RowChevron(p.ink3, 10.dp)
         }
     }
 }
@@ -1189,8 +1454,20 @@ private fun PublicRoomsCard(store: GameStore, account: AccountStore) {
                             // A seat is a new game and gets its break; a
                             // table only to watch is somebody else's game
                             // already running, and gets none.
-                            if (room.canSit) PreGameAd.beforeGame(context, account)
-                            store.connect(room.id)
+                            // A game already under way is watched from the
+                            // rail, the way Watch live opens one, rather than
+                            // through the seat door that would only turn the
+                            // tap into a spectator anyway. A game this device
+                            // stepped away from is no stranger's, though, and
+                            // watch() hands that one its seat back.
+                            if (room.canSit) {
+                                PreGameAd.beforeGame(context, account)
+                                store.connect(room.id)
+                            } else if (room.isPlaying) {
+                                store.watch(room.id)
+                            } else {
+                                store.connect(room.id)
+                            }
                         }
                         .padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically,

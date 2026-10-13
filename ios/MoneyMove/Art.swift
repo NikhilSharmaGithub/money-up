@@ -30,9 +30,9 @@ enum Glyph: String, CaseIterable {
     case soundOn, soundOff, replay, snooze
     // standing and stakes
     case crown, trophy, medalGold, medalSilver, medalBronze, heart, skull
-    case people, crane, ticket
+    case people, crane, ticket, level
     // places and things
-    case globe, question, plane, palette, moon, bag, key, shuffle, chart, island
+    case globe, question, plane, palette, moon, bag, key, shuffle, chart, island, clock
     // money moving
     case cash, payment, chat, bulb
     // buildings
@@ -48,7 +48,7 @@ extension Glyph {
         switch self {
         case .coin, .crown, .trophy, .medalGold, .medalSilver, .medalBronze,
              .heart, .police, .moon, .island, .cash, .payment, .bulb, .warning,
-             .toolbox, .sparkle, .house, .hotel,
+             .toolbox, .sparkle, .house, .hotel, .level,
              .bolt, .sun, .flame, .droplet, .turbine:
             return true
         default:
@@ -514,6 +514,31 @@ private enum ArtCanvas {
             A.medal(ctx, ribbonA: 0x5B6A86, ribbonB: 0x46536C, rim: 0x8B96A4, face: 0xCCD4DC)
         case .medalBronze:
             A.medal(ctx, ribbonA: 0x7A5A3C, ribbonB: 0x5F4530, rim: 0xA4652B, face: 0xCF8B4A)
+
+        case .level:
+            // The level badge: a brass star on a darker rim of itself. Its own
+            // colour on every table, like the medals — a level is a rank, and a
+            // rank that took the theme's ink would read as just another label.
+            ctx.fill(A.star(16, 17, 14.6, 7), with: .color(Color(hex: 0xC98A16)))
+            ctx.fill(A.star(16, 17, 10.6, 5.1), with: .color(Color(hex: 0xF7C948)))
+            A.wash(ctx, A.circle(16, 16.4, 2.2), .white, 0.55)
+
+        case .clock:
+            // A stopwatch, for the game clock of a timed table (1.0.6). The
+            // face is a hole and the hand stands in it, so the dial reads on
+            // a red-washed chip as well as a plain one.
+            ctx.fill(A.rrect(12.6, 1.4, 6.8, 3.6, 1.4), with: .color(ink))
+            ctx.fill(A.rect(14.7, 4.2, 2.6, 3.2), with: .color(ink))
+            ctx.fill(A.poly([(24.4, 6.2), (27.6, 9.4), (25.6, 11.4), (22.4, 8.2)]), with: .color(ink))
+            var dial = A.circle(16, 18.4, 12.4)
+            dial.addPath(A.circle(16, 18.4, 9.4))
+            ctx.fill(dial, with: .color(ink), style: FillStyle(eoFill: true))
+            A.wash(ctx, A.circle(16, 18.4, 9.4), ink, 0.2)
+            ctx.stroke(A.line([(16, 18.4), (16, 11.8)]),
+                       with: .color(ink), style: .init(lineWidth: 2.6, lineCap: .round))
+            ctx.stroke(A.line([(16, 18.4), (20.2, 21.2)]),
+                       with: .color(ink), style: .init(lineWidth: 2.2, lineCap: .round))
+            ctx.fill(A.circle(16, 18.4, 1.8), with: .color(ink))
 
         case .robot:
             ctx.fill(A.circle(16, 3, 2), with: .color(ink))

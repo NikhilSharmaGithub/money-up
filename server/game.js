@@ -10,6 +10,7 @@ import {
   REPLY_GAP_TABLE, REPLY_GAP_BOT, REPLY_GAP_ADDRESSED, REPLY_WINDOW, REPLY_WINDOW_MAX,
 } from './botchat.js';
 import { quickIdentity } from './names.js';
+import { houseLevel } from './progression.js';
 
 export const COLORS = [
   '#4ade80', '#60a5fa', '#f472b6', '#fbbf24',
@@ -41,7 +42,24 @@ export const DEFAULT_SETTINGS = {
   turnSeconds: 90,
   /** Head-to-head only: frees a player who can never build (see noteLap). */
   deadlockRelief: true,
+  /** How well the house players the host invited play — see botSkill. */
+  botLevel: 'normal',
+  /** Minutes until the richest player wins; 0 plays to the last one standing. */
+  timeLimit: 0,
 };
+
+/**
+ * The bot skills a host may pick. 'normal' is the house player that has
+ * always shipped, number for number; the other two lean either side of it.
+ */
+export const BOT_LEVELS = ['easy', 'normal', 'hard'];
+
+/**
+ * The game lengths a host may pick, in minutes. A list rather than a range:
+ * every client draws exactly these as a picker, and a length none of them can
+ * show is a countdown nobody at the table can read. 0 is no clock at all.
+ */
+export const TIME_LIMITS = [0, 20, 30, 45, 60];
 
 // ------------------------------------------------------- quick-match roll --
 // Every matchmade table deals itself its own house rules, so two quick games
@@ -241,6 +259,11 @@ const BOT_UNMORTGAGE_STEPS = 12;
  */
 const BOT_ASK_COOLDOWN = 9;
 const BOT_OFFER_GAP = 4;
+/** The same two waits for a hard bot, which trades more readily. */
+const HARD_ASK_COOLDOWN = 5;
+const HARD_OFFER_GAP = 2;
+/** How often an easy bot lets a street it could afford go by anyway. */
+const EASY_PASS_RATE = 0.35;
 /** Trade offers one player may have waiting on answers at once — see proposeTrade. */
 const MAX_OPEN_OFFERS = 5;
 
@@ -706,6 +729,30 @@ export class GameRoom {
       return { error: 'A Play-now table keeps its seats, privacy, house players, teams and clock' };
     }
     const before = quick ? Object.fromEntries(QUICK_HOST_KEYS.map((k) => [k, this.settings[k]])) : null;
+    // A cup table is set by the cup (the socket handler refuses every change
+    // there); these two are refused here as well, at the room's own door,
+    // because a cup game already has its clock — the whistle — and never a
+    // house player.
+    if (this.cupMatch && (patch.botLevel !== undefined || patch.timeLimit !== undefined)) {
+      return { error: 'A cup table is set by the cup' };
+    }
+    // The two 1.0.6 pickers are lists, not ranges, so a value off the list is
+    // refused outright rather than rounded: a bot skill of "brutal" has no
+    // nearest, and a game length no client offers is a countdown the table
+    // cannot read. Refused before anything is applied, like a locked board,
+    // so a patch is all or nothing here too. A number that arrives as text is
+    // still the number — the pickers on every platform send whole minutes.
+    if (patch.botLevel !== undefined && !BOT_LEVELS.includes(patch.botLevel)) {
+      return { error: 'Bot skill is easy, normal or hard' };
+    }
+    if (patch.timeLimit !== undefined) {
+      const v = patch.timeLimit ?? 0;
+      const minutes = typeof v === 'number' || typeof v === 'string' ? Number(v) : NaN;
+      if (!TIME_LIMITS.includes(minutes)) {
+        return { error: 'Game length is 20, 30, 45 or 60 minutes, or no limit' };
+      }
+      patch.timeLimit = minutes;
+    }
     // A board is stock now. The host may pick the house board, either of the
     // two the day is giving away, or anything they have bought — and nothing
     // else. Hiding the locked ones in the picker is a courtesy to a player;
@@ -931,10 +978,16 @@ export class GameRoom {
     this.vacationPot = 0;
     this.history = [];
     this.stats = {};
+    this.setsSeen = new Set();
     this.titles = null;
     this.turnCount = 0;
     this.lastProgressAt = 0;
     this.progressSig = '';
+    // When the dice started, for the watch-live list; and the game clock, if
+    // the host set one. Both are this game's, so a rematch sets them afresh.
+    this.startedAt = Date.now();
+    this.endReason = null;
+    this.whistleBlown = false;
     this.turn = {
       playerId: this.players[0].id,
       phase: 'roll',
@@ -944,8 +997,15 @@ export class GameRoom {
       debt: null,
       rolledThisTurn: false,
     };
+    // The opening turn is a turn like any other for the seat's own tally —
+    // nextTurn counts every one after it.
+    this.statFor(this.players[0]).turns++;
     this.recordWorth();
+    this.armGameClock();
     this.say('Game started! Good luck.', 'system');
+    if (this.endsAt) {
+      this.say(`A ${this.settings.timeLimit}-minute game — when the clock runs out, the richest player wins`, 'system');
+    }
     const greeter = this.players.filter((x) => this.autoPlayed(x));
     if (greeter.length) {
       this.botSay(greeter[Math.floor(Math.random() * greeter.length)], 'greet',
@@ -1274,7 +1334,11 @@ export class GameRoom {
     const cur = this.current;
     if (cur && !cur.bankrupt && cur.connected && !this.autoPlayed(cur)) return true;
     // `_destroyed` is how Node marks a Timeout that has run or been cleared.
-    return Object.values(this.timers || {}).some((t) => t && typeof t === 'object' && !t._destroyed);
+    // The game clock is not work: it is pending for the whole of a timed game,
+    // and counting it would switch the watchdog off at every table that has one.
+    return Object.entries(this.timers || {}).some(([k, t]) => (
+      !k.startsWith('gameClock') && t && typeof t === 'object' && !t._destroyed
+    ));
   }
 
   /** One timer, gone — handle and key both, so a listing of timers is true. */
@@ -1700,6 +1764,163 @@ export class GameRoom {
     if (this.turn.endsAt !== before) this.push();
   }
 
+  // -------------------------------------------------------------- game clock --
+  /**
+   * The whole game's clock, for a table whose host chose a length. Separate
+   * from the shot clock above, which is one turn's: this one decides the
+   * game, the same way the cup's whistle decides a cup match — whoever is
+   * worth the most when it runs out wins.
+   *
+   * Never at a Play-now table or a cup table. Neither may set one (see
+   * updateSettings and the socket handler), and the check is repeated here so
+   * no other door can start a clock on strangers who never agreed to one.
+   * The cup has its own whistle in server/index.js and needs no second.
+   */
+  armGameClock() {
+    this.clearTimer('gameClock');
+    this.clearTimer('gameClockStop');
+    this.endsAt = null;
+    this.timeUp = false;
+    const minutes = Number(this.settings.timeLimit) || 0;
+    if (this.status !== 'playing' || this.quick || this.cupMatch) return;
+    if (minutes <= 0 || !TIME_LIMITS.includes(minutes)) return;
+    const ms = minutes * GameRoom.CLOCK.minuteMs;
+    this.endsAt = Date.now() + ms;
+    this.timers.gameClock = setTimeout(() => this.clockRanOut(), ms);
+    this.timers.gameClock.unref?.();
+  }
+
+  /**
+   * How long a "minute" of the game clock is, and how long the last turn may
+   * run past it. A minute is a minute on every real server; a test that has
+   * to watch a twenty-minute game end shortens it (MM_CLOCK_MS in
+   * server/index.js, or directly).
+   *
+   * The last turn's allowance is the hard stop. Time's up ends the game at
+   * the end of the turn in progress, and a turn normally ends on its own —
+   * the shot clock, the house playing an absent chair. But a table with the
+   * shot clock switched off has nothing that ends a turn somebody has walked
+   * away from, and a game sold as thirty minutes cannot run for ever on one
+   * idle tab. Ninety seconds is one ordinary shot clock.
+   */
+  static CLOCK = { minuteMs: 60_000, graceMs: 90_000 };
+
+  /**
+   * Is somebody in the middle of something? A turn that has not yet rolled,
+   * with nothing owed and no hammer up, can simply be stopped; anything else
+   * is allowed to finish first — the dice have been thrown, a deed is on
+   * offer, a bill is open, a lot is under the hammer.
+   */
+  midTurn() {
+    if (this.auction) return true;
+    const t = this.turn;
+    if (!t) return false;
+    if (t.debt || t.pending || t.phase === 'debt' || t.phase === 'action' || t.phase === 'auction') return true;
+    return !!t.rolledThisTurn;
+  }
+
+  /**
+   * The game clock ran out. Mid-turn, that turn is the last one: no more
+   * rolling again on a double (see roll and afterActionPhase), and the moment
+   * it ends nextTurn hands over to finishOnTime instead of to the next chair.
+   * Otherwise the game is decided on the spot.
+   */
+  clockRanOut() {
+    delete this.timers.gameClock;
+    if (this.status !== 'playing' || this.timeUp) return;
+    this.timeUp = true;
+    if (!this.midTurn()) {
+      this.finishOnTime();
+      return;
+    }
+    this.say("Time's up — this is the last turn", 'system');
+    this.timers.gameClockStop = setTimeout(() => this.clockStop(), GameRoom.CLOCK.graceMs);
+    this.timers.gameClockStop.unref?.();
+    this.push();
+  }
+
+  /**
+   * The last turn's allowance is spent. An auction is the one thing not cut
+   * off — escrowed bids have to be settled by the hammer, which is never more
+   * than a few seconds away — so it is waited out in short steps.
+   */
+  clockStop() {
+    delete this.timers.gameClockStop;
+    if (this.status !== 'playing') return;
+    if (this.auction) {
+      this.timers.gameClockStop = setTimeout(() => this.clockStop(), 3000);
+      this.timers.gameClockStop.unref?.();
+      return;
+    }
+    this.finishOnTime();
+  }
+
+  /**
+   * Everyone still in the game, richest first. Equal fortunes keep their seat
+   * order, so the same table always ranks the same way. This is the cup
+   * whistle's ranking too (server/index.js): a timed game and a cup game
+   * decided on the clock are decided by the same rule.
+   */
+  rankByWorth() {
+    return this.active
+      .map((p) => [p, this.netWorth(p)])
+      .sort((a, b) => b[1] - a[1])
+      .map(([p]) => p);
+  }
+
+  /**
+   * Time's up: the richest player still in wins — or, with teams, the team
+   * whose standing members are worth the most together (ties to the team of
+   * the single richest player among them). Everything after that is the
+   * ordinary end of a game: the final net-worth snapshot, the titles, and one
+   * push, which is where the server pays the purse and the XP, exactly once,
+   * the same as for a game won the long way.
+   *
+   * The standings are read BEFORE any open bill is written off, so a player
+   * caught owing money when the clock went is ranked with the debt, not
+   * without it.
+   */
+  finishOnTime() {
+    if (this.status !== 'playing') return false;
+    // The hammer settles first; finishAuction hands the turn back, and the
+    // end of that turn comes back here through nextTurn.
+    if (this.auction) return false;
+    const ranked = this.rankByWorth();
+    if (ranked.length < 2) return this.checkGameEnd();
+    let winners = [ranked[0]];
+    if (this.teamsOn) {
+      const totals = new Map();
+      for (const p of ranked) totals.set(p.team, (totals.get(p.team) || 0) + this.netWorth(p));
+      let best = ranked[0].team;
+      for (const p of ranked) if (totals.get(p.team) > totals.get(best)) best = p.team;
+      winners = ranked.filter((p) => p.team === best);
+      this.winningTeam = best;
+    } else {
+      this.winningTeam = null;
+    }
+    this.clearTimer('gameClock');
+    this.clearTimer('gameClockStop');
+    this.closeDebtAtEnd();
+    this.turnCount++;
+    this.recordWorth();
+    this.status = 'ended';
+    this.endReason = 'time';
+    this.timeUp = true;
+    this.winner = winners[0];
+    this.say("Time's up — richest player wins", 'system');
+    if (this.teamsOn) {
+      const label = TEAMS[this.winningTeam]?.name || 'Nobody';
+      this.say(`🏆 Team ${label} wins the game! (${winners.map((p) => p.name).join(' & ')})`, 'system');
+    } else {
+      this.say(`🏆 ${this.winner.name} wins the game!`, 'system');
+    }
+    this.botFarewell(winners);
+    this.settleLeadShare();
+    this.titles = this.computeTitles();
+    this.push();
+    return true;
+  }
+
   /** Walking out on a live game — the deliberate version of a timeout. */
   quit(id, { whistle = false } = {}) {
     const p = this.player(id);
@@ -1709,7 +1930,9 @@ export class GameRoom {
     // A cup game that runs out of clock is ended by retiring whoever is behind
     // on net worth. They did not walk out, so they are not told they did and
     // they keep their karma; the reason stays 'quit' because every client
-    // already shipped reads anything else as a timeout.
+    // already shipped reads anything else as a timeout. The game itself, on
+    // the other hand, did end on the clock, and says so (endReason).
+    if (whistle) this.whistleBlown = true;
     this.say(whistle ? `The whistle — ${p.name} is behind on net worth` : `${p.name} left the game`, 'leave');
     this.removeFromPlay(p, 'quit', { karma: !whistle });
     return { ok: true };
@@ -1758,7 +1981,9 @@ export class GameRoom {
    */
   afterActionPhase(p = this.current) {
     const d = this.turn?.dice;
-    return d && d[0] === d[1] && p && !p.jail && !this.turn.noReroll ? 'roll' : 'end';
+    // Once the game clock has run out, the turn in progress is the last one,
+    // and a double no longer buys another throw — see clockRanOut.
+    return d && d[0] === d[1] && p && !p.jail && !this.turn.noReroll && !this.timeUp ? 'roll' : 'end';
   }
 
   tile(i) {
@@ -1803,7 +2028,8 @@ export class GameRoom {
   /**
    * Snapshots everyone's net worth for the end-of-game chart. Long bot games
    * can run thousands of turns, so the series halves itself when it gets big —
-   * the shape survives, the payload stays small.
+   * the shape survives, the payload stays small. Once a turn is also when the
+   * colour sets are looked over (noteSets).
    */
   recordWorth() {
     if (this.status !== 'playing') return;
@@ -1811,6 +2037,7 @@ export class GameRoom {
     for (const p of this.players) w[p.id] = p.bankrupt ? 0 : this.netWorth(p);
     this.history.push({ t: this.turnCount, w });
     if (this.history.length > 480) this.history = this.history.filter((_, i) => i % 2 === 0 || i === this.history.length - 1);
+    this.noteSets();
   }
 
   // ------------------------------------------------------------- match stats --
@@ -1821,7 +2048,29 @@ export class GameRoom {
       doubles: 0, jailed: 0, streetsBought: 0, auctionsWon: 0,
       tradesCompleted: 0, housesBuilt: 0, rentCollected: 0, rentPaid: 0,
       biggestRent: 0, biggestRentTile: null, laps: 0, leadShare: 0,
+      // The seat's own turns, and the colour sets it put together — what the
+      // XP and the daily missions are paid from when the game ends.
+      turns: 0, setsCompleted: 0,
     });
+  }
+
+  /**
+   * Count each colour set the first time a seat holds all of it. Sets change
+   * hands on a purchase, an auction, a trade or a bankruptcy, and every one of
+   * those ends in a turn changing hands, so looking once per turn (from
+   * recordWorth) sees them all without a hook in each. A set lost and won back
+   * counts once; the same set completed by two players counts for each.
+   */
+  noteSets() {
+    this.setsSeen ??= new Set();
+    for (const [group, idxs] of Object.entries(this.map.groups || {})) {
+      const owner = idxs.length ? this.ownership[idxs[0]]?.owner : null;
+      if (!owner || !this.ownsFullGroup(owner, group)) continue;
+      const key = `${owner}|${group}`;
+      if (this.setsSeen.has(key)) continue;
+      this.setsSeen.add(key);
+      this.statFor(owner).setsCompleted++;
+    }
   }
 
   /** One rent payment actually landing — in full, or one slice of a streamed
@@ -2129,7 +2378,7 @@ export class GameRoom {
     this.say(`${p.name} rolled ${d1} + ${d2} = ${d1 + d2}${isDouble ? ' (double!)' : ''}`, 'dice');
     this.movePlayer(p, d1 + d2);
     if (this.turn.phase !== 'debt' && !this.turn.pending && this.turn.phase !== 'auction') {
-      const encore = isDouble && !p.jail && !this.turn.noReroll;
+      const encore = isDouble && !p.jail && !this.turn.noReroll && !this.timeUp;
       this.turn.phase = encore ? 'roll' : 'end';
       if (encore) this.say(`${p.name} rolls again`, 'info');
     }
@@ -2956,6 +3205,11 @@ export class GameRoom {
       this.say(`🏆 ${this.winner ? this.winner.name : "Nobody"} wins the game!`, "system");
       this.botFarewell(alive);
     }
+    // Won the long way — everyone else is out — unless the cup's whistle is
+    // what put the last of them out, which is a game decided on the clock.
+    this.endReason = this.whistleBlown ? 'time' : 'last';
+    this.clearTimer('gameClock');
+    this.clearTimer('gameClockStop');
     this.settleLeadShare();
     this.titles = this.computeTitles();
     this.push();
@@ -3187,6 +3441,9 @@ export class GameRoom {
   nextTurn() {
     if (this.status !== 'playing') return;
     if (this.checkGameEnd()) return;
+    // The game clock ran out during the turn that has just ended: that was
+    // the last one, and nobody else is handed the dice.
+    if (this.timeUp && this.finishOnTime()) return;
     // A seat the house was covering for one missed turn gets itself back the
     // moment that turn is over, clock and all.
     const leaving = this.player(this.turn?.playerId);
@@ -3218,6 +3475,7 @@ export class GameRoom {
       if (!cand.connected && !cand.isBot) cand.botControlled = true;
       cand.doublesInARow = 0;
       this.turnCount++;
+      this.statFor(cand).turns++;
       this.recordWorth();
       this.noteProgress();
       this.noteLeader();
@@ -3270,6 +3528,13 @@ export class GameRoom {
     this.status = 'lobby';
     this.winner = null;
     this.winningTeam = null;
+    // Last game's clock is last game's; start() arms a fresh one.
+    this.clearTimer('gameClock');
+    this.clearTimer('gameClockStop');
+    this.endsAt = null;
+    this.timeUp = false;
+    this.endReason = null;
+    this.whistleBlown = false;
     this.ownership = {};
     this.turn = null;
     this.auction = null;
@@ -3363,6 +3628,19 @@ export class GameRoom {
     }
     if (/_p\d+$/.test(p.id)) return '';
     return this.hooks.codeOf?.(p.id) || '';
+  }
+
+  /**
+   * The level chip a seat wears. A person's comes from their profile, asked
+   * of the server (hooks.levelOf) because the room keeps no wallets; a house
+   * player's is drawn from the same H0 stand-in its profile is opened by, so
+   * the chip at the table and the one on its card after the game agree. A
+   * pass & play guest is nobody's profile and wears none: 0.
+   */
+  seatLevel(p) {
+    if (p.isBot) return houseLevel(this.chatCodeOf(p));
+    if (/_p\d+$/.test(p.id)) return 0;
+    return this.hooks.levelOf?.(p.id) || 0;
   }
 
   // ------------------------------------------------------------- bot replies --
@@ -3672,14 +3950,7 @@ export class GameRoom {
     }
 
     if (t.phase === 'action' && t.pending?.type === 'buy') {
-      const tile = this.tile(t.pending.tile);
-      // The survival floor collapses only for the buys that decide a colour
-      // race today — comfort money means nothing if a rival walks away with
-      // a full set because the bot kept a cushion.
-      const urgent = this.botUrgent(p, t.pending.tile);
-      const wants = this.botWantsTile(p, t.pending.tile);
-      if (wants && p.money - tile.price >= this.botFloor(p, { denial: urgent })) return this.buy(p.id);
-      return this.skipBuy(p.id);
+      return this.botBuys(p, t.pending.tile) ? this.buy(p.id) : this.skipBuy(p.id);
     }
 
     if (t.phase === 'roll') {
@@ -3706,6 +3977,64 @@ export class GameRoom {
       this.botMaybeTrade(p);
       return this.endTurn(p.id);
     }
+  }
+
+  // ------------------------------------------------------------- bot skill --
+  /**
+   * How well this seat plays when the house is playing it: 'easy', 'normal'
+   * or 'hard', from the host's lobby setting.
+   *
+   * The setting binds the house players the host invited and nothing else. A
+   * person's chair the house is minding while they are away plays the
+   * ordinary game — it is still their game, and nobody comes back from a
+   * dropped connection to find the house threw it because the table chose
+   * easy bots. And a Play-now table's house players are passing as people,
+   * so they play exactly like the ones that always have.
+   */
+  botSkill(p) {
+    if (!p?.isBot || this.quick) return 'normal';
+    const level = this.settings.botLevel;
+    return level === 'easy' || level === 'hard' ? level : 'normal';
+  }
+
+  /**
+   * A coin this seat flips for one question on one turn, landing the same
+   * way every time it is asked — a hash, not Math.random. An easy bot that
+   * passes on a street "now and then" passes on the same streets whenever
+   * the same game is replayed, which is what lets a test pin it down, and it
+   * cannot be talked into a different answer by asking again.
+   */
+  botCoin(p, question) {
+    const digest = createHash('sha1').update(`${p.id}:${question}:${this.turnCount}`).digest();
+    return digest.readUInt32BE(0) / 2 ** 32;
+  }
+
+  /**
+   * Does this seat buy the street it is standing on?
+   *
+   * Normal is the bot that has always shipped: the survival floor collapses
+   * only for the buys that decide a colour race today — comfort money means
+   * nothing if a rival walks away with a full set because the bot kept a
+   * cushion.
+   *
+   * Easy keeps a comfortable cushion whatever the street (twice the floor,
+   * never under $400), sees no colour races at all, and even when it can
+   * afford one lets about one street in three go by. Hard buys nearly
+   * anything it can pay for, keeping only half the floor a normal bot keeps.
+   */
+  botBuys(p, index) {
+    const tile = this.tile(index);
+    const skill = this.botSkill(p);
+    if (skill === 'easy') {
+      if (p.money - tile.price < Math.max(400, this.botFloor(p) * 2)) return false;
+      return this.botCoin(p, `buy:${index}`) >= EASY_PASS_RATE;
+    }
+    const urgent = this.botUrgent(p, index);
+    if (skill === 'hard') {
+      return p.money - tile.price >= Math.floor(this.botFloor(p, { denial: urgent }) / 2);
+    }
+    const wants = this.botWantsTile(p, index);
+    return wants && p.money - tile.price >= this.botFloor(p, { denial: urgent });
   }
 
   /**
@@ -3976,8 +4305,9 @@ export class GameRoom {
     const stale = this.botStaleness();
     const houseless = (i) => !this.tradeBlocked(i);
     const blindTemper = this.botBlindTemper();
+    const cooldown = this.botSkill(p) === 'hard' ? HARD_ASK_COOLDOWN : BOT_ASK_COOLDOWN;
     const rivals = this.active.filter((q) => q.id !== p.id
-      && this.turnCount - (p.askedAt[q.id] ?? -99) >= BOT_ASK_COOLDOWN);
+      && this.turnCount - (p.askedAt[q.id] ?? -99) >= cooldown);
     if (!rivals.length) return null;
 
     let budget = BOT_TRADE_PACKAGES;
@@ -4034,8 +4364,15 @@ export class GameRoom {
    * the game, which is how a helpful bot becomes a pest.
    */
   botMaybeTrade(p) {
+    // An easy bot never opens an envelope of its own. It still answers the
+    // ones it is sent, and still offers when a player asks it to in chat
+    // (botTradeOnRequest) — that is answering, not starting. A hard one is
+    // back at the door twice as often.
+    const skill = this.botSkill(p);
+    if (skill === 'easy') return;
+    const gap = skill === 'hard' ? HARD_OFFER_GAP : BOT_OFFER_GAP;
     if (this.trades.some((t) => t.from === p.id)) return;
-    if (this.turnCount - (p.lastAskedAt ?? -99) < BOT_OFFER_GAP) return;
+    if (this.turnCount - (p.lastAskedAt ?? -99) < gap) return;
     const deal = this.botBestOffer(p);
     if (!deal) return;
     const { q, take, give, cash } = deal;
@@ -4225,8 +4562,15 @@ export class GameRoom {
   }
 
   botBuild(p) {
+    // How far into its cushion each skill digs, below the third house and
+    // above it. Normal is the doctrine described below. Easy builds one house
+    // a turn at most, and only out of cash it would keep half again over its
+    // floor; hard races every full colour to three houses on almost nothing.
+    const skill = this.botSkill(p);
+    const [knee, after] = skill === 'easy' ? [1.5, 1.5] : skill === 'hard' ? [0.15, 0.75] : [0.35, 1];
+    const steps = skill === 'easy' ? 1 : BOT_BUILD_STEPS;
     let guard = 0;
-    while (guard++ < BOT_BUILD_STEPS) {
+    while (guard++ < steps) {
       const floor = this.botFloor(p);
       const candidates = this.tilesOf(p.id)
         .filter((i) => this.canBuild(p.id, i))
@@ -4236,7 +4580,7 @@ export class GameRoom {
         // cash after that. Hoarding a survival float while sitting on a bare
         // monopoly is how a bot draws a game out for four hundred turns.
         .filter((i) => {
-          const lean = (this.own(i).houses || 0) < 3 ? 0.35 : 1;
+          const lean = (this.own(i).houses || 0) < 3 ? knee : after;
           return p.money - this.tile(i).houseCost >= Math.floor(floor * lean);
         })
         .sort((a, b) => {
@@ -4288,7 +4632,12 @@ export class GameRoom {
     // The ceiling is the fixed valuation; the purse is read fresh every
     // time — money can move mid-auction (a trade settling, say), and a bid
     // the engine would refuse is a pass, never a retry.
-    const afford = bot.money - this.botFloor(bot, { denial: this.botUrgent(bot, a.tile) });
+    // What it keeps back follows its skill, the same cushion it buys with.
+    const skill = this.botSkill(bot);
+    const keep = skill === 'easy'
+      ? Math.max(400, this.botFloor(bot) * 2)
+      : Math.floor(this.botFloor(bot, { denial: this.botUrgent(bot, a.tile) }) / (skill === 'hard' ? 2 : 1));
+    const afford = bot.money - keep;
     const cap = Math.min(this.botAuctionCap(bot, a), afford);
     const next = a.bid === 0 ? 10 : a.bid + 10;
     if (next <= cap && !this.bid(bot.id, next)?.error) return;
@@ -4309,6 +4658,26 @@ export class GameRoom {
     const key = `${a.tile}:${bot.id}`;
     if (key in this.auctionCaps) return this.auctionCaps[key];
     const tile = this.tile(a.tile);
+    const skill = this.botSkill(bot);
+    // Easy bids low: never past half the sticker, colour race or not, which
+    // is under the least a normal bot ever goes to. Hard bids close to what
+    // the street is worth — the sticker for an ordinary street, a tenth over
+    // its own valuation for one in a race.
+    if (skill === 'easy') {
+      this.auctionCaps[key] = Math.floor(tile.price * 0.5);
+      return this.auctionCaps[key];
+    }
+    if (skill === 'hard') {
+      const relevant = tile.type !== 'property' || this.botSetRelevant(bot, a.tile);
+      // The temper still sets where a cautious bot stops ($5 short of the
+      // sticker), but never lifts an ordinary street past it: a street in
+      // nobody's colour race is worth what the bank asks for it, and a bot
+      // with a hot temper would otherwise let itself be bid up to 15% over.
+      this.auctionCaps[key] = relevant
+        ? Math.floor(this.botValueOf(bot, a.tile) * 1.1)
+        : Math.min(tile.price, Math.max(tile.price - 5, Math.floor(tile.price * this.botTemper(bot))));
+      return this.auctionCaps[key];
+    }
     let worth;
     if (tile.type !== 'property' || this.botSetRelevant(bot, a.tile)) {
       // A street in anyone's colour race is priced off the threat model —
@@ -4382,6 +4751,8 @@ export class GameRoom {
         // Who this seat is, by public code, so the results screen can open
         // their profile. Never the id — see seatCode.
         code: this.seatCode(p),
+        // The level chip — 0 for a pass & play guest. See seatLevel.
+        level: this.seatLevel(p),
         bankrupt: p.bankrupt,
         // Quick-match tables are seeded with house players so nobody waits
         // around; the lobby doesn't label who is who.
@@ -4436,6 +4807,22 @@ export class GameRoom {
       chat: this.chat.slice(-50),
       vacationPot: this.vacationPot,
       winner: this.winner ? { id: this.winner.id, name: this.winner.name, color: this.winner.color } : null,
+      // The game clock (ms since epoch) at a table whose host set one, null
+      // everywhere else — not the shot clock, which is turn.endsAt. `timeUp`
+      // is true from the moment it runs out: the turn on the board is the
+      // last. Once the game is over, `endReason` says how: 'time' when the
+      // clock decided it (a timed game, or a cup game at its whistle), 'last'
+      // when everybody else went out.
+      endsAt: this.endsAt || null,
+      timeUp: !!this.timeUp,
+      endReason: this.status === 'ended' ? (this.endReason || 'last') : null,
+      startedAt: this.status === 'lobby' ? null : (this.startedAt || null),
+      // Turns played so far — what the watch-live list counts, said here too
+      // so a watcher's table and the list agree.
+      turnCount: this.turnCount || 0,
+      // How many people are watching without a seat. Counted by the server,
+      // which is the one that knows the sockets — see hooks.spectators.
+      spectators: this.hooks.spectators?.() || 0,
       // The chart is an end-of-game reveal; streaming it every push would bloat
       // the state for nothing.
       history: this.status === 'ended' ? this.history : [],

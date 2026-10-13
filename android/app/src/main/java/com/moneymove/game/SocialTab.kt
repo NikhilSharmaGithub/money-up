@@ -38,6 +38,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -93,6 +94,8 @@ fun SocialTab(
     val safety = remember(account) { account.safety() }
     var friendsOpen by remember { mutableStateOf(false) }
     var talkingTo by remember { mutableStateOf<Friend?>(null) }
+    // A friend's profile, raised beside the friends room as the DM sheet is.
+    var profileOf by remember { mutableStateOf<ProfileSeed?>(null) }
     var cupOpen by remember { mutableStateOf(false) }
     val cups = rememberCupStore(game)
 
@@ -149,6 +152,7 @@ fun SocialTab(
             game = game,
             safety = safety,
             onMessage = { talkingTo = it },
+            onProfile = { profileOf = ProfileSeed.of(it) },
         ) { friendsOpen = false }
     }
     // Raised beside the friends room rather than inside it, so it opens on
@@ -163,6 +167,11 @@ fun SocialTab(
             // The sheet closes on a block, so the room under it says it went.
             onToast = { game.showToast(it) },
         ) { talkingTo = null }
+    }
+    // Over the friends room, and back onto it when it closes. The card's own
+    // button already knows they are friends, from the server's `relation`.
+    profileOf?.let { seed ->
+        key(seed.code) { PlayerProfileSheet(game, account, seed) { profileOf = null } }
     }
     if (cupOpen) {
         CupDetailSheet(
@@ -273,6 +282,7 @@ private fun FriendsSheet(
     game: GameStore,
     safety: Safety,
     onMessage: (Friend) -> Unit,
+    onProfile: (Friend) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val p = P.current
@@ -439,6 +449,10 @@ private fun FriendsSheet(
                         onMessage = {
                             Haptics.tap()
                             onMessage(it)
+                        },
+                        onProfile = {
+                            Haptics.tap()
+                            onProfile(it)
                         },
                         onJoin = { f, room ->
                             Haptics.tap()
@@ -706,6 +720,7 @@ private fun FriendList(
     /** The friend a table is being made for, whose Invite is spinning. */
     making: String?,
     onMessage: (Friend) -> Unit,
+    onProfile: (Friend) -> Unit,
     onJoin: (Friend, String) -> Unit,
     onInvite: (Friend) -> Unit,
     onRemove: (Friend) -> Unit,
@@ -758,6 +773,7 @@ private fun FriendList(
                         invited = invited(f.code),
                         making = making,
                         onMessage = { onMessage(f) },
+                        onProfile = { onProfile(f) },
                         onJoin = { onJoin(f, it) },
                         onInvite = { onInvite(f) },
                     ) {
@@ -790,6 +806,7 @@ private fun FriendRow(
     invited: Boolean,
     making: String?,
     onMessage: () -> Unit,
+    onProfile: () -> Unit,
     onJoin: (String) -> Unit,
     onInvite: () -> Unit,
     menu: @Composable () -> Unit,
@@ -811,33 +828,46 @@ private fun FriendRow(
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            FriendFace(
-                f.face,
-                ring = tint.copy(alpha = if (f.status == null) 0f else 0.55f),
-                fill = p.sunken,
-                size = 40.dp,
-                emoji = 20,
-                mark = 18.dp,
-                ringWidth = 1.5.dp,
-            )
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    f.display,
-                    color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+            // The face and the name are the way into their profile — level,
+            // record, career — and the chevron after the name says so. The
+            // menu keeps its own tap.
+            Row(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClickLabel = "Open ${f.display}'s profile") { onProfile() },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FriendFace(
+                    f.face,
+                    ring = tint.copy(alpha = if (f.status == null) 0f else 0.55f),
+                    fill = p.sunken,
+                    size = 40.dp,
+                    emoji = 20,
+                    mark = 18.dp,
+                    ringWidth = 1.5.dp,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, color = tint, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        f.code,
-                        color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
+                        f.display,
+                        color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, color = tint, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            f.code,
+                            color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
                 }
+                Spacer(Modifier.width(8.dp))
+                RowChevron(p.ink3, 10.dp)
             }
-            Spacer(Modifier.width(26.dp))
+            Spacer(Modifier.width(18.dp))
             menu()
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

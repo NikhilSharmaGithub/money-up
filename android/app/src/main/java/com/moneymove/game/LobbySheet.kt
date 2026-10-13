@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -337,6 +338,9 @@ private fun SettingsFace(
     val teams = s.teams ?: 0
     val clock = s.turnSeconds ?: 90
     val quick = state.quick == true
+    // A cup table never opens this sheet from its lobby, but the rules can
+    // still be read mid-game; its clock and its (absent) house are the cup's.
+    val tableRules = !quick && state.cup != true
     val hosting = game.isHost && state.isLobby
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -384,6 +388,16 @@ private fun SettingsFace(
                 "Allow bots", "Empty seats are filled with bots when the game starts.",
                 s.allowBots ?: false, can("allowBots"),
             ) { game.updateSettings(mapOf("allowBots" to it)) }
+            // How hard the house plays. A Play-now table's house always plays
+            // normal — it is passing itself off as people — so the row is not
+            // drawn there at all, rather than drawn locked on a word that
+            // would give the house away.
+            if (tableRules) {
+                Rule()
+                BotSkillRow(s.botSkill, can("botLevel")) {
+                    game.updateSettings(mapOf("botLevel" to it.wire))
+                }
+            }
         }
 
         // Strangers cannot be asked to pick a side, so a Play-now table has
@@ -421,6 +435,24 @@ private fun SettingsFace(
         // for it, so the two phones cannot show one table two ways.
         SettingsCard {
             PanelTitle("Rules")
+            // The whole game on a clock — a different thing from the turn
+            // clock under it, which is why it says what happens at the end.
+            // Play-now tables play to the last one standing, so the row is
+            // theirs to not have.
+            if (tableRules) {
+                MenuRow(
+                    "Game length", GameSettings.gameLengthLabel(s.gameMinutes),
+                    GameSettings.GAME_LENGTHS.map {
+                        (if (it == 0) "Unlimited" else "$it minutes") to it
+                    },
+                    s.gameMinutes, can("timeLimit"),
+                ) { game.updateSettings(mapOf("timeLimit" to it)) }
+                Caption(
+                    if (s.gameMinutes == 0) "Play until one player is left standing."
+                    else "When the clock runs out, the richest player wins.",
+                )
+                Rule()
+            }
             MenuRow(
                 "Turn clock", if (clock == 0) "Off" else "${clock}s",
                 TURN_CLOCK.map { (if (it == 0) "Off" else "$it seconds") to it },
@@ -831,6 +863,61 @@ private fun <T> MenuRow(
 }
 
 private fun teamsLabel(n: Int): String = if (n == 0) "Off" else "$n teams"
+
+/**
+ * Bot skill, as three segments — few enough to sit across a phone, unlike
+ * the cash amounts, and a choice people make by comparing, which a menu
+ * hides. A sunken track with the chosen one raised out of it on the card's
+ * own fill, the way the leaderboard's tabs are drawn. Locked, it keeps its
+ * colours at the rows' 0.6, so a guest still reads which one the host chose.
+ */
+@Composable
+private fun BotSkillRow(current: BotSkill, enabled: Boolean, onPick: (BotSkill) -> Unit) {
+    val p = P.current
+    val track = RoundedCornerShape(11.dp)
+    val lozenge = RoundedCornerShape(8.dp)
+    Column(
+        Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.6f),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Bot skill", color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(track)
+                .background(p.sunken)
+                .border(1.dp, p.rule, track)
+                .padding(3.dp)
+                .selectableGroup(),
+        ) {
+            for (skill in BotSkill.entries) {
+                val on = skill == current
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .then(if (on) Modifier.shadow(2.dp, lozenge, clip = false) else Modifier)
+                        .clip(lozenge)
+                        .background(if (on) p.card else Color.Transparent)
+                        .then(if (on) Modifier.border(1.dp, p.rule, lozenge) else Modifier)
+                        .selectable(selected = on, enabled = enabled, role = Role.RadioButton) {
+                            if (!on) onPick(skill)
+                        }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        skill.label,
+                        color = if (on) p.ink else p.ink3,
+                        fontSize = 13.sp,
+                        fontWeight = if (on) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+        Caption(current.blurb)
+    }
+}
 
 /**
  * The seven table styles as a row of dots, and the name of the one you are

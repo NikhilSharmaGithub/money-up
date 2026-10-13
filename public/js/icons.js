@@ -463,6 +463,30 @@ const BODY = {
     <path d="M14.4 2.4c1 6.4 3.1 8.5 9.5 9.5-6.4 1-8.5 3.1-9.5 9.5-1-6.4-3.1-8.5-9.5-9.5 6.4-1 8.5-3.1 9.5-9.5z" fill="#f5c542"/>
     <path d="M24.2 19.2c.5 3.3 1.6 4.4 4.9 4.9-3.3.5-4.4 1.6-4.9 4.9-.5-3.3-1.6-4.4-4.9-4.9 3.3-.5 4.4-1.6 4.9-4.9z" fill="#fbe08a"/>`,
 
+  /** A level. The same star the medals are struck with, in ink, so the chip
+      takes whatever colour it is printed in rather than claiming the gold
+      that already means coins. */
+  star: `<path d="${star5(16, 16.8, 14, 6.2)}" fill="currentColor"/>`,
+
+  /** Daily missions: a target with the arrow already in it. The rings are
+      cut through rather than painted, so the card shows between them. */
+  target: `
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" opacity=".34"
+      d="${dot(14.6, 17.4, 12.2)}${dot(14.6, 17.4, 8.6)}"/>
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"
+      d="${dot(14.6, 17.4, 6.2)}${dot(14.6, 17.4, 3)}"/>
+    <path d="M14.6 17.4 27 5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M23.2 3.2h5.6v5.6l-2.4-.8-2.4-2.4z" fill="currentColor"/>`,
+
+  /** A colour set: three deeds fanned in the hand, the front one in full ink. */
+  deeds: `
+    <rect x="3.4" y="6.6" width="13" height="18" rx="2.2" fill="currentColor" opacity=".3"
+      transform="rotate(-14 9.9 15.6)"/>
+    <rect x="9.5" y="5" width="13" height="18" rx="2.2" fill="currentColor" opacity=".55"/>
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"
+      d="${rr(15.6, 7.4, 13, 18, 2.2)}M18.2 10.2h7.8v3.4h-7.8ZM18.2 16.6h7.8v1.8h-7.8ZM18.2 20.2h5.4v1.8h-5.4Z"
+      transform="rotate(12 22.1 16.4)"/>`,
+
   /** The bot badge. Eyes and mouth are holes so it reads on any chip colour. */
   robot: `
     <circle cx="16" cy="3" r="2" fill="currentColor"/>
@@ -471,6 +495,25 @@ const BODY = {
       d="${rr(4.2, 7.6, 23.6, 19, 5)}${dot(11.4, 15.2, 2.5)}${dot(20.6, 15.2, 2.5)}M11.2 20.4h9.6v2.7h-9.6Z"/>
     <rect x="0.8" y="12.8" width="2.8" height="7" rx="1.4" fill="currentColor" opacity=".5"/>
     <rect x="28.4" y="12.8" width="2.8" height="7" rx="1.4" fill="currentColor" opacity=".5"/>`,
+
+  /** A timed game: a stopwatch, crown and all, with its hand cut through the
+      face so the chip shows between them. Not the turn clock — that one is
+      the snooze, a turn running out on somebody — but the whole table's. */
+  clock: `
+    <rect x="13" y="1.6" width="6" height="3.4" rx="1.3" fill="currentColor"/>
+    <path d="M24.6 6.4 27.4 9.2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" opacity=".55"/>
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"
+      d="${dot(16, 18, 12)}${dot(16, 18, 9.2)}"/>
+    <path fill="currentColor" opacity=".3" d="${dot(16, 18, 9.2)}"/>
+    <path d="M16 18V11.4M16 18l4.4 3.2" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>`,
+
+  /** A picture of the result: a framed photo, a hill and a sun — what a
+      share sheet is about to be handed, as opposed to the link beside it. */
+  picture: `
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"
+      d="${rr(2.4, 5, 27.2, 22, 4)}${rr(5.4, 8, 21.2, 16, 1.8)}"/>
+    <path d="M5.4 21.6 12.4 14.4l5.2 5.4 3-3 6 6.2V24H5.4z" fill="currentColor"/>
+    <circle cx="21.4" cy="12.6" r="2.4" fill="currentColor" opacity=".55"/>`,
 };
 
 /**
