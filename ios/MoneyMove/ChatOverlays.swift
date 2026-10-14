@@ -1,4 +1,4 @@
-// Chat + game-log sheet, the in-board auction box, and the game-over sheet.
+// Chat + game-log sheet, the in-board auction card, and the game-over sheet.
 // All three read the live GameState from the injected GameStore and only
 // ever send intents back — the server stays authoritative.
 //
@@ -591,16 +591,31 @@ struct ChatLogSheet: View {
     }
 }
 
-// MARK: - auction box (lives inside the board's centre well, ≈240pt square)
+// MARK: - auction card (lives inside the board's centre well, ≈250pt square)
 
+/// The auction, as one card laid on the table (1.0.7, H1) — an ordinary sale
+/// and a lot from a bankrupt player's estate alike. Top to bottom it answers
+/// what a bidder asks, in the order they ask it: what kind of sale (and
+/// whose), what is on the block, what it stands at and who holds it, how long
+/// is left, and what they can do about it.
+///
+/// It lives in the board's centre well, about 250 points square on a phone —
+/// less the turn clock's 36 when the turn has one — so every line earns its
+/// height: the countdown is a ring beside the bid rather than a bar of its
+/// own, the bids and Pass share one row, and a seat that cannot bid gets a
+/// pill saying why in that row's place.
+///
+/// It is paper, not glass: the lot is content, like the dice and the deeds,
+/// and a card of the board's own paper is what reads as something laid on it.
 struct AuctionBox: View {
     let auction: AuctionState
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Mirrors the server: the room opens on a 20s window, and every bid
-    /// resets it to 12s. Measuring both against 20 made the bar jump back to
+    /// resets it to 12s. Measuring both against 20 made the ring jump back to
     /// two-thirds after a bid and read as "nearly out of time".
     private var windowSeconds: Double { auction.leader == nil ? 20 : 12 }
 
@@ -630,85 +645,148 @@ struct AuctionBox: View {
         }
     }
 
+    private var card: RoundedRectangle {
+        RoundedRectangle(cornerRadius: MMRadius.lg, style: .continuous)
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
-        VStack(spacing: 5) {
-            HStack(spacing: 5) {
-                Art.icon(.gavel, size: 12, tint: P.gold)
-                Text(auction.estate == nil ? "AUCTION" : "ESTATE SALE")
-                    .font(.system(size: 10, weight: .black, design: .rounded))
-                    .kerning(1.5)
-                    .foregroundStyle(P.gold)
-            }
-
-            // The deed's printed price stays the reference for the bidding —
-            // at an auction-only table there is no other place it is said. It
-            // rides the name's line: the well is a fixed square, and a line of
-            // its own pushed the box up under the turn clock.
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(store.tile(auction.tile)?.name ?? "Property")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(P.ink)
-                if let price = store.tile(auction.tile)?.price, price > 0 {
-                    Text("deed \(money(price))")
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
-                }
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-
-            // An estate lot (1.0.6, G5) says whose it was and how much more
-            // follows. The turn has no clock while the estate sells, so the
-            // line takes the room the clock would have had.
-            if let line = estateLine {
-                Text(line)
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(P.ink3)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-            }
-
-            Text(money(auction.bid))
-                .font(.system(size: 26, weight: .heavy, design: .rounded))
-                .foregroundStyle(P.gold)
-
-            if let leader = store.state?.player(auction.leader) {
-                Text("leading: \(leader.name)")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(css: leader.color))
-                    .lineLimit(1)
-            } else {
-                Text("no bids yet")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(P.ink3)
-            }
-
-            countdownBar(P)
-
+        let estate = auction.estate.map { EstateProgress($0, auction: auction, store: store) }
+        VStack(spacing: 8) {
+            header(estate, P)
+            LotDeed(tile: store.tile(auction.tile))
+            bidLine(P)
             seatSwitcher(P)
-
-            bidControls(P)
+            controls(P)
+            if let estate { upNext(estate, P) }
         }
-        .padding(.horizontal, 6)
+        .padding(11)
+        .frame(maxWidth: 330)
+        .background(P.card, in: card)
+        // An estate lot wears the brass rim: it is a sale with a story, and
+        // the table should see at a glance that it is not just a landing.
+        .overlay(card.stroke(estate == nil ? P.rule : P.gold.opacity(0.55), lineWidth: 1))
+        .shadow(color: .black.opacity(scheme == .light ? 0.16 : 0.45), radius: 14, y: 6)
+        .mmControls(on: .paper)
         // A pick outlives its seat otherwise: drop it when the race changes
         // so the paddle falls back to a seat that is actually still bidding.
         .onChange(of: auction.inRace) { _, race in
             if let chosen = chosenSeat, !race.contains(chosen) { chosenSeat = nil }
         }
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: auction.bid)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: auction.inRace)
+        .accessibilityElement(children: .contain)
     }
 
-    /// "Ravi's estate — 2 more after this", or "— the last lot".
-    private var estateLine: String? {
-        guard let estate = auction.estate else { return nil }
-        let left = estate.left ?? 0
-        return "\(estate.from)’s estate — " + (left > 0 ? "\(left) more after this" : "the last lot")
+    // MARK: the kind of sale
+
+    /// "AUCTION", or "ESTATE SALE" with the lot's place in it as pips and,
+    /// on the line under it, whose estate it was and which lot this is.
+    private func header(_ estate: EstateProgress?, _ P: Palette) -> some View {
+        let brass = BackdropKind.paper.settledGlass(P).goldInk
+        return VStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Art.icon(.gavel, size: 13, tint: brass)
+                Text(estate == nil ? "AUCTION" : "ESTATE SALE")
+                    .font(.system(size: 10.5, weight: .black, design: .rounded))
+                    .kerning(1.4)
+                    .foregroundStyle(brass)
+                    .fixedSize()
+                Spacer(minLength: 6)
+                if let estate, let lot = estate.lot, let total = estate.total {
+                    LotPips(lot: lot, total: total)
+                }
+            }
+            if let estate {
+                HStack(spacing: 6) {
+                    if let p = estate.player {
+                        AvatarView(name: p.name, colorCSS: p.color, flag: "", size: 17, emoji: p.avatar ?? "")
+                    }
+                    Text("\(estate.from)’s estate")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    Text(estate.lotLabel)
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(P.ink3)
+                        .fixedSize()
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
+
+    // MARK: the bid
+
+    /// The bid, large, and who holds it — or, before anybody has bid, that
+    /// nobody has and where it opens. The countdown rides beside it.
+    private func bidLine(_ P: Palette) -> some View {
+        let brass = BackdropKind.paper.settledGlass(P).goldInk
+        let leader = store.state?.player(auction.leader)
+        return HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                if let leader {
+                    Text(money(auction.bid))
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(brass)
+                        .contentTransition(.numericText(value: Double(auction.bid)))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    leaderChip(leader, P)
+                } else {
+                    Text("No bids yet")
+                        .font(.system(size: 20, weight: .heavy, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("Opens at \(money(10))")
+                        .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+
+            // No deadline, no countdown: an auction at a table with nobody to
+            // wait for runs until it is settled, and a ring pinned at 0 would
+            // be a lie.
+            if let endsAt = auction.endsAt {
+                CountdownRing(endsAt: endsAt, window: windowSeconds)
+            }
+        }
+    }
+
+    /// The leader's face and name in a chip of their own colour — "You lead"
+    /// when the paddle on the table is this phone's.
+    private func leaderChip(_ leader: PlayerState, _ P: Palette) -> some View {
+        let mine = leader.id == store.meId
+        let hue = mine ? P.good : Color(css: leader.color)
+        return HStack(spacing: 5) {
+            AvatarView(name: leader.name, colorCSS: leader.color, flag: "", size: 16, emoji: leader.avatar ?? "")
+            Text(mine ? "You lead" : "\(leader.name) leads")
+                .font(.system(size: 11.5, weight: .heavy, design: .rounded))
+                .foregroundStyle(P.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.leading, 2)
+        .padding(.trailing, 8)
+        .padding(.vertical, 2)
+        .background(hue.opacity(0.16), in: Capsule())
+        .overlay(Capsule().stroke(hue.opacity(0.5), lineWidth: 1))
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+        .id(leader.id)
+    }
+
+    // MARK: the paddle
 
     /// One chip per local seat still racing, shown only when the phone holds
     /// more than one. Tap a chip and the bid buttons below speak for that
-    /// player. Compact on purpose — the whole row shares a 240pt well.
+    /// player. Compact on purpose — the whole row shares the well.
     @ViewBuilder
     private func seatSwitcher(_ P: Palette) -> some View {
         let racers = localRacers
@@ -718,41 +796,12 @@ struct AuctionBox: View {
         }
     }
 
-    /// No deadline, no countdown: an auction at a table with nobody to wait
-    /// for runs until it is settled, and a bar pinned at 0s would be a lie.
+    /// The bids and Pass as one row, or — for a seat with nothing to press —
+    /// a pill that says where it stands.
     @ViewBuilder
-    private func countdownBar(_ P: Palette) -> some View {
-        if let endsAt = auction.endsAt {
-            TimelineView(.animation) { context in
-                let now = context.date.timeIntervalSince1970
-                let remaining = max(0, endsAt / 1000 - now)
-                let fraction = min(1, remaining / windowSeconds)
-                HStack(spacing: 7) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(P.sunken)
-                            Capsule().fill(remaining <= 5 ? P.bad : P.gold)
-                                .frame(width: max(0, geo.size.width * fraction))
-                        }
-                    }
-                    .frame(height: 5)
-                    // Every other clock in the game shows a number; this one used
-                    // to be a bar you had to guess at.
-                    Text("\(Int(ceil(remaining)))s")
-                        .font(.system(size: 10.5, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(remaining <= 5 ? P.bad : P.ink3)
-                        .fixedSize()
-                }
-            }
-            .frame(height: 14)
-            .padding(.vertical, 2)
-        }
-    }
-
-    @ViewBuilder
-    private func bidControls(_ P: Palette) -> some View {
-        if let seat = biddingSeat {
+    private func controls(_ P: Palette) -> some View {
+        let leadingAlone = biddingSeat != nil && biddingSeat == auction.leader && localRacers.count == 1
+        if let seat = biddingSeat, !leadingAlone {
             let next = auction.bid == 0 ? 10 : auction.bid + 10
             // Mirrors the server's escrow rule: the leading bid already left
             // the leader's wallet, so their real ceiling is cash in hand plus
@@ -770,30 +819,257 @@ struct AuctionBox: View {
                         .foregroundStyle(Color(css: p.color))
                         .lineLimit(1)
                 }
-                if amounts.isEmpty {
-                    Text("\(money(next)) is out of reach — you can only pass.")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(P.ink3)
-                        .multilineTextAlignment(.center)
-                } else {
-                    HStack(spacing: 6) {
-                        ForEach(amounts, id: \.self) { amount in
-                            Button(money(amount)) {
-                                store.bid(amount, as: seat)
-                                Haptics.tap()
-                            }
-                            .buttonStyle(CompactAuctionButtonStyle(kind: .gold))
-                        }
+                HStack(spacing: 5) {
+                    if amounts.isEmpty {
+                        Text("\(money(next)) is out of reach")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(P.ink3)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity)
                     }
+                    ForEach(amounts, id: \.self) { amount in
+                        Button(money(amount)) {
+                            store.bid(amount, as: seat)
+                            Haptics.tap()
+                        }
+                        .buttonStyle(CompactAuctionButtonStyle(kind: .gold))
+                        .accessibilityLabel("Bid \(money(amount))")
+                    }
+                    Button("Pass") {
+                        store.passBid(as: seat)
+                        Haptics.tap()
+                    }
+                    .buttonStyle(CompactAuctionButtonStyle(kind: .bad, quiet: true))
                 }
-                Button("Pass") { store.passBid(as: seat) }
-                    .buttonStyle(CompactAuctionButtonStyle(kind: .bad))
             }
+            .transition(.opacity)
         } else {
-            Text("you're out")
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(P.ink3)
+            standing(leadingAlone: leadingAlone, P)
+                .transition(.scale(scale: 0.94).combined(with: .opacity))
         }
+    }
+
+    /// Where this phone stands when it has nothing to press: holding the
+    /// top bid, out of this lot, or out of the game (or only watching).
+    private func standing(leadingAlone: Bool, _ P: Palette) -> some View {
+        let me = store.state?.player(store.meId)
+        let out = store.isWatching || me == nil || me?.isBankrupt == true
+        let (text, hue): (String, Color) = leadingAlone
+            ? ("You lead — hold on", P.good)
+            : out ? ("You’re out", P.ink3)
+            : ("You passed", P.ink2)
+        return HStack(spacing: 6) {
+            if leadingAlone {
+                Art.icon(.crown, size: 13)
+            } else if out {
+                Art.icon(.eye, size: 13, tint: hue)
+            } else {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(hue)
+            }
+            Text(text)
+                .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+                .foregroundStyle(leadingAlone ? P.ink : hue)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 13)
+        .background(hue.opacity(leadingAlone ? 0.16 : 0.10), in: Capsule())
+        .overlay(Capsule().stroke(hue.opacity(leadingAlone ? 0.5 : 0.28), lineWidth: 1))
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: what follows
+
+    /// "Up next: Rome · Venice" under an estate lot, when this phone saw the
+    /// estate before it went under the hammer; "2 more lots to come" when it
+    /// joined too late to know which.
+    @ViewBuilder
+    private func upNext(_ estate: EstateProgress, _ P: Palette) -> some View {
+        if estate.left > 0 {
+            HStack(spacing: 5) {
+                Text("UP NEXT")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .kerning(0.8)
+                    .foregroundStyle(P.ink3)
+                    .fixedSize()
+                Text(estate.upNextText)
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 1)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+/// Where an estate lot stands within its estate. The server says whose it is
+/// and how many follow; how many there were in all comes off its own log line
+/// ("Ravi's 3 properties go to auction, one at a time"), or failing that the
+/// deeds this phone saw the player holding; which ones follow comes off those
+/// deeds alone, and is only said when it agrees with the server's count.
+private struct EstateProgress {
+    let from: String
+    let player: PlayerState?
+    let left: Int
+    let total: Int?
+    /// The names of the lots still to come, in the order they will come.
+    let following: [String]
+
+    @MainActor
+    init(_ estate: EstateLot, auction: AuctionState, store: GameStore) {
+        let more = max(0, estate.left ?? 0)
+        from = estate.from
+        left = more
+        player = store.state?.players.first { $0.name == estate.from }
+
+        let deeds = store.estateDeeds[estate.from] ?? []
+        let said = Self.announced(estate.from, in: store.state?.log ?? [])
+        let count = said ?? (deeds.isEmpty ? nil : deeds.count)
+        total = count.flatMap { $0 > more ? $0 : nil }
+
+        let after = deeds.filter { $0 > auction.tile && store.state?.owner(of: $0) == nil }
+        following = after.count == more ? after.compactMap { store.tile($0)?.name } : []
+    }
+
+    /// 1-based: which lot of the estate this is.
+    var lot: Int? { total.map { $0 - left } }
+
+    var lotLabel: String {
+        if let lot, let total { return "Lot \(lot) of \(total)" }
+        return left == 0 ? "Last lot" : "\(left) more to come"
+    }
+
+    var upNextText: String {
+        guard !following.isEmpty else { return "\(left) more lot\(left == 1 ? "" : "s")" }
+        let shown = following.prefix(2).joined(separator: " · ")
+        return following.count > 2 ? "\(shown) · +\(following.count - 2)" : shown
+    }
+
+    /// The size of the estate as the server announced it, read off the most
+    /// recent sale line for this player.
+    private static func announced(_ name: String, in log: [LogLine]) -> Int? {
+        let opening = "\(name)'s "
+        guard let line = log.last(where: {
+            $0.kind == "auction" && $0.text.hasPrefix(opening) && $0.text.hasSuffix("to auction, one at a time")
+        }) else { return nil }
+        return Int(line.text.dropFirst(opening.count).prefix { $0.isNumber })
+    }
+}
+
+/// The estate's lots as a row of pips: the ones sold (or passed over) dim,
+/// this one a lit bar, the ones to come hollow. Past ten a row of dots stops
+/// being countable, and the words beside it say it all.
+private struct LotPips: View {
+    let lot: Int
+    let total: Int
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        if total > 1, total <= 10 {
+            HStack(spacing: 3) {
+                ForEach(1...total, id: \.self) { i in
+                    Capsule()
+                        .fill(i < lot ? P.gold.opacity(0.45) : i == lot ? P.gold : P.rule2)
+                        .frame(width: i == lot ? 13 : 5, height: 5)
+                }
+            }
+            .animation(.snappy(duration: 0.3), value: lot)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// The lot on the block, drawn as a small deed: its colour down the edge, its
+/// mark, its name and the rent that makes it worth having, with the printed
+/// price on the right — the guide every bid is measured against.
+private struct LotDeed: View {
+    let tile: TileData?
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let shape = RoundedRectangle(cornerRadius: MMRadius.sm, style: .continuous)
+        HStack(spacing: 9) {
+            TileMark(tile: tile, size: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tile?.name ?? "Property")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(P.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                if let rent = rentLine {
+                    Text(rent)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+            Spacer(minLength: 4)
+            if let price = tile?.price, price > 0 {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("DEED")
+                        .font(.system(size: 8.5, weight: .black, design: .rounded))
+                        .kerning(0.8)
+                        .foregroundStyle(P.ink3)
+                    Text(money(price))
+                        .font(.system(size: 13.5, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(P.ink2)
+                }
+                .fixedSize()
+            }
+        }
+        .padding(.vertical, 7)
+        .padding(.leading, 13)
+        .padding(.trailing, 10)
+        .background(P.sunken, in: shape)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(band(P)).frame(width: 5)
+        }
+        .clipShape(shape)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// The deed's colour: the group's for a street, and the same airline blue
+    /// and utility cyan the deed sheet paints its header in.
+    private func band(_ P: Palette) -> Color {
+        switch tile?.type {
+        case "airport": Color(hex: 0x5B8DEF)
+        case "utility": Color(hex: 0x22D3EE)
+        default: tile.flatMap { store.groupInfo(for: $0) }.map { Color(css: $0.color) } ?? P.rule2
+        }
+    }
+
+    /// The figure that tells a bidder what the deed earns.
+    private var rentLine: String? {
+        switch tile?.type {
+        case "property":
+            guard let rent = tile?.rent, let base = rent.first else { return nil }
+            if let hotel = rent[safe: 5] { return "Rent \(money(base)) · hotel \(money(hotel))" }
+            return "Rent \(money(base))"
+        case "airport": return "Rent \(money(25)), up to \(money(200))"
+        case "utility": return "Rent 4× the dice, 10× with both"
+        default: return nil
+        }
+    }
+
+    private var accessibilityText: String {
+        var words = [tile?.name ?? "Property"]
+        if let price = tile?.price { words.append("deed \(money(price))") }
+        if let rent = rentLine { words.append(rent) }
+        return words.joined(separator: ", ")
     }
 }
 
@@ -848,31 +1124,40 @@ private struct SeatChipRow: View {
     }
 }
 
-/// Tighter sibling of MMButtonStyle so three bid buttons + pass fit the well.
+/// Tighter sibling of MMButtonStyle so three bid buttons and Pass fit the
+/// well as one row, each taking an equal share of it.
 ///
 /// It takes the same kinds, and each kind's plate and ink from the same place
 /// MMButtonStyle does: a bid is the gold plate with the palette's on-accent
-/// ink, as every gold button in the app is, and Pass the bad plate in white.
-/// A bid printed in white was the one gold button that did not match — and on
-/// the brass tables, whose on-accent ink is dark, white on their gold was the
-/// faintest pairing in the well.
+/// ink, as every gold button in the app is. A bid printed in white was the one
+/// gold button that did not match — and on the brass tables, whose on-accent
+/// ink is dark, white on their gold was the faintest pairing in the well.
+///
+/// `quiet` is Pass (1.0.7): the bad kind's red as words on a wash of itself
+/// rather than a solid plate, so the row reads as three offers and a way out
+/// instead of four buttons shouting at once.
 private struct CompactAuctionButtonStyle: ButtonStyle {
     let kind: MMButtonStyle.Kind
+    var quiet = false
 
     @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
         let P = Palette.current(scheme)
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        let plate = kind.plate(P) ?? P.sunken
         return configuration.label
-            .font(.system(size: 12, weight: .bold, design: .rounded))
-            .foregroundStyle(kind.ink(P))
-            .padding(.vertical, 6)
-            .padding(.horizontal, 11)
-            .background(kind.plate(P) ?? P.sunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 1)
-            )
+            .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(quiet ? plate : kind.ink(P))
+            .padding(.vertical, 7)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity)
+            .background(quiet ? plate.opacity(0.12) : plate, in: shape)
+            .overlay(shape.stroke(quiet ? plate.opacity(0.45) : .white.opacity(0.18), lineWidth: 1))
+            .contentShape(shape)
             .opacity(configuration.isPressed ? 0.82 : 1)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.spring(duration: 0.2), value: configuration.isPressed)

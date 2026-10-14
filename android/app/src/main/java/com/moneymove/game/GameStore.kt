@@ -390,6 +390,14 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     var confirm: TableConfirm? by mutableStateOf(null)
         private set
 
+    /**
+     * Which of this device's seats a [TableConfirm.GIVE_UP_CHOICE] is for —
+     * "Who gives up?" may have picked a pass & play guest, and the white
+     * flag and the answer about its streets both go out on that seat's line.
+     */
+    var giveUpSeat: String? by mutableStateOf(null)
+        private set
+
     fun openSheet(next: TableSheet?) { sheet = next }
     fun closeSheet() { sheet = null }
 
@@ -464,7 +472,10 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun ask(question: TableConfirm?) { confirm = question }
-    fun dismissConfirm() { confirm = null }
+    fun dismissConfirm() {
+        confirm = null
+        giveUpSeat = null
+    }
 
     /**
      * The way out of a table. Mid-game, leaving deserves a second thought and
@@ -1494,6 +1505,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
         mergeLog(next.log)
         noteChat()
+        noteEstates(old, next)
 
         // Keep the list of tables still waiting for this device honest.
         noteUnfinished(next)
@@ -2047,6 +2059,57 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Every estate this phone saw go, by the bankrupt player's name — the
+     * one thing an estate lot carries (G5) — as the deeds that went with it,
+     * in board order. The auction card reads its "Lot 2 of 4" and "Up next"
+     * from it ([estateProgress]): the server sends only how many lots are
+     * left. Not observed: it changes in the same push as the state it is
+     * read beside.
+     */
+    private val estateBook = HashMap<String, List<Int>>()
+
+    /**
+     * Keep [estateBook], and bring the question about a bankrupt seat's
+     * streets to the front when it is one of this device's.
+     *
+     * A seat that went out in this push left its deeds in the last one — the
+     * estate, whatever then becomes of it — and a "player decides" question
+     * names them itself. A new game forgets the lot.
+     *
+     * The question is twenty seconds and a modal, so nothing may sit over
+     * it: a sheet open on this table is a window above the table's own, so
+     * it goes, and so does any question already up.
+     */
+    private fun noteEstates(old: GameState?, next: GameState) {
+        if (next.isPlaying && old?.isPlaying != true) estateBook.clear()
+        if (old != null && old.isPlaying) {
+            for (p in next.players) {
+                if (!p.isBankrupt || old.player(p.id)?.isBankrupt != false) continue
+                val deeds = old.ownership.mapNotNull { (key, own) -> key.toIntOrNull()?.takeIf { own.owner == p.id } }
+                if (deeds.isNotEmpty()) estateBook[p.name] = deeds.sorted()
+            }
+        }
+        val asked = next.bankruptChoice ?: return
+        if (asked.properties.isNotEmpty()) estateBook[asked.name] = asked.properties.sorted()
+        val fresh = old?.bankruptChoice?.let { it.playerId != asked.playerId || it.endsAt != asked.endsAt } ?: true
+        if (fresh && next.isPlaying && !isSpectating && isLocal(asked.playerId)) {
+            sheet = null
+            dismissConfirm()
+            Haptics.turn()
+        }
+    }
+
+    /**
+     * Where the estate sale behind [auction] has got to: "Lot 2 of 4" and the
+     * streets still to come. Null for an ordinary auction.
+     */
+    fun estateProgress(auction: AuctionState?): EstateProgress? {
+        val lot = auction?.estate ?: return null
+        val log = state?.log.orEmpty()
+        return EstateProgress.of(auction.tile, lot.left, estateBook[lot.from], EstateProgress.announced(log, lot.from))
+    }
+
+    /**
      * The auction's own voice: the gavel when it opens — held back with the
      * box if the landing that opened it is still walking — and a rising
      * paddle tick for every new bid, pitched by how high the bid is.
@@ -2309,9 +2372,18 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
     /** Kept for the debt panel's "Back in the black"; the server settles a paid debt by itself. */
     fun payDebt() = emitAsActive("payDebt")
-    fun declareBankrupt() {
-        confirm = null
-        emitAsActive("bankrupt")
+
+    /**
+     * Go bankrupt from the debt panel or the properties list. [auction] is
+     * the answer to "what happens to your streets?" given in the same
+     * dialog at a "player decides" table (1.0.7) — sent with the white flag,
+     * so the seat is not asked a second time. Null is the old bare event:
+     * the table's own rule decides, and at a "player decides" table the
+     * question follows.
+     */
+    fun declareBankrupt(auction: Boolean? = null) {
+        dismissConfirm()
+        emitBankrupt(activeId, auction)
     }
 
     /**
@@ -2319,10 +2391,66 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * fine — conceding is a right, not a turn action — and the seat stays at
      * the table as a spectator. `seat` says which local player is giving up;
      * the main seat when nobody says otherwise.
+     *
+     * At a "player decides" table a seat that holds deeds is asked what
+     * happens to them inside the same confirmation, before the flag goes
+     * ([TableConfirm.GIVE_UP_CHOICE]); [auction] is that answer.
      */
-    fun concede(seat: String? = null) {
-        confirm = null
-        emitAs(localOr(seat), "bankrupt")
+    fun concede(seat: String? = null, auction: Boolean? = null) {
+        val who = localOr(seat)
+        if (auction == null && decidesEstate(who)) {
+            giveUpSeat = who
+            confirm = TableConfirm.GIVE_UP_CHOICE
+            return
+        }
+        dismissConfirm()
+        emitBankrupt(who, auction)
+    }
+
+    private fun emitBankrupt(seat: String, auction: Boolean?) {
+        if (auction == null) emitAs(seat, "bankrupt") else emitAs(seat, "bankrupt", JSONObject(mapOf("auction" to auction)))
+    }
+
+    /**
+     * Whether going out from [seat] asks the question about its streets: a
+     * "player decides" table, and at least one deed to decide about.
+     */
+    fun decidesEstate(seat: String?): Boolean {
+        val s = state ?: return false
+        return seat != null && s.isPlaying && s.estateRule == EstateRule.CHOOSE && s.ownedCount(seat) > 0
+    }
+
+    /** The deeds [seat] holds, in board order — what its estate would be. */
+    fun deedsOf(seat: String?): List<Int> {
+        val s = state ?: return emptyList()
+        if (seat == null) return emptyList()
+        return s.ownership.mapNotNull { (key, own) -> key.toIntOrNull()?.takeIf { own.owner == seat } }.sorted()
+    }
+
+    /**
+     * The question about a bankrupt seat's streets, when that seat is one of
+     * this device's: the prompt is theirs to answer. Never to a watcher.
+     */
+    val myBankruptChoice: BankruptChoice?
+        get() = state?.takeIf { it.isPlaying && !isSpectating }?.bankruptChoice?.takeIf { isLocal(it.playerId) }
+
+    /**
+     * The same question when somebody else is being asked it: the table
+     * waits, and says who on.
+     */
+    val othersBankruptChoice: BankruptChoice?
+        get() = state?.takeIf { it.isPlaying }?.bankruptChoice?.takeIf { isSpectating || !isLocal(it.playerId) }
+
+    /**
+     * "Give them back to the bank" (false) or "Auction them to everyone"
+     * (true), from the seat being asked — on its own connection, which is the
+     * only one the server takes it from. Nothing happens on this side until
+     * the next push clears the question.
+     */
+    fun answerBankruptChoice(auction: Boolean) {
+        val seat = myBankruptChoice?.playerId ?: return
+        Haptics.tap()
+        emitAs(seat, "bankruptChoice", JSONObject(mapOf("auction" to auction)))
     }
 
     /**
@@ -2867,6 +2995,11 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             old.trades.map { it.id to it.isSetAside } != next.trades.map { it.id to it.isSetAside }
         if (!moved || !next.isPlaying) return
         if (sheet != null || confirm != null || showGameOver || timedOut) return
+        // A seat here is answering what happens to its streets (1.0.7): a
+        // sheet is a window of its own and would draw over that prompt, its
+        // tiles and its clock. The offer waits in the dock, unshown, so it
+        // can still pop on the next move once the question has cleared.
+        if (myBankruptChoice != null) return
         val waiting = next.trades.filter { isLocal(it.to) && !it.isSetAside }
         when (val pop = offerPop(waiting, offersShown)) {
             null -> Unit
@@ -3416,10 +3549,21 @@ enum class TableConfirm {
 
     /**
      * The same question from the debt panel, where the money has somewhere to
-     * go. Copy: "Everything you own goes to whoever you owe, and you are out
-     * of the game."
+     * go. Copy: "Whatever you've paid stays paid. Your properties go back to
+     * the bank and you are out of the game." — or, at an auction table, that
+     * they are auctioned; at a "player decides" table the two answers to what
+     * happens to them stand in for "Go bankrupt".
      */
     DEBT_BANKRUPT,
+
+    /**
+     * Giving up at a "player decides" table (1.0.7) with deeds to decide
+     * about: the white flag and the answer in one question, so the seat
+     * ([GameStore.giveUpSeat]) is not asked again once it is out. "Give them
+     * back to the bank" and "Auction them to everyone" each call
+     * [GameStore.concede] with the answer.
+     */
+    GIVE_UP_CHOICE,
 }
 
 /** Seconds on the choreography's clock, as the milliseconds a timer waits. */

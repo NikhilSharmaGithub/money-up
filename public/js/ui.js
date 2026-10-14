@@ -338,8 +338,8 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
   const here = deviceCodes();
   const emptySeats = state.status === 'lobby'
     ? Math.max(0, state.settings.maxPlayers - state.players.length) : 0;
-  const structure = state.players.map((p) => `${p.id}:${shown.out(p) ? 1 : 0}:${p.color}:${p.avatar || ''}`).join('|')
-    + `:${state.status}:${state.hostId}:${emptySeats}`;
+  const structure = state.players.map((p) => `${p.id}:${shown.out(p) ? 1 : 0}:${p.color}:${p.avatar || ''}:${p.isBot ? 1 : 0}`).join('|')
+    + `:${state.status}:${state.hostId}:${emptySeats}:${botSkillShown(state) ? botLevelOf(state).id : ''}`;
 
   if (el.dataset.structure !== structure) {
     el.dataset.structure = structure;
@@ -366,11 +366,19 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
         <div class="pinfo"><div class="pname dim">Empty seat</div>
           <div class="pmeta dim">waiting for a player…</div></div>
         ${state.hostId === meId && !state.quick && !state.cup ? '<button class="btn tiny" data-addbot>Add bot</button>' : ''}
-      </div>`).join('');
+      </div>`).join('')
+      + botSkillCard(state, meId);
 
     el.querySelectorAll('[data-addbot]').forEach((b) => {
-      b.onclick = () => { sfx.click(); actions.addBot(); };
+      b.onclick = () => { sfx.click(); botAddedAt = Date.now(); actions.addBot(); };
     });
+    wirePickers(el, actions);
+    // A bot added from the foot of the settings is seated a long way up the
+    // column; the host is shown the card it brought with it.
+    const arrived = $('.bot-skill.arriving', el);
+    if (arrived && Date.now() - botAddedAt < 4000) {
+      requestAnimationFrame(() => arrived.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    }
   }
 
   state.players.forEach((p) => {
@@ -480,6 +488,8 @@ export function renderPlayers(state, meId, el, actions, shown = RAW) {
         : p.removedFor === 'quit' ? 'LEFT' : 'TIMED OUT'}</i>`);
     } else if (!p.isBot && p.botControlled) tags.push('<i class="tag off">BOT PLAYING</i>');
     else if (!p.connected && !p.isBot) tags.push('<i class="tag off">AWAY</i>');
+    // The game is waiting on this seat's answer about its streets (1.0.7).
+    if (state.bankruptChoice?.playerId === p.id) tags.push('<i class="tag deciding">DECIDING</i>');
     if (p.jail) tags.push('<i class="tag jail">JAIL</i>');
     if (p.skipTurns > 0) tags.push('<i class="tag vac">VACATION</i>');
     if (p.getOutCards > 0) tags.push(`<i class="tag card">${icon('ticket')}${p.getOutCards > 1 ? p.getOutCards : ''}</i>`);
@@ -730,7 +740,7 @@ export function renderRightPanel(state, meId, el, actions) {
   // same board id dealt into a different order — only its uid moves.
   const layout = state.map.uid || state.map.id;
   const sig = state.status === 'lobby'
-    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${layout}:${state.players.length}:${quickSig(state)}`
+    ? `lobby:${state.hostId}:${meId}:${me?.color}:${JSON.stringify(state.settings)}:${layout}:${state.players.length}:${state.players.filter((p) => p.isBot).length}:${quickSig(state)}`
     : `game:${layout}:${JSON.stringify(state.ownership)}:${meId}:${state.vacationPot}:${tradeSig(state)}:${state.status}:${state.settings.mortgage}:${debtSig(state, meId)}:${me?.bankrupt ? 1 : 0}${me?.timedOut ? 'x' : ''}:${lapSig(state)}:${state.turn?.playerId || ''}${me ? '' : `:w${state.spectators || 0}`}`;
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;
@@ -1263,8 +1273,10 @@ function wireLookPanel(state, meId, el, actions) {
  * The phrases a Play-now table's roll is told in, in the server's reading
  * order (quickRollParts), each paired with the setting it describes — so a
  * chip can say which rule it is when the host has moved it off the roll.
+ * What a bankruptcy does with the streets is rolled too (1.0.7), and is the
+ * last phrase.
  */
-const QUICK_PART_KEYS = ['mapId', 'startingCash', 'x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild'];
+const QUICK_PART_KEYS = ['mapId', 'startingCash', 'x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild', 'bankruptProperties'];
 
 /** The five house rules a Play-now table rolls, as the settings name them. */
 const ROLLED_RULES = ['x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild'];
@@ -1334,10 +1346,11 @@ const cashOptions = (current) => {
 /**
  * A Play-now table's rules: the chips it rolled, then the controls under
  * them. Its host may change exactly what the server lists in `editable` —
- * the money, the board and the five house rules the table rolled — from the
- * same rows a private host uses. Everything else a stranger sat down under
- * is shown locked, and everybody else reads every row switched off. A board
- * is never rented here (see paintBoards).
+ * the money, the board, the five house rules the table rolled and, since
+ * 1.0.7, where a bankrupt player's streets go — from the same rows a private
+ * host uses. Everything else a stranger sat down under is shown locked, and
+ * everybody else reads every row switched off. A board is never rented here
+ * (see paintBoards).
  */
 function quickRulesHTML(state, meId) {
   const q = state.quickLobby;
@@ -1350,8 +1363,8 @@ function quickRulesHTML(state, meId) {
       <div class="panel-title">${icon('dice')} ${rolledHeading(state)}</div>
       ${rolledChipsHTML(state)}
       <div class="qr-note">${isHost
-        ? 'You can change the money, the board and these five rules. Changing one un-readies everyone so they can read it.'
-        : 'The host can change the money, the board and these five rules — and a change un-readies everyone, so you get to read it first.'}</div>
+        ? 'You can change the money, the board and these six rules. Changing one un-readies everyone so they can read it.'
+        : 'The host can change the money, the board and these six rules — and a change un-readies everyone, so you get to read it first.'}</div>
       <div class="setting board-setting">
         <div class="s-body">
           <div class="s-name">${icon('map')} Board</div>
@@ -1367,6 +1380,7 @@ function quickRulesHTML(state, meId) {
         </select>
       </div>
       ${rolled.map((d) => toggleRow(state, d, dis(d.key))).join('')}
+      ${estateRow(state, dis('bankruptProperties'))}
       <div class="qr-locked">
         <div class="look-label">${icon('key')} Set by Play now</div>
         ${fixed.map((d) => toggleRow(state, d, 'disabled')).join('')}
@@ -1428,6 +1442,7 @@ function renderQuickLobby(state, meId, el, actions) {
   if (!lobby) return;
   const rules = $('#quickRules', el);
   wireSettingInputs(rules, actions);
+  wirePickers(rules, actions);
   const mayPickBoard = state.hostId === meId && (lobby.editable || []).includes('mapId');
   paintBoards(state, rules, meId, actions, mayPickBoard, false);
 }
@@ -1448,39 +1463,73 @@ const turnClockOptions = (current) => {
 const BOT_LEVELS = [
   { id: 'easy', name: 'Easy', desc: 'House players buy cautiously, bid low and never start a trade' },
   { id: 'normal', name: 'Normal', desc: 'House players play the way they always have' },
-  { id: 'hard', name: 'Hard', desc: 'House players buy almost everything, race to three houses and bid close to value' },
+  { id: 'hard', name: 'Hard', desc: 'House players buy almost everything, race to three houses and bid to stop the leader' },
 ];
 /** The table's bot skill, read as normal from a server that has never heard of it. */
 const botLevelOf = (state) => BOT_LEVELS.find((b) => b.id === state.settings?.botLevel) || BOT_LEVELS[1];
+
+/**
+ * Whether this table has house players for a bot skill to be about (1.0.7):
+ * one is sitting at it, or — in the lobby — the host's Allow bots switch will
+ * fill an empty chair with one at the deal. A switch with every chair taken
+ * by people deals nobody in, so it does not count. Without either, a "Bot
+ * skill" picker is a question about players who are not there, and it read
+ * as one. The same rule as the phones' (hasHouseBots / showsBotSkill).
+ */
+const houseAtTable = (state) => (state.players || []).some((p) => p.isBot)
+  || (state.status === 'lobby' && !!state.settings?.allowBots
+    && (state.players || []).length < (Number(state.settings.maxPlayers) || 0));
 
 // The whole game's clock, in minutes; 0 is no clock at all. A server sends
 // only these five, so there is no odd value to keep the way the turn clock does.
 const GAME_LENGTHS = [0, 20, 30, 45, 60];
 const gameLengthLabel = (n) => (n ? `${n} min` : 'Unlimited');
 
+// The bot skill card comes up when the first house player sits down, and it
+// arrives rather than just being there — once, as it appears, not on every
+// repaint of the seats while it stays.
+let botRowWas = '';
+let botAddedAt = 0;
+
+/** Whether the seats carry the bot skill card (see botSkillCard). */
+const botSkillShown = (state) => state.status === 'lobby' && !state.quick && !state.cup && houseAtTable(state);
+
 /**
- * Bot skill and game length as two lobby rows. A Play-now table keeps the
- * bots and the clock it was matched under, and a cup sets its own table, so
- * neither row is drawn at either (the server refuses both there anyway).
- * Everybody but the host reads them switched off, the way every other row
- * in this panel reads.
+ * Bot skill, under the seats it is about (1.0.7): the first "Add bot" brings
+ * it, and removing the last house player takes it away again — a "Bot skill"
+ * picker over a table of people only was a question about nobody, and it
+ * read as one. A Play-now table's house players always play the usual way
+ * and a cup has none, so it is never drawn at either (the server refuses the
+ * change there anyway). Everybody but the host reads it switched off.
  */
-function tableClockRows(state, dis) {
-  if (state.quick || state.cup) return '';
+function botSkillCard(state, meId) {
+  const shown = botSkillShown(state);
+  const key = shown ? state.id : '';
+  const arriving = shown && botRowWas !== key;
+  botRowWas = key;
+  if (!shown) return '';
   const bots = botLevelOf(state);
+  const dis = state.hostId === meId ? '' : 'disabled';
+  return `
+      <div class="bot-skill${arriving ? ' arriving' : ''}">
+        <div class="bsk-head"><span class="s-icon">${icon('robot')}</span><b>Bot skill</b>
+          <span>${state.players.some((p) => p.isBot) ? 'for the house players at this table' : 'for the house players Allow bots deals in'}</span></div>
+        <div class="chat-channels seg3 bot-seg" role="radiogroup" aria-label="Bot skill">${BOT_LEVELS.map((b) => `
+          <button type="button" role="radio" data-bot="${b.id}" class="${b.id === bots.id ? 'on' : ''}"
+            aria-checked="${b.id === bots.id}" ${dis}>${b.name}</button>`).join('')}
+        </div>
+        <div class="s-desc">${bots.desc}</div>
+      </div>`;
+}
+
+/**
+ * Game length as a lobby row. A Play-now table keeps the clock it was matched
+ * under, and a cup sets its own table, so it is not drawn at either.
+ */
+function gameLengthRow(state, dis) {
+  if (state.quick || state.cup) return '';
   const minutes = Number(state.settings.timeLimit) || 0;
   return `
-      <div class="setting stacked">
-        <span class="s-icon">${icon('robot')}</span>
-        <div class="s-body">
-          <div class="s-name">Bot skill</div>
-          <div class="s-desc">${bots.desc}</div>
-          <div class="chat-channels seg3 bot-seg" role="radiogroup" aria-label="Bot skill">${BOT_LEVELS.map((b) => `
-            <button type="button" role="radio" data-bot="${b.id}" class="${b.id === bots.id ? 'on' : ''}"
-              aria-checked="${b.id === bots.id}" ${dis}>${b.name}</button>`).join('')}
-          </div>
-        </div>
-      </div>
       <div class="setting">
         <span class="s-icon">${icon('clock')}</span>
         <div class="s-body"><div class="s-name">Game length</div>
@@ -1493,21 +1542,72 @@ function tableClockRows(state, dis) {
       </div>`;
 }
 
-// What happens to a bankrupt player's properties (1.0.6). A list like the
-// bot skill rather than a switch, because "off" would not say which of the
-// two a table is doing — and the words under it are the rule itself.
+// What happens to a bankrupt player's properties: back to the bank or under
+// the hammer (1.0.6), or — since 1.0.7 — the bankrupt player's own call. A
+// list like the bot skill rather than a switch, because "off" would not say
+// which of the three a table is doing, and the words under it are the rule
+// itself. `value` is how the rules sheet prints it.
 const ESTATE_RULES = [
-  { id: 'release', name: 'Back to the bank', desc: 'A bankrupt player’s properties go back to the bank, unowned' },
-  { id: 'auction', name: 'Auction them', desc: 'A bankrupt player’s properties are auctioned one at a time to everyone still playing' },
+  { id: 'release', name: 'Back to the bank', value: 'Back to the bank',
+    desc: 'A bankrupt player’s properties go back to the bank, unowned' },
+  { id: 'auction', name: 'Auction them', value: 'Auctioned',
+    desc: 'A bankrupt player’s properties are auctioned to everyone, one by one' },
+  { id: 'choose', name: 'Player decides', value: 'Player decides',
+    desc: 'The player who goes bankrupt picks: back to the bank, or auction' },
 ];
-/** The table's estate rule, read as "back to the bank" from a server that has never heard of it. */
-const estateRuleOf = (state) => ESTATE_RULES.find((r) => r.id === state.settings?.bankruptProperties) || ESTATE_RULES[0];
 /**
- * Whether a seat that leaves this game — bankrupt, conceding or walking out —
- * sends its streets under the hammer. Play-now and cup tables never do, as
- * the server always reads them as "back to the bank" whatever is stored.
+ * The estate rule this table plays. A cup always sends estates back to the
+ * bank whatever the field says, and so does a server that has never heard of
+ * the setting. A Play-now table plays what it rolled (1.0.7).
  */
-export const estateGoesToAuction = (state) => !!state && !state.quick && !state.cup && estateRuleOf(state).id === 'auction';
+const estateRuleOf = (state) => (state?.cup ? ESTATE_RULES[0]
+  : ESTATE_RULES.find((r) => r.id === state?.settings?.bankruptProperties) || ESTATE_RULES[0]);
+/** 'release', 'auction' or 'choose' — where a seat's streets go when it leaves the game. */
+export const estateRule = (state) => estateRuleOf(state).id;
+
+/**
+ * Bankrupt properties as a lobby row: the three ways side by side across the
+ * row, and the one in force spelled out under them. The same row at a
+ * private table and, for its host, at a Play-now one (1.0.7) — wherever the
+ * server lets the host change it; everyone else reads it switched off.
+ */
+function estateRow(state, dis) {
+  const estate = estateRuleOf(state);
+  return `
+      <div class="setting stacked estate-setting">
+        <span class="s-icon">${icon('skull')}</span>
+        <div class="s-body"><div class="s-name">Bankrupt properties</div></div>
+        <div class="chat-channels seg3 bot-seg estate-seg" role="radiogroup" aria-label="Bankrupt properties">${ESTATE_RULES.map((r) => `
+          <button type="button" role="radio" data-estate="${r.id}" class="${r.id === estate.id ? 'on' : ''}"
+            aria-checked="${r.id === estate.id}" ${dis}>${r.name}</button>`).join('')}
+        </div>
+        <div class="s-desc estate-desc">${estate.desc}</div>
+      </div>`;
+}
+
+/**
+ * The pickers answer when the state says the table changed, not under the
+ * finger: a refused change sends no new state, and a lozenge moved ahead of
+ * the server would be left sitting on a side the table does not have.
+ */
+function wirePickers(root, actions) {
+  root.querySelectorAll('[data-bot]').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = () => {
+      if (b.classList.contains('on')) return;
+      sfx.click();
+      actions.settings({ botLevel: b.dataset.bot });
+    };
+  });
+  root.querySelectorAll('[data-estate]').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = () => {
+      if (b.classList.contains('on')) return;
+      sfx.click();
+      actions.settings({ bankruptProperties: b.dataset.estate });
+    };
+  });
+}
 
 /**
  * Auction only, as a lobby row that sits straight under Auction: the two are
@@ -1527,31 +1627,21 @@ function auctionOnlyRow(state, dis) {
 
 /**
  * The other two house rules of 1.0.6 round 2: a shuffled board and what a
- * bankruptcy does with the streets. Like bot skill and game length, neither
- * is drawn at a Play-now or a cup table, which always play the printed board
- * and send estates back to the bank (the server refuses both there anyway).
+ * bankruptcy does with the streets. Neither is drawn here at a Play-now or a
+ * cup table: both play the printed board, a cup sends estates back to the
+ * bank, and a Play-now table shows its estate rule with the rules it rolled
+ * (see quickRulesHTML).
  */
 function houseRuleRows(state, dis) {
   if (state.quick || state.cup) return '';
   const shuffle = !!state.settings.shuffleBoard;
-  const estate = estateRuleOf(state);
   return `
       ${toggleRow(state, {
         key: 'shuffleBoard', icon: 'map', name: 'Shuffle the board',
         desc: shuffle ? 'The colour sets are dealt to new places at the start — prices and rents move with them'
           : 'Every street sits where the board prints it',
       }, dis)}
-      <div class="setting stacked">
-        <span class="s-icon">${icon('skull')}</span>
-        <div class="s-body">
-          <div class="s-name">Bankrupt properties</div>
-          <div class="s-desc">${estate.desc}</div>
-          <div class="chat-channels bot-seg" role="radiogroup" aria-label="Bankrupt properties">${ESTATE_RULES.map((r) => `
-            <button type="button" role="radio" data-estate="${r.id}" class="${r.id === estate.id ? 'on' : ''}"
-              aria-checked="${r.id === estate.id}" ${dis}>${r.name}</button>`).join('')}
-          </div>
-        </div>
-      </div>`;
+      ${estateRow(state, dis)}`;
 }
 
 /**
@@ -1567,8 +1657,7 @@ function lobbyTerms(state) {
   const minutes = Number(state.settings?.timeLimit) || 0;
   if (minutes) parts.push(`${minutes}-minute game`);
   const bots = botLevelOf(state);
-  const hasBots = state.settings?.allowBots || state.players.some((p) => p.isBot);
-  if (bots.id !== 'normal' && hasBots) parts.push(`${bots.name} bots`);
+  if (bots.id !== 'normal' && houseAtTable(state)) parts.push(`${bots.name} bots`);
   if (state.settings?.shuffleBoard) parts.push('Shuffled board');
   if (state.settings?.auctionOnly) parts.push('Auction only');
   return parts.map((p) => ` · ${p}`).join('');
@@ -1640,7 +1729,7 @@ function renderSettings(state, meId, el, actions) {
             `<option value="${n}" ${Number(state.settings.turnSeconds) === n ? 'selected' : ''}>${clockOptionLabel(n)}</option>`).join('')}
         </select>
       </div>
-      ${tableClockRows(state, dis)}
+      ${gameLengthRow(state, dis)}
     </div>
 
     <div class="panel">
@@ -1658,27 +1747,7 @@ function renderSettings(state, meId, el, actions) {
   `;
 
   wireSettingInputs(el, actions);
-  // The lozenge moves when the state says it has, not under the finger: a
-  // refused change sends no new state, and a lozenge moved ahead of the
-  // server would be left sitting on a skill the table does not have.
-  el.querySelectorAll('[data-bot]').forEach((b) => {
-    if (b.disabled) return;
-    b.onclick = () => {
-      if (b.classList.contains('on')) return;
-      sfx.click();
-      actions.settings({ botLevel: b.dataset.bot });
-    };
-  });
-  // The estate picker answers the same way: the side lights when the state
-  // says the table changed, not under the finger.
-  el.querySelectorAll('[data-estate]').forEach((b) => {
-    if (b.disabled) return;
-    b.onclick = () => {
-      if (b.classList.contains('on')) return;
-      sfx.click();
-      actions.settings({ bankruptProperties: b.dataset.estate });
-    };
-  });
+  wirePickers(el, actions);
   wireLookPanel(state, meId, el, actions);
   // A cup fixes its own board; the server refuses the change either way.
   paintBoards(state, el, meId, actions, isHost && !state.cup);
@@ -1687,7 +1756,7 @@ function renderSettings(state, meId, el, actions) {
   const startBtn = $('#startBtn', el);
   if (startBtn) startBtn.onclick = () => actions.start();
   const botBtn = $('#botBtn', el);
-  if (botBtn) botBtn.onclick = () => { sfx.click(); actions.addBot(); };
+  if (botBtn) botBtn.onclick = () => { sfx.click(); botAddedAt = Date.now(); actions.addBot(); };
 }
 
 /**
@@ -2449,6 +2518,15 @@ export function renderCenter(state, meId, actions) {
   // state for every tap at the table.
   const statusWas = statusEl.dataset.sig || '';
   statusEl.dataset.sig = '';
+  // The auction card and the bankrupt player's question (1.0.7) are rebuilt
+  // only when what they say has changed: a push that moves nothing else must
+  // not rebuild a bid button under a finger already on its way to it. Their
+  // buttons act on the newest state, kept here, never on the one that drew
+  // them.
+  const htmlWas = wellHtml;
+  wellHtml = '';
+  wellState = state;
+  noteEstates(state);
 
   const on = (id, fn, sound) => {
     const b = $(id);
@@ -2580,51 +2658,61 @@ export function renderCenter(state, meId, actions) {
   }
 
   // auction ──────────────────────────────────────────────────────────────
+  // One card for every lot (1.0.7): a street somebody turned down, an
+  // auction-only landing, a lot from a bankrupt player's estate. A question
+  // still open about somebody's streets does not stop a hammer already up,
+  // so the card says it while the bidding runs (see auctionCardHTML).
   if (state.auction) {
     const a = state.auction;
-    const tile = state.map.tiles[a.tile];
-    const leader = state.players.find((p) => p.id === a.leader);
-    const inRace = a.inRace.includes(meId);
-    const min = a.bid === 0 ? 10 : a.bid + 10;
-    // The leading bid is escrowed out of the leader's wallet the moment it
-    // lands, so their real ceiling is the cash still showing plus the money
-    // already on the table — read off the wallet alone it looks lower.
-    const purse = (me?.money || 0) + (a.leader === meId ? a.bid : 0);
-    const steps = [min, min + 40, min + 90].filter((v) => v <= purse);
-    // Which sale this is. A lot from a bankrupt player's estate (1.0.6) says
-    // whose and how many follow it, so a table watching five auctions in a
-    // row knows it is one sale and when it ends. An auction-only table says
-    // why there was no Buy button, and puts the deed's price beside the bid
-    // as the yardstick it is — bids can go past it.
-    const lot = a.estate
-      ? `${escapeHtml(a.estate.from)}’s estate — ${a.estate.left
-        ? `${a.estate.left} more after this` : 'the last lot'}`
-      : state.settings.auctionOnly && tile?.price ? `Auction only · the deed says ${money(tile.price)}` : '';
-    cardEl.innerHTML = deedMarkup(state, a.tile, { compact: true }) || '';
-    actionEl.innerHTML = `
-      <div class="auction-box">
-        <div class="auction-label">${icon('gavel')} Auction</div>
-        ${lot ? `<div class="auction-lot">${lot}</div>` : ''}
-        <div class="auction-bid">${money(a.bid)}</div>
-        <div class="dim small">${leader
-          ? `leading: <b style="color:${leader.color}">${escapeHtml(leader.name)}${a.leader === meId ? ' (you)' : ''}</b>`
-          : 'no bids yet'}</div>
-        <div class="auction-timer"><i id="auctionBar"></i></div>
-        ${inRace ? `<div class="bid-row">
-            ${steps.map((v) => `<button class="btn small" data-bid="${v}">${money(v)}</button>`).join('')}
-            <button class="btn small bad" id="passBid">Pass</button>
-          </div>
-          ${steps.length ? '' : `<div class="dim small mt">${money(min)} is the next bid — more than you can raise. Passing is the only move left.</div>`}`
-        : '<div class="dim small mt">You are out of this auction</div>'}
-      </div>`;
+    const mode = `auction:${state.id}:${a.tile}:${a.estate ? a.estate.left : ''}`;
+    // A new top bid gives the number a knock, once, as it lands.
+    const bump = bidSeen.mode === mode && bidSeen.bid !== a.bid;
+    bidSeen = { mode, bid: a.bid };
+    const html = auctionCardHTML(state, meId);
+    actionEl.dataset.mode = mode;
+    wellHtml = wellSig(html);
+    if (wellHtml !== htmlWas || wasMode !== mode) {
+      actionEl.innerHTML = html;
+      // A new lot arrives; a new bid lands. Both are said once, as they
+      // happen, and are not part of what the card says — so a later push
+      // that changes nothing does not rebuild it to take them off again.
+      if (wasMode !== mode) actionEl.firstElementChild?.classList.add('enter');
+      if (bump) $('.ab-bid', actionEl)?.classList.add('bump');
+      actionEl.querySelectorAll('[data-bid]').forEach((b) => {
+        // the state diff plays the bid sound for everyone (including us) — a
+        // click sound here would double it up
+        b.onclick = () => actions.bid(Number(b.dataset.bid));
+      });
+      on('#passBid', actions.passBid);
+      on('.ab-deed', () => openDeedModal(wellState, a.tile, meId, actions));
+    }
     statusEl.innerHTML = '';
-    actionEl.querySelectorAll('[data-bid]').forEach((b) => {
-      // the state diff plays the bid sound for everyone (including us) — a
-      // click sound here would double it up
-      b.onclick = () => actions.bid(Number(b.dataset.bid));
-    });
-    on('#passBid', actions.passBid);
-    animateAuctionBar(a);
+    on('#cbReopen', () => openEstateChoiceSheet(wellState, meId, actions));
+    paintCountdowns();
+    return;
+  }
+
+  // a bankrupt player deciding ──────────────────────────────────────────
+  // At a table where the bankrupt player decides (1.0.7), the game holds
+  // still on their answer: they get the question, everyone else is told who
+  // is deciding and for how long. A seat in debt keeps raising money in the
+  // meantime, so its own panel stays, with the wait said under it.
+  const choice = state.status === 'playing' ? state.bankruptChoice : null;
+  if (choice && !(myTurn && state.turn?.phase === 'debt')) {
+    const mode = `choice:${state.id}:${choice.endsAt}`;
+    const html = choiceCardHTML(state, meId);
+    actionEl.dataset.mode = mode;
+    wellHtml = wellSig(html);
+    if (wellHtml !== htmlWas || wasMode !== mode) {
+      actionEl.innerHTML = html;
+      if (wasMode !== mode) actionEl.firstElementChild?.classList.add('enter');
+      actionEl.querySelectorAll('[data-estate-answer]').forEach((b) => {
+        b.onclick = () => answerEstate(b, actions);
+      });
+      on('#cbSheet', () => openEstateChoiceSheet(wellState, meId, actions));
+    }
+    statusEl.innerHTML = '';
+    paintCountdowns();
     return;
   }
 
@@ -2710,12 +2798,11 @@ export function renderCenter(state, meId, actions) {
   on('#cPayDebt', actions.payDebt, sfx.cash);
   // What the button costs, in the table's own terms. The streets have never
   // followed the debt — whatever was raised already went to whoever was owed
-  // — so the prompt says where they really go: back to the bank, or (1.0.6)
-  // under the hammer one at a time at a table that auctions estates.
-  on('#cBankrupt', () => confirmModal('Declare bankruptcy?',
-    estateGoesToAuction(state)
-      ? 'You are out of the game, and your properties are auctioned to the other players one at a time.'
-      : 'You are out of the game, and your properties go back to the bank, unowned.', actions.bankrupt));
+  // — so the sheet says where they really go: back to the bank, under the
+  // hammer at a table that auctions estates (1.0.6), or, where the bankrupt
+  // player decides (1.0.7), wherever they say on that same sheet.
+  on('#cBankrupt', () => openGiveUpSheet(wellState, meId, actions, 'declare'));
+  if (choice) statusEl.innerHTML += choiceAsideHTML(state, meId);
 }
 
 function phaseHint(state, p) {
@@ -2726,6 +2813,461 @@ function phaseHint(state, p) {
   if (t.phase === 'auction') return 'waiting on the hammer…';
   if (t.phase === 'roll') return p.jail ? 'locked up' : 'about to roll…';
   return 'wrapping up…';
+}
+
+// ─────────────────────────────────────────────── the hammer and the estate ──
+// 1.0.7: the auction card, the bankrupt player's question and the sheets that
+// ask it. They share their parts — a deed in miniature, a face, a countdown —
+// so an estate sale reads as one story from the bust to the last lot.
+
+// What the well last drew for the auction or the question (see renderCenter),
+// and the newest state its buttons act on. A coin flag numbers its clip path
+// afresh every time it is drawn (see circleFlag), which is no change to what
+// the card says, so the comparison reads past the number.
+let wellHtml = '';
+let wellState = null;
+const wellSig = (html) => html.replace(/coinclip-\d+/g, 'coinclip');
+let bidSeen = { mode: '', bid: 0 };
+
+/** A player's face at the size of a chip, with the avatar they wear. */
+function chipFace(p, size = 'xs') {
+  return `<span class="avatar ${size}${p?.avatar ? ' has-skin' : ''}" style="background:${p?.color || 'var(--ink-3)'}">${
+    escapeHtml(p?.avatar || (String(p?.name || '?')[0] || '?').toUpperCase())}</span>`;
+}
+
+/** The colour a deed wears: its country's, or the airport's and utility's own. */
+function deedColour(state, tile) {
+  const g = tile?.group ? state.groups?.[tile.group] : null;
+  return g?.color || (tile?.type === 'airport' ? '#5b8def' : tile?.type === 'utility' ? '#38bdf8' : '#7c6bb0');
+}
+
+/** The deeds a seat holds, in board order. */
+function deedsOf(state, id) {
+  return Object.entries(state.ownership || {})
+    .filter(([, o]) => o.owner === id)
+    .map(([i]) => Number(i))
+    .sort((x, y) => x - y);
+}
+
+// ── which lot is this ──
+// The server tells an estate lot whose estate it is and how many more follow
+// it — never the lots themselves. They are read off the table instead, as the
+// player goes out: the deeds they held in the last state before the bust, or,
+// where they decide, the very list they were asked about. A seat that sat
+// down after the bust has neither, and its card counts what is left instead.
+let estateBook = { room: '', lots: new Map(), held: new Map() };
+const FOR_SALE = new Set(['property', 'airport', 'utility']);
+
+function noteEstates(state) {
+  if (estateBook.room !== state.id || state.status !== 'playing') {
+    estateBook = { room: state.id, lots: new Map(), held: new Map() };
+    if (state.status !== 'playing') return;
+  }
+  const c = state.bankruptChoice;
+  if (c?.name && Array.isArray(c.properties) && c.properties.length) {
+    estateBook.lots.set(c.name, [...c.properties].sort((x, y) => x - y));
+  }
+  const held = new Map();
+  for (const p of state.players) {
+    if (isOut(p)) {
+      const before = estateBook.held.get(p.name);
+      if (before?.length && !estateBook.lots.has(p.name)) estateBook.lots.set(p.name, before);
+      continue;
+    }
+    held.set(p.name, deedsOf(state, p.id).filter((i) => FOR_SALE.has(state.map.tiles[i]?.type)));
+  }
+  estateBook.held = held;
+}
+
+/**
+ * Where this lot sits in its estate: `{ left, n, total, next }` when the book
+ * knows the estate and agrees with the server about what is left, otherwise
+ * `{ left }` alone — a count the card can still say.
+ */
+function estateLot(a) {
+  const left = Math.max(0, Math.floor(Number(a.estate?.left) || 0));
+  const all = estateBook.lots.get(a.estate?.from);
+  const k = all ? all.indexOf(a.tile) : -1;
+  if (k < 0 || all.length - k - 1 !== left) return { left };
+  return { left, n: k + 1, total: all.length, next: all.slice(k + 1) };
+}
+
+/** The rent a bidder weighs, in a few words: a street's base and its hotel, an airport's range. */
+function lotFacts(tile) {
+  if (tile.type === 'property') {
+    const hotel = tile.rent?.[5];
+    return `rent ${money(tile.rent?.[0] || 0)}${hotel ? `<span class="ab-hotel"> · hotel ${money(hotel)}</span>` : ''}`;
+  }
+  if (tile.type === 'airport') return 'rent $25 – $200';
+  if (tile.type === 'utility') return 'rent 4× or 10× the dice';
+  return '';
+}
+
+/**
+ * What this lot does to the race for a colour — the thing a bidder most needs
+ * to know and the deed alone does not say: it finishes somebody's set. Yours,
+ * or a rival's, who will pay accordingly.
+ */
+function lotStakes(state, meId, i) {
+  const tile = state.map.tiles[i];
+  if (tile?.type !== 'property') return null;
+  const rest = (state.map.groups[tile.group] || []).filter((k) => k !== i);
+  const owners = new Set(rest.map((k) => state.ownership[k]?.owner || ''));
+  if (!rest.length || owners.size !== 1) return null;
+  const p = state.players.find((x) => x.id === [...owners][0] && !isOut(x));
+  if (!p) return null;
+  return p.id === meId
+    ? { mine: true, text: 'Completes your set' }
+    : { mine: false, text: `Completes ${p.name}’s set` };
+}
+
+/**
+ * The auction card. Read top to bottom it answers what a bidder asks in the
+ * order they ask it: what kind of sale, what is up (a deed in miniature that
+ * opens the real one), where the bidding stands, how long is left, and what
+ * this seat can do about it — bid, pass, or a pill that says why not.
+ */
+function auctionCardHTML(state, meId) {
+  const a = state.auction;
+  const tile = state.map.tiles[a.tile] || { name: '?' };
+  const g = tile.group ? state.groups?.[tile.group] : null;
+  const me = state.players.find((p) => p.id === meId);
+  const leader = state.players.find((p) => p.id === a.leader);
+  const leading = !!me && a.leader === meId;
+  const inRace = (a.inRace || []).includes(meId);
+  const min = a.bid === 0 ? 10 : a.bid + 10;
+  // The leading bid is escrowed out of the leader's wallet the moment it
+  // lands, so their real ceiling is the cash still showing plus the money
+  // already on the table — read off the wallet alone it looks lower.
+  const purse = (me?.money || 0) + (leading ? a.bid : 0);
+  const steps = [min, min + 40, min + 90].filter((v) => v <= purse);
+  const estate = a.estate || null;
+  const lot = estate ? estateLot(a) : null;
+  const from = estate ? state.players.find((p) => p.name === estate.from) : null;
+  const stakes = lotStakes(state, meId, a.tile);
+
+  // Which sale, and how far through it. An estate (1.0.6) says whose and
+  // which lot of how many, so a table watching five auctions in a row knows
+  // it is one sale and when it ends; an auction-only table says why there
+  // was no Buy button.
+  const pips = lot?.total && lot.total <= 12
+    ? `<i class="ab-pips" aria-hidden="true">${Array.from({ length: lot.total }, (_, k) =>
+      `<i class="${k < lot.n - 1 ? 'done' : k === lot.n - 1 ? 'now' : ''}"></i>`).join('')}</i>` : '';
+  const where = lot?.total ? `<span class="ab-where"><span><span class="ab-wide">Lot </span>${lot.n} of ${lot.total}</span>${pips}</span>`
+    : estate ? `<span class="ab-where">${lot.left ? `<span>${lot.left} more<span class="ab-wide"> after this</span></span>` : 'Last lot'}</span>`
+    : state.settings.auctionOnly ? '<span class="ab-where">Auction only</span>' : '';
+  // The lots still to come, in a few words. The card ends on them where it
+  // has the room; a phone's well does not, so the header carries them too.
+  const nextNames = lot?.next?.length
+    ? `${lot.next.slice(0, 2).map((k) => state.map.tiles[k]?.name || '').join(' · ')}${
+      lot.next.length > 2 ? ` +${lot.next.length - 2}` : ''}` : '';
+  // One line, whatever the names: the bankrupt player's name is the part
+  // that gives way. As the card narrows the kind's word, then the pips, then
+  // the "Lot" of "Lot 2 of 4" step aside first (see the well's container
+  // queries) — the gavel and a "’s estate" after the name, shown once the
+  // word has gone, still say what sale this is.
+  const head = `<div class="ab-head"${nextNames ? ` title="Up next: ${escapeHtml(nextNames)}"` : ''}>
+      <span class="ab-kind">${icon('gavel')}<span class="ab-kword">${estate ? 'Estate sale' : 'Auction'}</span></span>
+      ${estate ? `<span class="ab-from">${chipFace(from || { name: estate.from })}<span class="ab-who"><b>${escapeHtml(estate.from)}</b><span>’s estate</span></span></span>` : ''}
+      ${where}
+    </div>`;
+
+  const deed = `<button type="button" class="ab-deed" style="--c:${deedColour(state, tile)}"
+      title="Open the deed" aria-label="${escapeHtml(tile.name)} — open the deed">
+      <span class="ab-band">${tileMark(tile, g, 26)}</span>
+      <span class="ab-what">
+        <b>${escapeHtml(tile.name)}</b>
+        <span class="ab-facts">${lotFacts(tile)}</span>
+      </span>
+      ${tile.price ? `<span class="ab-price"><small>deed</small>${money(tile.price)}</span>` : ''}
+    </button>
+    ${stakes ? `<div class="ab-stakes ${stakes.mine ? 'mine' : 'rival'}" title="${escapeHtml(stakes.text)}">${icon(stakes.mine ? 'star' : 'warning')}<span>${escapeHtml(stakes.text)}</span></div>` : ''}`;
+
+  const standing = `<div class="ab-standing">
+      ${a.bid
+        ? `<div class="ab-bid"><small>top bid</small>${money(a.bid)}</div>`
+        : `<div class="ab-bid none"><b>No bids yet</b><small>opens at ${money(10)}</small></div>`}
+      ${leader ? `<span class="ab-leader" style="--c:${leader.color}">${chipFace(leader)}<b>${leading
+        ? '<span class="ab-lname">Your bid</span>' : `<span class="ab-lname">${escapeHtml(leader.name)}</span><i>leads</i>`}</b></span>` : ''}
+    </div>`;
+
+  // A bankrupt player's question still open while this hammer is up (1.0.7)
+  // belongs on the card, not under it: under it, a phone's well had already
+  // scrolled it out of sight. The player being asked gets their way back to
+  // it where their keys would be; everyone else, a line at the foot.
+  const ask = state.status === 'playing' ? state.bankruptChoice : null;
+  const asked = !!ask && ask.playerId === meId;
+
+  // What this seat can do. The leader has nothing to press — raising their
+  // own bid buys nothing, and passing would only throw away their answer to
+  // the next one — so the state is a pill, as it is for anyone with no move.
+  let moves;
+  if (asked) {
+    moves = `<button type="button" class="btn small gold cb-reopen" id="cbReopen">${icon('skull')} Decide about your properties</button>`;
+  } else if (!me || isOut(me)) {
+    moves = `<span class="ab-pill out">${icon(me ? 'skull' : 'eye')} ${me ? 'You’re out' : 'Watching'}</span>`;
+  } else if (leading) {
+    moves = `<span class="ab-pill lead">${TICK} You lead</span>`;
+  } else if (inRace) {
+    // Short of the next bid, the row says so where the keys would be, beside
+    // the one key left — a line under it cost a phone's well its last room.
+    moves = `<div class="bid-row${steps.some((v) => v >= 10000) ? ' wide' : ''}">
+        ${steps.length
+          ? steps.map((v, k) => `<button class="btn small${k ? '' : ' gold'}" data-bid="${v}">${money(v)}</button>`).join('')
+          : `<span class="ab-note">${money(min)} is more than you can raise</span>`}
+        <button class="btn small ghost pass" id="passBid">Pass</button>
+      </div>`;
+  } else {
+    moves = '<span class="ab-pill passed">You passed</span>';
+  }
+
+  // The foot: who the game is waiting on, while somebody else is deciding
+  // about their streets; otherwise the lots still to come.
+  const foot = ask && !asked
+    ? `<div class="ab-foot ab-ask" title="${escapeHtml(ask.name)} is deciding what happens to their streets">${icon('clock')}<b>${escapeHtml(ask.name)}</b> is deciding about their streets…</div>`
+    : lot?.next?.length
+      ? `<div class="ab-foot ab-next"><span>Up next</span> ${lot.next.slice(0, 2).map((k) => escapeHtml(state.map.tiles[k]?.name || '')).join(' · ')}${
+        lot.next.length > 2 ? ` <em>+${lot.next.length - 2}</em>` : ''}</div>`
+      : '';
+
+  return `<div class="auction-box${estate ? ' estate' : ''}">
+      ${head}
+      ${deed}
+      ${standing}
+      ${countdownHTML('auction', a.endsAt)}
+      <div class="ab-moves">${moves}</div>
+      ${foot}
+    </div>`;
+}
+
+/**
+ * The deeds in question as a row of their flags, so the table sees how much
+ * is at stake. For the player being asked it is a button too: it opens the
+ * whole list, by name and price, on the question's sheet.
+ */
+function lotFlagsHTML(state, lots, opens = false, max = 7) {
+  const shown = lots.slice(0, lots.length > max ? max - 1 : max);
+  const more = lots.length - shown.length;
+  const flags = `${shown.map((i) => {
+    const tile = state.map.tiles[i];
+    if (!tile) return '';
+    const g = tile.group ? state.groups?.[tile.group] : null;
+    return `<span class="cb-lot" style="--c:${deedColour(state, tile)}" title="${escapeHtml(tile.name)}">${tileMark(tile, g, 18)}</span>`;
+  }).join('')}${more > 0 ? `<span class="cb-lot more">+${more}</span>` : ''}`;
+  return opens
+    ? `<button type="button" class="cb-lots tap" id="cbSheet" title="See them by name">${flags}</button>`
+    : `<div class="cb-lots">${flags}</div>`;
+}
+
+const propertyWord = (n) => (n === 1 ? 'property' : `${n} properties`);
+
+/**
+ * The well while a bankrupt player decides (1.0.7). For them: the question,
+ * the clock and both answers, with the full list one tap away. For everyone
+ * else: who is deciding, about how much, and how long the game waits.
+ */
+function choiceCardHTML(state, meId) {
+  const c = state.bankruptChoice;
+  const lots = (c.properties || []).filter((i) => state.map.tiles[i]);
+  const mine = c.playerId === meId;
+  const flags = lotFlagsHTML(state, lots, mine);
+  const clock = countdownHTML('choice', c.endsAt);
+  if (mine) {
+    return `<div class="choice-box mine">
+        <div class="cb-head"><span class="cb-mark">${icon('skull')}</span><b>You’re bankrupt</b></div>
+        <div class="cb-q">What happens to your ${propertyWord(lots.length)}?</div>
+        ${flags}
+        ${clock}
+        <div class="cb-actions">
+          <button class="btn" data-estate-answer="bank">${icon('bank')} Back to the bank</button>
+          <button class="btn" data-estate-answer="auction">${icon('gavel')} Auction ${lots.length === 1 ? 'it' : 'them'}</button>
+        </div>
+      </div>`;
+  }
+  const p = state.players.find((x) => x.id === c.playerId) || { name: c.name };
+  const myTurn = state.turn?.playerId === meId;
+  return `<div class="choice-box">
+      <div class="cb-head">${chipFace(p, 'sm')}<b>${escapeHtml(c.name)}</b><span>went bankrupt</span></div>
+      <div class="cb-q">${escapeHtml(c.name)} is deciding what happens to their streets…</div>
+      ${flags}
+      ${clock}
+      <div class="cb-note">${myTurn
+        ? 'Your turn picks up the moment they choose.'
+        : 'Back to the bank, or auctioned to everyone. When the time is up, the house decides.'}</div>
+    </div>`;
+}
+
+/**
+ * A question still open while a seat busy raising money holds the well, said
+ * in one line under its panel. The player being asked gets a way back to
+ * their question instead. (A hammer that was already up says it on its own
+ * card, where a phone's well still has it in sight.)
+ */
+function choiceAsideHTML(state, meId) {
+  const c = state.status === 'playing' ? state.bankruptChoice : null;
+  if (!c) return '';
+  if (c.playerId === meId) {
+    return `<button type="button" class="btn small gold cb-reopen" id="cbReopen">${icon('skull')} Decide about your properties</button>`;
+  }
+  return `<div class="cb-aside">${icon('clock')} ${escapeHtml(c.name)} is deciding what happens to their streets…</div>`;
+}
+
+/** Send an answer from the well — once: the keys go quiet until the state says what happened. */
+function answerEstate(button, actions) {
+  sfx.click();
+  const keys = button.closest('.cb-actions')?.querySelectorAll('button') || [button];
+  keys.forEach((k) => { k.disabled = true; });
+  // Refused (it was not ours any more, or the clock beat us), nothing new
+  // arrives to redraw them — so they come back on their own.
+  setTimeout(() => keys.forEach((k) => { if (k.isConnected) k.disabled = false; }), 1500);
+  actions.bankruptChoice(button.dataset.estateAnswer === 'auction');
+}
+
+/** The deeds about to change hands, one row each: flag, street, the price on the deed. */
+function estateListHTML(state, lots) {
+  return `<div class="bk-lots">${lots.map((i) => {
+    const tile = state.map.tiles[i];
+    if (!tile) return '';
+    const g = tile.group ? state.groups?.[tile.group] : null;
+    return `<div class="bk-lot" style="--c:${deedColour(state, tile)}">
+        <span class="bk-flag">${tileMark(tile, g, 18)}</span>
+        <b>${escapeHtml(tile.name)}</b>
+        <em>${money(tile.price || 0)}</em>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+/** The two answers, as the two big buttons both sheets end on. */
+function estateOptionsHTML(n) {
+  const them = n === 1 ? 'it' : 'them';
+  return `<div class="bk-options">
+      <button type="button" class="bk-option" data-answer="bank">
+        <span class="bk-ico">${icon('bank', 22)}</span>
+        <b>Give ${them} back to the bank</b>
+        <span>Nobody gets ${them} now. ${n === 1 ? 'It sits' : 'They sit'} unowned until somebody lands there and buys.</span>
+      </button>
+      <button type="button" class="bk-option" data-answer="auction">
+        <span class="bk-ico">${icon('gavel', 22)}</span>
+        <b>Auction ${them} to everyone</b>
+        <span>${n === 1 ? 'Goes' : 'Sold one at a time'} to the highest bidder, starting at $10.</span>
+      </button>
+    </div>`;
+}
+
+/** The sheet's heading, with the mark of what is happening beside it. */
+function estateHead(title, sub) {
+  return `<div class="bk-head">
+      <span class="bk-mark">${icon('skull', 26)}</span>
+      <div class="bk-titles"><h2>${title}</h2><p class="sub">${sub}</p></div>
+    </div>`;
+}
+
+/**
+ * The bankrupt player's question as a sheet (1.0.7): opened once, the moment
+ * the server asks, and gone the moment the question is — answered here, in
+ * the well, by the house, or overtaken by the next player's. It does not
+ * close on a stray tap on the felt; Escape still puts it away, and the well
+ * keeps both answers on screen.
+ */
+function openEstateChoiceSheet(state, meId, actions) {
+  const c = state?.status === 'playing' ? state.bankruptChoice : null;
+  if (!c || c.playerId !== meId) return;
+  const lots = (c.properties || []).filter((i) => state.map.tiles[i]);
+  const asked = c.endsAt;
+  openModal(`
+    ${estateHead('You’re bankrupt', `What happens to your ${propertyWord(lots.length)}?`)}
+    ${countdownHTML('choice', c.endsAt)}
+    <p class="bk-note">No answer in time and the house decides — it picks whatever keeps the game close.</p>
+    ${estateListHTML(state, lots)}
+    ${estateOptionsHTML(lots.length)}`, (root) => {
+    root.onclick = null;
+    root.querySelectorAll('[data-answer]').forEach((b) => {
+      b.onclick = () => {
+        sfx.click();
+        closeModal();
+        actions.bankruptChoice(b.dataset.answer === 'auction');
+      };
+    });
+    sheetRepaint = (s) => {
+      const now = s?.status === 'playing' ? s.bankruptChoice : null;
+      if (!now || now.playerId !== meId || now.endsAt !== asked) closeModal();
+    };
+    paintCountdowns();
+  }, 'small estate-sheet');
+}
+
+// The question this screen has already put up, so a state push does not put
+// it up again after it was closed.
+let choiceAsked = '';
+
+/** Put the bankrupt player's question in front of them, once, when the server asks it. */
+export function syncEstateChoice(state, meId, actions) {
+  const c = state?.status === 'playing' ? state.bankruptChoice : null;
+  if (!c || c.playerId !== meId) return;
+  const key = `${state.id}:${c.endsAt}`;
+  if (choiceAsked === key) return;
+  choiceAsked = key;
+  openEstateChoiceSheet(state, meId, actions);
+}
+
+/**
+ * Going out on purpose — Give up in the leave sheet, Declare bankruptcy in a
+ * debt. Where the bankrupt player decides (1.0.7) and there are streets to
+ * decide about, the question they would be asked a moment later is asked
+ * here, inside the confirmation, so they decide once: either answer is the
+ * confirmation. Anywhere else it is a plain confirmation that says where the
+ * streets go.
+ */
+export function openGiveUpSheet(state, meId, actions, kind = 'concede') {
+  if (!state) return;
+  const rule = estateRuleOf(state);
+  const lots = deedsOf(state, meId);
+  const asks = rule.id === 'choose' && lots.length > 0;
+  const declare = kind === 'declare';
+  const debt = declare ? state.turn?.debt : null;
+  const sub = declare
+    ? `You are out of the game. Whatever you have raised stays with ${debt ? debtDestination(state, debt) : 'whoever you owe'}.`
+    : 'You go bankrupt on the spot and keep your seat to watch the end.';
+  const fate = !lots.length ? 'You hold no properties, so nothing changes hands.'
+    : rule.id === 'auction'
+      ? `Your ${lots.length === 1 ? 'property is' : `${lots.length} properties are`} auctioned to the other players, one at a time.`
+      : `Your ${lots.length === 1 ? 'property goes' : `${lots.length} properties go`} back to the bank, unowned.`;
+  openModal(`
+    ${estateHead(declare ? 'Declare bankruptcy?' : 'Give up the game?', sub)}
+    ${asks ? `
+      <p class="bk-q">What happens to your ${propertyWord(lots.length)}?</p>
+      ${estateListHTML(state, lots)}
+      ${estateOptionsHTML(lots.length)}
+      <div class="modal-actions"><button class="btn ghost" id="bkNo">Keep playing</button></div>`
+    : `
+      <div class="bk-fate">${icon(rule.id === 'auction' && lots.length ? 'gavel' : 'bank', 18)}<span>${fate}</span></div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="bkNo">Keep playing</button>
+        <button class="btn bad" id="bkYes">${declare ? 'Declare bankruptcy' : 'Give up'}</button>
+      </div>`}`, (root) => {
+    $('#bkNo', root).onclick = () => { sfx.click(); closeModal(); };
+    const go = (answer) => {
+      closeModal();
+      // No answer is the plain concede every client has always sent.
+      if (answer) actions.bankrupt(answer);
+      else actions.bankrupt();
+    };
+    const yes = $('#bkYes', root);
+    if (yes) yes.onclick = () => go();
+    root.querySelectorAll('[data-answer]').forEach((b) => {
+      b.onclick = () => go({ auction: b.dataset.answer === 'auction' });
+    });
+  }, 'small estate-sheet');
+}
+
+/**
+ * Give up from the leave sheet: where the bankrupt player decides and there
+ * is something to decide, the sheet above asks first; anywhere else the leave
+ * sheet already was the confirmation.
+ */
+export function giveUp(state, meId, actions) {
+  if (estateRule(state) === 'choose' && deedsOf(state, meId).length) openGiveUpSheet(state, meId, actions, 'concede');
+  else actions.bankrupt();
 }
 
 // ─────────────────────────────────────────────────────────── table talk ──
@@ -3173,27 +3715,53 @@ function paintAwaiting() {
   });
 }
 
-let auctionRaf = null;
-// A bid buys the auction a fresh, shorter deadline than the one it opened
-// with, so the bar has to be measured against the stretch it is actually
-// counting down — a fixed span would refill to two-thirds and read as a
-// timer that shrank when it had in fact just been extended.
-const auctionSpan = { endsAt: 0, ms: 1 };
+// ─────────────────────────────────────────────────────────── countdowns ──
+// The auction's clock and the bankrupt player's twenty seconds (1.0.7) are
+// one control: a thick bar running down beside its seconds, warming over the
+// last five. Every one on screen — in the well, on a sheet — is painted by
+// the one loop below, which puts itself away once none is left.
 
-function animateAuctionBar(a) {
-  cancelAnimationFrame(auctionRaf);
-  if (auctionSpan.endsAt !== a.endsAt) {
-    auctionSpan.endsAt = a.endsAt;
-    auctionSpan.ms = Math.max(1, a.endsAt - Date.now());
+// How long a deadline had when this screen first saw it. A bid buys the
+// auction a fresh, shorter deadline than the one it opened with (12 s against
+// 20), so the bar has to be measured against the stretch it is actually
+// counting down — a fixed span would refill to two-thirds and read as a timer
+// that shrank when it had in fact just been extended. Measured off this
+// device's own clock, it also starts full whatever the server's says.
+const countSpans = new Map();
+function spanOf(kind, endsAt) {
+  const key = `${kind}:${endsAt}`;
+  if (!countSpans.has(key)) {
+    if (countSpans.size > 32) countSpans.clear();
+    countSpans.set(key, Math.max(1000, Number(endsAt) - Date.now()));
   }
-  const step = () => {
-    const bar = document.getElementById('auctionBar');
-    if (!bar) return;
-    const left = Math.max(0, a.endsAt - Date.now());
-    bar.style.width = `${Math.min(100, (left / auctionSpan.ms) * 100)}%`;
-    if (left > 0) auctionRaf = requestAnimationFrame(step);
-  };
-  step();
+  return countSpans.get(key);
+}
+
+/** A countdown to `endsAt`, as markup; paintCountdowns() moves it. */
+function countdownHTML(kind, endsAt) {
+  const ends = Number(endsAt) || 0;
+  return `<div class="mm-count" data-ends="${ends}" data-span="${Math.round(spanOf(kind, ends))}" role="timer">
+      <span class="mm-track"><i></i></span><b class="mm-secs"></b>
+    </div>`;
+}
+
+let countRaf = 0;
+function paintCountdowns() {
+  cancelAnimationFrame(countRaf);
+  countRaf = 0;
+  const all = document.querySelectorAll('.mm-count[data-ends]');
+  if (!all.length) return;
+  const now = Date.now();
+  all.forEach((el) => {
+    const left = Math.max(0, Number(el.dataset.ends) - now);
+    const fill = el.querySelector('.mm-track > i');
+    if (fill) fill.style.transform = `scaleX(${Math.min(1, left / (Number(el.dataset.span) || 1)).toFixed(4)})`;
+    const secs = `${Math.ceil(left / 1000)}s`;
+    const label = el.querySelector('.mm-secs');
+    if (label && label.textContent !== secs) label.textContent = secs;
+    el.classList.toggle('warm', left > 0 && left <= 5000);
+  });
+  countRaf = requestAnimationFrame(paintCountdowns);
 }
 
 // ───────────────────────────────────────────────────────────────── dice ──
@@ -3608,9 +4176,17 @@ export function openJoinNameModal(roomId, onJoin) {
 /**
  * Two ways out of a live game, spelled out — one keeps the chair, one doesn't.
  * A walkout's streets go where a bankrupt's do (1.0.6): back to the bank, or
- * under the hammer at a table that auctions estates (estateGoesToAuction).
+ * under the hammer at a table that auctions estates — and at a table where
+ * the bankrupt player decides (1.0.7), somebody walking out is not there to
+ * be asked, so the house decides for them. Giving up at that table asks the
+ * question on the next sheet (see giveUp).
  */
-export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estateAuction = false }) {
+export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estate = 'release' }) {
+  const walkout = {
+    release: 'Your deeds go back to the bank and the table plays on without you.',
+    auction: 'Your properties are auctioned to the other players one at a time and the table plays on without you.',
+    choose: 'The house decides whether your properties go back to the bank or to auction, and the table plays on without you.',
+  }[estate] || 'Your deeds go back to the bank and the table plays on without you.';
   openModal(`
     <h2>Leaving the table?</h2>
     <p class="sub">The game is still running — pick how you go.</p>
@@ -3621,13 +4197,13 @@ export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estateAuction = 
       </button>
       <button class="leave-choice bad" id="lQuit">
         <b>${icon('door')} Leave for good</b>
-        <span>${estateAuction
-          ? 'Your properties are auctioned to the other players one at a time and the table plays on without you.'
-          : 'Your deeds go back to the bank and the table plays on without you.'}</span>
+        <span>${walkout}</span>
       </button>
       ${onConcede ? `<button class="leave-choice bad" id="lConcede">
-        <b>${icon('gavel')} Give up — declare bankruptcy</b>
-        <span>You go bankrupt on the spot but keep your seat to watch the end.</span>
+        <b>${icon('skull')} Give up — declare bankruptcy</b>
+        <span>${estate === 'choose'
+          ? 'You go bankrupt on the spot, choose where your properties go, and keep your seat to watch the end.'
+          : 'You go bankrupt on the spot but keep your seat to watch the end.'}</span>
       </button>` : ''}
     </div>
     <p class="karma-note">Leaving or timing out costs 1 karma.</p>
@@ -4402,7 +4978,7 @@ const RULES_HELP = [
   ['bank', 'Mortgage', 'Short of cash? Mortgage a property for half its price. Mortgaged streets collect no rent until you buy them back at 10% interest.'],
   ['trade', 'Trading', 'Offer any mix of cash, properties and prison cards to any player, at any time. Streets with buildings can’t be traded. Every open offer is shown to the whole table; only the player it is sent to can answer it.'],
   ['police', 'Prison', 'Land on Go to Prison, draw the card, or roll three doubles in a row, and you are locked up. On each turn inside you can roll for a double, which walks you out and moves you by that roll. You can also pay the $50 fine before rolling, which opens the door but ends that turn, or use a get-out card. If your third roll still is not a double, you walk out for free and move by that roll anyway.'],
-  ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, if the table says so. Last player standing wins.'],
+  ['skull', 'Bankruptcy', 'Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, or you choose which, if the table says so. Last player standing wins.'],
 ];
 
 // ────────────────────────────────────────────────────────── first minutes ──
@@ -4556,10 +5132,13 @@ export function openHelpModal() {
  * `on` colours the value — true for a switch that is on, false for one that
  * is off, null for a value that is neither (a board, a sum, a length).
  *
- * A Play-now table and a cup table always play the three host-only rules of
- * 1.0.6 and the game clock at their defaults whatever the fields say — the
+ * A Play-now table and a cup table always play auction-only, the shuffled
+ * board and the game clock at their defaults whatever the fields say — the
  * server checks them at its own door — so they are read the same way here
- * rather than taken on the field's word.
+ * rather than taken on the field's word. Bankrupt properties is rolled at a
+ * Play-now table since 1.0.7 and played as rolled; a cup still sends them to
+ * the bank (estateRuleOf). A row may be null: a rule this table does not
+ * have to tell anybody about.
  */
 function tableRuleSections(state) {
   const s = state.settings || {};
@@ -4580,12 +5159,16 @@ function tableRuleSections(state) {
   const teams = Math.floor(Number(s.teams) || 0);
   const turn = Math.floor(Number(s.turnSeconds) || 0);
   const minutes = own ? Math.floor(Number(s.timeLimit) || 0) : 0;
+  // Bot skill is a row only where it is about somebody (1.0.7): the house
+  // players the host sat down, or the ones Allow bots will deal in. A
+  // Play-now table's house players always play the usual way and a cup has
+  // none, so neither table prints it.
   const bots = botLevelOf(state);
-  const botRow = state.cup ? ['None', 'A cup match is two people — no house players']
-    : state.quick ? ['Normal', 'House players at a Play-now table always play the usual way']
-    : [bots.name, `${bots.desc}${s.allowBots || state.players?.some((p) => p.isBot) ? '' : ' — if the host adds any'}`];
+  const botRow = own && houseAtTable(state) ? ['robot', 'Bot skill', bots.name, bots.desc, null] : null;
 
-  const bankrupt = own && s.bankruptProperties === 'auction';
+  // Where a bankrupt player's streets go is played at a Play-now table too
+  // (1.0.7); only a cup is fixed to the bank.
+  const estate = estateRuleOf(state);
   const auctionOnly = own && !!s.auctionOnly;
   // A shuffled game says so from the board it is playing, which is the truth
   // whatever the switch says; the lobby only has the switch, and the deal
@@ -4611,7 +5194,7 @@ function tableRuleSections(state) {
       ['clock', 'Game length', state.cup ? 'Cup whistle' : minutes ? `${minutes} min` : 'Unlimited', state.cup
         ? 'A game still running at the cup’s whistle is decided on net worth — whoever is ahead goes through'
         : minutes ? 'When the clock runs out, the richest player wins' : 'Play on until one player is left standing', null],
-      ['robot', 'Bot skill', botRow[0], botRow[1], null],
+      botRow,
       ['shuffle', 'Turn order', s.randomizeOrder ? 'Drawn' : 'As seated', s.randomizeOrder
         ? 'The order of play is drawn at random when the game starts'
         : 'Players take their turns in the order they sat down', null],
@@ -4631,9 +5214,9 @@ function tableRuleSections(state) {
       ['houses', 'Even building', sw(s.evenBuild), s.evenBuild
         ? 'Houses go up and come down evenly across a set'
         : 'Build on any street of a full set, in any order', !!s.evenBuild],
-      ['skull', 'Bankrupt properties', bankrupt ? 'Auctioned' : 'Back to the bank', bankrupt
-        ? 'A bankrupt player’s properties are auctioned one at a time to everyone still playing'
-        : 'A bankrupt player’s properties go back to the bank, unowned', null],
+      ['skull', 'Bankrupt properties', estate.value, estate.id === 'choose'
+        ? 'The player who goes bankrupt picks: back to the bank, or auctioned to everyone one by one. Twenty seconds to choose, then the house picks whatever keeps the game close'
+        : estate.desc, null],
       ['shuffle', 'Shuffled board', sw(shuffle), !shuffle ? 'Every street sits where the board prints it'
         : live ? 'The colour sets were dealt to new places for this game — prices and rents moved with them'
         : 'The colour sets are dealt to new places when the game starts — prices and rents move with them', shuffle],
@@ -4666,7 +5249,7 @@ function tableRulesHTML(state) {
   return `<p class="sub">${escapeHtml(tableRulesWho(state))}</p>
     ${tableRuleSections(state).map(([title, rows]) => `
       <p class="tr-head">${escapeHtml(title)}</p>
-      <div class="tr-list">${rows.map(([glyph, name, value, words, on]) => `
+      <div class="tr-list">${rows.filter(Boolean).map(([glyph, name, value, words, on]) => `
         <div class="tr-row">
           <span class="tr-ico">${icon(glyph, 19, 'solo')}</span>
           <div class="tr-main">

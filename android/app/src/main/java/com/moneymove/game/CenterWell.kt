@@ -1,8 +1,18 @@
 package com.moneymove.game
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,11 +43,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,7 +67,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -172,7 +188,14 @@ private fun BoxScope.PlayingWell(
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         ) {
             val dice = state.turn?.dice
-            if (dice != null && dice.size == 2) {
+            // A bankrupt player at a "player decides" table is choosing what
+            // happens to their streets, and the whole table waits on it — so
+            // the middle says who, and how long they have, where the dice
+            // were. Their own phone asks them over the whole screen instead.
+            val deciding = store.othersBankruptChoice
+            if (deciding != null) {
+                DecidingCard(store, deciding, compact = !actionsInWell && wide < 300.dp)
+            } else if (dice != null && dice.size == 2) {
                 val die = (wide * 0.17f).coerceIn(44.dp, 76.dp)
                 val plate = RoundedCornerShape(24.dp)
                 Box(
@@ -529,13 +552,26 @@ private fun EndedWell(store: GameStore, state: GameState, showResults: Boolean, 
 // ── the auction ────────────────────────────────────────────────────────────
 
 /**
- * The auction, for every seat at the table: the street, the bid, who leads,
- * how long is left, and a paddle for each amount this seat can actually put
- * up. The server lets anyone still in the race bid, not just the player who
- * turned the street down, so this never asks whose turn it is.
+ * The auction, for every seat at the table — one card for an ordinary
+ * auction and for a lot from a bankrupt player's estate (1.0.7, H1).
  *
- * On a pass & play phone with more than one seat still racing, a chip per
- * seat says whose paddle the buttons are; otherwise the store picks the seat.
+ * Read top to bottom it answers what a bidder asks, in that order: what kind
+ * of sale this is (and for an estate, whose, and how far through it is);
+ * what is under the hammer, as a little deed — its colour, its mark, its
+ * name, the printed price and the rent that makes it worth having; where
+ * the bidding stands and who holds it, beside a ring that says how long is
+ * left; and what this seat can do about it — a row of paddles and a Pass,
+ * or a pill that says why not. An estate ends on the streets still to come.
+ *
+ * The server lets anyone still in the race bid, not just the player who
+ * turned the street down, so this never asks whose turn it is. On a pass &
+ * play phone with more than one seat still racing, a chip per seat says
+ * whose paddle the buttons are; otherwise the store picks the seat.
+ *
+ * It is paper on the felt — a card laid on the table — and it measures the
+ * well it is given: a phone's is a couple of hundred points high once the
+ * clocks have their row, so the card tightens to fit rather than spilling
+ * over the tiles, and on a tablet it opens out.
  */
 @Composable
 private fun AuctionBox(store: GameStore, auction: AuctionState, modifier: Modifier) {
@@ -547,146 +583,599 @@ private fun AuctionBox(store: GameStore, auction: AuctionState, modifier: Modifi
         if (chosen != null && chosen !in auction.inRace) chosen = null
     }
     val racers = store.auctionRacers
+    val progress = store.estateProgress(auction)
 
-    Column(
-        modifier.padding(horizontal = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+    // The card is laid down rather than switched on: a short rise and settle
+    // as the hammer comes up. Under Reduce Motion it is simply there.
+    val reduceMotion = rememberReduceMotion()
+    val rise = remember { Animatable(if (reduceMotion) 1f else 0f) }
+    LaunchedEffect(Unit) { rise.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = 420f)) }
+
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val fit = when {
+            maxHeight < 226.dp -> AuctionFit.COMPACT
+            maxHeight < 300.dp || maxWidth < 300.dp -> AuctionFit.TIGHT
+            else -> AuctionFit.ROOMY
+        }
+        val shape = MMShapes.r18
+        Column(
+            Modifier
+                .widthIn(max = 400.dp)
+                .fillMaxWidth()
+                .graphicsLayer {
+                    val t = rise.value
+                    alpha = t.coerceIn(0f, 1f)
+                    scaleX = 0.94f + 0.06f * t
+                    scaleY = 0.94f + 0.06f * t
+                    translationY = (1f - t) * 10.dp.toPx()
+                }
+                .shadow(14.dp, shape, clip = false, ambientColor = PLATE_SHADOW, spotColor = PLATE_SHADOW)
+                .background(p.card, shape)
+                .border(1.dp, p.rule, shape)
+                .padding(
+                    horizontal = if (fit == AuctionFit.ROOMY) 16.dp else 11.dp,
+                    vertical = if (fit == AuctionFit.ROOMY) 14.dp else 9.dp,
+                ),
+            verticalArrangement = Arrangement.spacedBy(if (fit == AuctionFit.ROOMY) 10.dp else 6.dp),
+        ) {
+            AuctionHeader(store, auction, progress, fit)
+            LotDeed(store, auction.tile, fit)
+            BidLine(store, auction, chosen, fit)
+
+            if (racers.size > 1) {
+                SeatChipRow(
+                    seats = racers.mapNotNull { store.state?.player(it) },
+                    selected = store.biddingSeat(chosen),
+                ) { chosen = it }
+            }
+
+            PaddleRow(store, auction, chosen, racers.size, fit)
+
+            if (auction.estate != null && fit != AuctionFit.COMPACT) UpNext(store, auction, progress)
+        }
+    }
+}
+
+/** How much room the well gave the card: the clocks' row on a small phone leaves very little. */
+private enum class AuctionFit { COMPACT, TIGHT, ROOMY }
+
+/**
+ * The gavel and the kind of sale. An estate lot says whose estate it is,
+ * with their face, and how far through it the table is: a pip per lot and
+ * "Lot 2 of 4" — given up, as the row runs out of room, in that order.
+ */
+@Composable
+private fun AuctionHeader(store: GameStore, auction: AuctionState, progress: EstateProgress?, fit: AuctionFit) {
+    val p = P.current
+    val estate = auction.estate
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Icon("gavel", size = 12.dp, tint = p.gold)
-            Text("AUCTION", color = p.gold, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
-        }
-        // The well's text shrinks to 70% before it is cut short, as iOS's does.
-        val street = store.tile(auction.tile)
-        FitText(
-            street?.name ?: "Property",
-            color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-            minScale = 0.7f,
+        Icon("gavel", size = 14.dp, tint = p.gold)
+        Text(
+            if (estate != null) "ESTATE SALE" else "AUCTION",
+            color = p.gold, fontSize = 10.5.sp, fontWeight = FontWeight.Black, letterSpacing = 1.4.sp,
+            maxLines = 1, softWrap = false,
         )
-        // One quiet line at most under the name (1.0.6 round 2): whose
-        // estate this lot is and how many of it are still to come, or — at
-        // an auction-only table, where nobody saw a Buy button — the price
-        // on the deed, which is what the bidding is measured against.
-        val note = auction.estateLine
-            ?: street?.price?.takeIf { store.state?.isAuctionOnly == true }?.let { "Deed price ${money(it)}" }
-        if (note != null) {
-            FitText(
-                note,
-                color = p.ink2, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
-                minScale = 0.7f,
+        if (estate == null) {
+            Spacer(Modifier.weight(1f))
+            // At an auction-only table nobody saw a Buy button; say why the
+            // hammer is up rather than leave it to the log.
+            if (store.state?.isAuctionOnly == true) {
+                Text(
+                    "Auction-only table",
+                    color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            return@Row
+        }
+        // The bankrupt seat stays in the roster, so its face is still there to show.
+        val who = store.state?.players?.let { all ->
+            all.firstOrNull { it.name == estate.from && it.isBankrupt } ?: all.firstOrNull { it.name == estate.from }
+        }
+        AvatarDisc(estate.from, who?.color, size = 17.dp, avatar = who?.avatar)
+        // The smallest card never draws pips: their room goes to the name.
+        NameAndLot(
+            estate.from.ifBlank { "A bankrupt player" }, progress, estate.left,
+            pips = fit != AuctionFit.COMPACT, modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * The bankrupt player's name and the sale's count, sharing what the header
+ * has left. The count reads "Lot 2 of 4" beside its pips wherever that still
+ * leaves the name whole — or, for a long one, [NAME_FLOOR] of it before the
+ * ellipsis. Short of that it gives up the pips first, then the words, for
+ * "2/4": measured, so a phone with the room says it in full.
+ */
+@Composable
+private fun NameAndLot(name: String, progress: EstateProgress?, left: Int, pips: Boolean, modifier: Modifier) {
+    val p = P.current
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val nameStyle = LocalTextStyle.current.merge(TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Bold))
+    val countStyle = LocalTextStyle.current.merge(TABULAR).merge(TextStyle(fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold))
+    BoxWithConstraints(modifier) {
+        val lot = progress?.lot
+        val total = progress?.total
+        val room = constraints.maxWidth
+        // Pips with words, words alone, pips with the short count, the short
+        // count alone: the first that fits is the one drawn.
+        val (dots, words) = remember(name, lot, total, left, pips, room, nameStyle, countStyle) {
+            val ladder = listOf(true to true, false to true, true to false, false to false)
+                .filter { (dots, _) -> pips || !dots }
+            if (!constraints.hasBoundedWidth) return@remember ladder.first()
+            with(density) {
+                val want = minOf(
+                    measurer.measure(name, nameStyle, maxLines = 1, softWrap = false).size.width,
+                    NAME_FLOOR.roundToPx(),
+                )
+                ladder.firstOrNull { (dots, words) ->
+                    val count = measurer.measure(lotLabel(lot, total, left, words), countStyle, maxLines = 1, softWrap = false).size.width
+                    val marks = if (dots && lot != null && total != null) pipsWidth(total) else 0.dp
+                    val strip = if (marks > 0.dp) marks.roundToPx() + LOT_GAP.roundToPx() else 0
+                    want + NAME_GAP.roundToPx() + strip + count <= room
+                } ?: ladder.last()
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NAME_GAP),
+        ) {
+            Text(
+                name,
+                modifier = Modifier.weight(1f),
+                color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+            LotCount(progress, left, words = words, pips = dots)
         }
-        Text(money(auction.bid), color = p.gold, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
 
-        val leader = store.auctionLeader
-        if (leader != null) {
-            FitText(
-                "leading: ${leader.name}",
-                color = cssColor(leader.color, p.ink2), fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                minScale = 0.7f,
-            )
-        } else {
-            Text("no bids yet", color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-        }
+/** Between the bankrupt player's name and the count, as the header spaces everything. */
+private val NAME_GAP = 6.dp
 
-        AuctionCountdown(auction)
+/** As much of a long name as the count leaves before it settles for "2/4". */
+private val NAME_FLOOR = 72.dp
 
-        if (racers.size > 1) {
-            SeatChipRow(
-                seats = racers.mapNotNull { store.state?.player(it) },
-                selected = store.biddingSeat(chosen),
-            ) { chosen = it }
-        }
+/** Between the pips (or the bar) and the count's words. */
+private val LOT_GAP = 5.dp
 
-        val seat = store.biddingSeat(chosen)
-        if (seat == null) {
-            Text("you're out", color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
-        } else {
-            val amounts = store.bidSteps(seat)
-            // Say whose paddle this is when it is not the main seat's. With
-            // two racers the chips above already name the bidder.
-            if (racers.size < 2 && seat != store.meId) {
-                store.state?.player(seat)?.let { who ->
-                    Text(
-                        "bidding as ${who.name}",
-                        color = cssColor(who.color, p.ink2), fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+/** One pip; the lot under the hammer now is the larger; and the gap between two. */
+private val LOT_PIP = 5.dp
+private val LOT_PIP_NOW = 7.dp
+private val LOT_PIP_GAP = 3.dp
+
+/** A sale too long for pips draws a bar this wide instead. */
+private val LOT_BAR = 34.dp
+
+/** How wide [LotCount] draws the pips for a sale of [total] lots: nothing for one lot. */
+private fun pipsWidth(total: Int): Dp = when {
+    total in 2..8 -> LOT_PIP * (total - 1) + LOT_PIP_NOW + LOT_PIP_GAP * (total - 1)
+    total > 8 -> LOT_BAR
+    else -> 0.dp
+}
+
+/**
+ * The count's words: "Lot 2 of 4", or "2/4" without [words]. A sale this
+ * phone never saw start says only what the server does, how many are left.
+ */
+private fun lotLabel(lot: Int?, total: Int?, left: Int, words: Boolean): String = when {
+    lot != null && total != null -> if (words) "Lot $lot of $total" else "$lot/$total"
+    left <= 0 -> "Last lot"
+    else -> "$left more"
+}
+
+/**
+ * Where the sale has got to: a pip per lot — the ones gone, this one, the
+ * ones to come — and the count. A sale too long for pips gets a thin bar; a
+ * sale this phone never saw start says only what the server does, how many
+ * are left.
+ */
+@Composable
+private fun LotCount(progress: EstateProgress?, left: Int, words: Boolean, pips: Boolean) {
+    val p = P.current
+    val lot = progress?.lot
+    val total = progress?.total
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LOT_GAP)) {
+        if (lot != null && total != null && pips) {
+            if (total in 2..8) {
+                Row(horizontalArrangement = Arrangement.spacedBy(LOT_PIP_GAP), verticalAlignment = Alignment.CenterVertically) {
+                    for (i in 1..total) {
+                        val now = i == lot
+                        Box(
+                            Modifier
+                                .size(if (now) LOT_PIP_NOW else LOT_PIP)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        now -> p.gold
+                                        i < lot -> p.gold.copy(alpha = 0.4f)
+                                        else -> p.rule2
+                                    },
+                                ),
+                        )
+                    }
+                }
+            } else if (total > 8) {
+                Box(Modifier.size(width = LOT_BAR, height = 4.dp).clip(MMShapes.pill).background(p.rule2)) {
+                    Box(
+                        Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(lot / total.toFloat())
+                            .clip(MMShapes.pill)
+                            .background(p.gold),
                     )
                 }
             }
-            if (amounts.isEmpty()) {
-                Text(
-                    "${money(auction.nextBid)} is out of reach — you can only pass.",
-                    color = p.ink3, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
+        }
+        // "2/4" is a fraction to a screen reader; it hears the words.
+        val label = lotLabel(lot, total, left, words)
+        val heard = lotLabel(lot, total, left, words = true)
+        Text(
+            label,
+            modifier = if (label != heard) Modifier.semantics { contentDescription = heard } else Modifier,
+            color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
+            style = LocalTextStyle.current.merge(TABULAR),
+            maxLines = 1, softWrap = false,
+        )
+    }
+}
+
+/**
+ * What is under the hammer, as a little deed: a band of its colour down the
+ * left, its mark, its name, the rent that makes it worth having — or, when
+ * it would finish somebody's set, whose — and the printed price, which is
+ * what the bidding is measured against. A new lot slides in over the last.
+ */
+@Composable
+private fun LotDeed(store: GameStore, index: Int, fit: AuctionFit) {
+    val p = P.current
+    AnimatedContent(
+        targetState = index,
+        transitionSpec = {
+            (fadeIn(tween(220, delayMillis = 60)) + slideInHorizontally(tween(260)) { it / 6 }) togetherWith
+                (fadeOut(tween(140)) + slideOutHorizontally(tween(200)) { -it / 6 }) using SizeTransform(clip = false)
+        },
+        label = "lot",
+    ) { shown ->
+        val tile = store.tile(shown)
+        val group = tile?.let { store.groupInfo(it) }
+        val colour = deedColour(tile, group)
+        val shape = MMShapes.r14
+        val roomy = fit == AuctionFit.ROOMY
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(p.sunken)
+                .deedBand(colour, 6.dp)
+                .border(1.dp, p.rule, shape)
+                .padding(start = 15.dp, end = 11.dp, top = if (roomy) 10.dp else 7.dp, bottom = if (roomy) 10.dp else 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (roomy) 11.dp else 9.dp),
+        ) {
+            LotBadge(tile, group, if (roomy) 32.dp else 25.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                FitText(
+                    tile?.name ?: "Property",
+                    color = p.ink, fontSize = if (roomy) 17.sp else 14.5.sp, fontWeight = FontWeight.ExtraBold,
+                    minScale = 0.7f,
                 )
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (amount in amounts) {
-                        PaddleButton(money(amount), p.gold) {
-                            store.bid(amount, seat)
-                            Haptics.tap()
-                        }
-                    }
+                if (fit != AuctionFit.COMPACT) LotNote(store, tile)
+            }
+            tile?.price?.let { price ->
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    Text(
+                        "DEED",
+                        color = p.ink3, fontSize = 8.5.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp,
+                        maxLines = 1,
+                    )
+                    Text(
+                        money(price),
+                        color = p.ink, fontSize = if (roomy) 15.sp else 13.sp, fontWeight = FontWeight.ExtraBold,
+                        style = LocalTextStyle.current.merge(TABULAR),
+                        maxLines = 1, softWrap = false,
+                    )
                 }
             }
-            PaddleButton("Pass", p.bad) { store.passBid(seat) }
         }
     }
 }
 
 /**
- * The bar and the seconds. The room opens on a twenty-second window and every
- * bid resets it to twelve; measured against twenty after a bid the bar would
- * jump back to two-thirds and read as nearly out of time. No deadline, no
- * countdown: a table with nobody to wait for runs the auction until it is
- * settled, and a bar pinned at 0s would be a lie.
+ * The deed's one line of small print: the rent ("Rent $18 · hotel $950"),
+ * unless the lot would finish somebody's colour — then that, which matters
+ * more to every bidder at the table: green when it is your own set, red
+ * when it is a rival's.
  */
 @Composable
-private fun AuctionCountdown(auction: AuctionState) {
-    val endsAt = auction.endsAt ?: return
+private fun LotNote(store: GameStore, tile: TileData?) {
     val p = P.current
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(endsAt) {
-        // Every frame, because a bar that moves in one-second steps looks
-        // broken; and only until it runs out.
-        while (now < endsAt) withFrameMillis { now = System.currentTimeMillis() }
+    val rent = tile?.rentLine
+    val set = completes(store, tile)
+    val line = buildAnnotatedString {
+        if (set != null) {
+            append(rent?.substringBefore(" · ") ?: "")
+            if (rent != null) append(" · ")
+            withStyle(SpanStyle(color = if (set.first) p.good else p.bad, fontWeight = FontWeight.ExtraBold)) {
+                append(set.second)
+            }
+        } else if (rent != null) {
+            append(rent)
+        }
     }
-    val remaining = maxOf(0.0, (endsAt - now) / 1000.0)
-    val fraction = minOf(1.0, remaining / auction.windowSeconds).toFloat()
-    val low = remaining <= 5.0
+    if (line.isEmpty()) return
+    Text(
+        line,
+        color = p.ink3, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * Whether this street would finish a colour: every other street of it held
+ * by one player still in. (true, "completes your set") for a seat on this
+ * phone, (false, "completes Arjun's set") for anybody else; null otherwise.
+ */
+private fun completes(store: GameStore, tile: TileData?): Pair<Boolean, String>? {
+    val s = store.state ?: return null
+    if (tile?.type != "property") return null
+    val members = s.map.groups?.get(tile.group ?: return null) ?: return null
+    val others = members.filter { it != tile.index }
+    if (others.isEmpty()) return null
+    val owner = s.owner(others.first())?.owner ?: return null
+    if (others.any { s.owner(it)?.owner != owner }) return null
+    val who = s.player(owner)?.takeIf { !it.isBankrupt } ?: return null
+    return if (store.isLocal(owner)) true to "completes your set" else false to "completes ${who.name}'s set"
+}
+
+/**
+ * Where the bidding stands: the bid, large, and who holds it — or, before
+ * anybody has, that nobody has and what it opens at — beside the ring that
+ * says how long is left. A seat on this phone holding the top bid is told
+ * so in a green pill rather than reading its own name.
+ */
+@Composable
+private fun BidLine(store: GameStore, auction: AuctionState, chosen: String?, fit: AuctionFit) {
+    val p = P.current
+    val roomy = fit == AuctionFit.ROOMY
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .height(14.dp),
+        Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(
-            Modifier
-                .weight(1f)
-                .height(5.dp)
-                .clip(RoundedCornerShape(99.dp))
-                .background(p.sunken),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(fraction)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(if (low) p.bad else p.gold),
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (roomy) 5.dp else 3.dp)) {
+            val leader = store.auctionLeader
+            if (auction.bid > 0 && leader != null) {
+                // Each new bid rolls in from below, as a number that went up.
+                AnimatedContent(
+                    targetState = auction.bid,
+                    transitionSpec = {
+                        (slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(220))) togetherWith
+                            (slideOutVertically(tween(180)) { -it / 2 } + fadeOut(tween(120))) using SizeTransform(clip = false)
+                    },
+                    label = "bid",
+                ) { bid ->
+                    Text(
+                        money(bid),
+                        color = p.gold,
+                        fontSize = when (fit) {
+                            AuctionFit.ROOMY -> 34.sp
+                            AuctionFit.TIGHT -> 27.sp
+                            AuctionFit.COMPACT -> 23.sp
+                        },
+                        fontWeight = FontWeight.ExtraBold,
+                        style = LocalTextStyle.current.merge(TABULAR),
+                        maxLines = 1, softWrap = false,
+                    )
+                }
+                if (store.isLocal(leader.id)) {
+                    StatePill(
+                        if (leader.id == store.meId) "You lead" else "${leader.name} leads",
+                        PillTone.GOOD, glyph = "check",
+                    )
+                } else {
+                    LeaderChip(leader)
+                }
+            } else {
+                Text(
+                    "No bids yet",
+                    color = p.ink, fontSize = if (roomy) 22.sp else 18.sp, fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1, softWrap = false,
+                )
+                Text(
+                    "Opens at ${money(auction.nextBid)}",
+                    color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
+        }
+        // No deadline, no ring: a table with nobody to wait for runs the
+        // auction until it is settled, and a ring pinned at nought would lie.
+        auction.endsAt?.let { end ->
+            CountdownRing(
+                end, auction.windowSeconds,
+                size = when (fit) {
+                    AuctionFit.ROOMY -> 54.dp
+                    AuctionFit.TIGHT -> 44.dp
+                    AuctionFit.COMPACT -> 38.dp
+                },
+                stroke = if (roomy) 5.dp else 4.dp,
             )
         }
+    }
+}
+
+/** "Arjun leads": the leader's face and name in a capsule, the name in their colour's ink. */
+@Composable
+private fun LeaderChip(leader: PlayerState) {
+    val p = P.current
+    Row(
+        Modifier
+            .clip(MMShapes.pill)
+            .background(p.sunken)
+            .border(1.dp, p.rule, MMShapes.pill)
+            .padding(start = 3.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        AvatarDisc(leader.name, leader.color, size = 18.dp, avatar = leader.avatar)
         Text(
-            "${kotlin.math.ceil(remaining).toInt()}s",
-            color = if (low) p.bad else p.ink3,
-            fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold,
-            style = LocalTextStyle.current.merge(TABULAR),
-            maxLines = 1, softWrap = false,
+            "${leader.name} leads",
+            color = p.ink, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * What this seat can do: a paddle for each amount it can put up and a Pass,
+ * all one row — or, when it cannot bid, the pill that says why. Holding the
+ * top bid there is nothing to press but patience; out of the race it is
+ * "You passed"; out of the game "You're out"; and from the rail, watching.
+ */
+@Composable
+private fun PaddleRow(store: GameStore, auction: AuctionState, chosen: String?, racers: Int, fit: AuctionFit) {
+    val p = P.current
+    val seat = store.biddingSeat(chosen)
+    val height = if (fit == AuctionFit.ROOMY) 40.dp else 34.dp
+    if (seat == null) {
+        val alive = store.aliveLocalSeats.isNotEmpty()
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            when {
+                store.isSpectating -> StatePill("Watching", PillTone.QUIET, glyph = "eye")
+                alive -> StatePill("You passed", PillTone.QUIET)
+                else -> StatePill("You're out", PillTone.QUIET)
+            }
+        }
+        return
+    }
+    if (seat == auction.leader) {
+        Text(
+            "Anyone still in can outbid you",
+            modifier = Modifier.fillMaxWidth(),
+            color = p.ink3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        return
+    }
+    // Say whose paddle this is when it is not the main seat's. With two
+    // racers the chips above already name the bidder.
+    if (racers < 2 && seat != store.meId) {
+        store.state?.player(seat)?.let { who ->
+            Text(
+                "Bidding as ${who.name}",
+                modifier = Modifier.fillMaxWidth(),
+                color = cssColor(who.color, p.ink2), fontSize = 10.5.sp, fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    val amounts = store.bidSteps(seat)
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (amounts.isEmpty()) {
+            Text(
+                "${money(auction.nextBid)} is more than you can raise",
+                modifier = Modifier.weight(1f),
+                color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                lineHeight = 14.sp, maxLines = 2,
+            )
+        } else {
+            for (amount in amounts) {
+                Paddle(money(amount), p.gold, p.accentInk, height, Modifier.weight(1f)) {
+                    store.bid(amount, seat)
+                    Haptics.tap()
+                }
+            }
+        }
+        Paddle(
+            "Pass", p.sunken, p.bad, height,
+            if (amounts.isEmpty()) Modifier.width(78.dp) else Modifier.weight(0.9f),
+            outline = p.rule,
+        ) { store.passBid(seat) }
+    }
+}
+
+/**
+ * One paddle: a short, wide button that gives under the thumb — a paddle
+ * that does not move when pressed feels like the bid did not go. The amount
+ * shrinks to fit rather than wrap, so "$1,290" sits on one line in a third
+ * of a phone's well.
+ */
+@Composable
+private fun Paddle(
+    label: String,
+    fill: Color,
+    ink: Color,
+    height: Dp,
+    modifier: Modifier = Modifier,
+    outline: Color = Color.White.copy(alpha = 0.18f),
+    onClick: () -> Unit,
+) {
+    val press = remember { MutableInteractionSource() }
+    val down by press.collectIsPressedAsState()
+    val give by animateFloatAsState(if (down) 0.95f else 1f, spring(dampingRatio = 0.7f), label = "paddle")
+    val shape = MMShapes.r10
+    Box(
+        modifier
+            .height(height)
+            .graphicsLayer {
+                scaleX = give
+                scaleY = give
+                alpha = if (down) 0.85f else 1f
+            }
+            .clip(shape)
+            .background(fill)
+            .border(1.dp, outline, shape)
+            .clickable(interactionSource = press, indication = null, role = Role.Button) { onClick() }
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        FitText(label, color = ink, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold, minScale = 0.7f)
+    }
+}
+
+/**
+ * An estate's next lots, by name, so the table knows what it is saving its
+ * money for — "Up next  Rome · Venice". A phone that did not see the estate
+ * go only knows how many, and says that.
+ */
+@Composable
+private fun UpNext(store: GameStore, auction: AuctionState, progress: EstateProgress?) {
+    val p = P.current
+    val estate = auction.estate ?: return
+    val names = progress?.upNext.orEmpty().mapNotNull { store.tile(it)?.name }
+    val line = buildAnnotatedString {
+        when {
+            names.isNotEmpty() -> {
+                withStyle(SpanStyle(color = p.ink2, fontWeight = FontWeight.ExtraBold)) { append("Up next  ") }
+                append(names.joinToString(" · "))
+                val more = estate.left - names.size
+                if (more > 0) append(" · +$more")
+            }
+            estate.left <= 0 -> append("The last lot of ${estate.from.ifBlank { "this" }}'s estate")
+            estate.left == 1 -> append("1 more lot after this")
+            else -> append("${estate.left} more lots after this")
+        }
+    }
+    Text(
+        line,
+        modifier = Modifier.fillMaxWidth(),
+        color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+    )
 }
 
 /**
@@ -697,7 +1186,7 @@ private fun AuctionCountdown(auction: AuctionState) {
 @Composable
 private fun SeatChipRow(seats: List<PlayerState>, selected: String?, choose: (String) -> Unit) {
     val p = P.current
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) {
         for (seat in seats) {
             val on = seat.id == selected
             val colour = cssColor(seat.color, p.ink3)
@@ -729,35 +1218,6 @@ private fun SeatChipRow(seats: List<PlayerState>, selected: String?, choose: (St
                 )
             }
         }
-    }
-}
-
-/**
- * A tighter sibling of MMButton, so three bids and a pass fit the well. It
- * gives under the thumb — a paddle that does not move when pressed feels like
- * the bid did not go.
- */
-@Composable
-private fun PaddleButton(label: String, fill: Color, onClick: () -> Unit) {
-    val press = remember { MutableInteractionSource() }
-    val down by press.collectIsPressedAsState()
-    val give by animateFloatAsState(if (down) 0.96f else 1f, spring(dampingRatio = 0.7f), label = "paddle")
-    val shape = RoundedCornerShape(8.dp)
-    Box(
-        Modifier
-            .graphicsLayer {
-                scaleX = give
-                scaleY = give
-                alpha = if (down) 0.82f else 1f
-            }
-            .clip(shape)
-            .background(fill)
-            .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
-            .clickable(interactionSource = press, indication = null) { onClick() }
-            .padding(horizontal = 11.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
     }
 }
 

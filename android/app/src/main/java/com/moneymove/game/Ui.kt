@@ -39,6 +39,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -1575,6 +1577,11 @@ class ConfirmAction(
  * as a glass bar's controls do ([GlassHost]) — glass cannot sit on glass —
  * and at twelve in from a 22 corner they are the ladder's r10, concentric.
  * The words keep their twenty.
+ *
+ * [body] is anything the question needs shown before it is answered — the
+ * deeds a bankruptcy is about to send somewhere, and the two answers that
+ * say where (BankruptChoice.kt) — laid between the sentence and the buttons.
+ * An answer drawn in it dismisses for itself.
  */
 @Composable
 fun ConfirmDialog(
@@ -1584,6 +1591,7 @@ fun ConfirmDialog(
     message: String? = null,
     icon: String? = null,
     cancelLabel: String? = "Cancel",
+    body: (@Composable () -> Unit)? = null,
 ) {
     val p = P.current
     val shape = MMShapes.r22
@@ -1602,6 +1610,9 @@ fun ConfirmDialog(
                         lens = false,
                         shadow = GlassShadow.Relaxed,
                     )
+                    // A question with a body can outgrow a phone on its side;
+                    // it scrolls inside its own glass rather than off-screen.
+                    .then(if (body != null) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                     .padding(12.dp),
             ) {
                 GlassHost(glass) {
@@ -1625,7 +1636,11 @@ fun ConfirmDialog(
                             )
                         }
                     }
-                    Spacer(Modifier.height(16.dp))
+                    if (body != null) {
+                        Spacer(Modifier.height(14.dp))
+                        body()
+                    }
+                    Spacer(Modifier.height(if (body != null) 10.dp else 16.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (a in actions) {
                             MMButton(a.label, Modifier.fillMaxWidth(), kind = a.kind, icon = a.icon) {

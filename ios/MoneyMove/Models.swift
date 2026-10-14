@@ -34,6 +34,10 @@ struct GameState: Codable, Equatable {
     var ownership: [String: TileOwnership]  // tile index (stringified) -> owner
     var turn: TurnState?
     var auction: AuctionState?
+    /// A bankrupt player being asked what happens to their properties (1.0.7,
+    /// H2) — only at a table where the player decides. Nil whenever nobody is
+    /// being asked, and from an older server, which never asks.
+    var bankruptChoice: BankruptChoice?
     var trades: [TradeOffer]
     var log: [LogLine]
     var chat: [ChatMessage]
@@ -130,7 +134,10 @@ struct QuickRoll: Codable, Equatable {
     /// house rules. The phrases arrive finished, so this is the only way to
     /// tell which chip an edited key belongs to.
     static let partKeys = ["mapId", "startingCash", "x2rent", "vacationCash",
-                           "auction", "noRentInPrison", "evenBuild"]
+                           "auction", "noRentInPrison", "evenBuild",
+                           // 1.0.7 (H3): what a bankrupt player's streets do,
+                           // always the last phrase.
+                           "bankruptProperties"]
 }
 
 /// A Play-now table between the tap and the deal: first the search, then a
@@ -219,7 +226,8 @@ struct GameSettings: Codable, Equatable {
     /// 45 or 60. The richest player still in wins when it runs out.
     var timeLimit: Int?
     /// What a bankrupt player's properties do (1.0.6, round 2): "release" —
-    /// back to the bank, unowned, as always — or "auction", one lot at a time.
+    /// back to the bank, unowned, as always — or "auction", one lot at a time;
+    /// and since 1.0.7 "choose", where the player who goes out decides.
     /// Absent from an older server, which only ever releases them.
     var bankruptProperties: String?
     /// Every unowned property goes straight to auction when landed on; there
@@ -403,6 +411,20 @@ struct AuctionState: Codable, Equatable {
     /// A lot from a bankrupt player's estate (1.0.6, round 2) — nil for an
     /// ordinary auction, and from an older server, which has no other kind.
     var estate: EstateLot?
+}
+
+/// The question a bankrupt player is asked at a table where the player
+/// decides (1.0.7, H2): back to the bank, or auction to everyone.
+struct BankruptChoice: Codable, Equatable {
+    /// Who is being asked — aliased like every other id, so it is this
+    /// device's own id only when the question is this device's to answer.
+    var playerId: String
+    var name: String
+    /// The deeds in question, as board indices in board order. They already
+    /// belong to the bank while the question is open.
+    var properties: [Int]
+    /// Epoch ms the house answers for them.
+    var endsAt: Double?
 }
 
 /// Whose estate is under the hammer, and how much more of it is to come.

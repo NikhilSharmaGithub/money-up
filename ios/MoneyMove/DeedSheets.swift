@@ -673,11 +673,25 @@ struct PropertiesSheet: View {
     }
 
     /// The web's always-there escape hatch, mirrored: give up on your own turn.
+    /// Where the bankrupt player decides (1.0.7, H2) the sheet steps aside for
+    /// the give-up card, which asks where the streets go in the same breath;
+    /// anywhere else the confirmation says what this table does with them.
     @ViewBuilder
     private func bankruptRow(_ P: Palette) -> some View {
         if store.isMyTurn {
             MMIconButton(.skull, "Declare bankruptcy", kind: .ghost, big: true) {
-                confirmBankrupt = true
+                let seat = store.activeId
+                if store.choosesEstate(seat) {
+                    dismiss()
+                    // The card lives on the table under this sheet, so it
+                    // waits for the sheet to be on its way down.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        store.askGiveUp(seat, kind: .declare)
+                    }
+                } else {
+                    confirmBankrupt = true
+                }
             }
                 .padding(.top, 6)
                 .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
@@ -686,7 +700,7 @@ struct PropertiesSheet: View {
                         dismiss()
                     }
                 } message: {
-                    Text("Everything you own returns to the bank and you are out of the game.")
+                    Text(store.bankruptcyTerms(for: store.activeId))
                 }
         }
     }

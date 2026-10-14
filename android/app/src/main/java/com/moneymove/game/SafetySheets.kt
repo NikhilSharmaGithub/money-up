@@ -851,15 +851,23 @@ fun TableConfirmHost(store: GameStore) {
         LaunchedEffect(question) { store.dismissConfirm() }
         return
     }
+    val state = store.state ?: return
+    val rule = state.estateRule
     when (question) {
         TableConfirm.LEAVE -> ConfirmDialog(
             title = "Leave the game?",
             message = "A bot holds your seat while you're away, so you can continue from the home " +
-                "screen. Leaving for good returns your streets to the bank and costs 1 karma.",
+                "screen. " + when (rule) {
+                    EstateRule.RELEASE -> "Leaving for good returns your streets to the bank and costs 1 karma."
+                    EstateRule.AUCTION -> "Leaving for good puts your streets up for auction and costs 1 karma."
+                    // A player who walks out is not asked (docs, "Who is asked").
+                    EstateRule.CHOOSE -> "Leaving for good lets the house decide where your streets go, and costs 1 karma."
+                },
             actions = listOf(
                 ConfirmAction("Leave — I'll come back") { store.stepAway() },
                 // Conceding keeps the seat as a spectator and the table plays
-                // on; on a pass & play phone it asks which player first.
+                // on; on a pass & play phone it asks which player first, and
+                // at a "player decides" table where the streets go.
                 ConfirmAction("Give up — declare bankruptcy", BtnKind.DANGER) { store.requestConcede() },
                 // The quit has to reach the server before the socket goes —
                 // it is what hands the streets back — and quitAndLeave waits.
@@ -869,7 +877,8 @@ fun TableConfirmHost(store: GameStore) {
         )
 
         // Named per seat: several people share this phone, and the white flag
-        // has to land on the right one.
+        // has to land on the right one. At a "player decides" table the seat
+        // picked is then asked about its streets (GIVE_UP_CHOICE).
         TableConfirm.CONCEDE -> ConfirmDialog(
             title = "Who gives up?",
             message = "That player declares bankruptcy and stays as a spectator. Everyone else on " +
@@ -880,28 +889,65 @@ fun TableConfirmHost(store: GameStore) {
             onDismiss = store::dismissConfirm,
         )
 
-        // From the properties list, where nobody is owed: the bank takes it.
-        // The sheet goes with it, as iOS's does — there is nothing left in it
-        // that belongs to this player.
-        TableConfirm.BANKRUPT -> ConfirmDialog(
-            title = "Declare bankruptcy?",
-            message = "Everything you own returns to the bank and you are out of the game.",
-            actions = listOf(
-                ConfirmAction("Go bankrupt", BtnKind.DANGER) {
-                    store.declareBankrupt()
-                    store.closeSheet()
-                },
-            ),
-            onDismiss = store::dismissConfirm,
-        )
+        // Giving up at a "player decides" table, with deeds to decide about:
+        // the white flag and the answer are one question, so the seat is not
+        // asked again once it is out (1.0.7, H2).
+        TableConfirm.GIVE_UP_CHOICE -> {
+            val seat = store.giveUpSeat ?: store.meId
+            val mine = seat == store.meId
+            val name = state.player(seat)?.name ?: "This player"
+            val deeds = store.deedsOf(seat)
+            ConfirmDialog(
+                title = if (mine) "Give up?" else "$name gives up?",
+                message = (if (mine) "You'll declare bankruptcy and watch the rest of the game." else "$name declares bankruptcy and watches the rest of the game.") +
+                    " What happens to ${propertiesPhrase(deeds.size, mine)}?",
+                actions = emptyList(),
+                onDismiss = store::dismissConfirm,
+                body = { EstateChoiceBody(store, deeds) { auction -> store.concede(seat, auction) } },
+            )
+        }
 
-        // From the debt panel, where somebody is owed and gets it all.
-        TableConfirm.DEBT_BANKRUPT -> ConfirmDialog(
+        // From the properties list, where nobody is owed. The sheet goes with
+        // it, as iOS's does — there is nothing left in it that belongs to
+        // this player.
+        TableConfirm.BANKRUPT -> BankruptcyQuestion(store, state, rule, owed = false)
+
+        // From the debt panel, where somebody may be owed: what was paid
+        // stays paid, and the deeds never go to the creditor.
+        TableConfirm.DEBT_BANKRUPT -> BankruptcyQuestion(store, state, rule, owed = true)
+    }
+}
+
+/**
+ * "Declare bankruptcy?", worded for where the streets go at this table. At
+ * a "player decides" table, with deeds to decide about, the two answers to
+ * that stand in for "Go bankrupt": choosing one is the confirmation.
+ */
+@Composable
+private fun BankruptcyQuestion(store: GameStore, state: GameState, rule: EstateRule, owed: Boolean) {
+    val seat = store.activeId
+    val paid = if (owed) {
+        val payee = state.debtPayee(state.turn?.debt)
+        if (payee == "the bank") "What you've paid stays paid. " else "What you've paid stays with $payee. "
+    } else ""
+    val done: (Boolean?) -> Unit = { auction ->
+        store.declareBankrupt(auction)
+        if (!owed) store.closeSheet()
+    }
+    if (store.decidesEstate(seat)) {
+        val deeds = store.deedsOf(seat)
+        ConfirmDialog(
             title = "Declare bankruptcy?",
-            message = "Everything you own goes to whoever you owe, and you are out of the game.",
-            actions = listOf(
-                ConfirmAction("Go bankrupt", BtnKind.DANGER) { store.declareBankrupt() },
-            ),
+            message = "${paid}You'll be out of the game. What happens to ${propertiesPhrase(deeds.size, yours = true)}?",
+            actions = emptyList(),
+            onDismiss = store::dismissConfirm,
+            body = { EstateChoiceBody(store, deeds) { auction -> done(auction) } },
+        )
+    } else {
+        ConfirmDialog(
+            title = "Declare bankruptcy?",
+            message = "$paid${bankruptOutLine(rule, store.deedsOf(seat).size)}",
+            actions = listOf(ConfirmAction("Go bankrupt", BtnKind.DANGER) { done(null) }),
             onDismiss = store::dismissConfirm,
         )
     }

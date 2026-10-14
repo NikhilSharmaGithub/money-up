@@ -59,11 +59,14 @@ data class TableRuleSection(val title: String, val lines: List<TableRuleLine>)
  *
  * A switch missing from the push reads exactly what the settings sheet reads
  * for it (LobbySheet.kt), so the two screens can never describe one table two
- * ways. A Play-now or a cup table always plays round 2's three new rules at
- * their defaults, whatever the fields say — the server's own rule — so they
- * are shown that way there; and only a table a host set up says how hard its
- * house plays, because a Play-now table's house is passing itself off as
- * people and a cup table has none.
+ * ways. A Play-now or a cup table always plays auction-only and the shuffle
+ * at their defaults, whatever the fields say — the server's own rule — so
+ * they are shown that way there. What a bankrupt player's streets do is a
+ * Play-now table's own rolled rule from 1.0.7, and a cup table's is always
+ * the bank ([GameState.estateRule]). Only a table with a house at it says
+ * how hard the house plays ([GameState.showsBotSkill]): a table of people
+ * has none to describe, a Play-now table's is passing itself off as people,
+ * and a cup table has none.
  */
 fun tableRuleSections(state: GameState): List<TableRuleSection> {
     val s = state.settings
@@ -78,7 +81,7 @@ fun tableRuleSections(state: GameState): List<TableRuleSection> {
     // Auction-only forces auctions on; an older server never sends the one
     // without the other, but a table that says both is read as both.
     val auction = auctionOnly || (s.auction ?: true)
-    val estates = hostSet && s.auctionsEstates
+    val estates = state.estateRule
     val teams = s.teams ?: 0
     val clock = s.turnSeconds ?: 90
     val minutes = s.gameMinutes
@@ -114,7 +117,7 @@ fun tableRuleSections(state: GameState): List<TableRuleSection> {
                 on = teams > 0,
             ),
         )
-        if (hostSet) {
+        if (state.showsBotSkill) {
             val skill = s.botSkill
             add(TableRuleLine("robot", "Bot skill", skill.label, skill.blurb))
         }
@@ -183,9 +186,12 @@ fun tableRuleSections(state: GameState): List<TableRuleSection> {
             on = even,
         ),
         TableRuleLine(
-            "skull", "Bankrupt properties", if (estates) "Auctioned" else "Back to the bank",
-            if (estates) "A bankrupt player's streets are auctioned one at a time, buildings sold back and mortgages lifted first."
-            else "A bankrupt player's streets go back to the bank, unowned, with their buildings and mortgages cleared.",
+            "skull", "Bankrupt properties", estates.sheet,
+            when (estates) {
+                EstateRule.RELEASE -> "A bankrupt player's streets go back to the bank, unowned, with their buildings and mortgages cleared."
+                EstateRule.AUCTION -> "A bankrupt player's streets are auctioned to everyone, one at a time, buildings sold back and mortgages lifted first."
+                EstateRule.CHOOSE -> "The player who goes bankrupt picks: back to the bank, or an auction for everyone. They have 20 seconds — then, or for a player who has left, the house picks whichever keeps the game close."
+            },
         ),
         TableRuleLine(
             "police", "Prison", "3 tries",

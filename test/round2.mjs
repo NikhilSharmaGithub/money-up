@@ -199,8 +199,9 @@ async function inProcess() {
   // ------------------------------------------------------------ settings --
   section('the three new table settings');
   {
+    // 1.0.7 added the third rule, 'choose' (test/round3.mjs).
     PASS(DEFAULT_SETTINGS.bankruptProperties === 'release' && DEFAULT_SETTINGS.auctionOnly === false
-      && DEFAULT_SETTINGS.shuffleBoard === false && isDeepStrictEqual(BANKRUPT_RULES, ['release', 'auction']),
+      && DEFAULT_SETTINGS.shuffleBoard === false && isDeepStrictEqual(BANKRUPT_RULES, ['release', 'auction', 'choose']),
     'a new table releases bankrupt estates, sells at the sticker and plays the board as printed');
 
     const room = bare({ humans: ['h', 'g'] });
@@ -208,10 +209,10 @@ async function inProcess() {
     PASS(!res?.error && room.settings.bankruptProperties === 'auction' && room.settings.auctionOnly === true
       && room.settings.shuffleBoard === true, 'the host sets all three', short(res));
     res = room.updateSettings('h', { bankruptProperties: 'raffle', shuffleBoard: false });
-    PASS(res?.error === 'Bankrupt properties go back to the bank or to auction' && room.settings.shuffleBoard === true
+    PASS(res?.error === 'Bankrupt properties go back to the bank, to auction, or the player decides' && room.settings.shuffleBoard === true
       && room.settings.bankruptProperties === 'auction', 'a value off the list is refused, and the whole patch with it', short(res));
     for (const bad of [null, 1, true, ['auction'], { a: 1 }]) {
-      if (room.updateSettings('h', { bankruptProperties: bad })?.error !== 'Bankrupt properties go back to the bank or to auction') {
+      if (room.updateSettings('h', { bankruptProperties: bad })?.error !== 'Bankrupt properties go back to the bank, to auction, or the player decides') {
         PASS(false, `bankruptProperties ${JSON.stringify(bad)} should be refused`);
       }
     }
@@ -231,10 +232,13 @@ async function inProcess() {
     PASS(room.settings.auctionOnly === true && room.settings.auction === true,
       'both in one patch: auction-only wins, and auctions are on');
 
+    // A Play-now table rolls bankruptProperties from 1.0.7 and its host may
+    // change it like the other rolled rules (test/round3.mjs); the other two
+    // stay private-table only.
     const quick = bare({ humans: ['q1'] });
     quick.makeQuickMatch(86400);
     const before = { ...quick.settings };
-    for (const patch of [{ bankruptProperties: 'auction' }, { auctionOnly: true }, { shuffleBoard: true }]) {
+    for (const patch of [{ auctionOnly: true }, { shuffleBoard: true }]) {
       const r = quick.updateSettings('q1', patch);
       PASS(r?.error === 'A Play-now table keeps its seats, privacy, house players, teams and clock'
         && isDeepStrictEqual(quick.settings, before), `a Play-now host cannot set ${Object.keys(patch)[0]}`, short(r));
@@ -251,9 +255,11 @@ async function inProcess() {
     // And if a field were forced anyway, the room plays the default there.
     cup.settings.shuffleBoard = true; cup.settings.auctionOnly = true; cup.settings.bankruptProperties = 'auction';
     quick.settings.shuffleBoard = true;
+    quick.settings.auctionOnly = true;
     PASS(cup.ruleOn('shuffleBoard') === false && cup.ruleOn('auctionOnly') === false
-      && cup.ruleOn('bankruptProperties') === 'release' && quick.ruleOn('shuffleBoard') === false,
-    'a cup or Play-now table plays the defaults even with the fields forced');
+      && cup.ruleOn('bankruptProperties') === 'release' && quick.ruleOn('shuffleBoard') === false
+      && quick.ruleOn('auctionOnly') === false,
+    'a cup table plays the defaults even with the fields forced, and so does a Play-now table for the two it never rolls');
   }
 
   // --------------------------------------------------------------- G1 ----
@@ -1078,7 +1084,7 @@ async function overTheWire() {
     await table([host, guest]);
     host.emit('settings', { bankruptProperties: 'lottery' });
     await until(() => host.toasts.length >= 1);
-    PASS(host.toasts.includes('Bankrupt properties go back to the bank or to auction'), 'a bad value is refused with a toast', short(host.toasts));
+    PASS(host.toasts.includes('Bankrupt properties go back to the bank, to auction, or the player decides'), 'a bad value is refused with a toast', short(host.toasts));
     const seq = host.seq;
     host.emit('settings', { bankruptProperties: 'auction', auctionOnly: true, shuffleBoard: true, auction: false });
     await until(() => host.seq !== seq && guest.state?.settings?.shuffleBoard === true);

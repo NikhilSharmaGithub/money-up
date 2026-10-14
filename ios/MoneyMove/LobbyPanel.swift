@@ -32,6 +32,7 @@ struct LobbyPanel: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
+            .animation(.spring(duration: 0.35), value: store.state?.hasHouseBots == true)
         }
         .scrollBounceBehavior(.basedOnSize)
         .onAppear { nameDraft = store.me?.name ?? store.nickname }
@@ -61,15 +62,16 @@ struct LobbyPanel: View {
             MMCard { BoardBoxes(canEdit: store.isHost) }
         }
 
-        // How hard the house plays and how long the game may run
-        // (1.0.6): the host's to set, everybody's to read. Neither
-        // exists at a Play-now or cup table. Nor do the three round-2
-        // rules beside them — what a bankrupt player's properties do,
-        // auction-only, the shuffled board — which a guest reads in the
-        // same summary, only when they are on.
+        // How long the game may run (1.0.6): the host's to set, everybody's
+        // to read. It does not exist at a Play-now or cup table. Nor do the
+        // three round-2 rules beside it — what a bankrupt player's
+        // properties do, auction-only, the shuffled board — which a guest
+        // reads in the same summary, only when they are on. How hard the
+        // house plays (1.0.7, H4) waits under the seats for a house player
+        // to sit down.
         if store.state?.hasTableRules == true {
             if store.isHost {
-                TableRulesCard(editable: true)
+                TableRulesCard(editable: true, showsBotSkill: false)
                 TableTwistsCard(editable: true)
             } else {
                 TableRulesSummary()
@@ -98,6 +100,14 @@ struct LobbyPanel: View {
         }
 
         seatList(P)
+
+        // Bot skill, right under the seats it is about (1.0.7, H4): it comes
+        // with the first house player the host adds — or with Allow bots,
+        // which seats them at the start — and goes with the last.
+        if store.isHost, store.state?.hasHouseBots == true {
+            BotSkillCard(editable: true)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
 
         if store.isHost, teamCount > 0 {
             Button("⇄  Balance teams") { store.balanceTeams() }
@@ -424,6 +434,13 @@ struct QuickMatchPanel: View {
                 if let lobby { actions(lobby, P) }
 
                 rolledRules(P)
+
+                // What a bankrupt player's streets do is one of the rules this
+                // table rolled (1.0.7, H3), and its host may change it right
+                // here — everybody else reads it in the line above.
+                if let lobby, store.isHost, lobby.editable?.contains("bankruptProperties") == true {
+                    MMCard { EstateRulePicker(editable: true) }
+                }
 
                 if lobby != nil { rulesAndChat(P) }
 

@@ -175,6 +175,18 @@ struct GameScreen: View {
         (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
     }
 
+    /// One seat gives up. Where the bankrupt player decides and the seat holds
+    /// deeds (1.0.7, H2), the give-up card asks where they go first — after a
+    /// beat, because the dialog that asked who gives up is still on its way
+    /// out; anywhere else the white flag goes straight up, as it always has.
+    private func concede(_ seat: String) {
+        guard store.choosesEstate(seat) else { return store.concede(as: seat) }
+        Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            store.askGiveUp(seat, kind: .concede)
+        }
+    }
+
     var body: some View {
         let P = Palette.current(scheme)
         VStack(spacing: 10) {
@@ -412,6 +424,31 @@ struct GameScreen: View {
             }
         }
         .animation(.spring(duration: 0.35), value: store.timedOut)
+        // Going out at a table where the player decides (1.0.7, H2): the
+        // question the server has put to a seat of ours, and the give-up
+        // card that asks it up front. Both take the whole screen — the table
+        // is waiting on the first, and the second is a door out of the game.
+        .overlay {
+            if let choice = store.myBankruptChoice {
+                BankruptChoicePrompt(choice: choice)
+            } else if let ask = store.giveUpAsk {
+                GiveUpCard(ask: ask)
+            }
+        }
+        .animation(.spring(duration: 0.35), value: store.myBankruptChoice)
+        .animation(.spring(duration: 0.35), value: store.giveUpAsk)
+        .onChange(of: store.myBankruptChoice != nil) { _, asked in
+            // The overlay lives under presented sheets, so a deed sheet left
+            // open would hide the one question the table is waiting on.
+            guard asked else { return }
+            sheet = nil
+            Haptics.warn()
+        }
+        // The question the give-up card asks stops mattering once the seat is
+        // out, or the game is.
+        .onChange(of: store.state?.isPlaying == true) { _, playing in
+            if !playing { store.giveUpAsk = nil }
+        }
     }
 
     private var connectionLabel: String {
@@ -545,7 +582,7 @@ struct GameScreen: View {
                         confirmConcede = true
                     }
                 } else {
-                    store.concede()
+                    concede(aliveLocalSeats.first?.id ?? store.meId)
                 }
             }
             Button("Leave for good", role: .destructive) {
@@ -565,17 +602,22 @@ struct GameScreen: View {
             }
         } message: {
             // At a table that auctions a bankrupt player's estate (1.0.6,
-            // G5), walking out puts the streets under the hammer instead.
-            let sold = store.state?.hasTableRules == true
-                && EstateRule.of(store.state?.settings) == .auction
-            Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good \(sold ? "puts your streets up for auction" : "returns your streets to the bank") and costs 1 karma.")
+            // G5), walking out puts the streets under the hammer instead; at
+            // one where the player decides (1.0.7), somebody who walks out is
+            // not there to be asked, and the house decides.
+            let streets: String = switch EstateRule.inForce(store.state) {
+            case .release: "returns your streets to the bank"
+            case .auction: "puts your streets up for auction"
+            case .choose: "leaves the house to decide where your streets go"
+            }
+            Text("A bot holds your seat while you're away, so you can continue from the home screen. Leaving for good \(streets) and costs 1 karma.")
         }
         .confirmationDialog("Who gives up?", isPresented: $confirmConcede, titleVisibility: .visible) {
             // Named per seat: several people share this phone, and the
             // white flag must land on the right one.
             ForEach(aliveLocalSeats) { p in
                 Button("\(p.name) gives up", role: .destructive) {
-                    store.concede(as: p.id)
+                    concede(p.id)
                 }
             }
         } message: {
@@ -1388,6 +1430,17 @@ struct CenterWell: View {
                         // line under its lower edge — plain to see once
                         // auction-only (1.0.6) made every landing an auction.
                         .padding(.top, state.turn?.endsAt == nil ? 0 : 36)
+                        .transition(.scale(scale: 0.92).combined(with: .opacity))
+                } else if !actionsInWell, let choice = store.shownBankruptChoice {
+                    // Somebody who just went out is deciding where their
+                    // streets go (1.0.7, H2). The game holds still — no dice
+                    // to show, and no clock on the turn — so the question
+                    // takes the dice's place. A hammer already up outranks it.
+                    // As presented: not before the board has shown the bust.
+                    // The iPad keeps its felt, since its dock lives there —
+                    // the card sits over the dock instead (below).
+                    EstateDecisionBox(choice: choice)
+                        .transition(.scale(scale: 0.92).combined(with: .opacity))
                 } else if state.isLobby {
                     VStack(spacing: 8) {
                         // A matchmade table waits undealt (TileView keeps every
@@ -1468,7 +1521,14 @@ struct CenterWell: View {
 
                             VStack(spacing: 12) {
                                 Group {
-                                    if let dice = state.turn?.dice, dice.count == 2 {
+                                    if actionsInWell, let choice = store.shownBankruptChoice {
+                                        // iPad: the estate question takes the
+                                        // dice's place, over the dock — whose
+                                        // turn buttons stay in view, greyed,
+                                        // with the debt and trade rows live.
+                                        EstateDecisionBox(choice: choice)
+                                            .transition(.scale(scale: 0.92).combined(with: .opacity))
+                                    } else if let dice = state.turn?.dice, dice.count == 2 {
                                         let dieSize = min(max(geo.size.width * 0.17, 44), 76)
                                         DiceView(values: dice, size: dieSize)
                                             .padding(.vertical, dieSize * 0.30)
@@ -1539,6 +1599,10 @@ struct CenterWell: View {
         }
         .padding(8)
         .minimumScaleFactor(0.7)
+        // The auction card and the estate question come and go on the same
+        // spring, rather than cutting in over the dice.
+        .animation(.spring(duration: 0.35), value: store.state?.auction == nil)
+        .animation(.spring(duration: 0.35), value: store.shownBankruptChoice?.playerId)
         // What the well's own controls float over is the felt, which moves
         // under them — the log drifting, the dice landing. The iPad's dock
         // declares its own glass for the buttons inside it.
@@ -1946,11 +2010,17 @@ private struct PlayerPod: View {
 
             HStack(spacing: 6) {
                 if isTurn, let phase = store.state?.turn?.phase {
+                    // The server's word, like the dock's: while somebody
+                    // decides about their estate (1.0.7, H2) the turn holds
+                    // still, and so do the buttons that would move it.
+                    let held = store.state?.bankruptChoice != nil
                     switch phase {
                     case "roll":
                         podButton("Roll", glyph: .dice, prominent: true) { store.roll() }
+                            .heldStill(held)
                     case "end":
                         podButton("End ➜", prominent: true) { store.endTurn() }
+                            .heldStill(held)
                     default:
                         Text(phase == "action" ? "your call…" : "…")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))

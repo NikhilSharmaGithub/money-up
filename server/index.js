@@ -2801,7 +2801,13 @@ io.on('connection', (socket) => {
   socket.on('trade:viewing', guard(({ id, viewing } = {}) => ok(room.setTradeViewing(playerId, id, !!viewing))));
 
   socket.on('payDebt', onTurn(() => ok(room.payDebt(playerId))));
-  socket.on('bankrupt', guard(() => ok(room.declareBankrupt(playerId))));
+  // `{ auction: true | false }` from a 1.0.7 Give up dialog at a table where
+  // the bankrupt player decides; older clients send nothing and are asked
+  // after (see GameRoom.declareBankrupt).
+  socket.on('bankrupt', guard((answer) => ok(room.declareBankrupt(playerId, answer))));
+  // The bankrupt player's answer to "what happens to your properties?" —
+  // only theirs, only while it is open (GameRoom.answerBankruptChoice).
+  socket.on('bankruptChoice', guard((answer) => ok(room.answerBankruptChoice(playerId, answer))));
   socket.on('quit', guard(() => ok(room.quit(playerId))));
   socket.on('grantTime', guard(({ id } = {}) => ok(room.grantTime(playerId, room.resolveId(String(id || ''))))));
   socket.on('chat', guard((text, channel) => room.sendChat(playerId, text, channel)));

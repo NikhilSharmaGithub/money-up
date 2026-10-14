@@ -9,7 +9,7 @@ import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openTableRulesModal, openIntroModal, INTRO_VERSION, openStoreModal, openJoinNameModal,
-  openLeaveModal, estateGoesToAuction, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
+  openLeaveModal, estateRule, giveUp, syncEstateChoice, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, openOffersModal, offerSheetOpen, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
   cupSettledLine, noteDeviceSeat, winnerLabel, wonGame, TICK,
@@ -135,7 +135,12 @@ const actions = {
   ignoreTrade: (id, ignored = true) => socket?.emit('trade:ignore', { id, ignored }),
   tradeViewing: (id, viewing) => socket?.emit('trade:viewing', { id, viewing }),
   payDebt: emit('payDebt'),
+  // Going out on purpose. At a table where the bankrupt player decides
+  // (1.0.7) it may carry the answer, `{ auction: true|false }`, so they are
+  // not asked again; without one it concedes exactly as it always has.
   bankrupt: emit('bankrupt'),
+  // The answer to the server's question about this seat's streets (1.0.7).
+  bankruptChoice: (auction) => socket?.emit('bankruptChoice', { auction: !!auction }),
   quit: emit('quit'),
   grantTime: (id) => socket?.emit('grantTime', { id }),
   chat: emit('chat'),
@@ -219,7 +224,7 @@ function socialHooks() {
           setTimeout(() => { state = null; go(id); }, 150);
         },
         onConcede: null,
-        estateAuction: estateGoesToAuction(state),
+        estate: estateRule(state),
       });
     },
     // Whatever table this browser is sitting at, so a friend can be asked to
@@ -1594,6 +1599,9 @@ function render() {
   safe('clock', () => syncTurnClock(state, meId));
   safe('tableChips', () => syncTableChips(state));
   safe('modals', () => syncOpenModals(state));
+  // The server asking this seat where its streets go (1.0.7) puts the
+  // question up once, over whatever else is open — it is on a clock.
+  safe('estateChoice', () => syncEstateChoice(state, meId, actions));
   safe('log', () => {
     // Both feeds read the log as it is shown: a line the walk caused is
     // printed when its money is, not when the server wrote it.
@@ -2611,10 +2619,12 @@ $('#leaveBtn').addEventListener('click', () => {
         setTimeout(goHome, 150);
       },
       // Conceding is only on the table while this seat is still in the game.
+      // Where the bankrupt player decides (1.0.7) it asks where the streets
+      // go first, read off the game as it is by then.
       onConcede: state?.players?.some((p) => p.id === meId && !p.bankrupt)
-        ? () => actions.bankrupt()
+        ? () => giveUp(state, meId, actions)
         : null,
-      estateAuction: estateGoesToAuction(state),
+      estate: estateRule(state),
     });
     return;
   }

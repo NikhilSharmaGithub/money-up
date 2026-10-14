@@ -3,8 +3,8 @@
 // still in the lobby — everyone else sees the same rows, disabled.
 //
 // At a Play-now table the host may change only what the server lists in
-// quickLobby.editable — the bankroll, the five rolled house rules and the
-// board. The seats, privacy and house players are what matchmaking stands
+// quickLobby.editable — the bankroll, the five rolled house rules, what a
+// bankrupt player's streets do (1.0.7) and the board. The seats, privacy and house players are what matchmaking stands
 // on; the turn clock costs strangers karma; mortgage off turns ordinary rent
 // into bankruptcy; a fixed order would always put the host first. Those rows
 // stay on screen, locked, so everybody can still read what they are.
@@ -66,12 +66,20 @@ struct SettingsSheet: View {
                     // Bot skill and game length (1.0.6). A Play-now table
                     // plays normal house players with no clock, and a cup
                     // table is set by the cup, so neither shows the rows.
+                    // Bot skill only while there are house players to play
+                    // it (1.0.7, H4).
                     if store.state?.hasTableRules == true {
-                        TableRulesCard(editable: canEdit("botLevel") && canEdit("timeLimit"))
+                        TableRulesCard(editable: canEdit("botLevel") && canEdit("timeLimit"),
+                                       showsBotSkill: store.state?.hasHouseBots == true)
                         // Bankrupt properties, auction-only and the shuffled
                         // board (1.0.6, round 2): host-set like the two above,
-                        // and like them never at a Play-now or cup table.
+                        // and like them never at a cup table.
                         TableTwistsCard(editable: canEdit("bankruptProperties"))
+                    } else if isQuick, store.state?.cup != true {
+                        // A Play-now table rolls what a bankrupt player's
+                        // streets do, and its host may change it (1.0.7, H3);
+                        // auction-only and the shuffled board stay private.
+                        TableTwistsCard(editable: canEdit("bankruptProperties"), estateOnly: true)
                     }
                     rulesSection(P)
                 }

@@ -757,7 +757,10 @@ async function overTheWire() {
   {
     const p = seat(S, 'Pia');
     const q = seat(S, 'Quin');
-    const roomId = await table(S, [p, q], { timeLimit: 20, auction: false });
+    // As much cash as a table may start with: the point is the clock, and a
+    // run of bad dice that bankrupts somebody inside the (shortened) twenty
+    // minutes would end the game the other way and fail this for nothing.
+    const roomId = await table(S, [p, q], { timeLimit: 20, auction: false, startingCash: 10000 });
     const before = Date.now();
     p.emit('start');
     await until(() => p.state?.status === 'playing' && q.state?.status === 'playing');

@@ -619,6 +619,10 @@ private fun TradeDoor(onClick: () -> Unit) {
  * window on this side (see ConfirmDialog in Ui.kt), so the same question, the
  * same sentence and the same two answers are asked in place — the button
  * becomes the "are you sure", and only "Go bankrupt" closes the sheet.
+ *
+ * At a "player decides" table (1.0.7) the question in place asks where the
+ * streets go as well, with the same two tiles the bankruptcy prompt has:
+ * picking one is the confirmation, and the seat is not asked again.
  */
 @Composable
 private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
@@ -626,12 +630,24 @@ private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
     val myTurn = store.isMyTurn
     LaunchedEffect(myTurn) { if (!myTurn) confirming = false }
     if (!myTurn) return
+    val rule = store.state?.estateRule ?: EstateRule.RELEASE
+    val seat = store.activeId
 
     Column(Modifier.padding(top = 6.dp)) {
-        if (confirming) {
+        if (confirming && store.decidesEstate(seat)) {
+            EstateChoiceRow(
+                count = store.deedsOf(seat).size,
+                onAnswer = { auction ->
+                    confirming = false
+                    store.declareBankrupt(auction)
+                    onDismiss()
+                },
+                onCancel = { confirming = false },
+            )
+        } else if (confirming) {
             ConfirmRow(
                 title = "Declare bankruptcy?",
-                message = "Everything you own returns to the bank and you are out of the game.",
+                message = bankruptOutLine(rule, store.deedsOf(seat).size),
                 confirmLabel = "Go bankrupt",
                 onConfirm = {
                     confirming = false
@@ -650,6 +666,33 @@ private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
                 icon = "skull",
             ) { confirming = true }
         }
+    }
+}
+
+/**
+ * [ConfirmRow]'s soft danger panel, asking the "player decides" question in
+ * place: the warning and the sentence, then the two answers as the tiles
+ * the bankruptcy prompt uses, and a way back. The deeds themselves are the
+ * sheet this sits at the foot of, so they are not listed again.
+ */
+@Composable
+private fun EstateChoiceRow(count: Int, onAnswer: (auction: Boolean) -> Unit, onCancel: () -> Unit) = OnPaper {
+    val p = P.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(p.badSoft, MMShapes.r22)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon("skull", size = 16.dp, tint = p.bad)
+            Spacer(Modifier.width(7.dp))
+            Text("Declare bankruptcy?", color = p.ink, fontSize = 15.sp, fontWeight = FontWeight.Black)
+        }
+        Hint("You'll be out of the game. What happens to ${propertiesPhrase(count, yours = true)}?")
+        EstateAnswerTiles(onAnswer = onAnswer)
+        MMButton("Cancel", Modifier.fillMaxWidth(), kind = BtnKind.GHOST) { onCancel() }
     }
 }
 

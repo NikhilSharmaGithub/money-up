@@ -17,22 +17,30 @@ class TableRulesSheetTest {
     private fun lines(state: GameState): Map<String, TableRuleLine> =
         tableRuleSections(state).flatMap { it.lines }.associateBy { it.title }
 
-    private fun state(settings: GameSettings, quick: Boolean? = null, cup: Boolean? = null, status: String = "playing") =
-        GameState(
-            status = status, quick = quick, cup = cup, settings = settings,
-            map = MapData(id = "classic", name = "Classic"),
-        )
+    /** A house player in a seat — what makes "Bot skill" mean anything (1.0.7, H4). */
+    private val bot = PlayerState(id = "bot:1", name = "Robo", isBot = true)
+
+    private fun state(
+        settings: GameSettings,
+        quick: Boolean? = null,
+        cup: Boolean? = null,
+        status: String = "playing",
+        players: List<PlayerState> = emptyList(),
+    ) = GameState(
+        status = status, quick = quick, cup = cup, settings = settings,
+        map = MapData(id = "classic", name = "Classic"), players = players,
+    )
 
     @Test
     fun `every rule the contract lists is on the sheet`() {
-        val titles = lines(state(GameSettings())).keys
+        val titles = lines(state(GameSettings(), players = listOf(bot))).keys
         for (t in listOf(
             "Board", "Starting cash", "Double rent on full sets", "Vacation cash", "Auctions",
             "No rent while in prison", "Mortgages", "Even building", "Turn clock", "Bot skill",
             "Game length", "Bankrupt properties", "Auction-only", "Shuffled board", "Teams", "Table", "Prison",
         )) assertTrue(t, t in titles)
         // Every mark is one the app can draw.
-        for (line in tableRuleSections(state(GameSettings())).flatMap { it.lines }) {
+        for (line in tableRuleSections(state(GameSettings(), players = listOf(bot))).flatMap { it.lines }) {
             assertTrue(line.glyph, Art.has(line.glyph) || line.glyph == "timer")
         }
     }
@@ -47,6 +55,7 @@ class TableRulesSheetTest {
                     botLevel = "hard", timeLimit = 30, teams = 2, isPrivate = false,
                     bankruptProperties = "auction", auctionOnly = true, shuffleBoard = true,
                 ),
+                players = listOf(bot),
             ),
         )
         assertEquals("Classic", l.getValue("Board").value)
@@ -66,7 +75,7 @@ class TableRulesSheetTest {
 
     @Test
     fun `defaults read as the settings sheet reads them`() {
-        val l = lines(state(GameSettings()))
+        val l = lines(state(GameSettings(), players = listOf(bot)))
         assertEquals("Back to the bank", l.getValue("Bankrupt properties").value)
         assertEquals("Off", l.getValue("Auction-only").value)
         assertEquals("Off", l.getValue("Shuffled board").value)
@@ -85,16 +94,18 @@ class TableRulesSheetTest {
     }
 
     @Test
-    fun `a play-now or cup table plays the new three at their defaults and hides the house`() {
+    fun `a play-now or cup table plays auction-only and the shuffle at their defaults and hides the house`() {
         val forced = GameSettings(bankruptProperties = "auction", auctionOnly = true, shuffleBoard = true, botLevel = "hard")
         for ((quick, cup, table) in listOf(Triple(true, null, "Play now"), Triple(null, true, "Cup match"))) {
-            val l = lines(state(forced, quick = quick, cup = cup))
-            assertEquals("Back to the bank", l.getValue("Bankrupt properties").value)
+            val l = lines(state(forced, quick = quick, cup = cup, players = listOf(bot)))
             assertEquals("Off", l.getValue("Auction-only").value)
             assertEquals("Off", l.getValue("Shuffled board").value)
             assertEquals(table, l.getValue("Table").value)
             assertNull(l["Bot skill"])
         }
+        // From 1.0.7 a Play-now table rolls and plays its bankrupt rule; a cup table never does.
+        assertEquals("Auctioned", lines(state(forced, quick = true)).getValue("Bankrupt properties").value)
+        assertEquals("Back to the bank", lines(state(forced, cup = true)).getValue("Bankrupt properties").value)
     }
 
     @Test

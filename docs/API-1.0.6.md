@@ -938,3 +938,262 @@ Numbers only; the shapes in F2 are unchanged.
   `id: "bonus"` → `"awarded": { "coins": 3, "xp": 0 }`. Claiming the three missions first is still
   not required.
 - Card: show "+10 XP" on each mission row and the coin amount only on the all-done bonus row.
+
+===================================================================================================
+
+# Round 3 — 1.0.7
+
+H2 (the bankrupt player chooses; smarter house players) and H3 (the same setting at Play-now
+tables). H1, H4 and H5 are client-only and add no server shapes. Same rules as the parts above:
+every new field is additive and rides full states and patches alike; an old server never sends it
+— treat absent as the default given here. Where this part differs from the round-3 spec, this part
+wins.
+
+---------------------------------------------------------------------------------------------------
+
+## `bankruptProperties` gains a third value
+
+| key                  | type   | values                                 | default     |
+|----------------------|--------|----------------------------------------|-------------|
+| `bankruptProperties` | string | `"release"` `"auction"` `"choose"`     | `"release"` |
+
+```js
+socket.emit('settings', { bankruptProperties: 'choose' });
+```
+
+- `"release"` and `"auction"` are exactly G5. `"choose"` is new: the player who goes out decides
+  (below).
+- Anything else (`null`, `1`, `true`, `"decide"`, an array…) is refused **whole**, with the new
+  message `Bankrupt properties go back to the bank, to auction, or the player decides` (it replaces
+  the round-2 message `Bankrupt properties go back to the bank or to auction`).
+- **Play-now tables roll it and their host may change it** (H3) — see the end of this part.
+- **Cup tables** still refuse it (`A cup table is set by the cup`) and always play `"release"`,
+  whatever the field says. `auctionOnly` and `shuffleBoard` stay private-table only: a Play-now
+  patch carrying either is refused whole with the existing Play-now message.
+
+Labels (every client):
+
+| value       | segmented control   | one-line explanation under it                                        | rules sheet row ("Bankrupt properties") |
+|-------------|---------------------|----------------------------------------------------------------------|-----------------------------------------|
+| `release`   | Back to the bank    | A bankrupt player's properties go back to the bank, unowned.         | Back to the bank                        |
+| `auction`   | Auction them        | A bankrupt player's properties are auctioned to everyone, one by one. | Auctioned                               |
+| `choose`    | Player decides      | The player who goes bankrupt picks: back to the bank, or auction.    | Player decides                          |
+
+---------------------------------------------------------------------------------------------------
+
+## H2 — `"choose"`: the bankrupt player is asked
+
+Whenever a player leaves play holding deeds — bankrupt to the bank or to a player, conceding,
+walking out, removed for timeouts — their deeds become the bank's at once (buildings gone back,
+mortgages lifted, exactly as `"release"` leaves them). At a `"choose"` table the bankrupt player
+is then **asked** whether the bank keeps them or they go to auction. The creditor of a bankruptcy
+to a player keeps the cash already paid, as always; the deeds never go to the creditor.
+
+### `state.bankruptChoice` (new, top level)
+
+```json
+{
+  "bankruptChoice": {
+    "playerId": "u_2xwvqmcqwaz0d2dus9a",
+    "name": "Ravi",
+    "properties": [11, 13, 14, 21],
+    "endsAt": 1792012201909
+  }
+}
+```
+
+| field        | meaning |
+|--------------|---------|
+| `playerId`   | Who is being asked. Aliased like every other id: the bankrupt player's own client sees its own id, everybody else (and every watcher) the alias they see on `state.players`. **Show the prompt when `playerId` is the client's own id**; everyone else shows "Ravi is deciding what happens to their streets…". |
+| `name`       | The player's display name (the same as their `players` row). |
+| `properties` | The deeds in question, as board indices **in board order** — draw the rows from `state.map.tiles[i]` (flag/colour from `state.groups`, `price`). They are already absent from `state.ownership` (the bank's). Airports and utilities included. Never empty. |
+| `endsAt`     | ms since epoch: when the house answers for them (20 s after the question opened). Draw the countdown from it. |
+
+`null` whenever nobody is being asked (always `null` at `"release"`/`"auction"` tables, in the
+lobby and once the game has ended). An old server never sends it — treat absent as `null`.
+
+### Answering — socket `bankruptChoice` (new)
+
+```js
+socket.emit('bankruptChoice', { auction: true });   // "Auction them to everyone"
+socket.emit('bankruptChoice', { auction: false });  // "Give them back to the bank"
+```
+
+No ack. On success the next state has `bankruptChoice: null` (or the next player's question, see
+"Two at once") and the log lines below. Refusals (`toast { type: "error", message }`, nothing
+changes, the question stays open):
+
+| when                                         | message |
+|----------------------------------------------|---------|
+| no question is open                          | `There is nothing to decide right now` |
+| the socket is not the player being asked     | `That decision is not yours` |
+| `auction` is not exactly `true` or `false` (missing, `"yes"`, `1`, no payload…) | `Choose the bank or an auction` |
+| a watcher (`spectate: true`)                 | `You are watching this game` |
+
+### Give up / Declare bankruptcy with the answer in the dialog
+
+```js
+socket.emit('bankrupt', { auction: true });   // or { auction: false }
+```
+
+- At a `"choose"` table the player who answers here is **not asked again**: the answer is applied
+  as they go out. Show the two options inside the Give up confirmation (and the debt sheet's
+  Declare bankruptcy confirmation) when `state.settings.bankruptProperties === "choose"` and the
+  player owns at least one deed.
+- `bankrupt` with no payload (every older client), or with an `auction` that is not `true`/`false`,
+  concedes exactly as before — and the question follows.
+- At a `"release"` or `"auction"` table the payload is ignored: the table's rule decides.
+- `quit` (Leave game) takes no answer: a player who walks out is not asked (below).
+
+### While the question is open — the game holds still
+
+- `turn.phase` is **not** changed: it says where the turn is. Clients disable the turn's own
+  buttons while `state.bankruptChoice` is non-null.
+- `roll`, `buy`, `skipBuy`, `endTurn`, `jailPay`, `jailCard` are refused with
+  `toast` `Waiting for Ravi to decide about their properties` (Ravi = `bankruptChoice.name`).
+- No shot clock: `turn.endsAt` is `null` from the moment the question opens, and nobody can time
+  out on it. The house plays nobody's turn.
+- An auction already under the hammer carries on (`bid`, `passBid` work); building, mortgaging and
+  trading work as always.
+- If the bankrupt player held the turn, the turn passes to the next player at once (a normal
+  `"Asha's turn"`), and that turn waits on the answer.
+- When it is answered: **back to the bank** → the turn picks up exactly where it was, with one
+  fresh `turn.endsAt` (and an away player one "Your turn" push). **Auction** → the estate sale of
+  G5 runs (`state.auction.estate = { from, left }`), and when its last lot falls the turn picks up
+  the same way.
+
+### Who is asked, and who the house decides for
+
+- **Asked:** a connected person, and a **house player** — which gets the same `bankruptChoice`
+  (at a Play-now table it passes for a person) and answers after a person's pause of 1.8–3.2 s
+  (the same pause every time the same game is replayed), by the house's rule below. Its log line
+  reads like anyone's.
+- **Not asked — the house decides on the spot:** a player who is disconnected, a seat the house is
+  covering (`botControlled`, including a missed turn), a player who walks out (`quit`), and one
+  removed for timeouts. A player who disconnects while their question is open is answered for at
+  once.
+- **No answer within 20 s:** the house decides.
+- **Two at once** (a card that collects from everybody can knock out two): one question at a time,
+  in the order they went out; the second opens, with its own 20 s, when the first is answered.
+- **Not asked at all:** once a timed game's clock has run out (nothing is sold after time — an open
+  or waiting question is dropped at that moment and the deeds stay with the bank), and when the
+  bankruptcy ends the game. A question still open when the game ends is simply cleared.
+
+### The house's rule (house players, absent players, and anyone who does not answer)
+
+It picks whatever keeps the game competitive. **Back to the bank** when either:
+
+1. one side still in holds **more cash than every other side still in put together** — a side
+   is one player, or at a team table a team's players still in, counted as one purse (so when
+   only two sides are left, the richer one always does, unless they hold exactly the same) —
+   they would win every lot; or
+2. the auction could hand **the leader** — the player still in with the highest `netWorth` (ties:
+   more cash, then seat order) — **or the player with the most cash**, a colour set or all but one
+   street of one: for any colour the lots touch, what that player's side already holds plus every
+   lot of that colour makes the **whole colour**, or — on a colour of three or more streets they
+   already hold a piece of — **all but one** street of it. (Airports and utilities never trip this.)
+
+**Auction** otherwise. Deterministic: the same board always gets the same answer. It reads only
+what every client can see.
+
+### Log lines, in order
+
+At a `"choose"` table the bankruptcy line no longer says where the streets went:
+
+| moment | line (kind `bankrupt`) |
+|--------|------------------------|
+| goes out | `Ravi concedes the game` (concede only), then `Ravi went bankrupt` — or `Ravi went bankrupt — Asha keeps what was paid` |
+| asked | `Ravi is deciding what happens to their 3 properties` (`…to their property` for one) |
+| answers / a house player decides | `Ravi chose to auction their properties` · `Ravi gave their properties back to the bank` |
+| no answer in 20 s | `Ravi didn't choose in time — the house put their properties up for auction` · `…— the house gave their properties back to the bank` |
+| not there to ask | `Ravi isn't here to choose — the house put their properties up for auction` · `…gave their properties back to the bank` |
+| clock ran out | `Time's up — Ravi's properties go back to the bank` |
+
+An auction is followed by G5's lines (`Ravi's 3 properties go to auction, one at a time`, then each
+lot). `"release"` and `"auction"` tables log exactly as in G5.
+
+### Old clients
+
+A 1.0.6 client at a `"choose"` table (a host on 1.0.7 set it, or a Play-now table rolled it) never
+sends `bankruptChoice`: its own question times out after 20 s and the house decides; when somebody
+else is deciding it sees the game wait, and its Roll button gets the `Waiting for …` toast.
+
+---------------------------------------------------------------------------------------------------
+
+## H2 — Smarter house players
+
+No new fields. What changed in how house players play (`settings.botLevel`, F3; a seat the house
+covers and every Play-now house player still play **normal**):
+
+**Every lot, at every skill** (an ordinary auction, an auction-only landing, an estate lot):
+
+| | easy | normal | hard |
+|---|---|---|---|
+| Ordinary street (no colour race) | half the sticker | as 1.0.6 (a bargain: under the sticker) | as 1.0.6 ($5 under the sticker to the sticker) |
+| Completes **its own** colour | half the sticker | the higher of its 1.0.6 ceiling and the sticker + 35% of the colour's built rent (`rent[3]` of each street × 0.9) | the same with 60% |
+| Would complete **the leader's** colour | half the sticker | its 1.0.6 ceiling × 1.15 | its 1.0.6 ceiling × 1.3 |
+| Would leave the leader one street short (colour of 3+) | half the sticker | at least 1.25 × the sticker | at least 1.5 × the sticker |
+| Never bids itself bankrupt | the same → | after any bid, the dearest rent within one throw of the bot (2–12 squares ahead, built and doubled as `rentFor` charges it, airports, utilities at a throw of 7, taxes) is still payable from the cash left plus what it could raise (half of every building, half the price of every unmortgaged deed, the lot itself included) — otherwise it passes | the same |
+
+Each bot's own temper (0.85–1.15) scales these as it always has. The "leader" is the player still
+in with the highest net worth. The cash a bot keeps back while bidding (its floor) is unchanged for
+easy and normal.
+
+**Hard only**, to make it really harder than normal:
+
+- **Cash reserve read off the board ahead of it:** the rent waiting within one throw at about the
+  one-in-six mark of the 2d6 odds, between $80 and $500 (normal keeps 75% of the worst rent
+  anywhere on the board, $120–$400). It buys, builds and bids with that reserve.
+- **Mortgages strays to build:** while a full colour of its own is under three houses a street, it
+  mortgages just enough of its strays (cheapest first; never a deed of a colour it owns or one that
+  decides a colour race) to pay for getting there, keeping half its reserve. It lifts a mortgage
+  outside a full colour of its own only when that leaves nothing short — so it never lifts a deed
+  and mortgages it again in the same turn.
+- **Trades:** it counts a quarter of what a deal hands the other side (the colour it would complete
+  for them) against the deal — so it no longer signs a swap that finishes a cheap colour for itself
+  and a dear one for its rival, without the difference in cash.
+
+**Measured** — one seat the house plays for a person (always normal) against three house players,
+Classic, auctions on, bankrupt estates released, random seat order, played to a winner or 500 turns
+(then the richest wins); the same 720 seeds (1001–1240, 5001–5240, 9001–9240) before and after.
+Lower = stronger bots:
+
+| the seat won … against | easy | normal | hard |
+|------------------------|------|--------|------|
+| 1.0.6                  | 666 / 720 (92.5%) | 206 / 720 (28.6%) | 197 / 720 (27.4%) |
+| 1.0.7                  | 666 / 720 (92.5%) | 206 / 720 (28.6%) | **118 / 720 (16.4%)** |
+| 1.0.7, first 60 seeds (1001–1060) | 55 / 60 | 16 / 60 | 13 / 60 |
+
+1.0.6's hard was no stronger than normal over a large sample; 1.0.7's hard cuts the person's share
+by about two fifths. `test/round3.mjs` re-runs 120 seeds (7001–7120) on every `npm test`: 30 / 120
+against normal, 17 / 120 against hard. The F3 table above still holds; read its auction row
+together with the lot table here, and its hard column with the three hard-only additions (its
+"usual floor" for a hard bot is now the reserve read off the board ahead of it). F3's measured
+line (54 / 15 / 13 of 60) was a different harness; the table here is the one to quote.
+
+---------------------------------------------------------------------------------------------------
+
+## H3 — The setting at Play-now tables
+
+- `bankruptProperties` is one of the rules a Play-now table **rolls**, weighted:
+  `"release"` 50%, `"auction"` 25%, `"choose"` 25%. A Play-now table **plays** what it rolled (or
+  what its host changed it to) — the old "Play-now plays the defaults" rule now holds only for
+  `auctionOnly` and `shuffleBoard`.
+- **Host-editable in the Play-now lobby** like the other rolled rules: it is in
+  `state.quickLobby.editable`, the host sends the ordinary `settings` event
+  (`{ bankruptProperties: "choose" }`), a change un-readies everybody as any rule change does, and
+  `state.quickRoll.edited` lists it while it differs from the roll.
+- `state.quickRoll.parts` gains **one phrase, last** (after `even build on/off`):
+
+  | value     | phrase |
+  |-----------|--------|
+  | `release` | `bankrupt streets back to the bank` |
+  | `auction` | `bankrupt streets auctioned` |
+  | `choose`  | `bankrupt player decides` |
+
+  So the roll line reads e.g. `This table rolled: Classic · $1,500 to start · x2 rent on full sets
+  on · vacation cash off · auctions on · no rent while jailed off · even build on · bankrupt player
+  decides`, and a host's change `Hana changed the rules: bankrupt streets auctioned`.
+- Show it in the Play-now lobby's rule list (the same segmented control as a private table, for
+  the host; the value for everyone else) and in the rules sheet.
+- Cup tables: unchanged — refused, always `"release"`.

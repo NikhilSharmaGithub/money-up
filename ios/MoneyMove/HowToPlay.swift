@@ -37,7 +37,7 @@ struct HowToPlayCard: View {
         Rule(glyph: .police, title: "Prison",
              body: "Land on Go to Prison, draw the card, or roll three doubles in a row, and you are locked up. On each turn inside you can roll for a double, which walks you out and moves you by that roll. You can also pay the $50 fine before rolling, which opens the door but ends that turn, or use a get-out card. If your third roll still is not a double, you walk out for free and move by that roll anyway."),
         Rule(glyph: .skull, title: "Bankruptcy",
-             body: "Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, if the table says so. Last player standing wins."),
+             body: "Owe more than you can raise and you must sell, mortgage or trade. Give up and you are out: what you raised stays with whoever you owed, and your properties go back to the bank — or to auction, if the table says so. At a table where the bankrupt player decides, you pick which. Last player standing wins."),
     ]
 
     var body: some View {

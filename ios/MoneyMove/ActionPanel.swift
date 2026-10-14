@@ -114,21 +114,21 @@ struct ActionPanel: View {
         .confirmationDialog("Declare bankruptcy?", isPresented: $confirmBankrupt, titleVisibility: .visible) {
             Button("Go bankrupt", role: .destructive) { store.declareBankrupt() }
         } message: {
-            Text(bankruptcyTerms)
+            // What giving up actually does, at this table: the creditor has
+            // only ever kept the cash already paid over, and the streets go
+            // back to the bank — or under the hammer, where the table says so
+            // (1.0.6, G5). A table where the player decides (1.0.7) never
+            // gets here with deeds to decide on: it asks on the give-up card.
+            Text(store.bankruptcyTerms(for: store.activeId))
         }
     }
 
-    /// What giving up actually does, at this table. The creditor has only
-    /// ever kept the cash already paid over; the streets go back to the bank
-    /// — or under the hammer, one at a time, where the host chose that
-    /// (1.0.6, G5). A Play-now or cup table always releases them.
-    private var bankruptcyTerms: String {
-        let state = store.state
-        let auctioned = state?.hasTableRules == true && EstateRule.of(state?.settings) == .auction
-        return auctioned
-            ? "Whatever you have paid stays with whoever you owe, your properties are auctioned to the other players, and you are out of the game."
-            : "Whatever you have paid stays with whoever you owe, your properties go back to the bank, and you are out of the game."
-    }
+    /// Somebody who went out is deciding where their streets go (1.0.7, H2),
+    /// and until they do the server holds the turn still: no roll, no buy, no
+    /// end of turn, no prison fine. Building, mortgaging and trading carry on.
+    /// The server's word, not the presented one: it refuses these buttons
+    /// from the moment it asks, even while the bust is still on stage.
+    private var held: Bool { store.state?.bankruptChoice != nil }
 
     // MARK: - the morph
 
@@ -164,10 +164,14 @@ struct ActionPanel: View {
             if store.theatreHolding(for: turn.playerId) { return "walking \(turn.playerId)" }
             var key = "\(turn.phase) \(turn.playerId)"
             if turn.phase == "roll", store.me?.inJail == true { key += " prison" }
+            // As presented: the hold line comes in when the bust that raised
+            // the question has been shown, and the shell stretches for it then.
+            if store.shownBankruptChoice != nil { key += " held" }
             if let pending = turn.pending { key += " \(pending.type) \(pending.tile)" }
             if (store.me?.lapsBlocked ?? 0) > 0 { key += " deadlock" }
             return key
         }
+        if let choice = store.shownBankruptChoice { return "deciding \(choice.playerId)" }
         if state.isPlaying || store.endOnStage { return "waiting \(state.turn?.playerId ?? "")" }
         return state.isEnded ? "ended" : ""
     }
@@ -203,6 +207,7 @@ struct ActionPanel: View {
             if store.isMyTurn {
                 turnHeader(P)
                     .transition(rowSwap)
+                holdLine(P)
                 deadlockLine(P)
             }
 
@@ -309,6 +314,30 @@ struct ActionPanel: View {
         .padding(.horizontal, 2)
     }
 
+    /// Why the turn's own buttons have gone quiet: the server's own words for
+    /// the hold, and how long the house will wait before it answers instead.
+    @ViewBuilder
+    private func holdLine(_ P: Palette) -> some View {
+        if let choice = store.shownBankruptChoice {
+            HStack(spacing: 7) {
+                Art.icon(.fork, size: 14, tint: glass.goldInk)
+                Text(store.isLocal(choice.playerId)
+                     ? "Waiting on your decision about your properties"
+                     : "Waiting for \(choice.name) to decide about their properties")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ink(true))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                TurnClock(endsAt: choice.endsAt, compact: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 9)
+            .background(wash(P.gold), in: block)
+            .transition(rowSwap)
+        }
+    }
+
     /// The deadlock rule is counting for this seat. It says the number and the
     /// way out, once per turn, and then gets out of the way — the rule already
     /// introduced itself as a card the first time it could ever apply.
@@ -367,6 +396,7 @@ struct ActionPanel: View {
                     MMIconButton(.gavel, "Send to auction", kind: .primary, big: true) {
                         store.skipBuy()
                     }
+                    .heldStill(held)
                 }
             } else if let pending = turn.pending, pending.type == "buy",
                let tile = store.tile(pending.tile) {
@@ -388,6 +418,7 @@ struct ActionPanel: View {
                         hint("Not enough cash for this one.")
                     }
                 }
+                .heldStill(held)
             }
 
         case "roll":
@@ -418,8 +449,10 @@ struct ActionPanel: View {
                     }
                     hint("Paying the fine ends your turn — the card lets you roll.")
                 }
+                .heldStill(held)
             } else {
                 MMIconButton(.dice, "Roll dice", kind: .primary, big: true) { store.roll() }
+                    .heldStill(held)
                 if (turn.doubles ?? 0) > 0 {
                     hint("Double! Free roll (\(turn.doubles ?? 0) of 2)")
                 }
@@ -449,6 +482,7 @@ struct ActionPanel: View {
                 }
                 Button("End turn →") { store.endTurn() }
                     .buttonStyle(MMButtonStyle(kind: .primary, big: true))
+                    .heldStill(held)
             }
 
         default:
@@ -505,7 +539,12 @@ struct ActionPanel: View {
             HStack(spacing: 8) {
                 Button("Raise cash") { openProperties() }
                     .buttonStyle(MMButtonStyle(kind: .ghost, big: true))
-                Button("Bankrupt") { confirmBankrupt = true }
+                // Where the bankrupt player decides (1.0.7), the give-up
+                // card asks where the streets go; anywhere else, the plain
+                // confirmation that says what the table does with them.
+                Button("Bankrupt") {
+                    if !store.askGiveUp(store.activeId, kind: .declare) { confirmBankrupt = true }
+                }
                     .buttonStyle(MMButtonStyle(kind: .bad, big: true))
             }
         }
@@ -544,7 +583,39 @@ struct ActionPanel: View {
         }
     }
 
+    @ViewBuilder
     private func liveWaitingRow(_ P: Palette) -> some View {
+        // As presented, like the bust above: nobody is "deciding" until the
+        // board has shown them going out.
+        if let choice = store.shownBankruptChoice {
+            decidingRow(choice, P)
+        } else {
+            playingRow(P)
+        }
+    }
+
+    /// The game is holding still on somebody's estate (1.0.7, H2): who, and
+    /// the seconds before the house decides for them.
+    private func decidingRow(_ choice: BankruptChoice, _ P: Palette) -> some View {
+        let mine = store.isLocal(choice.playerId)
+        return HStack(spacing: 10) {
+            if let p = store.state?.player(choice.playerId) {
+                AvatarView(name: p.name, colorCSS: p.color, flag: p.flag ?? "", size: 26, emoji: p.avatar ?? "")
+            }
+            Text(mine ? "Deciding what happens to your streets…" : "\(choice.name) is deciding what happens to their streets…")
+                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(ink(true))
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+            Spacer(minLength: 4)
+            TurnClock(endsAt: choice.endsAt, compact: true)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func playingRow(_ P: Palette) -> some View {
         HStack(spacing: 10) {
             if let current = store.currentPlayer {
                 // A seat that went bankrupt keeps the turn while its estate
@@ -799,5 +870,17 @@ struct ViewingLine: View {
             }
             try? await Task.sleep(for: .milliseconds(3600))
         }
+    }
+}
+
+
+extension View {
+    /// A turn button while the game holds still on somebody's estate: there,
+    /// but quiet and untouchable until the answer comes (1.0.7, H2). The
+    /// dock's buttons and the iPad's corner pods both wear it.
+    func heldStill(_ held: Bool) -> some View {
+        disabled(held)
+            .opacity(held ? 0.45 : 1)
+            .animation(.easeOut(duration: 0.2), value: held)
     }
 }

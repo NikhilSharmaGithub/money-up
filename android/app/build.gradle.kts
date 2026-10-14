@@ -85,8 +85,8 @@ android {
         // a recent phone, and Android's long tail is where its players are.
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.0.6"
+        versionCode = 6
+        versionName = "1.0.7"
         // Read by the manifest's APPLICATION_ID line. Always a well-formed id
         // by the time it gets here — see admobAppId above for why that matters.
         manifestPlaceholders["admobAppId"] = admobAppId

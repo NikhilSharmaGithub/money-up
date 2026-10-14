@@ -1,12 +1,15 @@
 package com.moneymove.game
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -199,6 +202,12 @@ private fun Dock(
                     // what it said, not the next player's name.
                     TurnHeader(store, state, shown.seat, turn?.endsAt)
                     DeadlockLine(store)
+                    // A bankrupt player is choosing where their streets go
+                    // (1.0.7): the server holds the turn until they do, so
+                    // the dock says who it is waiting on before anybody
+                    // presses a button that would only come back refused.
+                    val hold = state.bankruptChoice
+                    if (hold != null) HoldStrip(hold)
                     // The server answers a roll before the piece has taken
                     // a step, so the buy prompt — and whatever else the
                     // landing decides — arrives while the token is still
@@ -216,6 +225,7 @@ private fun Dock(
                             controls == WALKING -> WalkingRow()
                             controls != null && turn != null -> TurnControls(
                                 store, state, turn, controls, onTrade, onProperties,
+                                held = state.bankruptChoice != null,
                             ) { store.ask(TableConfirm.DEBT_BANKRUPT) }
                         }
                     }
@@ -516,6 +526,37 @@ private fun DeadlockLine(store: GameStore) {
 }
 
 /**
+ * The game is holding still on somebody's answer about their streets: whose,
+ * and how long the house gives them, drawn on the dock as the deadlock strip
+ * is — a brass wash through the material at its one tint strength, the ring
+ * running down beside the words.
+ */
+@Composable
+private fun HoldStrip(choice: BankruptChoice) {
+    val p = P.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(p.gold.copy(alpha = tintAlpha()), DOCK_BLOCK)
+            .padding(horizontal = 9.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CountdownRing(choice.endsAt, BANKRUPT_CHOICE_SECONDS, size = 22.dp, stroke = 2.5.dp, track = p.gold.copy(alpha = 0.25f)) {
+            Icon("scales", size = 11.dp, tint = p.gold)
+        }
+        Text(
+            "${choice.holdLine}…",
+            modifier = Modifier.weight(1f),
+            color = p.ink2, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+/** A turn button the server would refuse right now: there, so the dock keeps its shape, but faded and still. */
+private fun Modifier.held(on: Boolean): Modifier = if (on) alpha(0.45f) else this
+
+/**
  * The piece is still on its way — the same quiet voice as the waiting row,
  * gone the moment the store's curtain lifts and the landing's controls take
  * the stage. Inside the dock, so the dock does not change height as it swaps.
@@ -541,6 +582,12 @@ private fun WalkingRow() {
  * What this seat can do in [phase]. The phase is the one the dock's face was
  * keyed on rather than the turn's own, so a face on its way out keeps saying
  * what it said while the next one arrives over it.
+ *
+ * [held] is a bankrupt player still deciding where their streets go: the
+ * server refuses the dice, buying, ending the turn and the prison moves
+ * until they have, so those stand faded and still. The properties and trade
+ * doors, and the climb out of debt, keep working — building, mortgaging and
+ * trading never wait.
  */
 @Composable
 private fun TurnControls(
@@ -550,6 +597,7 @@ private fun TurnControls(
     phase: String,
     onTrade: () -> Unit,
     onProperties: () -> Unit,
+    held: Boolean = false,
     onBankrupt: () -> Unit,
 ) {
     val me = store.me
@@ -568,7 +616,7 @@ private fun TurnControls(
             if (state.isAuctionOnly) {
                 MMButton(
                     "Send ${tile.name} to auction", kind = BtnKind.GOLD, big = true, icon = "gavel",
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().held(held), enabled = !held,
                 ) { store.skipBuy() }
                 Hint("Auction-only table — every street goes under the hammer.")
                 return
@@ -576,17 +624,18 @@ private fun TurnControls(
             val canAfford = (me?.money ?: 0) >= price
             MMButton(
                 "Buy ${tile.name} — ${money(price)}", kind = BtnKind.GOOD, big = true,
-                modifier = Modifier.fillMaxWidth(), enabled = canAfford,
+                modifier = Modifier.fillMaxWidth().held(held), enabled = canAfford && !held,
             ) { store.buy() }
             if (state.settings.auction != false) {
                 MMButton(
                     "Send to auction", kind = BtnKind.GHOST, big = true, icon = "gavel",
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().held(held), enabled = !held,
                 ) { store.skipBuy() }
             } else {
-                MMButton("Skip", kind = BtnKind.GHOST, big = true, modifier = Modifier.fillMaxWidth()) {
-                    store.skipBuy()
-                }
+                MMButton(
+                    "Skip", kind = BtnKind.GHOST, big = true,
+                    modifier = Modifier.fillMaxWidth().held(held), enabled = !held,
+                ) { store.skipBuy() }
             }
             if (!canAfford) Hint("Not enough cash for this one.")
         }
@@ -594,17 +643,17 @@ private fun TurnControls(
         IN_PRISON -> {
             MMButton(
                 "Roll for a double", kind = BtnKind.PRIMARY, big = true, icon = "dice",
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().held(held), enabled = !held,
             ) { store.roll() }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MMButton(
                     "Pay $50 & wait", kind = BtnKind.GHOST, big = true,
-                    modifier = Modifier.weight(1f), enabled = (me?.money ?: 0) >= 50,
+                    modifier = Modifier.weight(1f).held(held), enabled = (me?.money ?: 0) >= 50 && !held,
                 ) { store.jailPay() }
                 if ((me?.getOutCards ?: 0) > 0) {
                     MMButton(
                         "Use card", kind = BtnKind.GOLD, big = true, icon = "ticket",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).held(held), enabled = !held,
                     ) { store.jailCard() }
                 }
             }
@@ -624,7 +673,7 @@ private fun TurnControls(
         "roll" -> {
             MMButton(
                 "Roll dice", kind = BtnKind.PRIMARY, big = true, icon = "dice",
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().held(held), enabled = !held,
             ) { store.roll() }
             if ((turn.doubles ?: 0) > 0) Hint("Double! Free roll (${turn.doubles} of 2)")
         }
@@ -647,7 +696,10 @@ private fun TurnControls(
             // it on the main seat hid it from a pass-and-play guest still in
             // the game after the main seat went bankrupt.
             GlyphButton("Offer a trade", big = true, onClick = onTrade) { SwapArrows(26.dp, it, flipped = true) }
-            MMButton("End turn →", kind = BtnKind.PRIMARY, big = true, modifier = Modifier.weight(1f)) {
+            MMButton(
+                "End turn →", kind = BtnKind.PRIMARY, big = true,
+                modifier = Modifier.weight(1f).held(held), enabled = !held,
+            ) {
                 store.endTurn()
             }
         }
@@ -745,6 +797,12 @@ private fun DebtControls(
 @Composable
 private fun WaitingRow(store: GameStore, state: GameState) {
     val p = P.current
+    // Somebody bankrupt is choosing where their streets go, and every turn
+    // waits on it — so that, not whose turn it nominally is, is the news.
+    store.othersBankruptChoice?.let { choice ->
+        DecidingRow(store, choice)
+        return
+    }
     // As shown: "you went bankrupt" is news, and waits for its piece to land.
     val locals = store.shownPlayers.filter { store.isLocal(it.id) }
     val me = locals.firstOrNull { it.id == store.meId } ?: locals.firstOrNull()
@@ -901,7 +959,7 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
         // What the host has set that changes the game itself — the house's
         // skill and the clock — said where everybody sitting down reads it,
         // not only behind Game settings.
-        if (!cup && state.quick != true) TableTerms(state.settings)
+        if (!cup && state.quick != true) TableTerms(state)
 
         // A cup fixes its own board, so a cup table has no boxes to show.
         if (!cup) LobbyBoards(store, account)
@@ -928,6 +986,18 @@ private fun LobbyPanel(store: GameStore, state: GameState, onSettings: () -> Uni
                 for (player in state.players) key(player.id) { LobbySeat(store, state, player, teams) }
                 repeat(state.openSeats) { EmptySeat(store) }
             }
+        }
+
+        // How hard the house plays, right under the chairs it sits in — and
+        // only once it sits in one (or "Allow bots" will seat it at the
+        // start). A table of people has no house to set, and a control for
+        // one only asks what it is for. Gone again with the last bot.
+        AnimatedVisibility(
+            visible = store.isHost && !watching && !cup && state.showsBotSkill,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            OnPaper { LobbyBotSkill(store, state) }
         }
 
         if (store.isHost && teams > 0) {
@@ -965,32 +1035,81 @@ private fun WatchingLine(state: GameState) {
 }
 
 /**
- * The terms a host moved off their defaults, as small chips under Start —
- * the house's skill, the game's clock, and round 2's three: estates sold at
- * auction, auction-only and a shuffled board. Only what differs, because
- * "Normal bots · Unlimited" on every table would be chips of nothing. The
- * full rows, locked for everybody but the host, are behind Game settings.
- * Five at once wrap rather than run off a small phone.
+ * The terms that change the game itself, as small chips under Start: the
+ * house's skill — whenever there is a house at the table, and only then
+ * (1.0.7) — and, where the host moved them off their defaults, the game's
+ * clock, a shuffled board, auction-only, and what happens to a bankrupt
+ * player's streets. "Unlimited · Back to the bank" on every table would be
+ * chips of nothing. The full rows, locked for everybody but the host, are
+ * behind Game settings. Several at once wrap rather than run off a phone.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TableTerms(settings: GameSettings) {
-    val skill = settings.botSkill
+private fun TableTerms(state: GameState) {
+    val settings = state.settings
+    val bots = state.showsBotSkill
     val minutes = settings.gameMinutes
-    val estates = settings.auctionsEstates
+    val estates = state.estateRule
     val auctionOnly = settings.auctionOnly == true
     val shuffle = settings.shuffleBoard == true
-    if (skill == BotSkill.NORMAL && minutes == 0 && !estates && !auctionOnly && !shuffle) return
+    if (!bots && minutes == 0 && estates == EstateRule.RELEASE && !auctionOnly && !shuffle) return
     FlowRow(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().animateContentSize(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (skill != BotSkill.NORMAL) TermChip("robot", "${skill.label} bots")
+        if (bots) TermChip("robot", "${settings.botSkill.label} bots")
         if (minutes > 0) TermChip("hourglass", "$minutes-minute game")
         if (shuffle) TermChip("shuffle", "Shuffled board")
         if (auctionOnly) TermChip("gavel", "Auction only")
-        if (estates) TermChip("skull", "Estates auctioned")
+        when (estates) {
+            EstateRule.AUCTION -> TermChip("gavel", "Estates auctioned")
+            EstateRule.CHOOSE -> TermChip("scales", "Bankrupt player decides")
+            EstateRule.RELEASE -> Unit
+        }
+    }
+}
+
+/**
+ * The house's skill, for the host, under the seats: the same three-way
+ * control as Game settings, with how many house players it is setting and
+ * what the choice means for them.
+ */
+@Composable
+private fun LobbyBotSkill(store: GameStore, state: GameState) {
+    val p = P.current
+    val shape = RoundedCornerShape(14.dp)
+    val skill = state.settings.botSkill
+    val house = state.players.count { it.isHouse }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.card)
+            .border(1.dp, p.rule, shape)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Icon("robot", size = 16.dp, tint = p.ink2)
+            Text("Bot skill", color = p.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            Text(
+                when (house) {
+                    0 -> "Bots fill empty seats"
+                    1 -> "1 bot at the table"
+                    else -> "$house bots at the table"
+                },
+                color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        SegmentedControl(
+            BotSkill.entries.map { Segment(it, it.label) },
+            selected = skill,
+            enabled = state.isLobby,
+        ) { store.updateSettings(mapOf("botLevel" to it.wire)) }
+        Text(skill.blurb, color = p.ink3, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 

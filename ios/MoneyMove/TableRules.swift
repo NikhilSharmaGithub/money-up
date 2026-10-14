@@ -54,10 +54,12 @@ enum GameLength {
     }
 }
 
-/// settings.bankruptProperties (round 2, G5): where a bankrupt player's
-/// properties go. Release is exactly the rule every older table plays.
+/// settings.bankruptProperties (round 2, G5; the third value 1.0.7, H2):
+/// where a bankrupt player's properties go. Release is exactly the rule every
+/// older table plays. The words are the contract's (docs/API-1.0.6.md, Round
+/// 3), so a phone, a browser and an Android at one table say the same thing.
 enum EstateRule: String, CaseIterable, Identifiable {
-    case release, auction
+    case release, auction, choose
 
     var id: String { rawValue }
 
@@ -66,13 +68,35 @@ enum EstateRule: String, CaseIterable, Identifiable {
         switch self {
         case .release: "Back to the bank"
         case .auction: "Auction them"
+        case .choose: "Player decides"
         }
     }
 
+    /// The segment's drawing: the bank keeps them, the hammer sells them, or
+    /// the road forks and the player who went out picks.
+    var glyph: Glyph {
+        switch self {
+        case .release: .bank
+        case .auction: .gavel
+        case .choose: .fork
+        }
+    }
+
+    /// The one line under the control, for whichever value is lit.
     var caption: String {
         switch self {
         case .release: "A bankrupt player’s properties go back to the bank, unowned."
-        case .auction: "A bankrupt player’s properties are auctioned to everyone left, one at a time."
+        case .auction: "A bankrupt player’s properties are auctioned to everyone, one by one."
+        case .choose: "The player who goes bankrupt picks: back to the bank, or auction."
+        }
+    }
+
+    /// The value on the rules sheet's "Bankrupt properties" row.
+    var sheetValue: String {
+        switch self {
+        case .release: "Back to the bank"
+        case .auction: "Auctioned"
+        case .choose: "Player decides"
         }
     }
 
@@ -80,22 +104,47 @@ enum EstateRule: String, CaseIterable, Identifiable {
     static func of(_ settings: GameSettings?) -> EstateRule {
         EstateRule(rawValue: settings?.bankruptProperties ?? "") ?? .release
     }
+
+    /// The rule the table actually plays. A cup table always gives the
+    /// streets back to the bank, whatever the field says; a Play-now table
+    /// plays what it rolled, or what its host changed it to (1.0.7, H3).
+    static func inForce(_ state: GameState?) -> EstateRule {
+        guard let state, state.cup != true else { return .release }
+        return of(state.settings)
+    }
 }
 
 extension GameState {
     /// The table has a host who chooses its bot skill and its length: not a
-    /// Play-now table, not a cup table. The three round-2 rules (bankrupt
-    /// properties, auction-only, the shuffled board) follow the same line.
+    /// Play-now table, not a cup table. Auction-only and the shuffled board
+    /// follow the same line; what a bankrupt player's properties do no longer
+    /// does — a Play-now table rolls it (1.0.7, H3).
     var hasTableRules: Bool { quick != true && cup != true }
+
+    /// House players the host added are at this table — or, in the lobby,
+    /// will be, because "Allow bots" fills every empty chair with one when the
+    /// game starts. Bot skill means nothing without them (1.0.7, H4), so its
+    /// control, its summary chip and its rules-sheet row only show while this
+    /// holds. Never at a Play-now table, whose house players always play
+    /// normal, and never at a cup table, which has none.
+    var hasHouseBots: Bool {
+        guard hasTableRules else { return false }
+        if players.contains(where: { $0.isBot == true }) { return true }
+        return isLobby && settings.allowBots == true && players.count < settings.maxPlayers
+    }
 }
 
 // MARK: - the host's card
 
-/// Bot skill and Game length as two segmented rows on one card: in the lobby
-/// for the host, and in the settings sheet for everybody — disabled for those
-/// who may not change them, exactly as every other row of that sheet is.
+/// Bot skill and Game length as two segmented rows on one card: in the
+/// settings sheet for everybody — disabled for those who may not change them,
+/// exactly as every other row of that sheet is — and in the lobby for the
+/// host. Bot skill only rides along while there are house players to play it
+/// (1.0.7, H4); the lobby gives it a card of its own under the seats instead.
 struct TableRulesCard: View {
     let editable: Bool
+    /// Whether the Bot skill row is on this card.
+    var showsBotSkill = true
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -106,16 +155,18 @@ struct TableRulesCard: View {
         let minutes = GameLength.of(store.state?.settings)
         MMCard {
             VStack(alignment: .leading, spacing: 12) {
-                PanelTitle("Opponents & clock")
+                PanelTitle(showsBotSkill ? "Opponents & clock" : "Game clock")
 
-                row(.robot, "Bot skill", P) {
-                    TableSegments(options: BotSkill.allCases.map { ($0, $0.title) },
-                                  selected: skill, enabled: editable) { pick in
-                        store.updateSettings(["botLevel": pick.rawValue])
-                    }
-                } caption: { skill.caption }
+                if showsBotSkill {
+                    row(.robot, "Bot skill", P) {
+                        TableSegments(options: BotSkill.allCases.map { ($0, $0.title) },
+                                      selected: skill, enabled: editable) { pick in
+                            store.updateSettings(["botLevel": pick.rawValue])
+                        }
+                    } caption: { skill.caption }
 
-                Rectangle().fill(P.rule).frame(height: 1)
+                    Rectangle().fill(P.rule).frame(height: 1)
+                }
 
                 row(.clock, "Game length", P) {
                     TableSegments(options: GameLength.options.map { ($0, GameLength.short($0)) },
@@ -150,10 +201,14 @@ struct TableRulesCard: View {
 }
 
 /// The three round-2 rules as one card (1.0.6): what a bankrupt player's
-/// properties do (G5), auction-only buying (G6) and the shuffled board (G7).
-/// The host's, in the lobby and the settings sheet; disabled for everybody
-/// else in the sheet, like every row there. Never at a Play-now or cup table,
-/// which always play the defaults — the server refuses all three there.
+/// properties do (G5, and 1.0.7's third answer, H2), auction-only buying (G6)
+/// and the shuffled board (G7). The host's, in the lobby and the settings
+/// sheet; disabled for everybody else in the sheet, like every row there.
+/// Never at a cup table, which plays the defaults.
+///
+/// A Play-now table (1.0.7, H3) rolls the bankrupt rule and its host may
+/// change it, but auction-only and the shuffled board stay private-table
+/// rules — there the card is `estateOnly`, the one control and its line.
 ///
 /// Like the card above, nothing here holds a value of its own: a tap sends the
 /// patch and the control moves when the state that confirms it arrives. That
@@ -162,6 +217,8 @@ struct TableRulesCard: View {
 /// toggles always read what the table will really play.
 struct TableTwistsCard: View {
     let editable: Bool
+    /// Only the bankrupt rule: a Play-now table's card.
+    var estateOnly = false
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -169,33 +226,27 @@ struct TableTwistsCard: View {
     var body: some View {
         let P = Palette.current(scheme)
         let settings = store.state?.settings
-        let estate = EstateRule.of(settings)
         MMCard {
             VStack(alignment: .leading, spacing: 12) {
-                PanelTitle("Auctions & board")
+                PanelTitle(estateOnly ? "Going broke" : "Auctions & board")
 
-                VStack(alignment: .leading, spacing: 7) {
-                    label(.skull, "Bankrupt properties", P)
-                    TableSegments(options: EstateRule.allCases.map { ($0, $0.title) },
-                                  selected: estate, enabled: editable) { pick in
-                        store.updateSettings(["bankruptProperties": pick.rawValue])
-                    }
-                    caption(estate.caption, P)
+                EstateRulePicker(editable: editable)
+
+                if !estateOnly {
+                    Rectangle().fill(P.rule).frame(height: 1)
+
+                    toggle(.gavel, "Auction only",
+                           caption: settings?.auctionOnly == true
+                               ? "No Buy button: every unowned property goes straight to auction, with its price as the guide."
+                               : "Land on an unowned property and you may buy it at its price.",
+                           key: "auctionOnly", isOn: settings?.auctionOnly ?? false, P)
+
+                    Rectangle().fill(P.rule).frame(height: 1)
+
+                    toggle(.shuffle, "Shuffle the board",
+                           caption: "At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.",
+                           key: "shuffleBoard", isOn: settings?.shuffleBoard ?? false, P)
                 }
-
-                Rectangle().fill(P.rule).frame(height: 1)
-
-                toggle(.gavel, "Auction only",
-                       caption: settings?.auctionOnly == true
-                           ? "No Buy button: every unowned property goes straight to auction, with its price as the guide."
-                           : "Land on an unowned property and you may buy it at its price.",
-                       key: "auctionOnly", isOn: settings?.auctionOnly ?? false, P)
-
-                Rectangle().fill(P.rule).frame(height: 1)
-
-                toggle(.shuffle, "Shuffle the board",
-                       caption: "At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.",
-                       key: "shuffleBoard", isOn: settings?.shuffleBoard ?? false, P)
             }
         }
     }
@@ -232,6 +283,87 @@ struct TableTwistsCard: View {
     }
 }
 
+/// "Bankrupt properties": the three answers as one control (1.0.7, H2) —
+/// each segment its drawing over its words, so the choice reads at a glance —
+/// with the lit one's line under it. Shared by the private lobby, the settings
+/// sheet and a Play-now host's lobby, so all three say it the same way.
+struct EstateRulePicker: View {
+    let editable: Bool
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let rule = EstateRule.of(store.state?.settings)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Art.icon(.skull, size: 15, tint: P.ink2)
+                Text("Bankrupt properties")
+                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(P.ink)
+            }
+            TableSegments(options: EstateRule.allCases.map { ($0, $0.title) },
+                          selected: rule, enabled: editable,
+                          glyph: { $0.glyph }) { pick in
+                store.updateSettings(["bankruptProperties": pick.rawValue])
+            }
+            Text(rule.caption)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(P.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+                .id(rule)
+                .transition(.opacity)
+        }
+        .animation(.easeOut(duration: 0.18), value: rule)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Bot skill on a card of its own, under the seats it is about (1.0.7, H4):
+/// it arrives with the first house player the host adds — or with "Allow
+/// bots", which seats them at the start — and goes when the last one does.
+/// A host who never adds one is never asked how hard nobody should play.
+struct BotSkillCard: View {
+    let editable: Bool
+
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let P = Palette.current(scheme)
+        let skill = BotSkill.of(store.state?.settings)
+        let bots = store.state?.players.filter { $0.isBot == true }.count ?? 0
+        MMCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Art.icon(.robot, size: 15, tint: P.ink2)
+                    Text("Bot skill")
+                        .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink)
+                    Spacer(minLength: 6)
+                    // How many it is about, so the card reads as theirs.
+                    Text(bots == 0 ? "fills empty seats"
+                                   : "\(bots) house player\(bots == 1 ? "" : "s")")
+                        .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(P.ink3)
+                        .contentTransition(.numericText())
+                }
+                TableSegments(options: BotSkill.allCases.map { ($0, $0.title) },
+                              selected: skill, enabled: editable) { pick in
+                    store.updateSettings(["botLevel": pick.rawValue])
+                }
+                Text(skill.caption)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .animation(nil, value: skill)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: bots)
+    }
+}
+
 /// What everybody but the host reads in the lobby: the settings, said once,
 /// without controls that would only ever be greyed out. The round-2 rules
 /// only say anything when they are on — a table playing the printed board
@@ -246,11 +378,16 @@ struct TableRulesSummary: View {
         let skill = BotSkill.of(settings)
         let minutes = GameLength.of(settings)
         FlowRow(spacing: 8) {
-            chip(.robot, "\(skill.title) bots", P)
+            // Only once there is somebody for it to be about (1.0.7, H4).
+            if store.state?.hasHouseBots == true { chip(.robot, "\(skill.title) bots", P) }
             chip(.clock, minutes == 0 ? "No time limit" : GameLength.label(minutes), P)
             if settings?.auctionOnly == true { chip(.gavel, "Auction only", P) }
             if settings?.shuffleBoard == true { chip(.shuffle, "Shuffled board", P) }
-            if EstateRule.of(settings) == .auction { chip(.skull, "Bankrupt estates auctioned", P) }
+            switch EstateRule.inForce(store.state) {
+            case .auction: chip(.gavel, "Bankrupt estates auctioned", P)
+            case .choose: chip(.fork, "Bankrupt player decides", P)
+            case .release: EmptyView()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -280,6 +417,9 @@ struct TableSegments<Value: Hashable>: View {
     let options: [(Value, String)]
     let selected: Value
     var enabled = true
+    /// A drawing over each segment's word (1.0.7): the segment grows a line
+    /// taller and its word may wrap to two, for choices that are sentences.
+    var glyph: ((Value) -> Glyph)? = nil
     let pick: (Value) -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -299,27 +439,50 @@ struct TableSegments<Value: Hashable>: View {
                     pick(option.0)
                     Haptics.tap()
                 } label: {
-                    Text(option.1)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(glass.label(secondary: !on, increaseContrast: contrast == .increased))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background {
-                            if on {
-                                RoundedRectangle(cornerRadius: MMRadius.inner(MMRadius.sm + 4, inset: 3),
-                                                 style: .continuous)
-                                    .fill(well)
-                                    .matchedGeometryEffect(id: "lit", in: lit)
+                    let ink = glass.label(secondary: !on, increaseContrast: contrast == .increased)
+                    Group {
+                        if let glyph {
+                            VStack(spacing: 4) {
+                                Art.icon(glyph(option.0), size: 18, tint: ink)
+                                Text(option.1)
+                                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                                    .foregroundStyle(ink)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.8)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 8)
+                        } else {
+                            Text(option.1)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(ink)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                                .padding(.vertical, 7)
                         }
-                        .contentShape(Rectangle())
+                    }
+                    // Every segment as tall as the tallest: one word that
+                    // wraps must not leave its neighbours' wells short.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: MMRadius.inner(MMRadius.sm + 4, inset: 3),
+                                             style: .continuous)
+                                .fill(well)
+                                .matchedGeometryEffect(id: "lit", in: lit)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
+        // The row takes the height its tallest segment asks for, and the
+        // others stretch to it — never the height of whatever holds the row.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(3)
         .mmGlass(.regular, backdrop: .paper,
                  in: RoundedRectangle(cornerRadius: MMRadius.sm + 4, style: .continuous))
@@ -343,7 +506,9 @@ struct TableSegments<Value: Hashable>: View {
 /// a game clock, the three round-2 rules) read as the defaults it plays,
 /// whatever the fields say — the server plays them that way too. The one
 /// exception is a cup table's length: it has no game clock, but the cup's
-/// whistle ends it all the same, and the sheet says so.
+/// whistle ends it all the same, and the sheet says so. What a bankrupt
+/// player's properties do is rolled at a Play-now table (1.0.7), so there it
+/// reads what the table rolled.
 struct TableRulesSheet: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -499,11 +664,20 @@ struct TableRulesSheet: View {
         // Prison (round 2's rule, G1) and going broke (G5).
         let prison = Rule(glyph: .police, title: "Getting out of prison", value: nil,
                           caption: "Roll a double to walk out and move by that roll. You can pay the $50 fine before rolling, which opens the door but ends that turn, or use a get-out card. If your third roll still isn’t a double, you walk out free and move by that roll anyway.")
-        let sale = hosted && s.bankruptProperties == "auction"
+        // A Play-now table plays what it rolled here (1.0.7, H3); only a cup
+        // table always gives the streets back.
+        let estate = EstateRule.inForce(state)
+        let estateCaption: String
+        switch estate {
+        case .release:
+            estateCaption = "A bankrupt player’s properties go back to the bank, unowned, for whoever lands on them next."
+        case .auction:
+            estateCaption = "A bankrupt player’s properties are auctioned to everyone left, one by one. Buildings go back to the bank and mortgages are lifted first."
+        case .choose:
+            estateCaption = "The player who goes bankrupt picks: back to the bank, or auctioned to everyone left, one by one. If they don’t answer in 20 seconds, or aren’t there to ask, the house decides — whichever keeps the game close."
+        }
         let bankrupt = Rule(glyph: .skull, title: "Bankrupt properties",
-                            value: sale ? "Auctioned" : "Back to the bank",
-                            caption: sale ? "A bankrupt player’s properties are auctioned to everyone left, one at a time. Buildings go back to the bank and mortgages are lifted first."
-                                          : "A bankrupt player’s properties go back to the bank, unowned, for whoever lands on them next.")
+                            value: estate.sheetValue, caption: estateCaption)
 
         // Time and the people at the table.
         let turn = s.turnSeconds ?? 90
@@ -553,7 +727,11 @@ struct TableRulesSheet: View {
             Section(title: "Rent & money", rules: [double, vacation, noRent, mortgages]),
             Section(title: "Buying & building", rules: [auctions, auctionOnly, evenBuild]),
             Section(title: "Prison & going broke", rules: [prison, bankrupt]),
-            Section(title: "Time & players", rules: [clock, length, bots, teams, table]),
+            // Bot skill only while house players the host added are at the
+            // table (1.0.7, H4): a row about nobody is a row to puzzle over.
+            Section(title: "Time & players",
+                    rules: state.hasHouseBots ? [clock, length, bots, teams, table]
+                                              : [clock, length, teams, table]),
         ]
     }
 }

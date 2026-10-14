@@ -85,8 +85,9 @@ import kotlinx.coroutines.launch
  * Only the host may change anything, and only in the lobby; everybody else
  * gets the same rows, dimmed, which is how you find out what you have sat
  * down to. At a Play-now table the host gets only what the server lets a
- * matchmade table change — the bankroll, the five rolled rules and the board
- * — and the rest stays as matchmaking set it, dimmed the same way; there are
+ * matchmade table change — the bankroll, the rolled rules (what a bankrupt
+ * player's streets do among them, from 1.0.7) and the board — and the rest
+ * stays as matchmaking set it, dimmed the same way; there are
  * no teams to pick among strangers, so that card is not drawn at all. The
  * seats are not here: iOS keeps them, Add player and the kick in
  * the lobby panel under the board (ActionPanel.kt), and a second copy would be
@@ -399,11 +400,14 @@ private fun SettingsFace(
                 "Allow bots", "Empty seats are filled with bots when the game starts.",
                 s.allowBots ?: false, can("allowBots"),
             ) { game.updateSettings(mapOf("allowBots" to it)) }
-            // How hard the house plays. A Play-now table's house always plays
-            // normal — it is passing itself off as people — so the row is not
-            // drawn there at all, rather than drawn locked on a word that
-            // would give the house away.
-            if (tableRules) {
+            // How hard the house plays — once there is a house at the table
+            // to play (1.0.7): a bot in a seat, or "Allow bots" to fill the
+            // empty ones at the start. A table of people has nothing for the
+            // row to set, and a Play-now table's house always plays normal —
+            // it is passing itself off as people — so the row is not drawn
+            // there at all, rather than drawn locked on a word that would
+            // give the house away.
+            if (state.showsBotSkill) {
                 Rule()
                 BotSkillRow(s.botSkill, can("botLevel")) {
                     game.updateSettings(mapOf("botLevel" to it.wire))
@@ -508,20 +512,14 @@ private fun SettingsFace(
             ) { game.updateSettings(mapOf("mortgage" to it)) }
             Rule()
             // Where a bankrupt player's streets go: back to the bank as they
-            // always have, or under the hammer one at a time. Play-now and
-            // cup tables always release them.
-            if (tableRules) {
-                val estates = if (s.auctionsEstates) "auction" else "release"
-                MenuRow(
-                    "Bankrupt properties",
-                    GameSettings.BANKRUPT_CHOICES.first { it.first == estates }.second,
-                    GameSettings.BANKRUPT_CHOICES.map { (wire, label) -> label to wire },
-                    estates, can("bankruptProperties"),
-                ) { game.updateSettings(mapOf("bankruptProperties" to it)) }
-                Caption(
-                    if (s.auctionsEstates) "A bankrupt player's streets are auctioned one at a time to everyone left."
-                    else "A bankrupt player's streets go back to the bank, unowned.",
-                )
+            // always have, under the hammer one at a time, or — 1.0.7 — the
+            // player who goes out decides. A Play-now table rolls it like the
+            // rest of its rules and its host may change it; a cup table
+            // always gives them back to the bank, so it has no row.
+            if (state.cup != true) {
+                BankruptRulesRow(s.estateRule, can("bankruptProperties")) {
+                    game.updateSettings(mapOf("bankruptProperties" to it.wire))
+                }
                 Rule()
             }
             ToggleRow(
@@ -913,48 +911,33 @@ private fun teamsLabel(n: Int): String = if (n == 0) "Off" else "$n teams"
 @Composable
 private fun BotSkillRow(current: BotSkill, enabled: Boolean, onPick: (BotSkill) -> Unit) {
     val p = P.current
-    val track = RoundedCornerShape(11.dp)
-    val lozenge = RoundedCornerShape(8.dp)
     Column(
-        Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.6f),
+        Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Bot skill", color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(track)
-                .background(p.sunken)
-                .border(1.dp, p.rule, track)
-                .padding(3.dp)
-                .selectableGroup(),
-        ) {
-            for (skill in BotSkill.entries) {
-                val on = skill == current
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .then(if (on) Modifier.shadow(2.dp, lozenge, clip = false) else Modifier)
-                        .clip(lozenge)
-                        .background(if (on) p.card else Color.Transparent)
-                        .then(if (on) Modifier.border(1.dp, p.rule, lozenge) else Modifier)
-                        .selectable(selected = on, enabled = enabled, role = Role.RadioButton) {
-                            if (!on) onPick(skill)
-                        }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        skill.label,
-                        color = if (on) p.ink else p.ink3,
-                        fontSize = 13.sp,
-                        fontWeight = if (on) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                }
-            }
-        }
+        SegmentedControl(BotSkill.entries.map { Segment(it, it.label) }, current, enabled) { onPick(it) }
         Caption(current.blurb)
+    }
+}
+
+/**
+ * "Bankrupt properties" (1.0.7): back to the bank, auctioned, or the
+ * player's call — a three-way control with each answer's mark over its
+ * words, and the one line under it that says what the chosen one does at
+ * the board. The words are the contract's, so every client's lobby says the
+ * same thing (docs/API-1.0.6.md, "Round 3").
+ */
+@Composable
+private fun BankruptRulesRow(current: EstateRule, enabled: Boolean, onPick: (EstateRule) -> Unit) {
+    val p = P.current
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Bankrupt properties", color = p.ink, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+        SegmentedControl(EstateRule.entries.map { Segment(it, it.label, it.glyph) }, current, enabled) { onPick(it) }
+        Caption(current.explain)
     }
 }
 

@@ -183,10 +183,11 @@ fun GameScreen(store: GameStore, account: AccountStore, onTheme: ((MMTheme) -> U
     // allows. It ships here, with the glass it governs.
     val level = rememberGlassGovernor(LocalGlassLevel.current)
 
-    // Full-screen questions: the chair taken by the clock, and the deadlock
-    // rule the one time it applies. While one is up the table behind it goes
-    // out of focus rather than under a wall of black.
-    val modal = store.timedOut || store.reliefPopup != null
+    // Full-screen questions: the chair taken by the clock, the deadlock rule
+    // the one time it applies, and — at a "player decides" table — what
+    // happens to this seat's streets now it is bankrupt. While one is up the
+    // table behind it goes out of focus rather than under a wall of black.
+    val modal = store.timedOut || store.reliefPopup != null || store.myBankruptChoice != null
 
     // The board mid-performance. The shell hears the store's curtain — dice,
     // a walk, a card being read — but two performances happen with no
@@ -324,6 +325,8 @@ fun GameScreen(store: GameStore, account: AccountStore, onTheme: ((MMTheme) -> U
 
                     CardPopup(store, Modifier.align(Alignment.Center))
                     ReliefCardOverlay(store)
+                    // Twenty seconds to say where the streets go (1.0.7).
+                    BankruptChoiceOverlay(store)
                     HeadlineOverlay(store, Modifier.align(Alignment.Center))
                     TurnBanner(store, Modifier.align(Alignment.TopCenter))
                 }
@@ -1443,9 +1446,14 @@ private fun ColumnScope.PodFace(store: GameStore, state: GameState, player: Play
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isTurn) {
+            // A bankrupt player still deciding where their streets go
+            // (1.0.7): the server holds the dice and the end of the turn
+            // until they have, so the pod's pair stands faded and still, as
+            // the dock's do, rather than pressing into a refusal.
+            val held = state.bankruptChoice != null
             when (state.turn?.phase) {
-                "roll" -> PodButton("Roll", Modifier.weight(1f), glyph = "dice", prominent = true) { store.roll() }
-                "end" -> PodButton("End ➜", Modifier.weight(1f), prominent = true) { store.endTurn() }
+                "roll" -> PodButton("Roll", Modifier.weight(1f), glyph = "dice", prominent = true, enabled = !held) { store.roll() }
+                "end" -> PodButton("End ➜", Modifier.weight(1f), prominent = true, enabled = !held) { store.endTurn() }
                 else -> Text(
                     if (state.turn?.phase == "action") "your call…" else "…",
                     modifier = Modifier.weight(1f),
@@ -1467,6 +1475,8 @@ private fun ColumnScope.PodFace(store: GameStore, state: GameState, player: Play
  * A pod's button, drawn on the pod: the prominent one a solid plate of the
  * accent in the ink made for it, the other a well of the glass's own ink —
  * both at r10, concentric with the pod — and both give the material's gel.
+ * Not [enabled], it keeps its place at the dock's faded 0.45 and takes no
+ * touch.
  */
 @Composable
 private fun PodButton(
@@ -1476,6 +1486,7 @@ private fun PodButton(
     glyphSize: Dp = 14.dp,
     glyphTurn: Float = 0f,
     prominent: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     val p = P.current
@@ -1485,9 +1496,10 @@ private fun PodButton(
     val fill = if (prominent) p.red else LocalGlassHost.current?.well() ?: p.sunken
     Row(
         modifier
+            .then(if (enabled) Modifier else Modifier.alpha(0.45f))
             .glassPress(press)
             .background(fill, POD_BUTTON_SHAPE)
-            .clickable(interactionSource = touches, indication = null, role = Role.Button) {
+            .clickable(interactionSource = touches, indication = null, role = Role.Button, enabled = enabled) {
                 onClick()
                 Haptics.tap()
             }

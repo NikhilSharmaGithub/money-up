@@ -50,8 +50,9 @@ class RoundTwoStateTest {
     }
 
     @Test
-    fun `the bankrupt-properties menu offers exactly the two values the server takes`() {
-        assertEquals(listOf("release", "auction"), GameSettings.BANKRUPT_CHOICES.map { it.first })
+    fun `the bankrupt-properties control offers exactly the values the server takes`() {
+        // 1.0.7 added the third, "choose" (docs/API-1.0.6.md, "Round 3").
+        assertEquals(listOf("release", "auction", "choose"), GameSettings.BANKRUPT_CHOICES.map { it.first })
         assertTrue(GameSettings(bankruptProperties = "auction").auctionsEstates)
         assertFalse(GameSettings(bankruptProperties = "release").auctionsEstates)
         assertFalse(GameSettings().auctionsEstates)

@@ -42,6 +42,8 @@ enum Glyph: String, CaseIterable {
     case sun, flame, droplet, turbine
     // the table's own rules
     case info
+    // a choice to make (1.0.7): the bankrupt player decides
+    case fork
 }
 
 extension Glyph {
@@ -563,6 +565,23 @@ private enum ArtCanvas {
             disc.addPath(A.circle(16, 9.4, 2.4))
             disc.addPath(A.rrect(13.8, 13.4, 4.4, 11.8, 2.2))
             ctx.fill(disc, with: .color(ink), style: FillStyle(eoFill: true))
+
+        case .fork:
+            // A choice (1.0.7): one road from the bottom splitting two ways,
+            // each ending in an arrowhead. The way not yet taken is a wash,
+            // as the trade's second hand is, so it reads as two roads and a
+            // decision rather than a Y.
+            let road = StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round)
+            var left = ctx
+            left.opacity = 0.38
+            left.stroke(A.line([(16, 18.2), (8.9, 11.1)]), with: .color(ink), style: road)
+            left.fill(A.poly([(4.6, 6.8), (12.4, 7.5), (5.3, 14.6)]), with: .color(ink))
+            left.stroke(A.poly([(4.6, 6.8), (12.4, 7.5), (5.3, 14.6)]), with: .color(ink),
+                        style: .init(lineWidth: 1.2, lineJoin: .round))
+            ctx.stroke(A.line([(16, 29), (16, 18.2), (23.1, 11.1)]), with: .color(ink), style: road)
+            ctx.fill(A.poly([(27.4, 6.8), (19.6, 7.5), (26.7, 14.6)]), with: .color(ink))
+            ctx.stroke(A.poly([(27.4, 6.8), (19.6, 7.5), (26.7, 14.6)]), with: .color(ink),
+                       style: .init(lineWidth: 1.2, lineJoin: .round))
 
         case .turbine:
             let blade = Color(hex: 0x4A86BD)

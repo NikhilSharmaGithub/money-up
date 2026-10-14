@@ -60,6 +60,13 @@ data class GameState(
     val ownership: Map<String, TileOwnership> = emptyMap(),
     val turn: TurnState? = null,
     val auction: AuctionState? = null,
+    /**
+     * A bankrupt player at a "player decides" table being asked what happens
+     * to their streets (1.0.7, H2). Null whenever nobody is being asked —
+     * always, at the other two tables and from an older server. While it is
+     * up the game holds still: the turn's own buttons wait on the answer.
+     */
+    val bankruptChoice: BankruptChoice? = null,
     val trades: List<TradeOffer> = emptyList(),
     val log: List<LogLine> = emptyList(),
     val chat: List<ChatMessage> = emptyList(),
@@ -127,12 +134,32 @@ data class GameState(
     val isEnded: Boolean get() = status == "ended"
 
     /**
-     * A table whose host set its rules. A Play-now or a cup table plays round
-     * 2's three — estates, auction-only, the shuffle — at their defaults
-     * whatever the fields say (docs/API-1.0.6.md), so nothing here reads
-     * them off one of those.
+     * A table whose host set its rules. A Play-now or a cup table plays
+     * auction-only and the shuffle at their defaults whatever the fields say
+     * (docs/API-1.0.6.md), so nothing here reads them off one of those. The
+     * bankrupt-properties rule is the exception from 1.0.7: a Play-now table
+     * rolls it and plays it — see [estateRule].
      */
     val hostSetsRules: Boolean get() = quick != true && cup != true
+
+    /**
+     * What this table does with a bankrupt player's streets, as the server
+     * plays it: whatever the settings say — at a Play-now table too, which
+     * rolls it from 1.0.7 — except at a cup table, which always gives them
+     * back to the bank.
+     */
+    val estateRule: EstateRule get() = if (cup == true) EstateRule.RELEASE else settings.estateRule
+
+    /**
+     * Whether "Bot skill" means anything here: a table a host set up, with a
+     * house player sitting at it — or, in the lobby, one with "Allow bots" on,
+     * which fills every empty chair with the house at the start. Nowhere else
+     * is the control, its chip or its rules-sheet row shown: a table of people
+     * has no house to set, and a Play-now table's house always plays normal
+     * while it passes itself off as people.
+     */
+    val showsBotSkill: Boolean
+        get() = hostSetsRules && (players.any { it.isHouse } || (isLobby && settings.allowBots == true))
 
     /**
      * Auction-only (1.0.6 round 2): every unowned street goes straight under
@@ -252,8 +279,14 @@ data class QuickRoll(
     fun isEdited(index: Int): Boolean = partKey(index)?.let { it in edited.orEmpty() } == true
 
     companion object {
-        /** quickRollParts() in server/game.js, phrase for phrase. */
-        val PART_KEYS = listOf("mapId", "startingCash", "x2rent", "vacationCash", "auction", "noRentInPrison", "evenBuild")
+        /**
+         * quickRollParts() in server/game.js, phrase for phrase — 1.0.7 adds
+         * what a bankrupt player's streets do, last ("bankrupt player decides").
+         */
+        val PART_KEYS = listOf(
+            "mapId", "startingCash", "x2rent", "vacationCash", "auction", "noRentInPrison", "evenBuild",
+            "bankruptProperties",
+        )
     }
 }
 
@@ -333,9 +366,10 @@ data class GameSettings(
     /** The game clock in minutes — 0, 20, 30, 45 or 60, where 0 is no clock. */
     val timeLimit: Int? = null,
     /**
-     * What a bankrupt player's streets do (1.0.6 round 2): "release" — back
-     * to the bank, unowned, as they always went — or "auction", one lot at a
-     * time. Absent from an older server, which only ever released them.
+     * What a bankrupt player's streets do: "release" — back to the bank,
+     * unowned, as they always went — "auction", one lot at a time (1.0.6
+     * round 2), or "choose", where the player who goes out picks (1.0.7).
+     * Absent from an older server, which only ever released them.
      */
     val bankruptProperties: String? = null,
     /** Every unowned street goes straight to auction; nobody buys at the sticker. */
@@ -345,8 +379,11 @@ data class GameSettings(
 ) {
     val botSkill: BotSkill get() = BotSkill.of(botLevel)
 
-    /** A bankrupt player's streets go under the hammer rather than back to the bank. */
+    /** A bankrupt player's streets always go under the hammer rather than back to the bank. */
     val auctionsEstates: Boolean get() = bankruptProperties == "auction"
+
+    /** The bankrupt-properties rule as the lobby and the rules sheet name it. */
+    val estateRule: EstateRule get() = EstateRule.of(bankruptProperties)
 
     /** Minutes on the game clock; 0 for an untimed table and an older server. */
     val gameMinutes: Int get() = timeLimit?.takeIf { it in GAME_LENGTHS } ?: 0
@@ -359,11 +396,76 @@ data class GameSettings(
         fun gameLengthLabel(minutes: Int): String = if (minutes <= 0) "Unlimited" else "$minutes min"
 
         /**
-         * The two values `bankruptProperties` takes, as the lobby's menu
+         * The three values `bankruptProperties` takes, as the lobby's control
          * offers them — the server refuses anything else, whole.
          */
-        val BANKRUPT_CHOICES = listOf("release" to "Back to the bank", "auction" to "Auction them")
+        val BANKRUPT_CHOICES: List<Pair<String, String>> = EstateRule.entries.map { it.wire to it.label }
     }
+}
+
+/**
+ * Where a bankrupt player's streets go — `settings.bankruptProperties` —
+ * with the words every client uses for it (docs/API-1.0.6.md, "Round 3"):
+ * [label] on the lobby's segmented control, [explain] the line under it,
+ * [sheet] the value on the rules sheet's "Bankrupt properties" row. [glyph]
+ * leads the segment and the lobby's summary chip.
+ */
+enum class EstateRule(
+    val wire: String,
+    val label: String,
+    val explain: String,
+    val sheet: String,
+    val glyph: String,
+) {
+    RELEASE(
+        "release", "Back to the bank",
+        "A bankrupt player's properties go back to the bank, unowned.",
+        "Back to the bank", "bank",
+    ),
+    AUCTION(
+        "auction", "Auction them",
+        "A bankrupt player's properties are auctioned to everyone, one by one.",
+        "Auctioned", "gavel",
+    ),
+    CHOOSE(
+        "choose", "Player decides",
+        "The player who goes bankrupt picks: back to the bank, or auction.",
+        "Player decides", "scales",
+    );
+
+    companion object {
+        /** Anything the server did not send, or this build has not heard of, is the bank's — its default. */
+        fun of(wire: String?): EstateRule = entries.firstOrNull { it.wire == wire } ?: RELEASE
+    }
+}
+
+/**
+ * "What happens to your streets?" — the question a bankrupt player is asked
+ * at a "player decides" table (1.0.7, H2). [playerId] is aliased like every
+ * other id: the bankrupt player's own phone sees its own id, everybody else
+ * the one they see on the seat. [properties] are board indices in board
+ * order, already the bank's; [endsAt] is when the house answers for them.
+ */
+@Serializable
+data class BankruptChoice(
+    val playerId: String = "",
+    val name: String = "",
+    val properties: List<Int> = emptyList(),
+    val endsAt: Double? = null,
+) {
+    /** "their 3 properties", "their property" — the server's own phrasing. */
+    val theirStreets: String
+        get() = if (properties.size == 1) "their property" else "their ${properties.size} properties"
+
+    /** "your 3 properties", "your property". */
+    val yourStreets: String
+        get() = if (properties.size == 1) "your property" else "your ${properties.size} properties"
+
+    /** What everybody else at the table reads while the question is open. */
+    val decidingLine: String get() = "${name.ifBlank { "A player" }} is deciding what happens to their streets…"
+
+    /** The server's own refusal for every turn move while this is open — said before anybody presses. */
+    val holdLine: String get() = "Waiting for ${name.ifBlank { "a player" }} to decide about their properties"
 }
 
 /**
@@ -443,6 +545,22 @@ data class TileData(
 
     /** What lifting the mortgage costs — the loan plus ten percent, rounded up like the server. */
     val unmortgageCost: Int? get() = price?.let { kotlin.math.ceil(it / 2.0 * 1.1).toInt() }
+
+    /**
+     * The rent that makes a deed worth bidding on, in one short line for the
+     * auction card: a street's bare rent and its hotel, an airport's range
+     * from one to four held, a utility's dice multiples. Null for anything
+     * that charges no rent.
+     */
+    val rentLine: String?
+        get() = when (type) {
+            "property" -> rent?.takeIf { it.isNotEmpty() }?.let { r ->
+                if (r.size >= 6) "Rent ${money(r[0])} · hotel ${money(r.last())}" else "Rent ${money(r[0])}"
+            }
+            "airport" -> "Rent ${money(AIRPORT_RENTS.first())}–${money(AIRPORT_RENTS.last())}"
+            "utility" -> "Rent ${UTILITY_MULTIPLIERS.first()}× or ${UTILITY_MULTIPLIERS.last()}× the dice"
+            else -> null
+        }
 
     companion object {
         /**
@@ -679,6 +797,58 @@ data class AuctionState(
  */
 @Serializable
 data class EstateLot(val from: String = "", val left: Int = 0)
+
+/**
+ * How far an estate sale has got, for the auction card's header: this lot's
+ * place in the sale, how many lots there are, and the streets still to come
+ * after it — what the server does not send, worked out from what this phone
+ * saw. [lot] and [total] are null when it cannot know; [upNext] is empty.
+ */
+data class EstateProgress(val lot: Int?, val total: Int?, val upNext: List<Int>) {
+    /** "Lot 2 of 4", or null when the count is not known. */
+    val label: String? get() = if (lot != null && total != null) "Lot $lot of $total" else null
+
+    companion object {
+        /**
+         * The sale's place from its lot. [known] is the bankrupt player's
+         * deeds as this phone saw them go — the question's own list at a
+         * "player decides" table, otherwise what the seat held the push
+         * before it went out — or null when this phone did not see it (it
+         * walked in mid-sale). The lots go in board order, so a lot found in
+         * it is that far into the sale, and the server's own [left] is the
+         * rest. [announced] is the size the log announced the sale at, the
+         * fallback for a phone that only has the log.
+         */
+        fun of(tile: Int, left: Int, known: List<Int>?, announced: Int?): EstateProgress {
+            val rest = maxOf(0, left)
+            val lots = known?.distinct()?.sorted()
+            val at = lots?.indexOf(tile) ?: -1
+            if (lots != null && at >= 0) {
+                return EstateProgress(at + 1, at + 1 + rest, lots.drop(at + 1).take(rest))
+            }
+            if (announced != null && announced > rest) return EstateProgress(announced - rest, announced, emptyList())
+            return EstateProgress(null, null, emptyList())
+        }
+
+        /**
+         * The size an estate sale was announced at — "Ravi's 3 properties go
+         * to auction, one at a time" — from the latest such line for [from]
+         * in the log, or null if the log no longer holds it.
+         */
+        fun announced(log: List<LogLine>, from: String): Int? {
+            if (from.isBlank()) return null
+            val many = "$from's "
+            for (line in log.asReversed()) {
+                val t = line.text
+                if (!t.startsWith(many) || !t.endsWith(" to auction, one at a time")) continue
+                val what = t.removePrefix(many)
+                if (what.startsWith("1 property goes")) return 1
+                return what.substringBefore(' ').toIntOrNull() ?: continue
+            }
+            return null
+        }
+    }
+}
 
 @Serializable
 data class TradeSide(

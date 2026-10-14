@@ -131,6 +131,18 @@ final class GameStore: ObservableObject {
     /// This device's seat was taken out by the clock — drives the full-screen
     /// explainer. Cleared when the player chooses to stay and watch.
     @Published var timedOut = false
+    /// A give-up waiting on its one question (1.0.7, H2): at a table where the
+    /// bankrupt player decides, the Give up and Declare bankruptcy doors ask
+    /// where the streets go before anything is sent, so nobody is asked twice.
+    @Published var giveUpAsk: GiveUpAsk?
+    /// The question this device has already answered, by seat and deadline,
+    /// so the prompt goes the moment it is tapped rather than a push later.
+    @Published private(set) var answeredChoice: String?
+    /// What each player who went out was holding, by name, in board order —
+    /// read off the last board before their bust. An estate sale says whose
+    /// lots are under the hammer and how many follow, but never which; this
+    /// is how the auction card can say "Up next: Rome · Venice".
+    @Published private(set) var estateDeeds: [String: [Int]] = [:]
     /// Set when a game begins — drives the board's deal-in animation.
     @Published var boardIntroAt: Date?
     /// Log lines at or before this stamp stay out of the ghosted centre-well
@@ -740,6 +752,8 @@ final class GameStore: ObservableObject {
                 Haptics.tap()
             }
         }
+
+        noteEstates(old, new)
 
         // A completed country set is a moment — the tiles flash (TileView),
         // the fanfare plays exactly once from here.
@@ -1736,6 +1750,9 @@ final class GameStore: ObservableObject {
         lastRoom = ""
         lastGuests = 0
         resumeCheck = nil
+        giveUpAsk = nil
+        answeredChoice = nil
+        estateDeeds = [:]
     }
 
     // MARK: - intents (mirror public/js actions)
@@ -1797,6 +1814,27 @@ final class GameStore: ObservableObject {
     func unmortgage(_ tile: Int) { emitAs(deedSeat(for: tile), "unmortgage", [tile]) }
     func payDebt() { emitAsActive("payDebt") }
     func declareBankrupt() { emitAsActive("bankrupt") }
+
+    /// The bankrupt seat's answer to "what happens to your properties?"
+    /// (1.0.7, H2), from that seat's own connection — on a pass & play phone
+    /// the question may be a guest's. The prompt goes at once; if the server
+    /// turns the answer down it says why, and the house answers anyway.
+    func answerBankruptChoice(auction: Bool) {
+        guard let choice = myBankruptChoice else { return }
+        answeredChoice = Self.choiceKey(choice)
+        emitAs(choice.playerId, "bankruptChoice", [["auction": auction]])
+        Haptics.tap()
+    }
+
+    /// The give-up card's answer: out of the game, with the streets' fate
+    /// said in the same breath (`{ auction }` on the ordinary `bankrupt`).
+    /// Nil sends the bare concede every older client sends.
+    func giveUp(_ ask: GiveUpAsk, auction: Bool?) {
+        giveUpAsk = nil
+        let seat = localIds.contains(ask.seat) ? ask.seat : meId
+        emitAs(seat, "bankrupt", auction.map { [["auction": $0]] } ?? [])
+        Haptics.tap()
+    }
     /// The white flag, thrown by one of THIS device's own seats — off-turn is
     /// fine, conceding is a right, not a turn action. `seat` says which local
     /// player is giving up; the main seat when nobody says otherwise.
@@ -2240,3 +2278,117 @@ enum Haptics {
     static func turn() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
 }
 
+
+// MARK: - going out (1.0.7, H2)
+
+/// Somebody on this device has pressed Give up — or Declare bankruptcy in the
+/// red — at a table where the bankrupt player decides, and still holds deeds.
+/// The give-up card asks where they go before anything is sent.
+struct GiveUpAsk: Identifiable, Equatable {
+    enum Kind { case concede, declare }
+    /// The seat going out: the one whose button it was, never assumed to be
+    /// the main player's on a pass & play phone.
+    let seat: String
+    /// Giving up of one's own accord, or going bankrupt in the red — the
+    /// card's title and what it says about the creditor follow from it.
+    let kind: Kind
+    var id: String { seat }
+}
+
+extension GameStore {
+    /// The question the server has open, as the table should see it right
+    /// now: kept back while the bust that raised it is still on stage, so no
+    /// view announces somebody's bankruptcy before the board has shown it.
+    /// Everything that says who is deciding reads this; the turn's buttons
+    /// read the raw `state.bankruptChoice`, since the server holds the turn
+    /// still from the moment it asks.
+    var shownBankruptChoice: BankruptChoice? {
+        guard let choice = state?.bankruptChoice, state?.isPlaying == true,
+              !heldBusts.contains(choice.playerId) else { return nil }
+        return choice
+    }
+
+    /// The question the server has open, when it is this device's to answer:
+    /// a seat of ours that has been shown going out. A bust still on stage
+    /// keeps the question back until it lands, so the prompt never beats the
+    /// piece to the square; somebody watching has no seat to answer for.
+    var myBankruptChoice: BankruptChoice? {
+        guard let choice = shownBankruptChoice, !isWatching, isLocal(choice.playerId),
+              answeredChoice != Self.choiceKey(choice) else { return nil }
+        return choice
+    }
+
+    /// One question, told apart from the next: the same seat is never asked
+    /// twice, but two questions in a row on a pass & play phone can be.
+    static func choiceKey(_ choice: BankruptChoice) -> String {
+        "\(choice.playerId)@\(Int(choice.endsAt ?? 0))"
+    }
+
+    /// The deeds a seat holds right now, in board order.
+    func deeds(of seat: String) -> [Int] {
+        guard let state else { return [] }
+        return state.ownership.compactMap { key, own in own.owner == seat ? Int(key) : nil }.sorted()
+    }
+
+    /// Whether going out from this seat comes with the question: the table
+    /// lets the bankrupt player decide, and there is something to decide on.
+    func choosesEstate(_ seat: String) -> Bool {
+        EstateRule.inForce(state) == .choose && !deeds(of: seat).isEmpty
+    }
+
+    /// The Give up / Declare bankruptcy door for one seat. At a table where
+    /// the player decides it opens the give-up card; anywhere else it answers
+    /// false and the caller keeps its ordinary confirmation.
+    @discardableResult
+    func askGiveUp(_ seat: String, kind: GiveUpAsk.Kind) -> Bool {
+        guard choosesEstate(seat) else { return false }
+        giveUpAsk = GiveUpAsk(seat: seat, kind: kind)
+        return true
+    }
+
+    /// What going bankrupt does at this table, for the plain confirmation —
+    /// the one a table that does not ask still shows. The creditor has only
+    /// ever kept the cash already paid over.
+    func bankruptcyTerms(for seat: String) -> String {
+        let paid = "Whatever you have paid stays with whoever you owe"
+        guard !deeds(of: seat).isEmpty else { return "\(paid), and you are out of the game." }
+        switch EstateRule.inForce(state) {
+        case .auction:
+            return "\(paid), your properties are auctioned to the other players, and you are out of the game."
+        case .choose:
+            return "\(paid), you choose whether your properties go back to the bank or to auction, and you are out of the game."
+        case .release:
+            return "\(paid), your properties go back to the bank, and you are out of the game."
+        }
+    }
+
+    /// Keeps `estateDeeds` up to date: whatever a seat held on the last board
+    /// before it went out, and — the server's own word, where it asks — the
+    /// deeds in question. A rematch starts the book again.
+    fileprivate func noteEstates(_ old: GameState?, _ new: GameState) {
+        if new.isLobby {
+            if !estateDeeds.isEmpty { estateDeeds = [:] }
+            if answeredChoice != nil { answeredChoice = nil }
+            if giveUpAsk != nil { giveUpAsk = nil }
+            return
+        }
+        var book = estateDeeds
+        if let old {
+            for p in new.players where p.isBankrupt && old.player(p.id)?.isBankrupt == false {
+                let held = old.ownership.compactMap { key, own in own.owner == p.id ? Int(key) : nil }
+                if !held.isEmpty { book[p.name] = held.sorted() }
+            }
+        }
+        if let choice = new.bankruptChoice, !choice.properties.isEmpty {
+            book[choice.name] = choice.properties.sorted()
+        }
+        if book != estateDeeds { estateDeeds = book }
+        // Nothing open any more: the answered key has done its job.
+        if new.bankruptChoice == nil, answeredChoice != nil { answeredChoice = nil }
+        // A give-up card for a seat that has gone out some other way in the
+        // meantime — timed out, or the debt settled it — asks about nothing.
+        if let ask = giveUpAsk, new.player(ask.seat).map({ $0.isBankrupt }) ?? true {
+            giveUpAsk = nil
+        }
+    }
+}

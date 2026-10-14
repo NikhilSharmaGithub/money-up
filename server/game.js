@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS = {
   botLevel: 'normal',
   /** Minutes until the richest player wins; 0 plays to the last one standing. */
   timeLimit: 0,
-  /** What happens to a bankrupt player's streets: back to the bank, or auctioned one by one. */
+  /** What happens to a bankrupt player's streets: back to the bank, auctioned one by one, or the player's call. */
   bankruptProperties: 'release',
   /** Every unowned street goes straight to auction — nobody buys at the sticker. */
   auctionOnly: false,
@@ -55,16 +55,20 @@ export const DEFAULT_SETTINGS = {
 };
 
 /**
- * What a bankrupt player's streets do — see sellEstate. 'release' is the rule
- * that has always shipped: they go back to the bank, unowned, for whoever
- * lands there next. 'auction' puts each one under the hammer in turn.
+ * What a bankrupt player's streets do — see disposeEstate. 'release' is the
+ * rule that has always shipped: they go back to the bank, unowned, for
+ * whoever lands there next. 'auction' puts each one under the hammer in turn
+ * (sellEstate). 'choose' (1.0.7) asks the player who went out which of the
+ * two it is, and the house answers for anybody who cannot (botEstateChoice).
  */
-export const BANKRUPT_RULES = ['release', 'auction'];
+export const BANKRUPT_RULES = ['release', 'auction', 'choose'];
 
 /**
- * The table rules a Play-now or a cup table never plays, whatever the field
- * says: the room checks them at its own door as well as at the setter's (see
- * ruleOn), the way armGameClock does for the clock.
+ * The round-2 table rules a cup table never plays, whatever the field says:
+ * the room checks them at its own door as well as at the setter's (see
+ * ruleOn), the way armGameClock does for the clock. A Play-now table never
+ * plays two of them either; the third, what happens to a bankrupt player's
+ * streets, it rolls and its host may change (1.0.7 — see QUICK_ROLL).
  */
 const HOUSE_TABLE_ONLY = ['bankruptProperties', 'auctionOnly', 'shuffleBoard'];
 
@@ -104,6 +108,21 @@ const QUICK_ROLL = {
   auction: [true, false],
   noRentInPrison: [true, false],
   evenBuild: [true, false],
+  // 1.0.7: what a bankrupt player's streets do. Not an even split: back to
+  // the bank is the game everybody already knows, so it comes up half the
+  // time, and the two newer ways a quarter each — enough that a regular
+  // meets them, not so often that every table is an estate sale.
+  bankruptProperties: ['release', 'auction', 'choose'],
+};
+
+/**
+ * How often each value on a menu above comes up, where it is not an even
+ * draw: the weights line up with the values. Kept apart from the menu itself
+ * so the menu stays a list of distinct values, which is what the lobby, the
+ * labels and the tests read it as.
+ */
+const QUICK_ROLL_WEIGHTS = {
+  bankruptProperties: [2, 1, 1],
 };
 
 /** The rules a quick table rolls, board aside. Exported so a test can read them. */
@@ -134,8 +153,22 @@ export const QUICK_HOST_KEYS = [...QUICK_ROLL_KEYS, 'mapId'];
  */
 export function rollQuickSettings(boards = [], rnd = Math.random) {
   const pick = (list) => list[Math.min(list.length - 1, Math.floor(rnd() * list.length))];
+  // One draw per rule either way, so a weighted menu costs the dice no more
+  // than an even one does.
+  const weighed = (list, weights) => {
+    const total = weights.reduce((n, w) => n + w, 0);
+    let at = rnd() * total;
+    for (let i = 0; i < list.length; i++) {
+      at -= weights[i];
+      if (at < 0) return list[i];
+    }
+    return list[list.length - 1];
+  };
   const rolled = {};
-  for (const key of QUICK_ROLL_KEYS) rolled[key] = pick(QUICK_ROLL[key]);
+  for (const key of QUICK_ROLL_KEYS) {
+    const w = QUICK_ROLL_WEIGHTS[key];
+    rolled[key] = w ? weighed(QUICK_ROLL[key], w) : pick(QUICK_ROLL[key]);
+  }
   // A board nobody can play is worse than no roll at all, so an id this build
   // does not have is dropped rather than dealt.
   //
@@ -167,6 +200,17 @@ const QUICK_ROLL_LABELS = {
 };
 
 /**
+ * The one rolled rule that is not a switch, in the same plain words: what a
+ * bankrupt player's streets do. Read off the live setting like the rest.
+ */
+const BANKRUPT_PHRASES = {
+  release: 'bankrupt streets back to the bank',
+  auction: 'bankrupt streets auctioned',
+  choose: 'bankrupt player decides',
+};
+const bankruptPhrase = (v) => BANKRUPT_PHRASES[v] || BANKRUPT_PHRASES.release;
+
+/**
  * What this table is, one phrase at a time: the board, the bankroll, then
  * every rolled rule and whether it is on.
  *
@@ -180,6 +224,7 @@ export function quickRollParts(settings = {}, mapName = '') {
     String(mapName || 'Classic'),
     `$${Number(settings.startingCash || 0).toLocaleString('en-US')} to start`,
     ...Object.entries(QUICK_ROLL_LABELS).map(([k, label]) => `${label} ${settings[k] ? 'on' : 'off'}`),
+    bankruptPhrase(settings.bankruptProperties),
   ];
 }
 
@@ -195,6 +240,7 @@ function quickChangeParts(settings, mapName, keys) {
   if (keys.includes('mapId')) out.push(`${board} board`);
   if (keys.includes('startingCash')) out.push(cash);
   Object.keys(QUICK_ROLL_LABELS).forEach((k, i) => { if (keys.includes(k)) out.push(rules[i]); });
+  if (keys.includes('bankruptProperties')) out.push(bankruptPhrase(settings.bankruptProperties));
   return out;
 }
 
@@ -282,12 +328,41 @@ const BOT_OFFER_GAP = 4;
 /** The same two waits for a hard bot, which trades more readily. */
 const HARD_ASK_COOLDOWN = 5;
 const HARD_OFFER_GAP = 2;
+/**
+ * How much of the colour a trade would finish for the OTHER side a hard bot
+ * counts against the deal (see botJudgeTrade). Swept from nothing to all of
+ * it over 720 seeded games a step: a quarter is where the hard table is
+ * strongest. Much more and the bots stop trading at all — no colours, no
+ * houses, games that run into the turn cap — which is a weaker table, not a
+ * stronger one.
+ */
+const HARD_RIVAL_SET_SHARE = 0.25;
+/**
+ * A hard bot's cash reserve is the rent its next throw is likely to cost it,
+ * not the worst rent anywhere on the board (see botReachFloor): the dearest
+ * square it could land on once the most expensive sixth or so of the throws
+ * is set aside, held between these two bounds.
+ */
+const HARD_REACH_TAIL = 0.17;
+const HARD_REACH_MIN = 80;
+const HARD_REACH_MAX = 500;
 /** How often an easy bot lets a street it could afford go by anyway. */
 const EASY_PASS_RATE = 0.35;
 /** Trade offers one player may have waiting on answers at once — see proposeTrade. */
 const MAX_OPEN_OFFERS = 5;
 
 const AUCTION_SECONDS = 20;
+/**
+ * What a lot is worth beyond its race valuation (see botAuctionCap), for a
+ * normal and a hard bot; easy bids half the sticker whatever the lot. The
+ * share of a colour's built rent (botSetPremium) the last street of the
+ * bot's own colour carries; how much more the lot that would finish the
+ * leader's colour is worth to keep from them; and the least a lot that would
+ * leave the leader one short is worth, as a multiple of its sticker.
+ */
+const AUCTION_SET_SHARE = { normal: 0.35, hard: 0.6 };
+const AUCTION_BLOCK_LEADER = { normal: 1.15, hard: 1.3 };
+const AUCTION_LEADER_NEAR = { normal: 1.25, hard: 1.5 };
 const JAIL_FINE = 50;
 const SALARY = 200;
 /** Landing dead on START pays this instead of the passing salary. */
@@ -362,6 +437,10 @@ export class GameRoom {
     this.chat = [];
     this.turn = null;
     this.auction = null;
+    // A bankrupt player's question at a 'choose' table, and anybody waiting
+    // to be asked theirs — see disposeEstate.
+    this.bankruptChoice = null;
+    this.choiceQueue = [];
     this.trades = [];
     this.vacationPot = 0;
     this.winner = null;
@@ -582,6 +661,12 @@ export class GameRoom {
         // the rest of the game: seatRanOut, rightly, never takes a seat from
         // a player who is already out, so it never cleared the card either.
         this.say(`${p.name} stopped watching`, 'leave');
+        // Gone with their estate's question still open: nobody is left to
+        // answer it, so the house does, now, rather than hold the table for
+        // the rest of the twenty seconds.
+        if (this.bankruptChoice?.playerId === id) {
+          this.settleBankruptChoice(this.botEstateChoice(p, this.bankruptChoice.properties), 'absent');
+        }
       } else {
         this.say(`${p.name} lost connection — holding their seat`, 'leave');
         this.holdSeat(p, RECONNECT_GRACE_MS);
@@ -714,14 +799,22 @@ export class GameRoom {
 
   /**
    * One of the round-2 table rules (bankrupt properties, auction-only, the
-   * shuffled board) as this table actually plays it. A Play-now table and a
-   * cup table play the default whatever the field says: neither may set them
-   * (updateSettings, and the socket handler for the cup), and asking again
-   * here means no other door can spring one on strangers who never agreed.
+   * shuffled board) as this table actually plays it. A cup table plays the
+   * default whatever the field says, and a Play-now table does for every one
+   * of them it did not roll: neither may set them (updateSettings, and the
+   * socket handler for the cup), and asking again here means no other door
+   * can spring one on strangers who never agreed. What a Play-now table DID
+   * roll — bankrupt properties, from 1.0.7 — everybody at it read in the
+   * lobby before saying they were ready, so that one it plays as set.
    */
   ruleOn(key) {
-    if (this.quick || this.cupMatch) return DEFAULT_SETTINGS[key];
-    return this.settings[key] ?? DEFAULT_SETTINGS[key];
+    if (this.cupMatch) return DEFAULT_SETTINGS[key];
+    if (this.quick && !QUICK_ROLL_KEYS.includes(key)) return DEFAULT_SETTINGS[key];
+    const v = this.settings[key] ?? DEFAULT_SETTINGS[key];
+    // A value forced past the door that the engine has no rule for plays as
+    // the default rather than as nothing.
+    if (key === 'bankruptProperties' && !BANKRUPT_RULES.includes(v)) return DEFAULT_SETTINGS[key];
+    return v;
   }
 
   updateAppearance(id, { name, color, flag }) {
@@ -744,12 +837,13 @@ export class GameRoom {
     // A matchmade table is only partly its host's.
     //
     // The host may re-deal what the table rolled — the bankroll, the five
-    // house rules, the board — because everyone at the table can read the
-    // change before they say they are ready, and saying so is the whole point
-    // of the lobby. Nothing else. The seats, the privacy and the house players
-    // are what matchmaking stands on, and the clock is the sharp end: a
-    // five-second turn on somebody who never asked for one is a timeout, and a
-    // timeout takes them out of the game AND costs them karma.
+    // house rules, what a bankrupt player's streets do, the board — because
+    // everyone at the table can read the change before they say they are
+    // ready, and saying so is the whole point of the lobby. Nothing else.
+    // The seats, the privacy and the house players are what matchmaking
+    // stands on, and the clock is the sharp end: a five-second turn on
+    // somebody who never asked for one is a timeout, and a timeout takes
+    // them out of the game AND costs them karma.
     //
     // One stray key refuses the whole patch rather than quietly keeping the
     // half that was allowed — a client asking for something it may not have
@@ -773,7 +867,7 @@ export class GameRoom {
     }
     // A list, like bot skill: a value off it has no nearest.
     if (patch.bankruptProperties !== undefined && !BANKRUPT_RULES.includes(patch.bankruptProperties)) {
-      return { error: 'Bankrupt properties go back to the bank or to auction' };
+      return { error: 'Bankrupt properties go back to the bank, to auction, or the player decides' };
     }
     // The two 1.0.6 pickers are lists, not ranges, so a value off the list is
     // refused outright rather than rounded: a bot skill of "brutal" has no
@@ -1064,8 +1158,10 @@ export class GameRoom {
     this.statFor(this.players[0]).turns++;
     this.recordWorth();
     this.armGameClock();
-    // Last game's estate sale, if the hammer was still up when it ended.
+    // Last game's estate sale, if the hammer was still up when it ended, and
+    // any question about an estate still open.
     this.estate = null;
+    this.clearBankruptChoices();
     this.say('Game started! Good luck.', 'system');
     if (this.map.shuffled) this.say('The board was shuffled', 'system');
     if (this.endsAt) {
@@ -1396,6 +1492,9 @@ export class GameRoom {
    */
   workPending() {
     if (this.auction) return true;
+    // A bankrupt player's question always has its own timer (see
+    // openNextChoice); said here as well so a test of this answer reads it.
+    if (this.bankruptChoice) return true;
     const cur = this.current;
     if (cur && !cur.bankrupt && cur.connected && !this.autoPlayed(cur)) return true;
     // `_destroyed` is how Node marks a Timeout that has run or been cleared.
@@ -1740,7 +1839,10 @@ export class GameRoom {
     // it, once, when the turn actually goes back to them. Without this every
     // lot re-armed it, and a player away from the table was sent "Your
     // turn" once per lot of somebody else's estate.
-    if (this.auction?.estate) {
+    // A turn waiting on a bankrupt player's answer (see disposeEstate) is
+    // held the same way, for the same reason: settleBankruptChoice arms it
+    // once the answer is in.
+    if (this.auction?.estate || this.bankruptChoice) {
       this.turn.endsAt = null;
       return;
     }
@@ -1881,6 +1983,15 @@ export class GameRoom {
   static CLOCK = { minuteMs: 60_000, graceMs: 90_000 };
 
   /**
+   * How long a bankrupt player has to say where their streets go at a table
+   * where the player decides (see disposeEstate), and the pause a house
+   * player takes over the same question — a person's few seconds, so that at
+   * a Play-now table it does not answer faster than anyone could read it.
+   * A test that has to watch the question time out shortens `ms`.
+   */
+  static BANKRUPT_CHOICE = { ms: 20_000, botMs: [1800, 3200] };
+
+  /**
    * Is somebody in the middle of something? A turn that has not yet rolled,
    * with nothing owed and no hammer up, can simply be stopped; anything else
    * is allowed to finish first — the dice have been thrown, a deed is on
@@ -1904,6 +2015,10 @@ export class GameRoom {
     delete this.timers.gameClock;
     if (this.status !== 'playing' || this.timeUp) return;
     this.timeUp = true;
+    // Nothing is sold once time is up, so a bankrupt player's open question
+    // has its answer: the streets stay with the bank. The turn it was holding
+    // carries on from here, as the turn in progress, or ends the game below.
+    const dropped = this.dropBankruptChoices();
     if (!this.midTurn()) {
       this.finishOnTime();
       return;
@@ -1911,7 +2026,9 @@ export class GameRoom {
     this.say("Time's up — this is the last turn", 'system');
     this.timers.gameClockStop = setTimeout(() => this.clockStop(), GameRoom.CLOCK.graceMs);
     this.timers.gameClockStop.unref?.();
+    if (dropped && !this.auction) this.armTurnTimer();
     this.push();
+    if (dropped) this.maybeBot();
   }
 
   /**
@@ -1975,6 +2092,7 @@ export class GameRoom {
     }
     this.clearTimer('gameClock');
     this.clearTimer('gameClockStop');
+    this.clearBankruptChoices();
     this.closeDebtAtEnd();
     this.turnCount++;
     this.recordWorth();
@@ -2038,8 +2156,10 @@ export class GameRoom {
     // Back on the market — or, at a table that auctions estates, under the
     // hammer one by one. A walkout or a timeout is a bankruptcy to the bank
     // as far as the streets are concerned. With a lot now up, the turn stays
-    // parked on the auction and finishAuction moves it on, as below.
-    this.sellEstate(p, estate);
+    // parked on the auction and finishAuction moves it on, as below. At a
+    // table where the player decides, somebody who has left is not there to
+    // be asked: the house decides for them, on the spot.
+    this.disposeEstate(p, estate, { absent: true });
     // While an auction still runs, the turn stays parked on the auction
     // phase; finishAuction moves it on the moment the hammer falls.
     if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
@@ -2396,6 +2516,7 @@ export class GameRoom {
   // -------------------------------------------------------------------- roll --
   roll(id, forced = null) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    if (this.choiceHold()) return { error: this.choiceHold() };
     if (this.turn.phase !== 'roll') return { error: 'Cannot roll now' };
     const p = this.current;
     this.actionMoves = [];
@@ -2860,6 +2981,8 @@ export class GameRoom {
     // An estate lot can go under the hammer while a deed of the roller's own
     // is still on offer; the offer waits until the hammer falls.
     if (this.auction) return { error: 'Auction in progress' };
+    // …and until a bankrupt player has said where their streets go.
+    if (this.choiceHold()) return { error: this.choiceHold() };
     const pend = this.turn.pending;
     if (!pend || pend.type !== 'buy') return { error: 'Nothing to buy' };
     const p = this.current;
@@ -2880,6 +3003,7 @@ export class GameRoom {
   skipBuy(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
     if (this.auction) return { error: 'Auction in progress' };
+    if (this.choiceHold()) return { error: this.choiceHold() };
     const pend = this.turn.pending;
     if (!pend || pend.type !== 'buy') return { error: 'Nothing to skip' };
     const tileIndex = pend.tile;
@@ -3053,14 +3177,15 @@ export class GameRoom {
    * Not once the game clock has run out — the last turn is not the moment
    * for a dozen auctions — and not with one player left, which is a game
    * already over. Returns true when a sale was queued.
+   *
+   * `chosen` is a sale somebody picked at a table where the player decides
+   * ('choose' — see disposeEstate): the table's rule is 'choose', not
+   * 'auction', and the choice is what puts the streets under the hammer.
    */
-  sellEstate(p, tiles) {
-    if (this.ruleOn('bankruptProperties') !== 'auction') return false;
-    if (this.status !== 'playing' || this.timeUp || this.active.length < 2) return false;
-    const forSale = new Set(['property', 'airport', 'utility']);
-    const lots = [...new Set(tiles)]
-      .filter((i) => forSale.has(this.tile(i)?.type) && !this.own(i))
-      .sort((a, b) => a - b);
+  sellEstate(p, tiles, { chosen = false } = {}) {
+    if (!chosen && this.ruleOn('bankruptProperties') !== 'auction') return false;
+    if (!this.estateSaleOpen()) return false;
+    const lots = this.estateLots(tiles);
     if (!lots.length) return false;
     this.estate ??= { lots: [] };
     // Numbered, so "how many more after this" counts this estate's lots and
@@ -3071,6 +3196,251 @@ export class GameRoom {
     this.say(`${p.name}'s ${what} to auction, one at a time`, 'auction');
     if (!this.auction) this.nextEstateLot();
     return true;
+  }
+
+  /** The game can still sell somebody's streets: it is on, the clock has not run out, and there are bidders. */
+  estateSaleOpen() {
+    return this.status === 'playing' && !this.timeUp && this.active.length >= 2;
+  }
+
+  /** The squares of an estate that can go under the hammer: deeds the bank now holds, in board order. */
+  estateLots(tiles) {
+    const forSale = new Set(['property', 'airport', 'utility']);
+    return [...new Set(tiles)]
+      .filter((i) => forSale.has(this.tile(i)?.type) && !this.own(i))
+      .sort((a, b) => a - b);
+  }
+
+  // ------------------------------------------------------ the player decides --
+  /**
+   * Where a player's streets go when they leave play — bankrupt to the bank
+   * or to a player, conceding, walking out, removed for timeouts. By now the
+   * estate is the bank's (buildings gone back, mortgages lifted); this only
+   * decides whether the bank keeps it or sells it.
+   *
+   *   'release'  the bank keeps it, as it always has.
+   *   'auction'  sold off lot by lot — sellEstate.
+   *   'choose'   the player who went out says which (1.0.7). The game holds
+   *              still until they do: nobody rolls, buys or ends a turn, no
+   *              shot clock runs, the house plays nobody's turn — though a
+   *              hammer already up still falls, and anybody may still build,
+   *              mortgage or trade. They have BANKRUPT_CHOICE.ms to answer
+   *              (answerBankruptChoice); after that, or for a player who is
+   *              not there to ask — disconnected, walked out, removed, a seat
+   *              the house is covering — the house answers for them
+   *              (botEstateChoice). A house player is asked like anybody
+   *              else and answers after a person's pause.
+   *
+   * `auction` is the answer given in advance, by a player who conceded from
+   * a dialog that asked them there and then (declareBankrupt): they are not
+   * asked twice. `absent` says the player has left the table for good.
+   *
+   * Two players out at once (a card that collects from everybody) are asked
+   * one after the other, never both at the same time.
+   */
+  disposeEstate(p, tiles, { auction, absent = false } = {}) {
+    const rule = this.ruleOn('bankruptProperties');
+    if (rule === 'auction') return this.sellEstate(p, tiles);
+    if (rule !== 'choose') return false;
+    const lots = this.estateLots(tiles);
+    if (!lots.length) return false;
+    // Nothing left to decide: the clock has run out, or nobody is left to
+    // sell to. Said, because the player's own line did not say where the
+    // streets went at a table where the player decides.
+    if (!this.estateSaleOpen()) {
+      if (this.status === 'playing') this.say(`${p.name}'s properties go back to the bank`, 'bankrupt');
+      return false;
+    }
+    if (typeof auction === 'boolean') return this.applyEstateChoice(p, lots, auction, 'answer');
+    if (absent || this.cannotAnswer(p)) {
+      return this.applyEstateChoice(p, lots, this.botEstateChoice(p, lots), 'absent');
+    }
+    this.choiceQueue.push({ playerId: p.id, lots });
+    this.openNextChoice();
+    return true;
+  }
+
+  /** A person who is not at the table to be asked — away, or played for by the house. */
+  cannotAnswer(p) {
+    return !p || (!p.isBot && (!p.connected || p.botControlled));
+  }
+
+  /**
+   * Put the next player waiting on their decision in front of the table.
+   * Anybody who has gone in the meantime, or whose question has stopped
+   * mattering, is answered for on the way past.
+   */
+  openNextChoice() {
+    while (!this.bankruptChoice && this.choiceQueue.length) {
+      const next = this.choiceQueue.shift();
+      const p = this.player(next.playerId);
+      if (!p) continue;
+      const lots = this.estateLots(next.lots);
+      if (!lots.length) continue;
+      if (!this.estateSaleOpen()) {
+        if (this.status === 'playing') this.say(`${p.name}'s properties go back to the bank`, 'bankrupt');
+        continue;
+      }
+      if (this.cannotAnswer(p)) {
+        this.applyEstateChoice(p, lots, this.botEstateChoice(p, lots), 'absent');
+        continue;
+      }
+      const { ms, botMs } = GameRoom.BANKRUPT_CHOICE;
+      this.bankruptChoice = { playerId: p.id, name: p.name, properties: lots, endsAt: Date.now() + ms };
+      const what = lots.length === 1 ? 'their property' : `their ${lots.length} properties`;
+      this.say(`${p.name} is deciding what happens to ${what}`, 'bankrupt');
+      // A house player passes for a person at a Play-now table, and a person
+      // takes a moment over this — so it does too, the same moment every
+      // time the same game is replayed (a hash, not the dice).
+      const wait = p.isBot ? botMs[0] + Math.floor(this.botCoin(p, `estate:${lots.join(',')}`) * (botMs[1] - botMs[0])) : ms + 200;
+      this.timers.bankruptChoice = setTimeout(() => this.bankruptChoiceDue(), wait);
+      this.timers.bankruptChoice.unref?.();
+      // Whatever clock the turn on the board had stops here — see armTurnTimer.
+      if (this.turn) this.armTurnTimer();
+    }
+  }
+
+  /**
+   * The time to answer is up — or, for a house player, its pause for thought
+   * is over. Either way the house's rule decides.
+   */
+  bankruptChoiceDue() {
+    delete this.timers.bankruptChoice;
+    const c = this.bankruptChoice;
+    if (!c || this.status !== 'playing') return;
+    const p = this.player(c.playerId);
+    this.settleBankruptChoice(this.botEstateChoice(p, c.properties), p?.isBot ? 'answer' : 'late');
+  }
+
+  /**
+   * The bankrupt player's answer: `{ auction: true }` sells the streets lot by
+   * lot, `{ auction: false }` gives them back to the bank. Only theirs to
+   * give, only while the question is open, and only one of those two.
+   */
+  answerBankruptChoice(id, answer) {
+    const c = this.bankruptChoice;
+    if (!c) return { error: 'There is nothing to decide right now' };
+    if (c.playerId !== id) return { error: 'That decision is not yours' };
+    const auction = answer && typeof answer === 'object' ? answer.auction : undefined;
+    if (typeof auction !== 'boolean') return { error: 'Choose the bank or an auction' };
+    this.settleBankruptChoice(auction, 'answer');
+    return { ok: true };
+  }
+
+  /** The open question is answered: say so, carry it out, and let the game move again. */
+  settleBankruptChoice(auction, how) {
+    const c = this.bankruptChoice;
+    if (!c) return;
+    this.clearTimer('bankruptChoice');
+    this.bankruptChoice = null;
+    const p = this.player(c.playerId) || { id: c.playerId, name: c.name };
+    this.applyEstateChoice(p, c.properties, auction, how);
+    this.openNextChoice();
+    if (this.status !== 'playing') return;
+    // Still waiting on somebody else, or a hammer now up: either one holds
+    // the turn, and whichever finishes last hands it back.
+    if (!this.bankruptChoice && !this.auction) {
+      this.armTurnTimer();
+      this.push();
+      this.maybeBot();
+      return;
+    }
+    this.push();
+  }
+
+  /**
+   * Say what was decided, and do it. `how` is who decided: the player
+   * ('answer' — a house player's own answer reads the same, because at a
+   * Play-now table it passes for a person), the house for a player who was
+   * not there ('absent'), or the house for one who ran out of time ('late').
+   */
+  applyEstateChoice(p, lots, auction, how) {
+    const what = auction ? 'put their properties up for auction' : 'gave their properties back to the bank';
+    if (how === 'absent') this.say(`${p.name} isn't here to choose — the house ${what}`, 'bankrupt');
+    else if (how === 'late') this.say(`${p.name} didn't choose in time — the house ${what}`, 'bankrupt');
+    else this.say(auction ? `${p.name} chose to auction their properties` : `${p.name} gave their properties back to the bank`, 'bankrupt');
+    return auction ? this.sellEstate(p, lots, { chosen: true }) : false;
+  }
+
+  /**
+   * The house's call on somebody's estate, when it has to make it: for a
+   * house player, and for a person who is not there to make it or ran out of
+   * time. It picks whatever keeps the game a game.
+   *
+   * An auction is a gift to whoever can outbid the table, so the streets go
+   * BACK TO THE BANK when either:
+   *   - one side still in holds more cash than every other side still in put
+   *     together — a side being one player, or at a team table a team's
+   *     players still in, as one purse — they would win every lot;
+   *   - the auction could hand the leader a colour, or leave them one street
+   *     short of one: for the leader (highest net worth — see leaderOf) and
+   *     for the richest player in cash, if that is somebody else, a colour
+   *     the lots touch where what they hold plus every lot of that colour
+   *     makes the whole colour, or — on a colour of three or more streets
+   *     they already have a piece of — all but one street of it.
+   * Otherwise the streets are AUCTIONED: there is no runaway to feed, and a
+   * sale gives the players who are behind a way back into the game.
+   *
+   * Read only off the public board, like everything else the bots decide,
+   * and deterministic: the same board always gets the same answer.
+   */
+  botEstateChoice(p, lots) {
+    const alive = this.active.filter((x) => x.id !== p?.id);
+    if (alive.length < 2) return false;
+    const purses = new Map();
+    for (const x of alive) {
+      const side = this.teamsOn && x.team != null ? `team:${x.team}` : x.id;
+      purses.set(side, (purses.get(side) || 0) + Math.max(0, x.money));
+    }
+    const all = [...purses.values()].reduce((n, v) => n + v, 0);
+    const top = Math.max(...purses.values());
+    if (top > all - top) return false;
+    const rich = alive.reduce((a, b) => (b.money > a.money ? b : a));
+    const lead = this.leaderOf();
+    const groups = new Set(lots.filter((i) => this.tile(i)?.type === 'property').map((i) => this.tile(i).group));
+    for (const who of new Set([lead, rich].filter(Boolean))) {
+      for (const g of groups) {
+        const k = (this.map.groups[g] || []).length;
+        if (!k) continue;
+        const held = this.heldInGroup(who, g);
+        const up = lots.filter((i) => this.tile(i).type === 'property' && this.tile(i).group === g).length;
+        if (held + up >= k) return false;
+        if (k >= 3 && held > 0 && held + up >= k - 1) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Why the game is standing still, or null when it is not: an open question
+   * about somebody's estate. The turn's own moves — the dice, buying, ending
+   * the turn, prison — wait for the answer.
+   */
+  choiceHold() {
+    const c = this.bankruptChoice;
+    return c ? `Waiting for ${c.name} to decide about their properties` : null;
+  }
+
+  /**
+   * The clock has run out: every open or waiting question is moot — nothing
+   * is sold once time is up — and the streets stay with the bank. True when
+   * there was anything to drop.
+   */
+  dropBankruptChoices() {
+    const open = [this.bankruptChoice, ...this.choiceQueue].filter(Boolean);
+    this.clearBankruptChoices();
+    for (const c of open) {
+      const name = c.name || this.player(c.playerId)?.name || 'A player';
+      this.say(`Time's up — ${name}'s properties go back to the bank`, 'bankrupt');
+    }
+    return open.length > 0;
+  }
+
+  /** No question open or waiting, and no timer for one. */
+  clearBankruptChoices() {
+    this.clearTimer('bankruptChoice');
+    this.bankruptChoice = null;
+    this.choiceQueue = [];
   }
 
   /**
@@ -3128,6 +3498,7 @@ export class GameRoom {
   // -------------------------------------------------------------------- jail --
   jailPay(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    if (this.choiceHold()) return { error: this.choiceHold() };
     const p = this.current;
     if (!p.jail) return { error: 'Not in prison' };
     if (this.turn.phase === 'debt') return { error: 'Settle your debt first' };
@@ -3155,6 +3526,7 @@ export class GameRoom {
 
   jailCard(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    if (this.choiceHold()) return { error: this.choiceHold() };
     const p = this.current;
     if (!p.jail || p.getOutCards < 1) return { error: 'No card available' };
     p.getOutCards--;
@@ -3374,7 +3746,15 @@ export class GameRoom {
     this.settleDebtIfPossible();
   }
 
-  declareBankrupt(id) {
+  /**
+   * `answer` is what a 1.0.7 client's Give up / Declare bankruptcy dialog
+   * sends at a table where the player decides: `{ auction: true }` or
+   * `{ auction: false }`, so the player who answered there is not asked
+   * again. Anything else — no payload, an old client, a value that is not
+   * true or false — concedes all the same and the question follows; at any
+   * other table the answer is ignored, because the table's rule decides.
+   */
+  declareBankrupt(id, answer = null) {
     const d = this.turn?.debt;
     const p = this.player(id);
     if (!p) return { error: 'No player' };
@@ -3384,7 +3764,8 @@ export class GameRoom {
     // not a turn action. A debtor's concession still pays the creditor.
     const creditor = d?.debtor === id && d?.creditor ? this.player(d.creditor) : null;
     if (!creditor) this.say(`${p.name} concedes the game`, 'bankrupt');
-    this.bankrupt(p, creditor);
+    const auction = answer && typeof answer === 'object' && typeof answer.auction === 'boolean' ? answer.auction : undefined;
+    this.bankrupt(p, creditor, { auction });
     return { ok: true };
   }
 
@@ -3422,8 +3803,9 @@ export class GameRoom {
     // Won the long way — everyone else is out — unless the cup's whistle is
     // what put the last of them out, which is a game decided on the clock.
     this.endReason = this.whistleBlown ? 'time' : 'last';
-    // Nobody left to sell an estate to.
+    // Nobody left to sell an estate to — or to ask about one.
     this.estate = null;
+    this.clearBankruptChoices();
     this.clearTimer('gameClock');
     this.clearTimer('gameClockStop');
     this.settleLeadShare();
@@ -3449,7 +3831,7 @@ export class GameRoom {
     if (this.turn.phase === 'debt') this.turn.phase = 'end';
   }
 
-  bankrupt(p, creditor) {
+  bankrupt(p, creditor, { auction } = {}) {
     p.bankrupt = true;
     // Out is out: a seat being held for their return has nothing left to hold.
     this.clearTimer(`grace:${p.id}`);
@@ -3459,14 +3841,19 @@ export class GameRoom {
     // race carries on (or closes) without forking the turn.
     const settled = this.settleAuctionExit(p, { refund: true });
     const tiles = this.tilesOf(p.id);
+    // At a table where the player decides, where the streets go is the next
+    // line's news, so this one does not get ahead of it.
+    const choosing = this.ruleOn('bankruptProperties') === 'choose';
     // The streets do NOT follow the debt: whatever cash existed already
     // streamed to the creditor — the estate itself goes back on the market,
     // houses razed and mortgages cleared, for whoever lands there next.
     if (creditor && !creditor.bankrupt) {
       creditor.money += Math.max(0, p.money);
-      this.say(`${p.name} went bankrupt — ${creditor.name} keeps what was paid, the streets return to the bank`, 'bankrupt');
+      this.say(choosing
+        ? `${p.name} went bankrupt — ${creditor.name} keeps what was paid`
+        : `${p.name} went bankrupt — ${creditor.name} keeps what was paid, the streets return to the bank`, 'bankrupt');
     } else {
-      this.say(`${p.name} went bankrupt — the streets return to the bank`, 'bankrupt');
+      this.say(choosing ? `${p.name} went bankrupt` : `${p.name} went bankrupt — the streets return to the bank`, 'bankrupt');
     }
     for (const i of tiles) delete this.ownership[i];
     p.money = 0;
@@ -3482,8 +3869,12 @@ export class GameRoom {
     // one after another (see sellEstate) — to the bank's account, as above,
     // whoever the debt was owed to. The turn waits on the hammer: the
     // bankrupt roller's turn moves on when the last lot falls, anybody
-    // else's picks up where it was.
-    this.sellEstate(p, tiles);
+    // else's picks up where it was. At a table where the player decides,
+    // they are asked first (disposeEstate) — unless they already answered
+    // in the dialog they conceded from — and the game waits on the answer.
+    // A person the house is covering, a walkout, a house player: none of
+    // them are asked here; see cannotAnswer.
+    this.disposeEstate(p, tiles, { auction });
     if (this.turn?.playerId === p.id && !this.auction && !settled) this.nextTurn();
     else this.push();
   }
@@ -3670,6 +4061,7 @@ export class GameRoom {
   // ---------------------------------------------------------------- end turn --
   endTurn(id) {
     if (!this.isCurrent(id)) return { error: 'Not your turn' };
+    if (this.choiceHold()) return { error: this.choiceHold() };
     if (this.turn.phase === 'debt') return { error: 'Settle your debt first' };
     if (this.turn.phase === 'auction') return { error: 'Auction in progress' };
     if (this.turn.phase === 'action') return { error: 'Resolve the property first' };
@@ -3779,6 +4171,7 @@ export class GameRoom {
     this.turn = null;
     this.auction = null;
     this.estate = null;
+    this.clearBankruptChoices();
     this.trades = [];
     this.vacationPot = 0;
     // Last game's shuffle was last game's. The lobby shows the board as it is
@@ -4167,6 +4560,9 @@ export class GameRoom {
     if (this.status !== 'playing') return;
     // Scheduled while somebody was still here; they have since gone.
     if (!this.watched) return;
+    // The table is waiting on a bankrupt player's answer; settleBankruptChoice
+    // wakes the house up again.
+    if (this.bankruptChoice) return;
     const p = this.current;
     if (!this.autoPlayed(p)) return;
     const t = this.turn;
@@ -4499,7 +4895,17 @@ export class GameRoom {
     // goes out — so one premium reads the right way round whichever direction
     // the deeds are travelling.
     const value = this.botPackageValue(me, incoming, temper) + Math.max(0, mySwing) * temper;
-    const cost = this.botPackageValue(me, outgoing, temper) + Math.max(0, -mySwing) * temper;
+    let cost = this.botPackageValue(me, outgoing, temper) + Math.max(0, -mySwing) * temper;
+    // A hard bot also prices what the deal hands the other side. A swap that
+    // finishes a cheap colour here and a dear one over there is not the even
+    // swap the deeds alone make it look like, and a normal bot signs it; a
+    // hard one wants the difference made up in cash. Only a share of the
+    // rival's colour, not all of it: priced in full, every swap needs both
+    // colours to be the same colour, nobody ever completes anything and the
+    // table locks into a draw (measured — see HARD_RIVAL_SET_SHARE).
+    if (this.botSkill(me) === 'hard' && !family && theirSwing > 0) {
+      cost += theirSwing * temper * HARD_RIVAL_SET_SHARE;
+    }
 
     // What a street is worth depends entirely on what it finishes. Taking the
     // deal that completes my colour is worth overpaying for; handing over the
@@ -4761,6 +5167,8 @@ export class GameRoom {
    */
   botFloor(p, { denial = false, temper = this.botTemper(p) } = {}) {
     if (denial) return Math.floor(40 * temper);
+    // A hard bot reads the board in front of it instead — see botReachFloor.
+    if (this.botSkill(p) === 'hard') return this.botReachFloor(p, temper);
     let worst = 0;
     for (const [i, o] of Object.entries(this.ownership)) {
       if (o.owner === p.id || o.mortgaged) continue;
@@ -4770,6 +5178,93 @@ export class GameRoom {
       worst = Math.max(worst, t.rent[Math.min(o.houses || 0, t.rent.length - 1)]);
     }
     return Math.floor(Math.min(400, Math.max(120, worst * 0.75)) * temper);
+  }
+
+  /**
+   * What landing on square `i` would cost this seat today, read off the board
+   * every client can see: the rent as rentFor would charge it (double on an
+   * unbuilt colour), an airport by how many its owner holds, a utility on an
+   * average throw of seven, or a tax. Nothing for its own deeds, a teammate's,
+   * a mortgaged one, or a square that charges nothing.
+   */
+  botRentAtRisk(p, i) {
+    const t = this.tile(i);
+    if (!t) return 0;
+    if (t.type === 'tax') return t.amount ?? Math.floor((Math.max(0, p.money) * (t.percent || 0)) / 100);
+    const o = this.own(i);
+    if (!o || o.mortgaged || o.owner === p.id) return 0;
+    const owner = this.player(o.owner);
+    if (!owner || this.sameTeam(p, owner)) return 0;
+    if (t.type === 'property') {
+      let rent = t.rent?.[Math.min(o.houses || 0, (t.rent?.length || 1) - 1)] || 0;
+      if (!(o.houses > 0) && this.settings.x2rent && this.ownsFullGroup(owner.id, t.group)) rent *= 2;
+      return rent;
+    }
+    if (t.type === 'airport') {
+      const n = this.tilesOf(owner.id).filter((x) => this.tile(x).type === 'airport').length;
+      return 25 * 2 ** Math.max(0, n - 1);
+    }
+    if (t.type === 'utility') {
+      const n = this.tilesOf(owner.id).filter((x) => this.tile(x).type === 'utility').length;
+      return 7 * (n >= 2 ? 10 : 4);
+    }
+    return 0;
+  }
+
+  /**
+   * A hard bot's cash reserve: the rent waiting within one throw of where it
+   * stands. The eleven totals of two dice are weighed by how often they come
+   * up, the dearest squares first, and the reserve is the rent at the point
+   * where about a sixth of all throws (HARD_REACH_TAIL) have been counted —
+   * so a hotel behind it, or one a twelve away, no longer freezes its cash,
+   * while a street it lands on one throw in seven still does.
+   *
+   * The normal floor reads the worst rent anywhere on the board, which on a
+   * built-up table is the same $400 whether that hotel is two squares ahead
+   * or thirty. Measured over 720 seeded games, swapping this in for the hard
+   * bots alone took the person at the table from 143 wins to 122.
+   */
+  botReachFloor(p, temper = this.botTemper(p)) {
+    return Math.floor(Math.min(HARD_REACH_MAX, Math.max(HARD_REACH_MIN, this.botReach(p))) * temper);
+  }
+
+  /**
+   * The rent within one throw at the `tail` mark, unbounded: at the default
+   * the dearest square once about a sixth of the throws are set aside; at 0
+   * the dearest square the next throw can reach at all.
+   */
+  botReach(p, tail = HARD_REACH_TAIL) {
+    const size = this.map.size;
+    const risk = [];
+    for (let d = 2; d <= 12; d++) {
+      risk.push([this.botRentAtRisk(p, (p.pos + d) % size), (6 - Math.abs(7 - d)) / 36]);
+    }
+    risk.sort((a, b) => b[0] - a[0]);
+    let seen = 0;
+    let at = 0;
+    for (const [rent, pr] of risk) {
+      at = rent;
+      seen += pr;
+      if (seen > tail) break;
+    }
+    return at;
+  }
+
+  /**
+   * What this seat could raise without giving a deed away: half of what every
+   * building cost, and — at a table that mortgages — half the price of every
+   * deed not already in hock. The same two things autoLiquidate reaches for
+   * when a bill comes in.
+   */
+  botLiquidity(p) {
+    let v = 0;
+    for (const i of this.tilesOf(p.id)) {
+      const o = this.own(i);
+      const t = this.tile(i);
+      v += Math.floor((t.houseCost || 0) / 2) * (o.houses || 0);
+      if (this.settings.mortgage && !o.mortgaged) v += Math.floor(t.price / 2);
+    }
+    return v;
   }
 
   /** True when this street decides a colour TODAY: the last piece of the
@@ -4815,6 +5310,8 @@ export class GameRoom {
     // a turn at most, and only out of cash it would keep half again over its
     // floor; hard races every full colour to three houses on almost nothing.
     const skill = this.botSkill(p);
+    // A hard bot first turns its stray deeds into houses — see botFundBuilding.
+    if (skill === 'hard') this.botFundBuilding(p);
     const [knee, after] = skill === 'easy' ? [1.5, 1.5] : skill === 'hard' ? [0.15, 0.75] : [0.35, 1];
     const steps = skill === 'easy' ? 1 : BOT_BUILD_STEPS;
     let guard = 0;
@@ -4843,10 +5340,64 @@ export class GameRoom {
   }
 
   /**
+   * The oldest trick at the table, played by a hard bot only: mortgage the
+   * strays to put houses on a colour. A street outside any colour earns base
+   * rent, which is next to nothing; the same money as a house on a full
+   * colour is the difference between a $20 rent and a $500 one. So while a
+   * full colour of its own is short of three houses a street, a hard bot
+   * mortgages just enough of its strays (cheapest first — airports and
+   * utilities count as strays) to pay for getting there and still keep half
+   * its reserve. Never a street of a colour it owns, and never one that
+   * decides somebody's colour race: that one is worth more held than in
+   * hock. botUnmortgage lifts them again once the purse is fat — and only
+   * once nothing is short any more, or the two would undo each other in the
+   * same turn and hand the bank a tenth of every lift.
+   */
+  botFundBuilding(p) {
+    if (!this.botFundsBuilding(p)) return;
+    let short = this.botBuildShortfall(p);
+    if (short <= 0) return;
+    const strays = this.tilesOf(p.id).filter((i) => {
+      const o = this.own(i);
+      if (o.mortgaged || (o.houses || 0) > 0) return false;
+      const t = this.tile(i);
+      if (t.type !== 'property') return true;
+      if (this.ownsFullGroup(p.id, t.group)) return false;
+      return !this.botUrgent(p, i);
+    }).sort((a, b) => this.tile(a).price - this.tile(b).price);
+    for (const i of strays) {
+      if (short <= 0) break;
+      if (this.mortgage(p.id, i, true)) short -= Math.floor(this.tile(i).price / 2);
+    }
+  }
+
+  /** Whether this seat mortgages strays to build: a hard bot, at a table that mortgages. */
+  botFundsBuilding(p) {
+    return this.settings.mortgage && this.botSkill(p) === 'hard';
+  }
+
+  /**
+   * How much a hard bot is short of three houses a street on every full
+   * colour of its own (none of it in hock) while keeping half its reserve,
+   * after spending `spend` more: what botFundBuilding mortgages strays to
+   * cover. Zero or less when nothing is short or there is no such colour.
+   */
+  botBuildShortfall(p, spend = 0) {
+    const sets = Object.keys(this.map.groups).filter((g) => this.ownsFullGroup(p.id, g)
+      && this.map.groups[g].every((i) => !this.own(i).mortgaged)
+      && this.map.groups[g].some((i) => (this.own(i).houses || 0) < 3));
+    if (!sets.length) return 0;
+    const want = sets.reduce((n, g) => n + this.map.groups[g]
+      .reduce((m, i) => m + Math.max(0, 3 - (this.own(i).houses || 0)) * this.tile(i).houseCost, 0), 0);
+    return want + Math.floor(this.botFloor(p) * 0.5) - (p.money - spend);
+  }
+
+  /**
    * Buy mortgages back when flush — a full colour stays dead while any of
    * its streets is in hock, because canBuild refuses the whole group.
    */
   botUnmortgage(p) {
+    const funds = this.botFundsBuilding(p);
     let guard = 0;
     while (guard++ < BOT_UNMORTGAGE_STEPS) {
       const floor = this.botFloor(p);
@@ -4858,12 +5409,68 @@ export class GameRoom {
           return { i, cost: Math.ceil((t.price / 2) * 1.1), inSet };
         })
         // Set members come first and are worth dipping toward the floor for;
-        // stragglers wait until the purse is fat.
+        // stragglers wait until the purse is fat. A hard bot lifts a
+        // straggler only when its building fund would still be whole after
+        // paying for it: a lift that leaves a colour of its own short of
+        // houses sends botFundBuilding straight back to its strays — the very
+        // deeds just lifted, at a tenth of their mortgage lost each time.
         .filter((x) => p.money - x.cost >= (x.inSet ? Math.floor(floor / 2) : floor * 2))
+        .filter((x) => x.inSet || !funds || this.botBuildShortfall(p, x.cost) <= 0)
         .sort((a, b) => (b.inSet - a.inSet) || (a.cost - b.cost))[0];
       if (!pick) break;
       if (this.unmortgage(p.id, pick.i)?.error) break;
     }
+  }
+
+  /**
+   * Who is winning right now: the player still in with the highest net worth
+   * — the same number every seat row carries — and on a level fortune the
+   * one with more cash, then seat order. Read by the bots' bidding and by the
+   * house's call on a bankrupt estate (see botEstateChoice), so "the leader"
+   * means one thing everywhere.
+   */
+  leaderOf() {
+    let best = null;
+    for (const p of this.active) {
+      if (!best) { best = p; continue; }
+      const d = this.netWorth(p) - this.netWorth(best);
+      if (d > 0 || (d === 0 && p.money > best.money)) best = p;
+    }
+    return best;
+  }
+
+  /** How many of a colour this player's side holds, leaving one square out. */
+  heldInGroup(p, group, except = -1) {
+    let n = 0;
+    for (const i of this.map.groups[group] || []) {
+      if (i === except) continue;
+      const o = this.own(i);
+      if (o && (o.owner === p.id || this.sameTeam(p, this.player(o.owner)))) n++;
+    }
+    return n;
+  }
+
+  /**
+   * What one lot means to this bot beyond its sticker, from the public board:
+   * whether winning it finishes the bot's own colour, whether losing it
+   * finishes somebody else's, and whether that somebody is the leader — or,
+   * on a colour of three or more, would put the leader one street short.
+   * Airports and utilities have no colour and mean nothing extra.
+   */
+  botLotStakes(bot, index) {
+    const tile = this.tile(index);
+    const out = { completes: false, blocks: false, blocksLeader: false, leaderNear: false };
+    if (tile?.type !== 'property') return out;
+    const { k, mine, topRival } = this.botGroupRace(bot, index);
+    out.completes = mine === k - 1;
+    out.blocks = topRival === k - 1;
+    const lead = this.leaderOf();
+    if (lead && lead.id !== bot.id && !this.sameTeam(bot, lead)) {
+      const held = this.heldInGroup(lead, tile.group, index);
+      out.blocksLeader = held === k - 1;
+      out.leaderNear = k >= 3 && held > 0 && held === k - 2;
+    }
+    return out;
   }
 
   runBotAuction() {
@@ -4885,11 +5492,27 @@ export class GameRoom {
     const keep = skill === 'easy'
       ? Math.max(400, this.botFloor(bot) * 2)
       : Math.floor(this.botFloor(bot, { denial: this.botUrgent(bot, a.tile) }) / (skill === 'hard' ? 2 : 1));
-    const afford = bot.money - keep;
+    const afford = bot.money - Math.max(keep, this.botBidSafety(bot, a.tile));
     const cap = Math.min(this.botAuctionCap(bot, a), afford);
     const next = a.bid === 0 ? 10 : a.bid + 10;
     if (next <= cap && !this.bid(bot.id, next)?.error) return;
     this.passBid(bot.id);
+  }
+
+  /**
+   * The cash a bid must never eat into, whatever the lot: a bot does not bid
+   * itself bankrupt. The dearest rent its next throw can reach (botReach at
+   * 0) has to stay payable after the hammer — out of the cash left, or out
+   * of what it could raise by selling buildings and mortgaging, the lot
+   * itself included. A colour race lowers the cushion a bot keeps for comfort
+   * (botFloor's denial), never this. For a bot with deeds to fall back on it
+   * is nothing at all; it bites on a bot with little more than its cash, a
+   * hotel or two ahead of it, which is exactly the bot that used to win a
+   * lot and go out on the next throw.
+   */
+  botBidSafety(bot, index) {
+    const lot = this.settings.mortgage ? Math.floor((this.tile(index)?.price || 0) / 2) : 0;
+    return Math.max(0, this.botReach(bot, 0) - this.botLiquidity(bot) - lot);
   }
 
   /**
@@ -4898,8 +5521,9 @@ export class GameRoom {
    * a fixed ceiling and the war ends at the higher one, instead of both
    * re-arguing themselves upward forever. What it can actually AFFORD is
    * checked live by the caller — the engine already refuses bids from the
-   * red, and the floor keeps a bot from bidding itself into rent-death for
-   * anything short of a colour race.
+   * red, the floor keeps a bot from bidding itself into rent-death for
+   * anything short of a colour race, and botBidSafety keeps it from bidding
+   * itself bankrupt even then.
    */
   botAuctionCap(bot, a) {
     this.auctionCaps ??= {};
@@ -4915,27 +5539,45 @@ export class GameRoom {
       this.auctionCaps[key] = Math.floor(tile.price * 0.5);
       return this.auctionCaps[key];
     }
+    const temper = this.botTemper(bot);
+    let worth;
     if (skill === 'hard') {
       const relevant = tile.type !== 'property' || this.botSetRelevant(bot, a.tile);
       // The temper still sets where a cautious bot stops ($5 short of the
       // sticker), but never lifts an ordinary street past it: a street in
       // nobody's colour race is worth what the bank asks for it, and a bot
       // with a hot temper would otherwise let itself be bid up to 15% over.
-      this.auctionCaps[key] = relevant
+      worth = relevant
         ? Math.floor(this.botValueOf(bot, a.tile) * 1.1)
-        : Math.min(tile.price, Math.max(tile.price - 5, Math.floor(tile.price * this.botTemper(bot))));
-      return this.auctionCaps[key];
-    }
-    let worth;
-    if (tile.type !== 'property' || this.botSetRelevant(bot, a.tile)) {
+        : Math.min(tile.price, Math.max(tile.price - 5, Math.floor(tile.price * temper)));
+    } else if (tile.type !== 'property' || this.botSetRelevant(bot, a.tile)) {
       // A street in anyone's colour race is priced off the threat model —
       // up to about double the sticker when it decides a set outright.
       worth = this.botValueOf(bot, a.tile);
     } else if (bot.money > tile.price * 2) {
       // An ordinary street is only ever a bargain: never chase it to list.
-      worth = Math.min(tile.price - 5, Math.floor(tile.price * 0.9 * this.botTemper(bot)));
+      worth = Math.min(tile.price - 5, Math.floor(tile.price * 0.9 * temper));
     } else {
       worth = Math.floor(tile.price * 0.55);
+    }
+    // Then what the lot decides, for every lot — a declined deed, an
+    // auction-only landing or an estate's. The street that finishes the
+    // bot's own colour is worth its sticker plus a share of what the colour
+    // charges once built (a third for normal, three fifths for hard), and the
+    // one that would finish the LEADER's colour is worth more again to keep
+    // out of their hands: denial against whoever is merely second is already
+    // in the race valuation, but the leader getting a set is how a table
+    // stops being a game. A leader one street short of a three-or-more
+    // colour is the same worry, smaller. Hard leans on all of it harder.
+    const s = this.botLotStakes(bot, a.tile);
+    const hard = skill === 'hard';
+    if (s.completes) {
+      const share = hard ? AUCTION_SET_SHARE.hard : AUCTION_SET_SHARE.normal;
+      worth = Math.max(worth, Math.floor((tile.price + this.botSetPremium(tile.group) * share) * temper));
+    }
+    if (s.blocksLeader) worth = Math.floor(worth * (hard ? AUCTION_BLOCK_LEADER.hard : AUCTION_BLOCK_LEADER.normal));
+    else if (s.leaderNear) {
+      worth = Math.max(worth, Math.floor(tile.price * (hard ? AUCTION_LEADER_NEAR.hard : AUCTION_LEADER_NEAR.normal) * temper));
     }
     this.auctionCaps[key] = worth;
     return worth;
@@ -5022,6 +5664,18 @@ export class GameRoom {
       ownership: this.ownership,
       turn: this.turn,
       auction: this.auction,
+      // A bankrupt player's open question at a table where the player
+      // decides: who (an id like any other, aliased per viewer), their name,
+      // the squares in question in board order, and when the house answers
+      // for them. Null whenever nobody is being asked.
+      bankruptChoice: this.bankruptChoice
+        ? {
+          playerId: this.bankruptChoice.playerId,
+          name: this.bankruptChoice.name,
+          properties: [...this.bankruptChoice.properties],
+          endsAt: this.bankruptChoice.endsAt,
+        }
+        : null,
       trades: this.trades,
       quick: !!this.quick,
       // Set from outside by whoever made this table for a cup match. The room
@@ -5161,6 +5815,7 @@ export class GameRoom {
         leader: mapId(base.auction.leader),
         inRace: base.auction.inRace.map(mapId),
       },
+      bankruptChoice: base.bankruptChoice && { ...base.bankruptChoice, playerId: mapId(base.bankruptChoice.playerId) },
       trades: base.trades.map((t) => ({
         ...t,
         from: mapId(t.from),
