@@ -7,6 +7,7 @@ import {
 } from './icons.js';
 import { sfx } from './sound.js';
 import { api } from './net.js';
+import { loadFacts, factsFor } from './facts.js';
 import { configureAdNetwork, playNetworkAd } from './ads.js';
 import { noteWallet, setCoins } from './coins.js';
 import { drawResultCard, sharePicture, canSharePicture } from './sharecard.js';
@@ -4326,7 +4327,9 @@ export function openDeedModal(state, i, meId, actions) {
     // under the same rule, so nobody has to go looking for who holds it.
     const ask = canAskFor(s, meId, i)
       ? '<button class="btn tiny gold" data-deed-ask>Ask for it</button>' : '';
-    sheet.innerHTML = `${deedMarkup(s, i, { actions: isMine ? quickBuildBar(s, meId, i) : '', ask })}
+    sheet.innerHTML = `${deedMarkup(s, i, {
+      actions: isMine ? quickBuildBar(s, meId, i) : '', ask, facts: factsFor(s.map.tiles[i]),
+    })}
       <div class="modal-actions"><button class="btn ghost" data-deed-close>Close</button></div>`;
     sheet.querySelector('[data-deed-close]').onclick = closeModal;
     // The composer opens with this deed already on their side, aimed at
@@ -4357,8 +4360,14 @@ export function openDeedModal(state, i, meId, actions) {
 
   openModal('', (root) => {
     const sheet = $('.modal', root);
-    paint(state, sheet);
-    sheetRepaint = (s) => paint(s, sheet);
+    let shown = state;
+    const repaint = (s) => { shown = s; paint(s, sheet); };
+    repaint(state);
+    sheetRepaint = repaint;
+    // The facts usually come from storage at once; when they arrive (or
+    // change) over the wire instead, the card gains its footnote in place —
+    // if it is still this card that is open.
+    loadFacts().then((changed) => { if (changed && sheetRepaint === repaint) repaint(shown); });
   }, 'deed-modal');
 }
 

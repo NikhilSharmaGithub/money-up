@@ -207,6 +207,17 @@ class Api(private val baseUrl: String, private val token: String) {
             call(Request.Builder().url(url(path, query + ("token" to token))).get())
         }
 
+    /**
+     * A public GET that asks only for something newer than [etag]: a 304 comes
+     * back as a Reply of 304 with no body, so the caller keeps what it holds.
+     */
+    suspend fun getIfChanged(path: String, etag: String?): Reply =
+        withContext(Dispatchers.IO) {
+            val req = Request.Builder().url(url(path)).get()
+            if (etag != null) req.header("If-None-Match", etag)
+            call(req)
+        }
+
     suspend fun post(path: String, body: Map<String, Any?> = emptyMap()): String? =
         withContext(Dispatchers.IO) {
             val payload = JSONObject((body + ("token" to token)).filterValues { it != null })

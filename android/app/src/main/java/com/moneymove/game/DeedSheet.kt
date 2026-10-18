@@ -29,6 +29,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -53,9 +54,12 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,6 +98,8 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
     // deed closes first, so the composer the store opens next is the one
     // left standing.
     val handOff: (() -> Unit) -> Unit = { next -> onDismiss(); next() }
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { PlaceFacts.load(context.applicationContext, store.api) }
 
     MMSheet(
         onDismissRequest = onDismiss,
@@ -130,6 +136,8 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
                     if (rows.isNotEmpty()) DeedRowsCard(rows)
 
                     if (tile.isOwnable) OwnerCard(store, state, index, own, handOff)
+
+                    PlaceFacts.lookup(tile)?.let { FactCard(it, store.groupInfo(tile)) }
                 }
             }
             DeedsGrabber(Modifier.align(Alignment.TopCenter))
@@ -480,6 +488,59 @@ private fun DeedRowsCard(rows: List<DeedRow>) {
  * at the holder and already asking for this street — so nobody has to go
  * and find out who has it before they can ask.
  */
+/**
+ * "Did you know?" — the street's fact, then its country's, at the foot of the
+ * deed: a quieter card than the rent table, since nobody plays by it.
+ */
+@Composable
+private fun FactCard(found: PlaceFacts.Found, group: GroupInfo?) {
+    val p = P.current
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(p.sunken)
+            .border(1.dp, p.rule, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon("bulb", size = 14.dp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "DID YOU KNOW?",
+                color = quietInk(),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.6.sp,
+            )
+        }
+        found.place?.let {
+            Text(it, color = p.ink2, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp)
+        }
+        if (found.group != null && group != null) {
+            if (found.place != null) Box(Modifier.fillMaxWidth().height(1.dp).background(p.rule))
+            Row(verticalAlignment = Alignment.Top) {
+                Box(Modifier.padding(top = 2.dp)) {
+                    DeedGroupFlag(group.flag, cssColor(group.color, p.ink2), 15.dp)
+                }
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = p.ink, fontWeight = FontWeight.Bold)) { append(group.name) }
+                        append(" · ${found.group}")
+                    },
+                    color = p.ink2,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun OwnerCard(
     store: GameStore,

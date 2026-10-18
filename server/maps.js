@@ -445,7 +445,9 @@ const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);
 // Keeps the proven classic *shape* (where the airports, chance tiles and taxes
 // sit) and randomises the content: which countries appear, which of their cities
 // get used, and which airports and utilities show up.
-const CITY_POOL = {
+// Exported for the place facts (facts.js), which have to cover every city
+// this can deal, not just the ones a few random boards happened to.
+export const CITY_POOL = {
   BR: ['Salvador', 'Rio', 'São Paulo', 'Brasília', 'Recife'],
   IL: ['Tel Aviv', 'Haifa', 'Jerusalem', 'Eilat'],
   IT: ['Venice', 'Milan', 'Rome', 'Bologna', 'Naples', 'Turin'],

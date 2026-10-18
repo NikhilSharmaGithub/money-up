@@ -789,9 +789,11 @@ const RENT_LABELS = ['Base rent', 'With 1 house', 'With 2 houses', 'With 3 house
  * row: it renders straight under the price, because those are the buttons
  * people opened the card for — behind the rent table they may as well not exist.
  * `ask` is the same idea for somebody else's deed: an "Ask for it" printed on
- * the Owner line, beside the name it would be asked of.
+ * the Owner line, beside the name it would be asked of. `facts` is the
+ * street's "Did you know?" pair from facts.js — the city's line, then its
+ * country's — printed at the foot of the card, under everything you play by.
  */
-export function deedMarkup(state, i, { compact = false, actions = '', ask = '' } = {}) {
+export function deedMarkup(state, i, { compact = false, actions = '', ask = '', facts = null } = {}) {
   const tile = state.map.tiles[i];
   if (!tile || !['property', 'airport', 'utility', 'tax'].includes(tile.type)) return null;
 
@@ -825,6 +827,14 @@ export function deedMarkup(state, i, { compact = false, actions = '', ask = '' }
     : owner && ask ? `<div class="deed-row owner"><span>Owner</span><span class="deed-owner">${ownerName}${ask}</span></div>`
     : `<div class="deed-row"><span>Owner</span>${ownerName}</div>`;
 
+  const fact = facts && tile.type === 'property' && (facts.place || facts.group)
+    ? `<div class="deed-fact">
+        <div class="deed-fact-head">${icon('bulb', 14)}<span>Did you know?</span></div>
+        ${facts.place ? `<p>${escapeHtml(facts.place)}</p>` : ''}
+        ${facts.group && g ? `<p class="deed-fact-set"><span class="deed-fact-flag">${groupFlag(g.flag, g.color)}</span>
+          <span><b>${escapeHtml(g.name)}</b> · ${escapeHtml(facts.group)}</span></p>` : ''}
+      </div>` : '';
+
   return `<div class="deed${compact ? ' compact' : ''}">
     <div class="deed-head" style="background:${headColor}">
       <span class="deed-flag">${g
@@ -837,5 +847,6 @@ export function deedMarkup(state, i, { compact = false, actions = '', ask = '' }
     ${tile.price ? `<div class="deed-price">$${tile.price}</div>` : ''}
     ${actions}
     <div class="deed-rows">${rows}${mort}${ownerRow}</div>
+    ${fact}
   </div>`;
 }

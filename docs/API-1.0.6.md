@@ -1197,3 +1197,42 @@ line (54 / 15 / 13 of 60) was a different harness; the table here is the one to 
 - Show it in the Play-now lobby's rule list (the same segmented control as a private table, for
   the host; the value for everyone else) and in the rules sheet.
 - Cup tables: unchanged — refused, always `"release"`.
+
+---------------------------------------------------------------------------------------------------
+
+## Place facts (1.0.7)
+
+One checked "Did you know?" line per street and one per country or region, to show under a card.
+The text lives in `server/facts.json` and is served exactly as written; read once at boot.
+
+```
+GET /api/facts
+→ 200  Cache-Control: public, max-age=86400
+       ETag: "0a1b2c3d4e5f6789"            (the version, quoted — a strong tag)
+{
+  "version": "0a1b2c3d4e5f6789",
+  "places": { "Mumbai|IN": "…", "Jaipur|IN_RJ": "…", "Jaipur|RJ": "…", … },
+  "groups": { "IN": "…", "IN_RJ": "…", "RJ": "…", … }
+}
+```
+
+- **Look a street up by `"<tile.name>|<tile.group>"`** exactly as the board sends them (accents
+  and all: `"São Paulo|BR"`), and its set by `tile.group`. The same city has its own key on each
+  set it sits in.
+- `version` is 16 hex characters, a hash of `places` + `groups`: it changes when, and only when, a
+  fact does (or one is added). Cache the body by it; there is nothing else to key on.
+- **Revalidate** with `If-None-Match: "<version>"` → `304`, no body, same headers. A weak tag
+  (`W/"…"`), a list, or `*` matches too, and so does a request a browser's `fetch()` has stamped
+  `Cache-Control: no-cache`. Any other tag gets the full `200`.
+- **The web client sends no If-None-Match**: the site and the API are different origins and CORS
+  allows only `Content-Type`, so the header would fail its preflight. A plain `fetch()` lets the
+  browser's HTTP cache revalidate with the ETag itself. The apps send the header directly.
+- **Random boards**: a city the random generator deals that has no fact under its own key
+  (`Kolkata|IN`) is served the same city's fact from a board of the same country (`Kolkata|EA`) —
+  added to `places` under the random board's key, so the lookup above is still all a client does.
+  Never across countries.
+- **Missing is normal**: a street with no fact, or an old server with no route (`404`), shows no
+  line. Show the set's fact, if any, on its own.
+- `test/facts.mjs` (in `npm test`) fails the build if a street or set on any board — stock,
+  shuffled, or anything the random generator can deal — has no fact, if a fact is outside 40–170
+  characters or has an emoji, or if a fact belongs to no street any board deals.

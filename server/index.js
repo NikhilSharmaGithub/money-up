@@ -10,6 +10,7 @@ import { sendTurnPush, pushSends } from './push.js';
 import * as cup from './tournament.js';
 import { refreshRates } from './fx.js';
 import { mapList } from './maps.js';
+import { FACTS } from './facts.js';
 import {
   boardAccess, mayUseBoard, priceOn, mapIdOfItem, freeBoardsOn, HOUSE_BOARD,
   isBoardForSale, RENT_PRICE,
@@ -101,6 +102,22 @@ app.get('/app-ads.txt', (_req, res) => {
 
 app.use(express.static(PUBLIC_DIR));
 app.get('/api/maps', (_req, res) => res.json(mapList()));
+// The "Did you know?" facts, built once at boot (facts.js). A day's cache, and
+// the version in the body is the ETag on it, so a client already holding this
+// set gets a 304 rather than the whole file again.
+//
+// The tag is compared here rather than with Express's req.fresh, which calls
+// any request carrying Cache-Control: no-cache stale — and a browser's fetch()
+// adds exactly that to every request it sends with an If-None-Match of its
+// own. A client that names the set it holds is answered about that set.
+app.get('/api/facts', (req, res) => {
+  res.set({ 'Cache-Control': 'public, max-age=86400', ETag: FACTS.etag });
+  const held = String(req.headers['if-none-match'] || '');
+  if (held.trim() === '*' || held.split(',').some((t) => t.trim().replace(/^W\//, '') === FACTS.etag)) {
+    return res.status(304).end();
+  }
+  res.type('json').send(FACTS.body);
+});
 
 /**
  * Pass-and-play seats derive their token from the phone's — `abc_p2` is the

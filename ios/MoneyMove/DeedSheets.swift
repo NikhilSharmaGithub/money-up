@@ -67,6 +67,7 @@ struct DeedSheet: View {
     /// street you want is one you have just tapped on the board far more
     /// often than one you found in your own list.
     var askFor: ((String, Set<Int>) -> Void)? = nil
+    @ObservedObject private var facts = PlaceFacts.shared
 
     var body: some View {
         let P = Palette.current(scheme)
@@ -93,6 +94,10 @@ struct DeedSheet: View {
                         if tile.isOwnable {
                             ownerCard(tile, P)
                         }
+
+                        if let found = facts.lookup(tile) {
+                            factCard(tile, found, P)
+                        }
                     }
                     .padding(14)
                 } else {
@@ -113,6 +118,48 @@ struct DeedSheet: View {
         .sheetPaper(P.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .task { await facts.load(from: store.serverURL) }
+    }
+
+    // MARK: did you know?
+
+    /// The street's fact, then its country's, at the foot of the deed: a
+    /// quieter card than the rent table, since nobody plays by it.
+    private func factCard(_ tile: TileData, _ found: (place: String?, group: String?), _ P: Palette) -> some View {
+        let group = store.groupInfo(for: tile)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Art.icon(.bulb, size: 14)
+                Text("DID YOU KNOW?")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.6)
+                    .foregroundStyle(P.ink3)
+            }
+            if let place = found.place {
+                Text(place)
+                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let about = found.group, let group {
+                if found.place != nil {
+                    Rectangle().fill(P.rule).frame(height: 1)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Art.groupFlag(group.flag, Color(css: group.color), size: 15)
+                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                    (Text(group.name).bold().foregroundColor(P.ink) + Text(" · " + about))
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(P.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(P.sunken, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(P.rule, lineWidth: 1))
     }
 
     // MARK: header strip

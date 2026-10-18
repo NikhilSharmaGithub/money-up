@@ -4187,6 +4187,24 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
    rather than away from it, so it still reads as one line of the card. */
 .deed-owner b { text-align: right; }
 .deed-owner .btn { flex: none; }
+/* "Did you know?" — the street's fact, then its country's, at the foot of the
+   card: a quieter panel than the rent table, since nobody plays by it. */
+.deed-fact {
+  margin: 0 13px 13px; padding: 10px 12px 11px;
+  background: var(--paper-2); border: 1px solid var(--rule); border-radius: 12px;
+  font-size: 12.5px; line-height: 1.45; color: var(--ink-2);
+}
+.deed-fact-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 5px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: var(--ink-3);
+}
+.deed-fact-head svg { flex: none; }
+.deed-fact p { margin: 0; }
+.deed-fact p + p { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--rule); }
+.deed-fact-set { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; }
+.deed-fact-set b { color: var(--ink); font-weight: 750; }
+.deed-fact-flag { flex: none; display: inline-flex; width: 16px; height: 16px; margin-top: 1px; }
+.deed-fact-flag svg { width: 100%; height: 100%; }
 
 .map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .map-card {
