@@ -206,7 +206,11 @@ private fun Dock(
                     // (1.0.7): the server holds the turn until they do, so
                     // the dock says who it is waiting on before anybody
                     // presses a button that would only come back refused.
-                    val hold = state.bankruptChoice
+                    // The question as shown, not as sent: a bust still
+                    // walking on stage is not named yet (iOS reads its
+                    // shownBankruptChoice here too). The buttons below stay
+                    // on the raw state, since the server refuses them at once.
+                    val hold = store.myBankruptChoice ?: store.othersBankruptChoice
                     if (hold != null) HoldStrip(hold)
                     // The server answers a roll before the piece has taken
                     // a step, so the buy prompt — and whatever else the

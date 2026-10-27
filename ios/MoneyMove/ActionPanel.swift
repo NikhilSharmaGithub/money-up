@@ -117,8 +117,9 @@ struct ActionPanel: View {
             // What giving up actually does, at this table: the creditor has
             // only ever kept the cash already paid over, and the streets go
             // back to the bank — or under the hammer, where the table says so
-            // (1.0.6, G5). A table where the player decides (1.0.7) never
-            // gets here with deeds to decide on: it asks on the give-up card.
+            // (1.0.6, G5). A table where the player decides (1.0.7) asks on
+            // the give-up card instead, and only gets here with deeds when no
+            // sale could follow — and then the words say back to the bank.
             Text(store.bankruptcyTerms(for: store.activeId))
         }
     }

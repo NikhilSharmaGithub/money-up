@@ -2801,7 +2801,8 @@ export function renderCenter(state, meId, actions) {
   // followed the debt — whatever was raised already went to whoever was owed
   // — so the sheet says where they really go: back to the bank, under the
   // hammer at a table that auctions estates (1.0.6), or, where the bankrupt
-  // player decides (1.0.7), wherever they say on that same sheet.
+  // player decides (1.0.7), wherever they say on that same sheet. Once no
+  // sale can happen any more (estateFate) it is the bank at every table.
   on('#cBankrupt', () => openGiveUpSheet(wellState, meId, actions, 'declare'));
   if (choice) statusEl.innerHTML += choiceAsideHTML(state, meId);
 }
@@ -3212,25 +3213,48 @@ export function syncEstateChoice(state, meId, actions) {
 }
 
 /**
+ * Where this seat's streets go if it leaves play now, read off the table the
+ * way the server decides it (estateSaleOpen, disposeEstate): 'ask' when the
+ * bankrupt-player-decides question would really be put to them, 'auction'
+ * when the table sells them, 'release' when the bank keeps them. Nothing is
+ * sold once the game clock has run out, or without at least two other
+ * players still in to bid — and at a team table they must be on two teams,
+ * because one team left is a game already won. Past that every table sends
+ * the deeds back to the bank and one where the player decides asks nothing,
+ * so no dialog here offers a choice or an auction that is not going to
+ * happen. A seat with no deeds has nothing to be asked about either.
+ */
+function estateFate(state, meId) {
+  const rule = estateRule(state);
+  if (rule === 'release' || state?.status !== 'playing' || state.timeUp) return 'release';
+  const others = (state.players || []).filter((p) => p.id !== meId && !p.bankrupt);
+  const teamed = (state.settings?.teams || 0) > 0;
+  if (others.length < 2 || (teamed && new Set(others.map((p) => p.team)).size < 2)) return 'release';
+  if (rule === 'auction') return 'auction';
+  return deedsOf(state, meId).length ? 'ask' : 'release';
+}
+
+/**
  * Going out on purpose — Give up in the leave sheet, Declare bankruptcy in a
- * debt. Where the bankrupt player decides (1.0.7) and there are streets to
- * decide about, the question they would be asked a moment later is asked
+ * debt. Where the bankrupt player decides (1.0.7) and they really would be
+ * asked (estateFate), the question they would get a moment later is asked
  * here, inside the confirmation, so they decide once: either answer is the
  * confirmation. Anywhere else it is a plain confirmation that says where the
  * streets go.
  */
 export function openGiveUpSheet(state, meId, actions, kind = 'concede') {
   if (!state) return;
-  const rule = estateRuleOf(state);
+  const where = estateFate(state, meId);
   const lots = deedsOf(state, meId);
-  const asks = rule.id === 'choose' && lots.length > 0;
+  const asks = where === 'ask';
+  const auctioned = where === 'auction' && lots.length > 0;
   const declare = kind === 'declare';
   const debt = declare ? state.turn?.debt : null;
   const sub = declare
     ? `You are out of the game. Whatever you have raised stays with ${debt ? debtDestination(state, debt) : 'whoever you owe'}.`
     : 'You go bankrupt on the spot and keep your seat to watch the end.';
   const fate = !lots.length ? 'You hold no properties, so nothing changes hands.'
-    : rule.id === 'auction'
+    : auctioned
       ? `Your ${lots.length === 1 ? 'property is' : `${lots.length} properties are`} auctioned to the other players, one at a time.`
       : `Your ${lots.length === 1 ? 'property goes' : `${lots.length} properties go`} back to the bank, unowned.`;
   openModal(`
@@ -3241,7 +3265,7 @@ export function openGiveUpSheet(state, meId, actions, kind = 'concede') {
       ${estateOptionsHTML(lots.length)}
       <div class="modal-actions"><button class="btn ghost" id="bkNo">Keep playing</button></div>`
     : `
-      <div class="bk-fate">${icon(rule.id === 'auction' && lots.length ? 'gavel' : 'bank', 18)}<span>${fate}</span></div>
+      <div class="bk-fate">${icon(auctioned ? 'gavel' : 'bank', 18)}<span>${fate}</span></div>
       <div class="modal-actions">
         <button class="btn ghost" id="bkNo">Keep playing</button>
         <button class="btn bad" id="bkYes">${declare ? 'Declare bankruptcy' : 'Give up'}</button>
@@ -3262,12 +3286,12 @@ export function openGiveUpSheet(state, meId, actions, kind = 'concede') {
 }
 
 /**
- * Give up from the leave sheet: where the bankrupt player decides and there
- * is something to decide, the sheet above asks first; anywhere else the leave
- * sheet already was the confirmation.
+ * Give up from the leave sheet: where the bankrupt player would be asked
+ * (estateFate), the sheet above asks first; anywhere else the leave sheet
+ * already was the confirmation.
  */
 export function giveUp(state, meId, actions) {
-  if (estateRule(state) === 'choose' && deedsOf(state, meId).length) openGiveUpSheet(state, meId, actions, 'concede');
+  if (estateFate(state, meId) === 'ask') openGiveUpSheet(state, meId, actions, 'concede');
   else actions.bankrupt();
 }
 
@@ -3728,12 +3752,19 @@ function paintAwaiting() {
 // counting down — a fixed span would refill to two-thirds and read as a timer
 // that shrank when it had in fact just been extended. Measured off this
 // device's own clock, it also starts full whatever the server's says.
+//
+// None of them is ever longer than twenty seconds — an auction opens with 20
+// and a bid leaves 12, the bankrupt player gets 20 — so that is the ceiling
+// for the span and for the seconds shown. A device whose clock runs behind
+// the server's would otherwise read a deadline as further off than it is,
+// and show a 26 s bar on a twenty-second question.
+const COUNT_MAX_MS = 20000;
 const countSpans = new Map();
 function spanOf(kind, endsAt) {
   const key = `${kind}:${endsAt}`;
   if (!countSpans.has(key)) {
     if (countSpans.size > 32) countSpans.clear();
-    countSpans.set(key, Math.max(1000, Number(endsAt) - Date.now()));
+    countSpans.set(key, Math.min(COUNT_MAX_MS, Math.max(1000, Number(endsAt) - Date.now())));
   }
   return countSpans.get(key);
 }
@@ -3746,6 +3777,9 @@ function countdownHTML(kind, endsAt) {
     </div>`;
 }
 
+// The loop runs only while some bar on screen still has time to lose: once
+// every one reads 0s there is nothing left to move, and the next render that
+// draws a countdown calls this again.
 let countRaf = 0;
 function paintCountdowns() {
   cancelAnimationFrame(countRaf);
@@ -3753,8 +3787,10 @@ function paintCountdowns() {
   const all = document.querySelectorAll('.mm-count[data-ends]');
   if (!all.length) return;
   const now = Date.now();
+  let running = false;
   all.forEach((el) => {
-    const left = Math.max(0, Number(el.dataset.ends) - now);
+    const left = Math.min(COUNT_MAX_MS, Math.max(0, Number(el.dataset.ends) - now));
+    if (left > 0) running = true;
     const fill = el.querySelector('.mm-track > i');
     if (fill) fill.style.transform = `scaleX(${Math.min(1, left / (Number(el.dataset.span) || 1)).toFixed(4)})`;
     const secs = `${Math.ceil(left / 1000)}s`;
@@ -3762,7 +3798,7 @@ function paintCountdowns() {
     if (label && label.textContent !== secs) label.textContent = secs;
     el.classList.toggle('warm', left > 0 && left <= 5000);
   });
-  countRaf = requestAnimationFrame(paintCountdowns);
+  if (running) countRaf = requestAnimationFrame(paintCountdowns);
 }
 
 // ───────────────────────────────────────────────────────────────── dice ──
@@ -4180,14 +4216,16 @@ export function openJoinNameModal(roomId, onJoin) {
  * under the hammer at a table that auctions estates — and at a table where
  * the bankrupt player decides (1.0.7), somebody walking out is not there to
  * be asked, so the house decides for them. Giving up at that table asks the
- * question on the next sheet (see giveUp).
+ * question on the next sheet (see giveUp). Both lines follow estateFate, so
+ * once no sale can happen — the clock has run out, or too few are left to
+ * bid — they say the deeds go back to the bank, and no choice is promised.
  */
-export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estate = 'release' }) {
+export function openLeaveModal({ onKeepSeat, onQuit, onConcede, state = null, meId = null }) {
+  const fate = estateFate(state, meId);
   const walkout = {
-    release: 'Your deeds go back to the bank and the table plays on without you.',
     auction: 'Your properties are auctioned to the other players one at a time and the table plays on without you.',
-    choose: 'The house decides whether your properties go back to the bank or to auction, and the table plays on without you.',
-  }[estate] || 'Your deeds go back to the bank and the table plays on without you.';
+    ask: 'The house decides whether your properties go back to the bank or to auction, and the table plays on without you.',
+  }[fate] || 'Your deeds go back to the bank and the table plays on without you.';
   openModal(`
     <h2>Leaving the table?</h2>
     <p class="sub">The game is still running — pick how you go.</p>
@@ -4202,7 +4240,7 @@ export function openLeaveModal({ onKeepSeat, onQuit, onConcede, estate = 'releas
       </button>
       ${onConcede ? `<button class="leave-choice bad" id="lConcede">
         <b>${icon('skull')} Give up — declare bankruptcy</b>
-        <span>${estate === 'choose'
+        <span>${fate === 'ask'
           ? 'You go bankrupt on the spot, choose where your properties go, and keep your seat to watch the end.'
           : 'You go bankrupt on the spot but keep your seat to watch the end.'}</span>
       </button>` : ''}
@@ -5277,9 +5315,13 @@ function tableRulesHTML(state) {
  */
 export function openTableRulesModal(state) {
   if (!state?.settings) return;
+  // The Bot skill row follows houseAtTable, which also moves with the seats
+  // alone — the last chair filling leaves Allow bots nobody to deal in — so
+  // the signature carries its answer rather than only whether a house
+  // player is sitting down.
   const sig = (s) => `${JSON.stringify(s.settings)}:${s.map?.uid || s.map?.id}:${s.map?.shuffled ? 1 : 0}:`
     + `${s.status}:${s.quick ? 1 : 0}:${s.cup ? 1 : 0}:${s.vacationPot || 0}:${(s.quickRoll?.edited || []).length}:`
-    + `${(s.players || []).some((p) => p.isBot) ? 1 : 0}`;
+    + `${houseAtTable(s) ? 1 : 0}`;
   openModal(`
     <h2>This table’s rules</h2>
     <div id="trBody"></div>

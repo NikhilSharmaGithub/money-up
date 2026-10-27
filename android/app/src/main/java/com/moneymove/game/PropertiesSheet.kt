@@ -622,7 +622,9 @@ private fun TradeDoor(onClick: () -> Unit) {
  *
  * At a "player decides" table (1.0.7) the question in place asks where the
  * streets go as well, with the same two tiles the bankruptcy prompt has:
- * picking one is the confirmation, and the seat is not asked again.
+ * picking one is the confirmation, and the seat is not asked again. Only
+ * while a sale could still follow ([GameStore.decidesEstate]); after that
+ * the plain question says the deeds go back to the bank.
  */
 @Composable
 private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
@@ -630,8 +632,11 @@ private fun BankruptRow(store: GameStore, onDismiss: () -> Unit) {
     val myTurn = store.isMyTurn
     LaunchedEffect(myTurn) { if (!myTurn) confirming = false }
     if (!myTurn) return
-    val rule = store.state?.estateRule ?: EstateRule.RELEASE
     val seat = store.activeId
+    // Where the streets really go if this seat goes out now: with the clock
+    // run out, or too few left to bid, the bank's whatever the table's rule,
+    // so the plain question never promises a choice or an auction.
+    val rule = store.state?.estateRuleFor(seat) ?: EstateRule.RELEASE
 
     Column(Modifier.padding(top = 6.dp)) {
         if (confirming && store.decidesEstate(seat)) {

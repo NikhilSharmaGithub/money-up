@@ -2282,8 +2282,9 @@ enum Haptics {
 // MARK: - going out (1.0.7, H2)
 
 /// Somebody on this device has pressed Give up — or Declare bankruptcy in the
-/// red — at a table where the bankrupt player decides, and still holds deeds.
-/// The give-up card asks where they go before anything is sent.
+/// red — at a table where the bankrupt player decides, still holds deeds, and
+/// a sale could still follow them out (`choosesEstate`). The give-up card asks
+/// where they go before anything is sent.
 struct GiveUpAsk: Identifiable, Equatable {
     enum Kind { case concede, declare }
     /// The seat going out: the one whose button it was, never assumed to be
@@ -2330,15 +2331,40 @@ extension GameStore {
         return state.ownership.compactMap { key, own in own.owner == seat ? Int(key) : nil }.sorted()
     }
 
-    /// Whether going out from this seat comes with the question: the table
-    /// lets the bankrupt player decide, and there is something to decide on.
-    func choosesEstate(_ seat: String) -> Bool {
-        EstateRule.inForce(state) == .choose && !deeds(of: seat).isEmpty
+    /// Whether streets could still be sold once these seats are out: the
+    /// server's estateSaleOpen, asked before they go. The game is on, its
+    /// clock has not run out, and at least two players would be left to bid
+    /// — of two teams at least at a team table, because one team left
+    /// standing has won before any sale starts. Short of that the deeds go
+    /// back to the bank whatever the table's rule, and nobody is asked.
+    func estateSaleOpen(goingOut seats: Set<String>) -> Bool {
+        guard let state, state.isPlaying, state.timeUp != true else { return false }
+        let left = state.players.filter { !$0.isBankrupt && !seats.contains($0.id) }
+        guard left.count >= 2 else { return false }
+        guard (state.settings.teams ?? 0) > 0 else { return true }
+        // Counted the way the server counts sides, as a set of team numbers:
+        // players on no team make one more side between them.
+        return Set(left.map(\.team)).count >= 2
     }
 
-    /// The Give up / Declare bankruptcy door for one seat. At a table where
-    /// the player decides it opens the give-up card; anywhere else it answers
-    /// false and the caller keeps its ordinary confirmation.
+    /// Where these seats' streets go if they go out now: the table's rule
+    /// while a sale could still follow, and back to the bank once none can.
+    func estateFate(goingOut seats: Set<String>) -> EstateRule {
+        estateSaleOpen(goingOut: seats) ? EstateRule.inForce(state) : .release
+    }
+
+    /// Whether going out from this seat comes with the question: the table
+    /// lets the bankrupt player decide, there is something to decide on, and
+    /// a sale could still follow. Without one the server gives the deeds back
+    /// to the bank whichever answer comes, so asking would offer an auction
+    /// that never happens.
+    func choosesEstate(_ seat: String) -> Bool {
+        !deeds(of: seat).isEmpty && estateFate(goingOut: [seat]) == .choose
+    }
+
+    /// The Give up / Declare bankruptcy door for one seat. Where the player
+    /// has that question to answer it opens the give-up card; anywhere else
+    /// it answers false and the caller keeps its ordinary confirmation.
     @discardableResult
     func askGiveUp(_ seat: String, kind: GiveUpAsk.Kind) -> Bool {
         guard choosesEstate(seat) else { return false }
@@ -2347,12 +2373,15 @@ extension GameStore {
     }
 
     /// What going bankrupt does at this table, for the plain confirmation —
-    /// the one a table that does not ask still shows. The creditor has only
-    /// ever kept the cash already paid over.
+    /// the one a table that does not ask still shows, and so does one that
+    /// would ask when no sale could follow. Then the streets go back to the
+    /// bank whatever the rule, and the words say so rather than promise a
+    /// choice or an auction. The creditor has only ever kept the cash
+    /// already paid over.
     func bankruptcyTerms(for seat: String) -> String {
         let paid = "Whatever you have paid stays with whoever you owe"
         guard !deeds(of: seat).isEmpty else { return "\(paid), and you are out of the game." }
-        switch EstateRule.inForce(state) {
+        switch estateFate(goingOut: [seat]) {
         case .auction:
             return "\(paid), your properties are auctioned to the other players, and you are out of the game."
         case .choose:
@@ -2390,5 +2419,10 @@ extension GameStore {
         if let ask = giveUpAsk, new.player(ask.seat).map({ $0.isBankrupt }) ?? true {
             giveUpAsk = nil
         }
+        // Nor does one whose choice has gone while it was up — the clock ran
+        // out, or the players who would bid went out — since either answer
+        // now sends the deeds back to the bank. The button that opened it
+        // leads to the plain confirmation from here on.
+        if let ask = giveUpAsk, !choosesEstate(ask.seat) { giveUpAsk = nil }
     }
 }

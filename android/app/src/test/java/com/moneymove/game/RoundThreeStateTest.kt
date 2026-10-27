@@ -12,7 +12,8 @@ import org.junit.Test
 /**
  * What 1.0.7 (round 3) adds to the room state, read the way the table reads
  * it (docs/API-1.0.6.md, "Round 3"): the third bankrupt-properties value and
- * its words, the question a bankrupt player is asked, the same rule at
+ * its words, the question a bankrupt player is asked — only while a sale
+ * could still follow — the same rule at
  * Play-now tables, "Bot skill" only where there is a house, and what the
  * auction card works out for itself — where an estate sale has got to, and
  * the rent line on its little deed. An older server sends none of it, and
@@ -105,6 +106,79 @@ class RoundThreeStateTest {
         assertNull(MMJson.decodeFromJsonElement(GameState.serializer(), answered).bankruptChoice)
     }
 
+    // ── asked only while a sale can follow ──────────────────────────────────
+
+    private val choose = GameSettings(bankruptProperties = "choose")
+
+    /** A table of [ids] at [settings], where "a" holds two deeds and nobody else any. */
+    private fun table(
+        vararg ids: String,
+        settings: GameSettings = choose,
+        bust: Set<String> = emptySet(),
+        teams: Map<String, Int> = emptyMap(),
+    ) = GameState(
+        status = "playing",
+        settings = settings,
+        players = ids.map { PlayerState(id = it, name = it, bankrupt = it in bust, team = teams[it]) },
+        ownership = mapOf("1" to TileOwnership(owner = "a"), "3" to TileOwnership(owner = "a")),
+    )
+
+    @Test
+    fun `a seat with deeds is asked while two would be left to bid`() {
+        val s = table("a", "b", "c")
+        assertTrue(s.estateSaleAfter(setOf("a")))
+        assertEquals(EstateRule.CHOOSE, s.estateRuleFor("a"))
+        assertTrue(s.decidesEstate("a"))
+        // Nothing owned, nothing to decide — the plain confirmation.
+        assertFalse(s.decidesEstate("b"))
+    }
+
+    @Test
+    fun `one left to bid, a game already out, or the clock run out asks nothing`() {
+        // Only one would be left: the game is over before any sale.
+        val two = table("a", "b")
+        assertFalse(two.estateSaleAfter(setOf("a")))
+        assertEquals(EstateRule.RELEASE, two.estateRuleFor("a"))
+        assertFalse(two.decidesEstate("a"))
+        // A seat already out is no bidder.
+        assertFalse(table("a", "b", "c", bust = setOf("c")).decidesEstate("a"))
+        // The last turn of a timed game is not the moment for a sale.
+        assertFalse(table("a", "b", "c").copy(timeUp = true).decidesEstate("a"))
+        // Nor is the lobby, or a game that has ended.
+        assertFalse(table("a", "b", "c").copy(status = "lobby").decidesEstate("a"))
+        assertFalse(table("a", "b", "c").copy(status = "ended").decidesEstate("a"))
+    }
+
+    @Test
+    fun `with teams, the players left must play for two teams`() {
+        val teams = GameSettings(bankruptProperties = "choose", teams = 2)
+        // "b" and "c" are teammates: one team left standing has won.
+        val oneTeam = table("a", "b", "c", settings = teams, teams = mapOf("a" to 0, "b" to 1, "c" to 1))
+        assertFalse(oneTeam.decidesEstate("a"))
+        assertEquals(EstateRule.RELEASE, oneTeam.estateRuleFor("a"))
+        val twoTeams = table("a", "b", "c", "d", settings = teams, teams = mapOf("a" to 0, "b" to 0, "c" to 1, "d" to 1))
+        assertTrue(twoTeams.decidesEstate("a"))
+        // Teams off, the same seats are just three players.
+        assertTrue(table("a", "b", "c", teams = mapOf("a" to 0, "b" to 1, "c" to 1)).decidesEstate("a"))
+    }
+
+    @Test
+    fun `an auction table says the bank once no sale can follow, and leaving counts every seat going`() {
+        val auction = GameSettings(bankruptProperties = "auction")
+        assertEquals(EstateRule.AUCTION, table("a", "b", "c", settings = auction).estateRuleFor("a"))
+        assertEquals(EstateRule.RELEASE, table("a", "b", settings = auction).estateRuleFor("a"))
+        // Never a question at an auction table, or at the bank's.
+        assertFalse(table("a", "b", "c", settings = auction).decidesEstate("a"))
+        assertFalse(table("a", "b", "c", settings = GameSettings()).decidesEstate("a"))
+        // A cup table always gives them back, whatever its settings say.
+        assertEquals(EstateRule.RELEASE, table("a", "b", "c").copy(cup = true).estateRuleFor("a"))
+        // Two seats on one phone walking out of four leave two to bid; three
+        // walking out leave one.
+        val four = table("a", "g", "b", "c", settings = auction)
+        assertEquals(EstateRule.AUCTION, four.estateRuleFor(setOf("a", "g")))
+        assertEquals(EstateRule.RELEASE, four.estateRuleFor(setOf("a", "g", "b")))
+    }
+
     // ── bot skill, only with bots ───────────────────────────────────────────
 
     @Test
@@ -117,6 +191,14 @@ class RoundThreeStateTest {
         assertTrue(GameState(status = "lobby", players = listOf(person, bot)).showsBotSkill)
         // "Allow bots" will fill the empty chairs at the start.
         assertTrue(GameState(status = "lobby", players = listOf(person), settings = GameSettings(allowBots = true)).showsBotSkill)
+        // ...but only while there is a chair to fill: people in every seat
+        // deal no house in, switch or not (iOS hasHouseBots, web houseAtTable).
+        val full = List(4) { PlayerState(id = "u_$it", name = "P$it") }
+        assertFalse(GameState(status = "lobby", players = full, settings = GameSettings(allowBots = true)).showsBotSkill)
+        assertTrue(
+            GameState(status = "lobby", players = full, settings = GameSettings(maxPlayers = 5, allowBots = true)).showsBotSkill,
+        )
+        assertFalse(GameState(status = "lobby", players = full.take(1), settings = GameSettings(maxPlayers = 1, allowBots = true)).showsBotSkill)
         // Mid-game it is the seats that count.
         assertFalse(GameState(status = "playing", players = listOf(person), settings = GameSettings(allowBots = true)).showsBotSkill)
         assertTrue(GameState(status = "playing", players = listOf(person, bot)).showsBotSkill)

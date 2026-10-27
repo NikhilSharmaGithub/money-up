@@ -115,8 +115,14 @@ struct GameScreen: View {
     /// One offer waiting comes up on its own sheet. Two or more come up as the
     /// one list (1.0.6, G9) — never a sheet per offer, one after another, each
     /// hiding the rest — and everything on that list counts as shown.
+    ///
+    /// Nor does it cover the bankruptcy question or the give-up card (1.0.7):
+    /// presented sheets draw over those overlays, so an offer would hide the
+    /// one question the table is waiting on. It waits, still unshown, and
+    /// comes up when the card goes.
     private func presentNewOffer() {
-        guard store.state?.isPlaying == true, sheet == nil else { return }
+        guard store.state?.isPlaying == true, sheet == nil,
+              store.myBankruptChoice == nil, store.giveUpAsk == nil else { return }
         let live = Set((store.state?.trades ?? []).map(\.id))
         offersShown = offersShown.intersection(live)
         let waiting = store.incomingOffers.filter { $0.ignored != true }
@@ -175,15 +181,20 @@ struct GameScreen: View {
         (store.state?.players ?? []).filter { store.isLocal($0.id) && !$0.isBankrupt }
     }
 
-    /// One seat gives up. Where the bankrupt player decides and the seat holds
-    /// deeds (1.0.7, H2), the give-up card asks where they go first — after a
-    /// beat, because the dialog that asked who gives up is still on its way
-    /// out; anywhere else the white flag goes straight up, as it always has.
+    /// One seat gives up. Where the bankrupt player decides, the seat holds
+    /// deeds and a sale could still follow (1.0.7, H2), the give-up card asks
+    /// where they go first — after a beat, because the dialog that asked who
+    /// gives up is still on its way out; anywhere else the white flag goes
+    /// straight up, as it always has. So it does if the choice has gone in
+    /// that beat: the player has already said they give up — unless the seat
+    /// or the game went out in it too, which the server would only refuse.
     private func concede(_ seat: String) {
         guard store.choosesEstate(seat) else { return store.concede(as: seat) }
         Task {
             try? await Task.sleep(for: .milliseconds(350))
-            store.askGiveUp(seat, kind: .concede)
+            guard !store.askGiveUp(seat, kind: .concede), store.state?.isPlaying == true,
+                  store.state?.player(seat)?.isBankrupt == false else { return }
+            store.concede(as: seat)
         }
     }
 
@@ -440,9 +451,20 @@ struct GameScreen: View {
         .onChange(of: store.myBankruptChoice != nil) { _, asked in
             // The overlay lives under presented sheets, so a deed sheet left
             // open would hide the one question the table is waiting on.
-            guard asked else { return }
+            // Answered, an offer that arrived meanwhile comes up now.
+            guard asked else { return presentNewOffer() }
             sheet = nil
             Haptics.warn()
+        }
+        .onChange(of: store.giveUpAsk == nil) { _, gone in
+            // A beat first: if the card closed because the seat gave up, the
+            // server's next push takes that seat's offers off the table, and
+            // one of them should not slide up only to close itself again.
+            guard gone else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                presentNewOffer()
+            }
         }
         // The question the give-up card asks stops mattering once the seat is
         // out, or the game is.
@@ -604,8 +626,11 @@ struct GameScreen: View {
             // At a table that auctions a bankrupt player's estate (1.0.6,
             // G5), walking out puts the streets under the hammer instead; at
             // one where the player decides (1.0.7), somebody who walks out is
-            // not there to be asked, and the house decides.
-            let streets: String = switch EstateRule.inForce(store.state) {
+            // not there to be asked, and the house decides. Every seat on this
+            // phone walks out together, and once no sale could follow them —
+            // the clock has run out, or too few would be left to bid — the
+            // streets go back to the bank whatever the rule.
+            let streets: String = switch store.estateFate(goingOut: store.localIds) {
             case .release: "returns your streets to the bank"
             case .auction: "puts your streets up for auction"
             case .choose: "leaves the house to decide where your streets go"

@@ -4,7 +4,11 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -35,6 +39,16 @@ object PlaceFacts {
     private var read = false
     private var checked = false
 
+    /**
+     * The fetch runs here, not in the deed sheet's own effect: a sheet swiped
+     * away before the reply landed cancelled the request with it, after
+     * [checked] had already been set, and no street showed a fact again until
+     * the app was killed. Lazy, so a unit test that only looks lines up never
+     * touches the main dispatcher.
+     */
+    private val scope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    private var job: Job? = null
+
     private fun file(context: Context) = File(context.cacheDir, "place-facts.json")
 
     /**
@@ -51,8 +65,15 @@ object PlaceFacts {
         return if (place == null && about == null) null else Found(place, about)
     }
 
+    /** Starts [load] unless it is already running; it outlives whichever sheet asked. */
+    fun ensureLoaded(context: Context, api: Api) {
+        if (job?.isActive == true) return
+        val app = context.applicationContext
+        job = scope.launch { load(app, api) }
+    }
+
     /** Reads the kept set, then fetches (or revalidates) it once per launch that reaches the server. */
-    suspend fun load(context: Context, api: Api) {
+    private suspend fun load(context: Context, api: Api) {
         if (!read) {
             read = true
             facts = withContext(Dispatchers.IO) {

@@ -152,14 +152,19 @@ data class GameState(
 
     /**
      * Whether "Bot skill" means anything here: a table a host set up, with a
-     * house player sitting at it — or, in the lobby, one with "Allow bots" on,
-     * which fills every empty chair with the house at the start. Nowhere else
-     * is the control, its chip or its rules-sheet row shown: a table of people
-     * has no house to set, and a Play-now table's house always plays normal
-     * while it passes itself off as people.
+     * house player sitting at it — or, in the lobby, one with "Allow bots" on
+     * and a chair still free, which the house fills at the start. A switch
+     * with every chair taken by people deals nobody in. Nowhere else is the
+     * control, its chip or its rules-sheet row shown: a table of people has
+     * no house to set, and a Play-now table's house always plays normal while
+     * it passes itself off as people. The iPhone's hasHouseBots and the web's
+     * houseAtTable are the same rule.
      */
     val showsBotSkill: Boolean
-        get() = hostSetsRules && (players.any { it.isHouse } || (isLobby && settings.allowBots == true))
+        get() = hostSetsRules && (
+            players.any { it.isHouse } ||
+                (isLobby && settings.allowBots == true && players.size < settings.maxPlayers)
+            )
 
     /**
      * Auction-only (1.0.6 round 2): every unowned street goes straight under
@@ -217,6 +222,43 @@ data class GameState(
 
     /** How many deeds a seat holds — the count its chip carries. */
     fun ownedCount(playerId: String): Int = ownership.values.count { it.owner == playerId }
+
+    /**
+     * Whether the streets the seats [going] leave behind could still be sold
+     * were they to go out now — server/game.js estateSaleOpen, asked of the
+     * table as it would be once they have gone: the game on, its clock not
+     * run out, and at least two players still in to bid. With teams one team
+     * left is a game over, so those players must also play for two teams at
+     * least. When no sale can happen the deeds go back to the bank whatever
+     * the table's rule, and a "player decides" table asks nothing.
+     */
+    fun estateSaleAfter(going: Set<String>): Boolean {
+        if (!isPlaying || timeUp == true) return false
+        val left = players.filter { !it.isBankrupt && it.id !in going }
+        if (left.size < 2) return false
+        return (settings.teams ?: 0) <= 0 || left.map { it.team }.toSet().size >= 2
+    }
+
+    /**
+     * What going out now does with the streets of the seats [going]: the
+     * table's rule while a sale can still happen, the bank's otherwise — so
+     * a dialog never promises an auction, or a question, that the server
+     * will not hold. Several at once is Leave for good from a pass & play
+     * phone, where every seat on it walks out together.
+     */
+    fun estateRuleFor(going: Set<String>): EstateRule =
+        if (estateRule == EstateRule.RELEASE || estateSaleAfter(going)) estateRule else EstateRule.RELEASE
+
+    /** [estateRuleFor] for one seat going out on its own. */
+    fun estateRuleFor(seat: String): EstateRule = estateRuleFor(setOf(seat))
+
+    /**
+     * Whether going out from [seat] asks where its streets go — in the same
+     * dialog, so it is not asked a second time: a "player decides" table
+     * where a sale could still happen, and at least one deed to decide about.
+     */
+    fun decidesEstate(seat: String): Boolean =
+        estateRuleFor(seat) == EstateRule.CHOOSE && ownedCount(seat) > 0
 
     /**
      * How many of one kind of tile a seat holds — airports and utilities,

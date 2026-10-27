@@ -1038,8 +1038,19 @@ socket.emit('bankrupt', { auction: true });   // or { auction: false }
 
 - At a `"choose"` table the player who answers here is **not asked again**: the answer is applied
   as they go out. Show the two options inside the Give up confirmation (and the debt sheet's
-  Declare bankruptcy confirmation) when `state.settings.bankruptProperties === "choose"` and the
-  player owns at least one deed.
+  Declare bankruptcy confirmation) only when **all** of these hold:
+  - `state.settings.bankruptProperties === "choose"`;
+  - the player owns at least one deed;
+  - a sale could still happen once they are out — `state.timeUp` is not `true`, and at least two
+    **other** players are still in (not `bankrupt`), so their going out does not end the game;
+    with teams on (`settings.teams > 0`) those players must also be on at least two different
+    teams, because one team left is a game won.
+
+  Otherwise show the plain confirmation, saying the deeds go back to the bank — which is where
+  they go, whatever was sent (the "Not asked at all" rule below). The same test decides the
+  Leave sheet's wording: promise a choice on Give up only when these options would be shown. At an
+  `"auction"` table the same last condition decides whether the confirmation may say the deeds
+  are auctioned.
 - `bankrupt` with no payload (every older client), or with an `auction` that is not `true`/`false`,
   concedes exactly as before — and the question follows.
 - At a `"release"` or `"auction"` table the payload is ignored: the table's rule decides.

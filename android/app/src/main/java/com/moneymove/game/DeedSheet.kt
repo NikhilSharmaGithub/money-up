@@ -99,7 +99,7 @@ fun DeedSheet(store: GameStore, index: Int, onDismiss: () -> Unit) {
     // left standing.
     val handOff: (() -> Unit) -> Unit = { next -> onDismiss(); next() }
     val context = LocalContext.current
-    LaunchedEffect(Unit) { PlaceFacts.load(context.applicationContext, store.api) }
+    LaunchedEffect(Unit) { PlaceFacts.ensureLoaded(context, store.api) }
 
     MMSheet(
         onDismissRequest = onDismiss,

@@ -61,10 +61,12 @@ import kotlinx.coroutines.delay
  * refused answer leaves the question open, so after a beat the tiles take a
  * second tap again.
  *
- * Nothing else may sit over it: the store closes any sheet or question that
- * was open when it arrived (GameStore.noteEstates), and the back gesture is
- * swallowed while it is up, so a stray swipe does not ask about leaving in
- * the middle of a twenty-second answer.
+ * It comes up once the bust that raised it has landed on the board, not
+ * with the push that asked it (GameStore.myBankruptChoice). Nothing else may
+ * sit over it: the store closes any sheet or question that was open when it
+ * came up (GameStore.notePrompt), and the back gesture is swallowed while it
+ * is up, so a stray swipe does not ask about leaving in the middle of a
+ * twenty-second answer.
  */
 @Composable
 fun BankruptChoiceOverlay(store: GameStore, modifier: Modifier = Modifier) {

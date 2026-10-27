@@ -853,8 +853,13 @@ struct AuctionBox: View {
     /// Where this phone stands when it has nothing to press: holding the
     /// top bid, out of this lot, or out of the game (or only watching).
     private func standing(leadingAlone: Bool, _ P: Palette) -> some View {
-        let me = store.state?.player(store.meId)
-        let out = store.isWatching || me == nil || me?.isBankrupt == true
+        // Out only when no seat on this phone is still playing: on a pass &
+        // play phone whose main seat went bankrupt, a guest who passed this
+        // lot has passed, not left the game.
+        let anyLocalAlive = store.state?.players.contains {
+            store.localIds.contains($0.id) && !$0.isBankrupt
+        } ?? false
+        let out = store.isWatching || !anyLocalAlive
         let (text, hue): (String, Color) = leadingAlone
             ? ("You lead — hold on", P.good)
             : out ? ("You’re out", P.ink3)

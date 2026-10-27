@@ -9,7 +9,7 @@ import {
   renderPlayers, renderRightPanel, renderCenter, renderLog, renderChat,
   renderDice, toast, showCard, showGameOver, closeModal, showTurnBanner,
   confetti, openDeedModal, openHelpModal, openTableRulesModal, openIntroModal, INTRO_VERSION, openStoreModal, openJoinNameModal,
-  openLeaveModal, estateRule, giveUp, syncEstateChoice, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
+  openLeaveModal, giveUp, syncEstateChoice, showRemovedOverlay, randomName, syncTurnClock, syncOpenModals,
   renderAwaiting, openReportCard, setAdsConfig, openLeaderboardModal,
   openAchievementsModal, leaderRowsHTML, openTradeOfferModal, openOffersModal, offerSheetOpen, isModalOpen, openCupBracket, openCupPoster, openCupDetail, cupMoney,
   cupSettledLine, noteDeviceSeat, winnerLabel, wonGame, TICK,
@@ -224,7 +224,7 @@ function socialHooks() {
           setTimeout(() => { state = null; go(id); }, 150);
         },
         onConcede: null,
-        estate: estateRule(state),
+        state, meId,
       });
     },
     // Whatever table this browser is sitting at, so a friend can be asked to
@@ -2587,6 +2587,11 @@ function goHome({ replace = false } = {}) {
   document.body.classList.remove('watching', 'seatless');
   closeModal();
   $('#cardPopup').classList.add('hidden');
+  // The well goes with the table: an auction card or a bankrupt player's
+  // question left behind would keep its countdown painting under the landing,
+  // and a table rejoined later draws its own scene from scratch anyway.
+  const well = $('#centerAction');
+  if (well) { well.innerHTML = ''; well.dataset.mode = ''; }
   if (socket) { socket.close(); socket = null; }
   state = null;
   roomId = null;
@@ -2619,12 +2624,14 @@ $('#leaveBtn').addEventListener('click', () => {
         setTimeout(goHome, 150);
       },
       // Conceding is only on the table while this seat is still in the game.
-      // Where the bankrupt player decides (1.0.7) it asks where the streets
-      // go first, read off the game as it is by then.
+      // Where the bankrupt player decides (1.0.7) and would really be asked,
+      // it asks where the streets go first, read off the game as it is by then.
       onConcede: state?.players?.some((p) => p.id === meId && !p.bankrupt)
         ? () => giveUp(state, meId, actions)
         : null,
-      estate: estateRule(state),
+      // The sheet's own lines — where a walkout's streets go, and whether
+      // giving up asks — are read off the game as it is now.
+      state, meId,
     });
     return;
   }

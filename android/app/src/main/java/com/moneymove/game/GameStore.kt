@@ -1359,6 +1359,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         headline = null
         sheet = null
         confirm = null
+        promptedKey = null
         lastTurnId = null
         chatPrimed = false
         heardChatId = null
@@ -1529,6 +1530,9 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             noteSets(old, next)
         }
         noteCard(old, next, news)
+        // After the journey, which is what decides whether a bust in this
+        // push — and the question it raised — is held back for a walk.
+        notePrompt()
 
         // The deadlock rule explains itself the one time it becomes possible.
         // The server keeps the card in every push from then on, so the `at`
@@ -1934,6 +1938,8 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         if (entry.busts.isNotEmpty()) heldBusts = heldBusts - entry.busts
         if (entry.lines.isNotEmpty()) heldLog = heldLog - entry.lines
         voice(entry)
+        // A bust landing is what lets a question it raised come up.
+        if (entry.busts.isNotEmpty()) notePrompt()
     }
 
     /** A journey cut short: its walk stops and everything it held shows at once. */
@@ -2069,16 +2075,12 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     private val estateBook = HashMap<String, List<Int>>()
 
     /**
-     * Keep [estateBook], and bring the question about a bankrupt seat's
-     * streets to the front when it is one of this device's.
+     * Keep [estateBook], and take down a "Give up?" that has nobody left to
+     * ask.
      *
      * A seat that went out in this push left its deeds in the last one — the
      * estate, whatever then becomes of it — and a "player decides" question
      * names them itself. A new game forgets the lot.
-     *
-     * The question is twenty seconds and a modal, so nothing may sit over
-     * it: a sheet open on this table is a window above the table's own, so
-     * it goes, and so does any question already up.
      */
     private fun noteEstates(old: GameState?, next: GameState) {
         if (next.isPlaying && old?.isPlaying != true) estateBook.clear()
@@ -2089,14 +2091,44 @@ class GameStore(app: Application) : AndroidViewModel(app) {
                 if (deeds.isNotEmpty()) estateBook[p.name] = deeds.sorted()
             }
         }
+        // The seat the give-up card asks for went out while it was open — the
+        // rent it could not pay, or a timeout — or has left the table: its
+        // answer would only come back refused. The card goes too once its
+        // choice has gone while it was up — the clock ran out, the players
+        // who would bid went out, the last deed changed hands — as the
+        // iPhone's does: either answer would now send the deeds back to the
+        // bank, and Give up from here on goes out with nothing to ask.
+        if (confirm == TableConfirm.GIVE_UP_CHOICE) {
+            val seat = giveUpSeat ?: meId
+            if (next.player(seat)?.isBankrupt != false || !next.decidesEstate(seat)) dismissConfirm()
+        }
         val asked = next.bankruptChoice ?: return
         if (asked.properties.isNotEmpty()) estateBook[asked.name] = asked.properties.sorted()
-        val fresh = old?.bankruptChoice?.let { it.playerId != asked.playerId || it.endsAt != asked.endsAt } ?: true
-        if (fresh && next.isPlaying && !isSpectating && isLocal(asked.playerId)) {
-            sheet = null
-            dismissConfirm()
-            Haptics.turn()
-        }
+    }
+
+    /** The question [notePrompt] last brought to the front, as "seat@endsAt". */
+    private var promptedKey: String? = null
+
+    /**
+     * Bring the question about a bankrupt seat's streets to the front the
+     * moment it comes up on this device — when the push asks it, or later,
+     * when the bust that raised it lands ([myBankruptChoice] holds it back
+     * until then), so the buzz and the cleared table arrive with the prompt
+     * and not a walk ahead of it.
+     *
+     * The question is twenty seconds and a modal, so nothing may sit over
+     * it: a sheet open on this table is a window above the table's own, so
+     * it goes, and so does any question already up.
+     */
+    private fun notePrompt() {
+        val shown = myBankruptChoice
+        val key = shown?.let { "${it.playerId}@${it.endsAt}" }
+        if (key == promptedKey) return
+        promptedKey = key
+        if (shown == null) return
+        sheet = null
+        dismissConfirm()
+        Haptics.turn()
     }
 
     /**
@@ -2392,9 +2424,10 @@ class GameStore(app: Application) : AndroidViewModel(app) {
      * the table as a spectator. `seat` says which local player is giving up;
      * the main seat when nobody says otherwise.
      *
-     * At a "player decides" table a seat that holds deeds is asked what
-     * happens to them inside the same confirmation, before the flag goes
-     * ([TableConfirm.GIVE_UP_CHOICE]); [auction] is that answer.
+     * At a "player decides" table a seat that holds deeds, with a sale still
+     * possible, is asked what happens to them inside the same confirmation,
+     * before the flag goes ([TableConfirm.GIVE_UP_CHOICE]); [auction] is that
+     * answer.
      */
     fun concede(seat: String? = null, auction: Boolean? = null) {
         val who = localOr(seat)
@@ -2413,12 +2446,11 @@ class GameStore(app: Application) : AndroidViewModel(app) {
 
     /**
      * Whether going out from [seat] asks the question about its streets: a
-     * "player decides" table, and at least one deed to decide about.
+     * "player decides" table, at least one deed to decide about, and a sale
+     * the server could still hold — see [GameState.decidesEstate]. Otherwise
+     * the deeds go back to the bank and the plain confirmation says so.
      */
-    fun decidesEstate(seat: String?): Boolean {
-        val s = state ?: return false
-        return seat != null && s.isPlaying && s.estateRule == EstateRule.CHOOSE && s.ownedCount(seat) > 0
-    }
+    fun decidesEstate(seat: String?): Boolean = seat != null && state?.decidesEstate(seat) == true
 
     /** The deeds [seat] holds, in board order — what its estate would be. */
     fun deedsOf(seat: String?): List<Int> {
@@ -2430,16 +2462,33 @@ class GameStore(app: Application) : AndroidViewModel(app) {
     /**
      * The question about a bankrupt seat's streets, when that seat is one of
      * this device's: the prompt is theirs to answer. Never to a watcher.
+     *
+     * Kept back while the bust that raised it is still on stage
+     * ([heldBusts]), as the iPhone's shownBankruptChoice is, so the prompt
+     * never beats the piece to the square. The turn's own buttons read the
+     * raw `state.bankruptChoice` instead: the server holds the turn still
+     * from the moment it asks.
      */
     val myBankruptChoice: BankruptChoice?
-        get() = state?.takeIf { it.isPlaying && !isSpectating }?.bankruptChoice?.takeIf { isLocal(it.playerId) }
+        get() = state?.takeIf { it.isPlaying && !isSpectating }?.bankruptChoice
+            ?.takeIf { isLocal(it.playerId) && it.playerId !in heldBusts }
 
     /**
      * The same question when somebody else is being asked it: the table
-     * waits, and says who on.
+     * waits, and says who on — once their bust has landed, not before, so
+     * nothing names somebody bankrupt while the board still shows them in.
      */
     val othersBankruptChoice: BankruptChoice?
-        get() = state?.takeIf { it.isPlaying }?.bankruptChoice?.takeIf { isSpectating || !isLocal(it.playerId) }
+        get() = state?.takeIf { it.isPlaying }?.bankruptChoice
+            ?.takeIf { (isSpectating || !isLocal(it.playerId)) && it.playerId !in heldBusts }
+
+    /**
+     * Whether this device has a seat being asked, shown yet or not: what
+     * keeps anything that would draw over the prompt from opening in the
+     * beat before it comes up.
+     */
+    private fun asksHere(s: GameState): Boolean =
+        s.isPlaying && !isSpectating && s.bankruptChoice?.let { isLocal(it.playerId) } == true
 
     /**
      * "Give them back to the bank" (false) or "Auction them to everyone"
@@ -2999,7 +3048,10 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         // sheet is a window of its own and would draw over that prompt, its
         // tiles and its clock. The offer waits in the dock, unshown, so it
         // can still pop on the next move once the question has cleared.
-        if (myBankruptChoice != null) return
+        // Read off the push, not [myBankruptChoice]: while the bust is still
+        // on stage the prompt is held back, and an offer popped in that beat
+        // would be sitting over it when it comes up.
+        if (asksHere(next)) return
         val waiting = next.trades.filter { isLocal(it.to) && !it.isSetAside }
         when (val pop = offerPop(waiting, offersShown)) {
             null -> Unit
@@ -3552,13 +3604,16 @@ enum class TableConfirm {
      * go. Copy: "Whatever you've paid stays paid. Your properties go back to
      * the bank and you are out of the game." — or, at an auction table, that
      * they are auctioned; at a "player decides" table the two answers to what
-     * happens to them stand in for "Go bankrupt".
+     * happens to them stand in for "Go bankrupt". Where no sale could happen
+     * any more ([GameState.estateSaleAfter]) the deeds go back to the bank
+     * whatever the table's rule, and the question says that instead.
      */
     DEBT_BANKRUPT,
 
     /**
      * Giving up at a "player decides" table (1.0.7) with deeds to decide
-     * about: the white flag and the answer in one question, so the seat
+     * about and a sale still possible ([GameStore.decidesEstate]): the white
+     * flag and the answer in one question, so the seat
      * ([GameStore.giveUpSeat]) is not asked again once it is out. "Give them
      * back to the bank" and "Auction them to everyone" each call
      * [GameStore.concede] with the answer.
