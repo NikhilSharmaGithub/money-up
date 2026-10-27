@@ -137,7 +137,7 @@ fun QuickMatchPanel(store: GameStore, state: GameState, modifier: Modifier = Mod
             color = p.ink2, fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
         )
 
-        RolledRules(state.quickRoll)
+        RolledRules(state.quickRoll, state.shufflesBoard)
 
         if (lobby != null) {
             // One sheet for both: the host's has the rows the server lets
@@ -489,10 +489,16 @@ private fun ReadyTick(size: Dp, ring: Boolean, modifier: Modifier = Modifier) {
  * rolled it and says a person did, and the chips they changed wear the
  * accent's ring, so nobody takes a rule somebody chose for the luck of the
  * draw.
+ *
+ * [shuffled] is whether the table is about to deal its board shuffled
+ * (1.0.8), read off the live settings rather than off the words: when it is,
+ * that chip carries the shuffle's own drawn mark in the accent, because it
+ * is the one rule here a stranger has met on no other table, and the board
+ * they are looking at is not the one they will play.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RolledRules(roll: QuickRoll?) {
+private fun RolledRules(roll: QuickRoll?, shuffled: Boolean) {
     val parts = roll?.parts.orEmpty()
     if (parts.isEmpty()) return
     val p = P.current
@@ -516,32 +522,88 @@ private fun RolledRules(roll: QuickRoll?) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             parts.forEachIndexed { i, part ->
-                // The board leads, and reads like it.
-                val lead = i == 0
-                val edited = roll?.isEdited(i) == true
-                val shape = RoundedCornerShape(99.dp)
-                Text(
+                RolledChip(
                     part,
-                    modifier = Modifier
-                        .background(p.card, shape)
-                        .border(
-                            if (edited) 1.5.dp else 1.dp,
-                            when {
-                                edited -> p.red
-                                lead -> p.gold.copy(alpha = 0.5f)
-                                else -> p.rule
-                            },
-                            shape,
-                        )
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        // The ring is a colour, so a screen reader is told in
-                        // words, as iOS's chip says it.
-                        .semantics { if (edited) contentDescription = "$part, changed by the host" },
-                    color = if (lead) p.gold else p.ink2,
-                    fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+                    // The board leads, and reads like it.
+                    lead = i == 0,
+                    edited = roll?.isEdited(i) == true,
+                    // Found by its place, as the ring is: an older server's
+                    // eight phrases have no ninth for this to land on.
+                    shuffle = shuffled && roll?.partKey(i) == "shuffleBoard",
                 )
             }
         }
+    }
+}
+
+/**
+ * One rolled rule, as a pill: the board's in gold, a rule the host changed
+ * ringed in the accent, and a shuffled board (1.0.8) on the accent's own soft
+ * fill with the shuffle's mark leading its words. Its ring stays the plain
+ * hairline unless the host changed it, so "on" and "changed by the host"
+ * never wear the same colour.
+ *
+ * Switched on while you watch — the host's toggle — the shuffle pill lands
+ * with a small bounce, so the one change that moves the board itself is seen
+ * to happen. Already on when you sat down, it just sits there, and with
+ * Remove animations on it never moves.
+ */
+@Composable
+private fun RolledChip(part: String, lead: Boolean, edited: Boolean, shuffle: Boolean) {
+    val p = P.current
+    val shape = RoundedCornerShape(99.dp)
+    val still = rememberReduceMotion()
+    val pop = remember { Animatable(1f) }
+    var wasOn by remember { mutableStateOf(shuffle) }
+    LaunchedEffect(shuffle) {
+        if (shuffle && !wasOn && !still) {
+            pop.snapTo(0.82f)
+            pop.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = Spring.StiffnessMedium))
+        } else if (pop.value != 1f) {
+            // A host who flips it back off inside the bounce (a double tap)
+            // cancels this effect mid-spring, and the Animatable keeps
+            // whatever size it had reached. The next run is the "off" one,
+            // which has no bounce of its own, so it puts the chip back to
+            // its true size rather than leave it frozen small or swollen.
+            pop.snapTo(1f)
+        }
+        wasOn = shuffle
+    }
+    Row(
+        Modifier
+            .graphicsLayer {
+                scaleX = pop.value
+                scaleY = pop.value
+            }
+            .background(if (shuffle) p.redSoft else p.card, shape)
+            .border(
+                if (edited) 1.5.dp else 1.dp,
+                when {
+                    edited -> p.red
+                    lead -> p.gold.copy(alpha = 0.5f)
+                    else -> p.rule
+                },
+                shape,
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            // The ring is a colour, so a screen reader is told in words, as
+            // iOS's chip says it. The mark is a drawing and says nothing.
+            .semantics(mergeDescendants = true) {
+                if (edited) contentDescription = "$part, changed by the host"
+            },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (shuffle) Icon("shuffle", size = 12.dp, tint = p.red)
+        Text(
+            part,
+            color = when {
+                shuffle -> p.red
+                lead -> p.gold
+                else -> p.ink2
+            },
+            fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
+        )
     }
 }
 

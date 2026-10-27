@@ -126,6 +126,11 @@ final class GameStore: ObservableObject {
     /// Which explainer this device has already read. Kept on disk against its
     /// server timestamp so rejoining the same table doesn't re-teach the rule.
     @AppStorage("mm.reliefSeen") private var reliefSeenAt: Double = 0
+    /// The shuffled board this device last said so about (1.0.8), by the
+    /// board's own uid — a fresh one every deal, rematches included — so the
+    /// heads-up comes once a game, and a reconnect or a relaunch into the same
+    /// game does not say it twice.
+    @AppStorage("mm.shuffleSeen") private var shuffleSeenUid: String = ""
     @Published var turnBanner: PlayerState?
     @Published var showGameOver = false
     /// This device's seat was taken out by the clock — drives the full-screen
@@ -898,6 +903,30 @@ final class GameStore: ObservableObject {
                     self?.reveal = "\(info.flag) \(info.name) holds the priciest streets this game!"
                     try? await Task.sleep(for: .seconds(3.4))
                     if !Task.isCancelled { self?.reveal = nil }
+                }
+            }
+            // A shuffled board says so, once a game (1.0.8). It used to be a
+            // private host's choice that the whole table had agreed to in the
+            // lobby; now about one Play-now table in three deals it to people
+            // who never saw a switch, and a regular who knows where the cheap
+            // streets usually sit deserves a word before walking onto a set
+            // that is not there any more. Light and never in the way: a toast,
+            // timed to land while the tiles are still flying to their new
+            // squares, keyed on the board's uid so a reconnect or a relaunch
+            // into the same game stays quiet. Somebody who walks in to watch a
+            // game long under way is left alone — this is news at the deal,
+            // and the rules sheet still says it for anybody who asks.
+            if new.map.shuffled == true {
+                let key = new.map.uid ?? "\(new.id)@\(Int(new.startedAt ?? 0))"
+                let seated = new.players.contains { localIds.contains($0.id) }
+                if key != shuffleSeenUid, old != nil || seated {
+                    shuffleSeenUid = key
+                    let uid = new.map.uid
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(1400))
+                        guard let self, self.state?.isPlaying == true, self.state?.map.uid == uid else { return }
+                        self.showToast("Shuffled board — the colour sets have new homes this game", glyph: .shuffle)
+                    }
                 }
             }
         }

@@ -135,10 +135,11 @@ data class GameState(
 
     /**
      * A table whose host set its rules. A Play-now or a cup table plays
-     * auction-only and the shuffle at their defaults whatever the fields say
-     * (docs/API-1.0.6.md), so nothing here reads them off one of those. The
-     * bankrupt-properties rule is the exception from 1.0.7: a Play-now table
-     * rolls it and plays it — see [estateRule].
+     * auction-only at its default whatever the field says (docs/API-1.0.6.md),
+     * so nothing here reads it off one of those. Two round-2 rules are the
+     * exceptions, rolled and played at a Play-now table: what a bankrupt
+     * player's streets do from 1.0.7 ([estateRule]) and the shuffled board
+     * from 1.0.8 ([shufflesBoard]).
      */
     val hostSetsRules: Boolean get() = quick != true && cup != true
 
@@ -149,6 +150,47 @@ data class GameState(
      * back to the bank.
      */
     val estateRule: EstateRule get() = if (cup == true) EstateRule.RELEASE else settings.estateRule
+
+    /**
+     * Whether this table deals its board shuffled at the start, as the server
+     * plays it: whatever the setting says — at a Play-now table too, which
+     * rolls it from 1.0.8, about one table in three — except at a cup table,
+     * which always plays the board as it is printed. A Play-now table on an
+     * older server never had the switch on, so the same read is right there.
+     * Once the game is dealt [MapData.isShuffled] is the board's own word for
+     * what actually happened; this is the promise the lobby makes.
+     */
+    val shufflesBoard: Boolean get() = cup != true && settings.shuffleBoard == true
+
+    /**
+     * Whether the shuffle is one of this table's rules at all, for the rows
+     * that would otherwise sit there saying "off" about a rule nobody here
+     * can have. Every table a host set up has it. A Play-now table has it once
+     * its server rolls it (1.0.8) — which that server says by having rolled
+     * it ([QuickRoll.keys]), by offering it to the host, or by having dealt
+     * it on — and a 1.0.7 server's Play-now table never did. A cup table
+     * never shuffles.
+     */
+    val hasShuffleRule: Boolean
+        get() = when {
+            cup == true -> false
+            quick == true ->
+                settings.shuffleBoard == true ||
+                    quickRoll?.keys.orEmpty().contains("shuffleBoard") ||
+                    quickLobby?.mayEdit("shuffleBoard") == true
+            else -> true
+        }
+
+    /**
+     * Whether this push is the deal of a shuffled board that this device
+     * watched happen: [old] was this same table's lobby, and the game it
+     * became has its colour sets on new squares. The one moment the table
+     * says "shuffled board" out loud (GameStore's noteShuffle) — not to a
+     * phone that walks in on a game already going, nor to one coming back
+     * after a dropped line, both of which have no lobby behind them.
+     */
+    fun dealtShuffledAfter(old: GameState?): Boolean =
+        isPlaying && map.isShuffled && old != null && old.isLobby && old.id == id
 
     /**
      * Whether "Bot skill" means anything here: a table a host set up, with a
@@ -312,8 +354,16 @@ data class QuickRoll(
     /**
      * Which setting each of [parts] describes, in its order. The server
      * writes the phrases in quickRollParts' fixed reading order — the board,
-     * the bankroll, then its five labelled rules — and this is that order, so
-     * a changed rule can be found among the chips without parsing the words.
+     * the bankroll, its five labelled switches, what a bankrupt player's
+     * streets do, and from 1.0.8 the shuffle — and this is that order, so a
+     * changed rule can be found among the chips without parsing the words.
+     *
+     * Every new rule goes on the end, never in the middle: the apps already
+     * in the stores pair the phrases with their own copy of this list by
+     * index, and a phrase slipped in anywhere else would ring the wrong chip
+     * on every one of them. An older server's eight phrases simply leave the
+     * last key unused, and a newer server's tenth has no key here — null,
+     * a chip with no ring, never a crash.
      */
     fun partKey(index: Int): String? = PART_KEYS.getOrNull(index)
 
@@ -323,11 +373,12 @@ data class QuickRoll(
     companion object {
         /**
          * quickRollParts() in server/game.js, phrase for phrase — 1.0.7 adds
-         * what a bankrupt player's streets do, last ("bankrupt player decides").
+         * what a bankrupt player's streets do ("bankrupt player decides"),
+         * and 1.0.8 the shuffle after it, last ("shuffled board on").
          */
         val PART_KEYS = listOf(
             "mapId", "startingCash", "x2rent", "vacationCash", "auction", "noRentInPrison", "evenBuild",
-            "bankruptProperties",
+            "bankruptProperties", "shuffleBoard",
         )
     }
 }
@@ -416,7 +467,12 @@ data class GameSettings(
     val bankruptProperties: String? = null,
     /** Every unowned street goes straight to auction; nobody buys at the sticker. */
     val auctionOnly: Boolean? = null,
-    /** The colour sets trade places on the board at the start of each game. */
+    /**
+     * The colour sets trade places on the board at the start of each game —
+     * a host's switch since 1.0.6, and one of a Play-now table's rolled rules
+     * from 1.0.8. Read through [GameState.shufflesBoard], which knows a cup
+     * table never plays it.
+     */
     val shuffleBoard: Boolean? = null,
 ) {
     val botSkill: BotSkill get() = BotSkill.of(botLevel)

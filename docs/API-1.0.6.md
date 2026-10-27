@@ -660,6 +660,11 @@ A Play-now table and a cup table always play the defaults (`release`, no auction
 printed board) whatever the fields say. **Clients:** show the three to the host in the lobby; hide
 them when `state.quick` or `state.cup` is true.
 
+> **Later rounds change the Play-now half of this.** From 1.0.7 a Play-now table rolls
+> `bankruptProperties` and its host may change it (Round 3, H3); from 1.0.8 the same goes for
+> `shuffleBoard` (Round 4). Only `auctionOnly` is still refused at a Play-now table. Cup tables
+> are unchanged: all three refused, all three played at the default.
+
 Labels the "This table's rules" sheet (G4) can use: Bankrupt properties — "Back to the bank" /
 "Auctioned"; Auction-only — on/off; Shuffled board — on/off.
 
@@ -837,7 +842,10 @@ new layout from a fresh seed:
   **of the same size** (Classic: the two 2-street sets swap or stay, the six 3-street sets are
   permuted). Inside a set the streets keep their order. Each street carries its own deed: name,
   price, rent table, house cost, group, flag. Expensive streets can now sit right after START.
-- Log, right after `Game started! Good luck.`: `The board was shuffled`.
+- Log, right after `Game started! Good luck.`: `The board was shuffled`. From 1.0.8 the line goes
+  on to say what moved (`The board was shuffled — United States, the priciest set, now sits right
+  after START`) — it always **starts** with `The board was shuffled`; match on that, never on the
+  whole line. See Round 4.
 - Cards that name a square ("Advance to Rio", the nearest airport, the priciest street) follow the
   streets. Sets, rent, building, even-build, mortgages, trades, bots, the deadlock rule and the
   end-of-game stats all use the shuffled layout.
@@ -969,7 +977,8 @@ socket.emit('settings', { bankruptProperties: 'choose' });
 - **Play-now tables roll it and their host may change it** (H3) — see the end of this part.
 - **Cup tables** still refuse it (`A cup table is set by the cup`) and always play `"release"`,
   whatever the field says. `auctionOnly` and `shuffleBoard` stay private-table only: a Play-now
-  patch carrying either is refused whole with the existing Play-now message.
+  patch carrying either is refused whole with the existing Play-now message. (1.0.8: `shuffleBoard`
+  joins the Play-now roll — see Round 4. `auctionOnly` is still refused.)
 
 Labels (every client):
 
@@ -1189,7 +1198,7 @@ line (54 / 15 / 13 of 60) was a different harness; the table here is the one to 
 - `bankruptProperties` is one of the rules a Play-now table **rolls**, weighted:
   `"release"` 50%, `"auction"` 25%, `"choose"` 25%. A Play-now table **plays** what it rolled (or
   what its host changed it to) — the old "Play-now plays the defaults" rule now holds only for
-  `auctionOnly` and `shuffleBoard`.
+  `auctionOnly` and `shuffleBoard` (from 1.0.8, only `auctionOnly` — see Round 4).
 - **Host-editable in the Play-now lobby** like the other rolled rules: it is in
   `state.quickLobby.editable`, the host sends the ordinary `settings` event
   (`{ bankruptProperties: "choose" }`), a change un-readies everybody as any rule change does, and
@@ -1247,3 +1256,113 @@ GET /api/facts
 - `test/facts.mjs` (in `npm test`) fails the build if a street or set on any board — stock,
   shuffled, or anything the random generator can deal — has no fact, if a fact is outside 40–170
   characters or has an emoji, or if a fact belongs to no street any board deals.
+
+===================================================================================================
+
+# Round 4 — 1.0.8: the shuffled board at Play-now tables
+
+Until 1.0.8 a Play-now table always played the printed board: `shuffleBoard` was a private-table
+switch (G7). From 1.0.8 a Play-now table rolls it like its other house rules and its host may
+change it. Nothing about the shuffled board itself changes — G7 is still exactly how a board is
+shuffled, sent and drawn. Same rules as the parts above: every change is additive; an old server
+never rolls it, and an old server's roll has eight phrases, not nine.
+
+---------------------------------------------------------------------------------------------------
+
+## The roll
+
+- `shuffleBoard` is one of the rules a Play-now table **rolls**, weighted `false` 2 : `true` 1 —
+  about one table in three plays a shuffled board. It is the last rolled rule (after
+  `bankruptProperties`).
+- It is never dealt `true` onto a board with no two colour sets of the same size: a shuffle only
+  trades sets of one size, so such a board would be dealt exactly as printed while the lobby said
+  otherwise. Today **every** stock board — all 24 in `MAPS` and Random — has such a pair, so this
+  never fires; it keeps the chip honest if a board without one is ever added.
+- A Play-now table **plays** what it rolled, or what its host changed it to: `start` deals a
+  shuffled board exactly as G7 says (a fresh seed, `state.map.shuffled: true`, a new
+  `state.map.uid`, the board's id unchanged). The lobby always shows the printed board
+  (`state.map.shuffled: false`); the shuffle happens at the deal.
+- Cup tables: unchanged — `shuffleBoard` is refused there and never played.
+- `auctionOnly` is still private-table only: a Play-now patch carrying it is refused whole with
+  `A Play-now table keeps its seats, privacy, house players, teams and clock`.
+
+## The Play-now lobby
+
+- `state.quickLobby.editable` includes `"shuffleBoard"`. In full it is now `startingCash`,
+  `x2rent`, `vacationCash`, `auction`, `noRentInPrison`, `evenBuild`, `bankruptProperties`,
+  `shuffleBoard`, `mapId` — test membership, never position.
+- The host sends the ordinary `settings` event (`{ shuffleBoard: true }`). As with every rolled
+  rule, a change un-readies everybody else, `state.quickRoll.edited` lists `"shuffleBoard"` while
+  it differs from the roll, and the log says `Hana changed the rules: shuffled board on`. Changed
+  together with other rules it is named last: `Hana changed the rules: auctions off · shuffled
+  board on`. Sending the value that is already set changes nothing and says nothing.
+- At a Play-now table only: moving the board to one that cannot be shuffled turns the switch off
+  with it (`Hana changed the rules: <Board> board · shuffled board off`), and turning it on there
+  is a no-op. A private table keeps whatever its host set, as since 1.0.6.
+- `state.quickRoll.keys` includes `"shuffleBoard"` on a table a 1.0.8 server rolled.
+- `state.quickRoll.parts` gains a **ninth phrase, last**, read off the live setting:
+  `shuffled board on` / `shuffled board off`.
+
+  | index | phrase (example)                      | key                  |
+  |-------|---------------------------------------|----------------------|
+  | 0     | `Classic`                             | `mapId`              |
+  | 1     | `$1,500 to start`                     | `startingCash`       |
+  | 2     | `x2 rent on full sets on`             | `x2rent`             |
+  | 3     | `vacation cash off`                   | `vacationCash`       |
+  | 4     | `auctions on`                         | `auction`            |
+  | 5     | `no rent while jailed off`            | `noRentInPrison`     |
+  | 6     | `even build on`                       | `evenBuild`          |
+  | 7     | `bankrupt player decides`             | `bankruptProperties` |
+  | 8     | `shuffled board on` (**new**)         | `shuffleBoard`       |
+
+  Last, so the 1.0.7 apps already in the stores — whose index → key maps have eight entries —
+  keep every existing chip on its own rule and show the ninth as a plain chip. **Clients:** append
+  `shuffleBoard` as the ninth entry of the index → key map, and look indices up safely: a roll
+  from an older server has eight phrases and no index 8.
+
+  The roll line in the log therefore reads e.g. `This table rolled: Classic · $1,500 to start · x2
+  rent on full sets on · vacation cash off · auctions on · no rent while jailed off · even build on
+  · bankrupt player decides · shuffled board on`.
+
+## The deal — the log line
+
+Kind `system`, right after `Game started! Good luck.`, on any table that deals a shuffled board
+(private or Play-now):
+
+```
+The board was shuffled — <what moved>
+```
+
+| `<what moved>`                                              | when |
+|-------------------------------------------------------------|------|
+| `<Set>, the priciest set, now sits right after START`      | the set now first after START was not first on the printed board, and it holds the board's priciest street |
+| `<Set> now sits right after START`                          | the set now first after START was not first on the printed board |
+| `<N> of <M> sets moved, and <Set> still opens the board`    | the first set after START did not move; N of the board's M sets did |
+
+`<Set>` is the set's display name, `state.groups[key].name` — the name the deeds and the property
+list already use (`United States`, `Maharashtra`, `The Northeast`). Examples:
+
+- `The board was shuffled — United States, the priciest set, now sits right after START`
+- `The board was shuffled — France now sits right after START`
+- `The board was shuffled — 5 of 8 sets moved, and Brazil still opens the board`
+
+On the vanishingly rare deal where no set ended up moving, the line is the bare 1.0.6
+`The board was shuffled`. **Clients:** match the line by its opening `The board was shuffled`,
+never the whole text, and never parse the clause — for a "shuffled board" heads-up, read
+`state.map.shuffled` and key it on `state.map.uid`.
+
+## Old clients
+
+- Every shipped client already draws the board from `state.map` and redraws when
+  `state.map.uid` changes (G7), so a 1.0.7 or older app at a shuffled Play-now table plays the
+  shuffled board correctly.
+- A 1.0.7 app shows the ninth phrase as a chip with no "changed by host" mark, and a 1.0.7 host has
+  no control for it (the table still plays what was rolled; a 1.0.8 host can change it).
+- Their table rules sheets ("i") read the shuffle only at a host-set private table, so at a
+  Play-now table that rolled it on they say the wrong thing. iOS 1.0.6/1.0.7 show
+  `Shuffled board: Off — Every street stays where the board prints it` both in the lobby (right
+  under a `shuffled board on` chip) and in the game, while the sheet's own Board row says
+  `Shuffled for this game`. Android 1.0.6/1.0.7 show Off in the lobby only; after the deal they
+  read On, from `state.map.shuffled`. Only the words are wrong — the board is dealt and played
+  correctly, and updating to 1.0.8 fixes the sheet. No server change can help: the old sheets
+  ignore `settings.shuffleBoard` whenever `quick` is true.

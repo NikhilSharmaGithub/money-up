@@ -576,6 +576,25 @@ function seeded(seed) {
   };
 }
 
+/** True when two of these set sizes are the same — the only trade a shuffle makes. */
+const twinSizes = (sizes) => sizes.some((n, i) => sizes.indexOf(n) !== i);
+
+/**
+ * Whether a board has anything to shuffle: two colour sets of the same size.
+ * A board without a pair comes back from shuffleMap exactly as printed, and
+ * a table that says "shuffled board on" over it is promising strangers
+ * something the deal will never do — so a Play-now roll asks this first.
+ */
+export const canShuffle = (map) => twinSizes(Object.values(map?.groups || {}).map((idxs) => idxs.length));
+
+/**
+ * The same question asked of a board by the id a table names it by. Random
+ * is answered from the shape every generated board is dealt in rather than
+ * by generating one to look at: that would spend draws of Math.random, and a
+ * seeded test table would no longer play the game its seed promises.
+ */
+export const boardCanShuffle = (id) => (id === 'random' ? twinSizes(GROUP_SIZES) : canShuffle(getMap(id)));
+
 /**
  * The same board with its colour sets traded among the runs of their size.
  *
@@ -596,8 +615,7 @@ export function shuffleMap(map, seed) {
     if (!bySize.has(idxs.length)) bySize.set(idxs.length, []);
     bySize.get(idxs.length).push(g);
   }
-  const movable = [...bySize.values()].some((list) => list.length > 1);
-  if (!movable) return { ...map, shuffled: false, shuffleSeed: null };
+  if (!canShuffle(map)) return { ...map, shuffled: false, shuffleSeed: null };
 
   const deal = () => {
     const runOf = {};

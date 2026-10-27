@@ -40,7 +40,13 @@ export const TICK = `<svg class="ico tick" viewBox="0 0 24 24" fill="none" aria-
 // ─────────────────────────────────────────────────────────────── toasts ──
 const MAX_TOASTS = 3;
 
-export function toast(message, type = 'info') {
+/**
+ * A short line over everything, gone on its own. `type` is 'info', 'error',
+ * or 'accent' — a moment worth the brand's tint rather than a problem, the
+ * shuffled board's heads-up (1.0.8) — and `glyph` swaps the bulb for a drawn
+ * glyph that says what the moment is about.
+ */
+export function toast(message, type = 'info', glyph = '') {
   const root = $('#toastRoot');
 
   // Repeating the same message bumps a counter instead of stacking copies —
@@ -58,7 +64,7 @@ export function toast(message, type = 'info') {
   el.className = `toast ${type}`;
   el.dataset.msg = message;
   el.dataset.n = '1';
-  el.innerHTML = `<span>${icon(type === 'error' ? 'warning' : 'bulb', null, 'solo')}</span>
+  el.innerHTML = `<span>${icon(glyph || (type === 'error' ? 'warning' : 'bulb'), null, 'solo')}</span>
     <span>${escapeHtml(message)}</span><b class="toast-n"></b>`;
   root.appendChild(el);
   // A dismissed toast stays in the DOM for its 320 ms fade, so counting
@@ -1274,10 +1280,24 @@ function wireLookPanel(state, meId, el, actions) {
  * The phrases a Play-now table's roll is told in, in the server's reading
  * order (quickRollParts), each paired with the setting it describes — so a
  * chip can say which rule it is when the host has moved it off the roll.
- * What a bankruptcy does with the streets is rolled too (1.0.7), and is the
- * last phrase.
+ * What a bankruptcy does with the streets is rolled too (1.0.7), and after it
+ * whether the board is shuffled at the deal (1.0.8). New phrases only ever go
+ * on the end: the apps already in the stores pair the first eight by place,
+ * and one slipped into the middle would ring the wrong chip on every phone
+ * at the table. A phrase past the end of this list — a server newer than
+ * this page — is still shown, just without a key to ring.
  */
-const QUICK_PART_KEYS = ['mapId', 'startingCash', 'x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild', 'bankruptProperties'];
+const QUICK_PART_KEYS = ['mapId', 'startingCash', 'x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild', 'bankruptProperties', 'shuffleBoard'];
+
+/**
+ * Whether this table's roll covers a rule at all: a server from before 1.0.8
+ * tells eight phrases and never the shuffle, and a row for a rule the table
+ * did not roll would only be a locked switch nobody can explain.
+ */
+const rollCovers = (state, key) => {
+  const at = QUICK_PART_KEYS.indexOf(key);
+  return at >= 0 && at < (state.quickRoll?.parts?.length || 0);
+};
 
 /** The five house rules a Play-now table rolls, as the settings name them. */
 const ROLLED_RULES = ['x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'evenBuild'];
@@ -1289,14 +1309,37 @@ const ROLLED_RULES = ['x2rent', 'vacationCash', 'auction', 'noRentInPrison', 'ev
  * table. Whatever the host has since moved off the roll wears the accent's
  * ring and is counted in the heading, so a stranger can see which rules a
  * person chose and which the dice did.
+ *
+ * A shuffled board (1.0.8) is the one rule that changes the board everybody
+ * is looking at, so when it is on its chip says so a little louder: the
+ * drawn shuffle and the accent's tint. Off, it is a chip like the rest —
+ * "shuffled board off" is the game everybody already knows.
  */
 function rolledChipsHTML(state) {
   const parts = state.quickRoll?.parts || [];
   const edited = new Set(state.quickRoll?.edited || []);
   return `<div class="rolled-rules">${parts.map((p, i) => {
-    const changed = edited.has(QUICK_PART_KEYS[i]);
-    return `<span class="rolled-chip${changed ? ' edited' : ''}"${changed ? ' title="Changed by the host"' : ''}>${escapeHtml(p)}</span>`;
+    const key = QUICK_PART_KEYS[i];
+    const changed = !!key && edited.has(key);
+    const lit = key === 'shuffleBoard' && String(p).endsWith(' on');
+    const title = changed ? 'Changed by the host'
+      : lit ? 'The colour sets trade places when the game starts' : '';
+    return `<span class="rolled-chip${changed ? ' edited' : ''}${lit ? ' lit' : ''}"${title ? ` title="${title}"` : ''}>${lit ? icon('shuffle') : ''}${escapeHtml(p)}</span>`;
   }).join('')}</div>`;
+}
+
+/**
+ * The same roll as one line under the board's name in the well, the board
+ * itself left off because the line above already says it. The shuffle, when
+ * it is on, wears its glyph and the accent here too: the well is where the
+ * whole table is looking while it waits, and a board about to be dealt into
+ * new places is the one rule worth catching an eye with.
+ */
+function rolledLineHTML(state) {
+  return (state.quickRoll?.parts || []).slice(1).map((p, i) => {
+    const lit = QUICK_PART_KEYS[i + 1] === 'shuffleBoard' && String(p).endsWith(' on');
+    return lit ? `<b class="rolled-lit">${icon('shuffle')}${escapeHtml(p)}</b>` : escapeHtml(p);
+  }).join(' · ');
 }
 
 function rolledHeading(state) {
@@ -1347,11 +1390,12 @@ const cashOptions = (current) => {
 /**
  * A Play-now table's rules: the chips it rolled, then the controls under
  * them. Its host may change exactly what the server lists in `editable` —
- * the money, the board, the five house rules the table rolled and, since
- * 1.0.7, where a bankrupt player's streets go — from the same rows a private
- * host uses. Everything else a stranger sat down under is shown locked, and
- * everybody else reads every row switched off. A board is never rented here
- * (see paintBoards).
+ * the money, the board, the five house rules the table rolled, since 1.0.7
+ * where a bankrupt player's streets go, and since 1.0.8 whether the board is
+ * shuffled at the deal — from the same rows a private host uses, in the
+ * order the chips above them read. Everything else a stranger sat down under
+ * is shown locked, and everybody else reads every row switched off. A board
+ * is never rented here (see paintBoards).
  */
 function quickRulesHTML(state, meId) {
   const q = state.quickLobby;
@@ -1360,12 +1404,17 @@ function quickRulesHTML(state, meId) {
   const dis = (k) => (can(k) ? '' : 'disabled');
   const rolled = RULES.filter((d) => ROLLED_RULES.includes(d.key));
   const fixed = RULES.filter((d) => !ROLLED_RULES.includes(d.key));
+  // The shuffle is a row only at a table whose server knows it as a Play-now
+  // rule — its roll tells the phrase (rollCovers) or its host may change it —
+  // and the note under the chips counts it only then.
+  const shuffles = rollCovers(state, 'shuffleBoard') || (q.editable || []).includes('shuffleBoard');
+  const count = shuffles ? 'seven' : 'six';
   return `<div class="panel quick-rules" id="quickRules">
       <div class="panel-title">${icon('dice')} ${rolledHeading(state)}</div>
       ${rolledChipsHTML(state)}
       <div class="qr-note">${isHost
-        ? 'You can change the money, the board and these six rules. Changing one un-readies everyone so they can read it.'
-        : 'The host can change the money, the board and these six rules — and a change un-readies everyone, so you get to read it first.'}</div>
+        ? `You can change the money, the board and these ${count} rules. Changing one un-readies everyone so they can read it.`
+        : `The host can change the money, the board and these ${count} rules — and a change un-readies everyone, so you get to read it first.`}</div>
       <div class="setting board-setting">
         <div class="s-body">
           <div class="s-name">${icon('map')} Board</div>
@@ -1382,6 +1431,7 @@ function quickRulesHTML(state, meId) {
       </div>
       ${rolled.map((d) => toggleRow(state, d, dis(d.key))).join('')}
       ${estateRow(state, dis('bankruptProperties'))}
+      ${shuffles ? shuffleRow(state, dis('shuffleBoard')) : ''}
       <div class="qr-locked">
         <div class="look-label">${icon('key')} Set by Play now</div>
         ${fixed.map((d) => toggleRow(state, d, 'disabled')).join('')}
@@ -1627,21 +1677,34 @@ function auctionOnlyRow(state, dis) {
 }
 
 /**
+ * Shuffle the board as a lobby row. The same row at a private table and, for
+ * its host, at a Play-now one (1.0.8), where the table rolls it and the host
+ * may change it — so a stranger meets the words a private host reads. It is
+ * drawn and worded as the iPhone and Android rows are, the shuffle glyph and
+ * their sentence word for word, whichever way the switch sits: the switch
+ * already says whether it is on, and the "pricey streets right after START"
+ * half is what makes a host want to flip it. The Board row just above it
+ * carries the map glyph, so this one must not, or it reads as a second board
+ * picker.
+ */
+function shuffleRow(state, dis) {
+  return toggleRow(state, {
+    key: 'shuffleBoard', icon: 'shuffle', name: 'Shuffle the board',
+    desc: 'At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.',
+  }, dis);
+}
+
+/**
  * The other two house rules of 1.0.6 round 2: a shuffled board and what a
  * bankruptcy does with the streets. Neither is drawn here at a Play-now or a
- * cup table: both play the printed board, a cup sends estates back to the
- * bank, and a Play-now table shows its estate rule with the rules it rolled
- * (see quickRulesHTML).
+ * cup table: a cup plays the printed board and sends estates back to the
+ * bank, and a Play-now table shows both with the rules it rolled (see
+ * quickRulesHTML) — the estate rule since 1.0.7, the shuffle since 1.0.8.
  */
 function houseRuleRows(state, dis) {
   if (state.quick || state.cup) return '';
-  const shuffle = !!state.settings.shuffleBoard;
   return `
-      ${toggleRow(state, {
-        key: 'shuffleBoard', icon: 'map', name: 'Shuffle the board',
-        desc: shuffle ? 'The colour sets are dealt to new places at the start — prices and rents move with them'
-          : 'Every street sits where the board prints it',
-      }, dis)}
+      ${shuffleRow(state, dis)}
       ${estateRow(state, dis)}`;
 }
 
@@ -1650,7 +1713,9 @@ function houseRuleRows(state, dis) {
  * the people who cannot open the settings: the clock, a bot skill other
  * than the usual when there are bots to have it, and the two house rules
  * that change what the board in front of them is about to do — the lobby
- * shows the printed board, and a shuffle only happens at the deal.
+ * shows the printed board, and a shuffle only happens at the deal. A
+ * Play-now table's half-line is its roll instead, the line under this one,
+ * and that roll tells the shuffle too (1.0.8).
  */
 function lobbyTerms(state) {
   if (state.quick || state.cup) return '';
@@ -2603,7 +2668,7 @@ export function renderCenter(state, meId, actions) {
         <div class="lobby-map">${icon('map')} ${escapeHtml(state.map.name)} · ${state.map.size} tiles${state.settings.teams > 0 ? ` · ${state.settings.teams} teams` : ''}${lobbyTerms(state)}</div>
         ${state.quickRoll?.parts?.length
           // The board is already on the line above, so this picks up the rules.
-          ? `<div class="lobby-rolled">${escapeHtml(state.quickRoll.parts.slice(1).join(' · '))}</div>` : ''}
+          ? `<div class="lobby-rolled">${rolledLineHTML(state)}</div>` : ''}
       </div>
       <div class="seat-row${lobby ? ' marked' : ''}">${Array.from({ length: seats }, (_, i) => seatHtml(state.players[i])).join('')}</div>
       <div class="dim small">${state.cup && seated < seats
@@ -5179,13 +5244,14 @@ export function openHelpModal() {
  * `on` colours the value — true for a switch that is on, false for one that
  * is off, null for a value that is neither (a board, a sum, a length).
  *
- * A Play-now table and a cup table always play auction-only, the shuffled
- * board and the game clock at their defaults whatever the fields say — the
- * server checks them at its own door — so they are read the same way here
- * rather than taken on the field's word. Bankrupt properties is rolled at a
- * Play-now table since 1.0.7 and played as rolled; a cup still sends them to
- * the bank (estateRuleOf). A row may be null: a rule this table does not
- * have to tell anybody about.
+ * A Play-now table and a cup table always play auction-only and the game
+ * clock at their defaults whatever the fields say — the server checks them
+ * at its own door — so they are read the same way here rather than taken on
+ * the field's word, and a cup plays the printed board the same way. Bankrupt
+ * properties (1.0.7) and the shuffled board (1.0.8) are rolled at a Play-now
+ * table and played as rolled; a cup still sends estates to the bank
+ * (estateRuleOf) and never shuffles. A row may be null: a rule this table
+ * does not have to tell anybody about.
  */
 function tableRuleSections(state) {
   const s = state.settings || {};
@@ -5219,9 +5285,10 @@ function tableRuleSections(state) {
   const auctionOnly = own && !!s.auctionOnly;
   // A shuffled game says so from the board it is playing, which is the truth
   // whatever the switch says; the lobby only has the switch, and the deal
-  // that honours it is still to come.
+  // that honours it is still to come. The switch is read at a private table
+  // and, since 1.0.8, at a Play-now one, which rolls it — never at a cup.
   const shuffled = !!map.shuffled;
-  const shuffle = shuffled || (own && !!s.shuffleBoard);
+  const shuffle = shuffled || (!state.cup && !!s.shuffleBoard);
   const pot = Number(state.vacationPot) || 0;
 
   return [

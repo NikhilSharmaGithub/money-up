@@ -8,11 +8,12 @@
 // one of the two the calendar is giving away would be a matchmade table half
 // the queue is locked out of — which is not a matchmade table at all.
 //
-// The second is the game behind the roll. Five bankrolls and five rules that
-// flip freely is a hundred and sixty tables, and "the engine supports this
+// The second is the game behind the roll. Five bankrolls and six switches
+// that flip freely — the five house rules and, from 1.0.8, the shuffled board
+// — is three hundred and twenty tables, and "the engine supports this
 // setting" is not the same claim as "the engine finishes a game with this
-// setting". So every one of the hundred and sixty is actually played out, to a
-// winner, with the invariants checked at the end.
+// setting". So every one of the three hundred and twenty is actually played
+// out, to a winner, with the invariants checked at the end.
 import {
   GameRoom, DEFAULT_SETTINGS, rollQuickSettings, quickRollParts,
   QUICK_ROLL_KEYS, quickRollValues,
@@ -269,7 +270,7 @@ rule('EVERY COMBINATION PLAYED OUT');
       } catch (e) { crash = `${e.message} @ ${e.stack.split('\n')[1]?.trim()}`; }
     }
     // The handful of things that are never true of a legal table, checked at
-    // the end rather than every step — this is a hundred and sixty games.
+    // the end rather than every step — this is three hundred and twenty games.
     const debt = room.turn?.debt || null;
     for (const p of room.players) {
       const owing = room.status === 'playing' && debt?.debtor === p.id && !p.bankrupt;
@@ -283,35 +284,41 @@ rule('EVERY COMBINATION PLAYED OUT');
       if (o.houses > 0 && !room.ownsFullGroup(o.owner, tile.group)) crash ||= `${tile.name} built without the set`;
     }
     const status = room.status;
+    const shuffled = !!room.map.shuffled;
     room.dispose();
-    return { status, steps, crash };
+    return { status, steps, crash, shuffled };
   };
 
   const broke = [];
   const stalled = [];
+  const unkept = [];
   let played = 0;
   let boardAt = 0;
   for (const cash of CASH) {
-    // All thirty-two ways the five flippable rules can land, exhaustively —
-    // a combination the roll can produce is a combination somebody will be
-    // sat down at.
+    // All sixty-four ways the six switches can land, exhaustively — a
+    // combination the roll can produce is a combination somebody will be sat
+    // down at, and half of them are now played on a shuffled board.
     for (let mask = 0; mask < (1 << FLAGS.length); mask++) {
       const settings = { startingCash: cash };
       FLAGS.forEach((k, i) => { settings[k] = !!(mask & (1 << i)); });
       // Rotate the boards through the combinations so the day's whole shelf
       // is played, not only the house board.
       const mapId = boards[boardAt++ % boards.length];
-      const { status, crash } = play(settings, mapId);
+      const { status, crash, shuffled } = play(settings, mapId);
       played++;
       const label = `${mapId} $${cash} ${FLAGS.map((k, i) => (mask & (1 << i) ? k : `no-${k}`)).join(' ')}`;
       if (crash) broke.push(`${label}: ${crash}`);
       else if (status !== 'ended') stalled.push(label);
+      // The chip in the lobby is a promise: a table that said "shuffled board
+      // on" played a shuffled board, and one that said off played the print.
+      if (shuffled !== !!settings.shuffleBoard) unkept.push(label);
     }
   }
 
   P(broke.length === 0, `${played} combinations played without a crash`, broke[0] || 'clean');
   P(stalled.length === 0, 'every one of them reached a winner',
     stalled.length ? `${stalled.length} unfinished, e.g. ${stalled[0]}` : `${played}/${played}`);
+  P(unkept.length === 0, 'each played the board its shuffle switch promised', unkept[0] || 'kept');
 }
 
 rule(failed ? `${failed} CHECK(S) FAILED` : 'ALL CHECKS PASSED');

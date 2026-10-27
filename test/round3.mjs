@@ -607,9 +607,11 @@ async function inProcess() {
     const share = (k) => tally[k] / N;
     PASS(Math.abs(share('release') - 0.5) < 0.04 && Math.abs(share('auction') - 0.25) < 0.04 && Math.abs(share('choose') - 0.25) < 0.04,
       'weighted: back to the bank half the time, auction and player-decides a quarter each', short(tally));
-    PASS(quickRollParts({ startingCash: 1500, bankruptProperties: 'choose' }, 'Classic').at(-1) === 'bankrupt player decides'
-      && quickRollParts({ bankruptProperties: 'auction' }).at(-1) === 'bankrupt streets auctioned'
-      && quickRollParts({ bankruptProperties: 'release' }).at(-1) === 'bankrupt streets back to the bank',
+    // Eighth of the nine phrases: 1.0.8 put the shuffled board after it,
+    // last, where the 1.0.7 apps' eight-entry maps cannot trip on it.
+    PASS(quickRollParts({ startingCash: 1500, bankruptProperties: 'choose' }, 'Classic')[7] === 'bankrupt player decides'
+      && quickRollParts({ bankruptProperties: 'auction' })[7] === 'bankrupt streets auctioned'
+      && quickRollParts({ bankruptProperties: 'release' })[7] === 'bankrupt streets back to the bank',
     'and it is said in plain words with the rest of the roll');
 
     const q = new GameRoom(`r3q-${++serial}`, () => {});
@@ -619,8 +621,8 @@ async function inProcess() {
     q.addPlayer({ id: B, name: 'Ben' });
     PASS(q.settings.bankruptProperties === 'choose' && q.ruleOn('bankruptProperties') === 'choose',
       'a Play-now table plays the value it rolled');
-    PASS(logText(q).find((t) => t.startsWith('This table rolled:'))?.endsWith('bankrupt player decides')
-      && q.serialize().quickRoll.parts.at(-1) === 'bankrupt player decides', 'the lobby and the log say so');
+    PASS(/ · bankrupt player decides · shuffled board o(n|ff)$/.test(logText(q).find((t) => t.startsWith('This table rolled:')) || '')
+      && q.serialize().quickRoll.parts[7] === 'bankrupt player decides', 'the lobby and the log say so');
     PASS(q.quickLobbyView()?.editable?.includes('bankruptProperties'), 'and the host may change it in the lobby');
     q.player(B).ready = true;
     const res = q.updateSettings(q.hostId, { bankruptProperties: 'auction' });
@@ -630,10 +632,16 @@ async function inProcess() {
     PASS(q.updateSettings(q.hostId, { bankruptProperties: 'lottery' })?.error === 'Bankrupt properties go back to the bank, to auction, or the player decides',
       'a value off the list is refused there too');
     const locked = 'A Play-now table keeps its seats, privacy, house players, teams and clock';
-    PASS(q.updateSettings(q.hostId, { auctionOnly: true })?.error === locked && q.updateSettings(q.hostId, { shuffleBoard: true })?.error === locked
+    PASS(q.updateSettings(q.hostId, { auctionOnly: true })?.error === locked
       && q.updateSettings(q.hostId, { bankruptProperties: 'choose', auctionOnly: true })?.error === locked
       && q.settings.bankruptProperties === 'auction',
-    'auction-only and the shuffled board stay private-table only — a patch reaching for them is refused whole');
+    'auction-only stays private-table only — a patch reaching for it is refused whole');
+    // The shuffled board is the other half of that old line, and from 1.0.8
+    // it is a rolled rule like this one (test/quick-shuffle.mjs has the rest).
+    const shuffleWas = q.settings.shuffleBoard;
+    PASS(!q.updateSettings(q.hostId, { shuffleBoard: !shuffleWas })?.error && q.settings.shuffleBoard === !shuffleWas
+      && q.settings.bankruptProperties === 'auction',
+    'the shuffled board is the host\'s to change from 1.0.8', `shuffled board ${q.settings.shuffleBoard ? 'on' : 'off'}`);
     PASS(q.updateSettings(B, { bankruptProperties: 'release' }) === undefined && q.settings.bankruptProperties === 'auction',
       'a guest changes nothing');
     q.clearQuickTimers();
@@ -1103,7 +1111,7 @@ async function overTheWire() {
     await until(() => host.state?.quickLobby && host.state.quickRoll);
     const st = host.state;
     PASS(['release', 'auction', 'choose'].includes(st.settings.bankruptProperties)
-      && /^bankrupt (streets|player)/.test(st.quickRoll.parts.at(-1)),
+      && /^bankrupt (streets|player)/.test(st.quickRoll.parts[7]),
     'the table rolled what happens to bankrupt streets, and says it with the rest of the roll', short(st.quickRoll.parts));
     PASS(st.quickLobby.editable.includes('bankruptProperties'), 'the host may change it');
     const other = st.settings.bankruptProperties === 'choose' ? 'auction' : 'choose';

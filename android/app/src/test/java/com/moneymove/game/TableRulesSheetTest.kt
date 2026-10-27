@@ -9,8 +9,10 @@ import org.junit.Test
 /**
  * "This table's rules" (round 2, G4) says what `state.settings` says, in
  * words, for everybody at the table — and says the three new rules the way
- * the server plays them: at their defaults on a Play-now or a cup table,
- * whatever the fields hold (docs/API-1.0.6.md, "Three more lobby settings").
+ * the server plays them: at their defaults on a cup table, whatever the
+ * fields hold, and on a Play-now table all but the two it rolls — the
+ * estates from 1.0.7, the shuffle from 1.0.8 (docs/API-1.0.6.md, "Three more
+ * lobby settings").
  */
 class TableRulesSheetTest {
 
@@ -94,18 +96,21 @@ class TableRulesSheetTest {
     }
 
     @Test
-    fun `a play-now or cup table plays auction-only and the shuffle at their defaults and hides the house`() {
+    fun `a play-now or cup table plays auction-only at its default and hides the house`() {
         val forced = GameSettings(bankruptProperties = "auction", auctionOnly = true, shuffleBoard = true, botLevel = "hard")
         for ((quick, cup, table) in listOf(Triple(true, null, "Play now"), Triple(null, true, "Cup match"))) {
             val l = lines(state(forced, quick = quick, cup = cup, players = listOf(bot)))
             assertEquals("Off", l.getValue("Auction-only").value)
-            assertEquals("Off", l.getValue("Shuffled board").value)
             assertEquals(table, l.getValue("Table").value)
             assertNull(l["Bot skill"])
         }
         // From 1.0.7 a Play-now table rolls and plays its bankrupt rule; a cup table never does.
         assertEquals("Auctioned", lines(state(forced, quick = true)).getValue("Bankrupt properties").value)
         assertEquals("Back to the bank", lines(state(forced, cup = true)).getValue("Bankrupt properties").value)
+        // And from 1.0.8 the shuffle the same way: on where a Play-now table
+        // rolled it, never at a cup, whatever the field says.
+        assertEquals("On", lines(state(forced, quick = true)).getValue("Shuffled board").value)
+        assertEquals("Off", lines(state(forced, cup = true)).getValue("Shuffled board").value)
     }
 
     @Test

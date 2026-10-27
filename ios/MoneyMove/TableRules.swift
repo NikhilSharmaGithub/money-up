@@ -116,10 +116,33 @@ enum EstateRule: String, CaseIterable, Identifiable {
 
 extension GameState {
     /// The table has a host who chooses its bot skill and its length: not a
-    /// Play-now table, not a cup table. Auction-only and the shuffled board
-    /// follow the same line; what a bankrupt player's properties do no longer
-    /// does — a Play-now table rolls it (1.0.7, H3).
+    /// Play-now table, not a cup table. Auction-only follows the same line;
+    /// what a bankrupt player's properties do no longer does — a Play-now
+    /// table rolls it (1.0.7, H3) — and nor does the shuffled board, which a
+    /// Play-now table rolls from 1.0.8 (see `rollsShuffle`).
     var hasTableRules: Bool { quick != true && cup != true }
+
+    /// A Play-now table whose server deals the shuffled board as one of its
+    /// rolled rules (1.0.8) — about one table in three gets it, and the host
+    /// may change it. Read off what the server says it rolled, or what it
+    /// says the host may change, because an older server's Play-now tables
+    /// never shuffle at all: offering that host a switch it would only refuse
+    /// is a switch that reads as broken. A cup table never shuffles.
+    var rollsShuffle: Bool {
+        guard quick == true, cup != true else { return false }
+        return quickRoll?.keys?.contains("shuffleBoard") == true
+            || quickLobby?.editable?.contains("shuffleBoard") == true
+    }
+
+    /// The table plays — or, in the lobby, will deal — a shuffled board. A
+    /// board that already arrived shuffled is the plain fact of it; before the
+    /// deal it is the rule. A cup table plays the printed board whatever the
+    /// field says, and an older server's Play-now table never sets the field,
+    /// so the rule alone answers for both private and Play-now tables.
+    var shufflesBoard: Bool {
+        guard cup != true else { return false }
+        return map.shuffled == true || settings.shuffleBoard == true
+    }
 
     /// House players the host added are at this table — or, in the lobby,
     /// will be, because "Allow bots" fills every empty chair with one when the
@@ -207,8 +230,11 @@ struct TableRulesCard: View {
 /// Never at a cup table, which plays the defaults.
 ///
 /// A Play-now table (1.0.7, H3) rolls the bankrupt rule and its host may
-/// change it, but auction-only and the shuffled board stay private-table
-/// rules — there the card is `estateOnly`, the one control and its line.
+/// change it; from 1.0.8 it rolls the shuffled board too. Auction-only stays a
+/// private-table rule. There the card is `quick`: no auction-only row, and
+/// each row it does have answers for its own key, because the server opens
+/// them to the host one by one (quickLobby.editable) — and the shuffle row
+/// only from a server that rolls it at all.
 ///
 /// Like the card above, nothing here holds a value of its own: a tap sends the
 /// patch and the control moves when the state that confirms it arrives. That
@@ -216,9 +242,16 @@ struct TableRulesCard: View {
 /// on turns auctions on, and switching auctions off turns it off — so both
 /// toggles always read what the table will really play.
 struct TableTwistsCard: View {
+    /// The bankrupt rule's control — and at a private table, every row's.
     let editable: Bool
-    /// Only the bankrupt rule: a Play-now table's card.
-    var estateOnly = false
+    /// A Play-now table's card: the rules such a table rolls, and nothing else.
+    var quick = false
+    /// Whether the shuffle row is there: always at a private table; at a
+    /// Play-now table only where the server rolls it (GameState.rollsShuffle).
+    var showsShuffle = true
+    /// Whether the shuffle may be flipped from here, where that is not simply
+    /// `editable` — a Play-now host's hand is opened key by key.
+    var shuffleEditable: Bool? = nil
 
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -228,58 +261,84 @@ struct TableTwistsCard: View {
         let settings = store.state?.settings
         MMCard {
             VStack(alignment: .leading, spacing: 12) {
-                PanelTitle(estateOnly ? "Going broke" : "Auctions & board")
+                PanelTitle(!quick ? "Auctions & board" : showsShuffle ? "Going broke & board" : "Going broke")
 
                 EstateRulePicker(editable: editable)
 
-                if !estateOnly {
+                if !quick {
                     Rectangle().fill(P.rule).frame(height: 1)
 
-                    toggle(.gavel, "Auction only",
-                           caption: settings?.auctionOnly == true
-                               ? "No Buy button: every unowned property goes straight to auction, with its price as the guide."
-                               : "Land on an unowned property and you may buy it at its price.",
-                           key: "auctionOnly", isOn: settings?.auctionOnly ?? false, P)
+                    TwistToggle(glyph: .gavel, title: "Auction only",
+                                caption: settings?.auctionOnly == true
+                                    ? "No Buy button: every unowned property goes straight to auction, with its price as the guide."
+                                    : "Land on an unowned property and you may buy it at its price.",
+                                key: "auctionOnly", isOn: settings?.auctionOnly ?? false,
+                                editable: editable)
+                }
 
+                if showsShuffle {
                     Rectangle().fill(P.rule).frame(height: 1)
 
-                    toggle(.shuffle, "Shuffle the board",
-                           caption: "At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.",
-                           key: "shuffleBoard", isOn: settings?.shuffleBoard ?? false, P)
+                    ShuffleBoardToggle(editable: shuffleEditable ?? editable)
                 }
             }
         }
     }
+}
 
-    private func label(_ glyph: Glyph, _ title: String, _ P: Palette) -> some View {
-        HStack(spacing: 6) {
-            Art.icon(glyph, size: 15, tint: P.ink2)
-            Text(title)
-                .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(P.ink)
-        }
-    }
+/// One of the round-2 switches, drawn the one way the private lobby has drawn
+/// them since 1.0.6: its glyph and name over a line of what it does, the
+/// switch on the right in the accent. Bound straight to the broadcast value —
+/// flipping it sends the patch, and it only moves when the state confirms it.
+struct TwistToggle: View {
+    let glyph: Glyph
+    let title: String
+    let caption: String
+    let key: String
+    let isOn: Bool
+    let editable: Bool
 
-    private func caption(_ text: String, _ P: Palette) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundStyle(P.ink3)
-            .fixedSize(horizontal: false, vertical: true)
-            .animation(nil, value: text)
-    }
+    @EnvironmentObject var store: GameStore
+    @Environment(\.colorScheme) private var scheme
 
-    private func toggle(_ glyph: Glyph, _ title: String, caption text: String,
-                        key: String, isOn: Bool, _ P: Palette) -> some View {
+    var body: some View {
+        let P = Palette.current(scheme)
         Toggle(isOn: Binding(get: { isOn },
                              set: { store.updateSettings([key: $0]) })) {
             VStack(alignment: .leading, spacing: 3) {
-                label(glyph, title, P)
-                caption(text, P)
+                HStack(spacing: 6) {
+                    Art.icon(glyph, size: 15, tint: P.ink2)
+                    Text(title)
+                        .font(.system(size: 14.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(P.ink)
+                }
+                Text(caption)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(P.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .animation(nil, value: caption)
             }
         }
         .tint(P.red)
         .disabled(!editable)
         .opacity(editable ? 1 : 0.6)
+    }
+}
+
+/// "Shuffle the board" (round 2, G7): the private lobby's row since 1.0.6,
+/// and from 1.0.8 a Play-now host's too — in the lobby right under what the
+/// table rolled, and in the Change rules sheet — so the host of a table of
+/// strangers flips exactly the switch a private host does, worded the same.
+struct ShuffleBoardToggle: View {
+    let editable: Bool
+
+    @EnvironmentObject var store: GameStore
+
+    var body: some View {
+        TwistToggle(glyph: .shuffle, title: "Shuffle the board",
+                    caption: "At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.",
+                    key: "shuffleBoard", isOn: store.state?.settings.shuffleBoard ?? false,
+                    editable: editable)
     }
 }
 
@@ -507,8 +566,9 @@ struct TableSegments<Value: Hashable>: View {
 /// whatever the fields say — the server plays them that way too. The one
 /// exception is a cup table's length: it has no game clock, but the cup's
 /// whistle ends it all the same, and the sheet says so. What a bankrupt
-/// player's properties do is rolled at a Play-now table (1.0.7), so there it
-/// reads what the table rolled.
+/// player's properties do is rolled at a Play-now table (1.0.7), and so is the
+/// shuffled board (1.0.8), so there both read what the table rolled — or what
+/// its host changed them to.
 struct TableRulesSheet: View {
     @EnvironmentObject var store: GameStore
     @Environment(\.colorScheme) private var scheme
@@ -611,8 +671,10 @@ struct TableRulesSheet: View {
         func on(_ value: Bool?, _ fallback: Bool) -> Bool { value ?? fallback }
         func flag(_ isOn: Bool) -> String { isOn ? "On" : "Off" }
 
-        // The board, and what the round-2 shuffle did to it.
-        let shuffle = hosted && on(s.shuffleBoard, false)
+        // The board, and what the round-2 shuffle did to it. A Play-now table
+        // rolls the shuffle from 1.0.8, so it is no longer only a hosted
+        // table's; a cup table still never has it (GameState.shufflesBoard).
+        let shuffle = state.shufflesBoard
         let shuffled = state.map.shuffled == true
         let board = Rule(glyph: mapGlyph(state.map.icon), title: "Board", value: state.map.name,
                          caption: shuffled ? "Shuffled for this game: the colour sets sit in new places."

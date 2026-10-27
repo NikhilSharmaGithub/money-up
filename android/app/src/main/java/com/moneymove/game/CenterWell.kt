@@ -487,8 +487,10 @@ private fun LobbyWell(state: GameState, modifier: Modifier) {
         )
         // The lobby always shows the printed board; at a table set to
         // shuffle, the layout everybody sees here is not the one they will
-        // play, so the well says so before the dice do.
-        if (state.settings.shuffleBoard == true && state.hostSetsRules) {
+        // play, so the well says so before the dice do. A Play-now table
+        // that rolled the shuffle (1.0.8) says it too, under its riffling
+        // deck; a cup table never shuffles.
+        if (state.shufflesBoard) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Icon("shuffle", size = 11.dp, tint = p.ink3)
                 Text("Shuffled at the start", color = p.ink3, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)

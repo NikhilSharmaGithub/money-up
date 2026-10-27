@@ -232,13 +232,14 @@ async function inProcess() {
     PASS(room.settings.auctionOnly === true && room.settings.auction === true,
       'both in one patch: auction-only wins, and auctions are on');
 
-    // A Play-now table rolls bankruptProperties from 1.0.7 and its host may
-    // change it like the other rolled rules (test/round3.mjs); the other two
-    // stay private-table only.
+    // A Play-now table rolls bankruptProperties from 1.0.7 and shuffleBoard
+    // from 1.0.8, and its host may change both like the other rolled rules
+    // (test/round3.mjs, test/quick-shuffle.mjs); auction-only stays
+    // private-table only.
     const quick = bare({ humans: ['q1'] });
     quick.makeQuickMatch(86400);
     const before = { ...quick.settings };
-    for (const patch of [{ auctionOnly: true }, { shuffleBoard: true }]) {
+    for (const patch of [{ auctionOnly: true }]) {
       const r = quick.updateSettings('q1', patch);
       PASS(r?.error === 'A Play-now table keeps its seats, privacy, house players, teams and clock'
         && isDeepStrictEqual(quick.settings, before), `a Play-now host cannot set ${Object.keys(patch)[0]}`, short(r));
@@ -257,9 +258,9 @@ async function inProcess() {
     quick.settings.shuffleBoard = true;
     quick.settings.auctionOnly = true;
     PASS(cup.ruleOn('shuffleBoard') === false && cup.ruleOn('auctionOnly') === false
-      && cup.ruleOn('bankruptProperties') === 'release' && quick.ruleOn('shuffleBoard') === false
+      && cup.ruleOn('bankruptProperties') === 'release' && quick.ruleOn('shuffleBoard') === true
       && quick.ruleOn('auctionOnly') === false,
-    'a cup table plays the defaults even with the fields forced, and so does a Play-now table for the two it never rolls');
+    'a cup table plays the defaults even with the fields forced; a Play-now table plays the shuffle it rolls, never auction-only');
   }
 
   // --------------------------------------------------------------- G1 ----
@@ -679,8 +680,11 @@ async function inProcess() {
     PASS(state.map.shuffled === true && state.map.uid === map.uid && state.map.uid !== 'classic' && state.mapId === 'classic'
       && state.settings.mapId === 'classic' && isDeepStrictEqual(state.map.tiles, map.tiles) && isDeepStrictEqual(state.map.groups, map.groups),
     'the state carries the shuffled tiles and sets, a new uid, and the board is still Classic by id');
-    PASS(logText(room).includes('The board was shuffled') && logText(room).indexOf('The board was shuffled') === logText(room).indexOf('Game started! Good luck.') + 1,
-      'the log says "The board was shuffled", right after the start');
+    // From 1.0.8 the line goes on to say what moved; it still opens with the
+    // same words, so it is found by its opening.
+    const shuffledAt = logText(room).findIndex((t) => t.startsWith('The board was shuffled'));
+    PASS(shuffledAt >= 0 && shuffledAt === logText(room).indexOf('Game started! Good luck.') + 1,
+      'the log says "The board was shuffled", right after the start', logText(room)[shuffledAt]);
     const twin = bare({ settings: { shuffleBoard: true } });
     twin.hostId = 'a';
     seeded(7, () => twin.start('a'));
@@ -745,10 +749,13 @@ async function inProcess() {
     room.rematch('a');
     room.updateSettings('a', { shuffleBoard: false });
     room.start('a');
-    PASS(!room.map.shuffled && room.map === MAPS.classic && !logText(room).includes('The board was shuffled'),
+    PASS(!room.map.shuffled && room.map === MAPS.classic && !logText(room).some((t) => t.startsWith('The board was shuffled')),
       'switched off in the lobby, it is off');
 
-    // A random board shuffles too, and a Play-now table never does.
+    // A random board shuffles too. A Play-now table plays the printed board
+    // when its roll left the shuffle off, and from 1.0.8 deals a shuffled one
+    // when the roll (or its host) turned it on — test/quick-shuffle.mjs has
+    // the rest of that story.
     const rnd = bare({ settings: { shuffleBoard: true, mapId: 'random' } });
     rnd.hostId = 'a';
     seeded(3, () => rnd.start('a'));
@@ -756,11 +763,21 @@ async function inProcess() {
       'Random: a fresh board, then shuffled', rnd.map.uid);
     const q = bare({ humans: ['q'], bots: 1 });
     q.quick = true;
-    q.settings.shuffleBoard = true;
+    q.settings.shuffleBoard = false;
     q.hostId = 'q';
     q.start('q');
-    PASS(!q.map.shuffled && !logText(q).includes('The board was shuffled'), 'a Play-now table plays the printed board');
+    PASS(!q.map.shuffled && !logText(q).some((t) => t.startsWith('The board was shuffled')),
+      'a Play-now table that rolled the shuffle off plays the printed board');
     q.quick = false;
+    const qs = bare({ humans: ['q'], bots: 1 });
+    qs.quick = true;
+    qs.settings.shuffleBoard = true;
+    qs.hostId = 'q';
+    seeded(11, () => qs.start('q'));
+    PASS(qs.map.shuffled && shuffleErrors(classic, qs.map).length === 0
+      && logText(qs).some((t) => t.startsWith('The board was shuffled')),
+    'and one that rolled it on deals a shuffled board', logText(qs).find((t) => t.startsWith('The board was shuffled')));
+    qs.quick = false;
   }
 
   // --------------------------------------------------------------- G8 ----
@@ -1114,7 +1131,8 @@ async function overTheWire() {
     'state.map is the shuffled board — sets moved whole, everything else fixed, new uid, still Classic', m.uid);
     PASS(!isDeepStrictEqual(m.tiles, MAPS.classic.tiles) && [ben, cat, wes].every((c) => isDeepStrictEqual(c.state.map, m)),
       'and it is not the printed board /api/maps describes; every seat and the watcher get the same one');
-    PASS(ann.state.log.some((l) => l.text === 'The board was shuffled'), 'the log says "The board was shuffled"');
+    PASS(ann.state.log.some((l) => l.text.startsWith('The board was shuffled')), 'the log says "The board was shuffled"',
+      ann.state.log.find((l) => l.text.startsWith('The board was shuffled'))?.text);
   }
 
   section('over the wire: trades are on the table, tokens are not');

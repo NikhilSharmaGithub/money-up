@@ -2,7 +2,7 @@
 // Every rule lives here; clients only send intents and render what comes back.
 
 import { createHash } from 'node:crypto';
-import { getMap, GROUPS, MAPS, shuffleMap } from './maps.js';
+import { getMap, GROUPS, MAPS, shuffleMap, boardCanShuffle } from './maps.js';
 import { buildDecks, shuffled, cardTone } from './cards.js';
 import { banter, cleanText, cleanFlag, isAllMasked } from './banter.js';
 import {
@@ -67,8 +67,9 @@ export const BANKRUPT_RULES = ['release', 'auction', 'choose'];
  * The round-2 table rules a cup table never plays, whatever the field says:
  * the room checks them at its own door as well as at the setter's (see
  * ruleOn), the way armGameClock does for the clock. A Play-now table never
- * plays two of them either; the third, what happens to a bankrupt player's
- * streets, it rolls and its host may change (1.0.7 — see QUICK_ROLL).
+ * plays auction-only either. The other two it rolls and its host may change:
+ * what happens to a bankrupt player's streets from 1.0.7, and the shuffled
+ * board from 1.0.8 (see QUICK_ROLL).
  */
 const HOUSE_TABLE_ONLY = ['bankruptProperties', 'auctionOnly', 'shuffleBoard'];
 
@@ -113,6 +114,15 @@ const QUICK_ROLL = {
   // time, and the two newer ways a quarter each — enough that a regular
   // meets them, not so often that every table is an estate sale.
   bankruptProperties: ['release', 'auction', 'choose'],
+  // 1.0.8: the colour sets trade places at the start (see shuffleMap). It is
+  // the one rule that changes nothing about the money and everything about
+  // the walk round, which is exactly the surprise a table of strangers can
+  // enjoy without having to learn anything first — New York two steps after
+  // START is a story, not a rule. About one table in three: often enough that
+  // a regular plays it most evenings, rare enough that the printed board
+  // stays the board people know. Last on the menu, and last in the phrases
+  // below, so the apps already in the stores read every chip they had.
+  shuffleBoard: [false, true],
 };
 
 /**
@@ -123,6 +133,7 @@ const QUICK_ROLL = {
  */
 const QUICK_ROLL_WEIGHTS = {
   bankruptProperties: [2, 1, 1],
+  shuffleBoard: [2, 1],
 };
 
 /** The rules a quick table rolls, board aside. Exported so a test can read them. */
@@ -179,6 +190,13 @@ export function rollQuickSettings(boards = [], rnd = Math.random) {
   // board every single game was the one board quick play would never deal.
   const playable = boards.filter((id) => id === 'random' || Object.hasOwn(MAPS, id));
   if (playable.length) rolled.mapId = pick(playable);
+  // A shuffle needs two colour sets of one size to trade, and a board without
+  // a pair is dealt exactly as printed. Every board on the shelf today has
+  // one, but the chip would be the one to lie if a new board did not: four
+  // strangers read "shuffled board on" and then play the printed board. So
+  // the roll asks the board it just dealt — or, with no board in the roll,
+  // the one a fresh table already sits on — and deals the switch off there.
+  if (rolled.shuffleBoard && !boardCanShuffle(rolled.mapId ?? DEFAULT_SETTINGS.mapId)) rolled.shuffleBoard = false;
   return rolled;
 }
 
@@ -211,6 +229,16 @@ const BANKRUPT_PHRASES = {
 const bankruptPhrase = (v) => BANKRUPT_PHRASES[v] || BANKRUPT_PHRASES.release;
 
 /**
+ * The shuffled board (1.0.8), a switch like the five above but kept out of
+ * their list on purpose: those sit before the bankruptcy phrase, and this
+ * one goes after it. The apps pair each phrase with its rule by position, and
+ * a 1.0.7 phone knows eight positions — a ninth at the end is a chip it shows
+ * plainly, where one in the middle would shift every chip after it onto the
+ * wrong rule.
+ */
+const shufflePhrase = (on) => `shuffled board ${on ? 'on' : 'off'}`;
+
+/**
  * What this table is, one phrase at a time: the board, the bankroll, then
  * every rolled rule and whether it is on.
  *
@@ -225,6 +253,7 @@ export function quickRollParts(settings = {}, mapName = '') {
     `$${Number(settings.startingCash || 0).toLocaleString('en-US')} to start`,
     ...Object.entries(QUICK_ROLL_LABELS).map(([k, label]) => `${label} ${settings[k] ? 'on' : 'off'}`),
     bankruptPhrase(settings.bankruptProperties),
+    shufflePhrase(settings.shuffleBoard),
   ];
 }
 
@@ -241,7 +270,45 @@ function quickChangeParts(settings, mapName, keys) {
   if (keys.includes('startingCash')) out.push(cash);
   Object.keys(QUICK_ROLL_LABELS).forEach((k, i) => { if (keys.includes(k)) out.push(rules[i]); });
   if (keys.includes('bankruptProperties')) out.push(bankruptPhrase(settings.bankruptProperties));
+  if (keys.includes('shuffleBoard')) out.push(shufflePhrase(settings.shuffleBoard));
   return out;
+}
+
+/**
+ * The second half of the line that announces a shuffled board, in words a
+ * stranger gets without knowing the board: which colour set now waits right
+ * after START — the first thing anybody will land on — and, when that is the
+ * priciest set on the board, saying so, because that is the whole fun of the
+ * rule. When the deal left the opening set where it was, it says how many
+ * sets did move instead, so the line is never "nothing to see here".
+ *
+ * Names come from GROUPS, the same names the deeds and the property list
+ * use, and the sets are walked in board order (shuffleMap writes its group
+ * table that way, and buildMap writes the printed one that way).
+ */
+function shuffleNews(printed, dealt) {
+  const name = (g) => GROUPS[g]?.name || g;
+  const first = Object.keys(dealt.groups || {})[0];
+  if (!first) return '';
+  const was = Object.keys(printed?.groups || {})[0];
+  if (first !== was) {
+    // The set whose street costs the most — where "Advance to the priciest
+    // street" sends you — rather than a sum, which reads oddly across sets of
+    // two and three.
+    const priciest = dealt.tiles
+      .filter((t) => t.type === 'property')
+      .reduce((top, t) => (!top || t.price > top.price ? t : top), null)?.group;
+    return first === priciest
+      ? `${name(first)}, the priciest set, now sits right after START`
+      : `${name(first)} now sits right after START`;
+  }
+  const sets = Object.keys(dealt.groups);
+  const moved = sets.filter((g) => dealt.groups[g][0] !== printed?.groups?.[g]?.[0]).length;
+  // shuffleMap re-deals a layout that came back as printed, but only so many
+  // times; on the vanishingly rare deal that never moved, say nothing extra
+  // rather than "0 sets moved" under a line that says it was shuffled.
+  if (!moved) return '';
+  return `${moved} of ${sets.length} sets moved, and ${name(first)} still opens the board`;
 }
 
 /**
@@ -804,8 +871,9 @@ export class GameRoom {
    * of them it did not roll: neither may set them (updateSettings, and the
    * socket handler for the cup), and asking again here means no other door
    * can spring one on strangers who never agreed. What a Play-now table DID
-   * roll — bankrupt properties, from 1.0.7 — everybody at it read in the
-   * lobby before saying they were ready, so that one it plays as set.
+   * roll — bankrupt properties from 1.0.7, the shuffled board from 1.0.8 —
+   * everybody at it read in the lobby before saying they were ready, so
+   * those it plays as set.
    */
   ruleOn(key) {
     if (this.cupMatch) return DEFAULT_SETTINGS[key];
@@ -837,9 +905,10 @@ export class GameRoom {
     // A matchmade table is only partly its host's.
     //
     // The host may re-deal what the table rolled — the bankroll, the five
-    // house rules, what a bankrupt player's streets do, the board — because
-    // everyone at the table can read the change before they say they are
-    // ready, and saying so is the whole point of the lobby. Nothing else.
+    // house rules, what a bankrupt player's streets do, whether the board is
+    // shuffled, the board itself — because everyone at the table can read
+    // the change before they say they are ready, and saying so is the whole
+    // point of the lobby. Nothing else.
     // The seats, the privacy and the house players are what matchmaking
     // stands on, and the clock is the sharp end: a five-second turn on
     // somebody who never asked for one is a timeout, and a timeout takes
@@ -941,6 +1010,15 @@ export class GameRoom {
     if (patch.auctionOnly !== undefined && this.settings.auctionOnly) this.settings.auction = true;
     else if (patch.auction !== undefined && !this.settings.auction) this.settings.auctionOnly = false;
     if (patch.mapId) this.map = getMap(this.settings.mapId);
+    // The roll never deals a shuffle onto a board that has nothing to trade
+    // (rollQuickSettings), and the host cannot talk one onto it either: at a
+    // Play-now table the switch is a chip strangers read, and a chip saying
+    // "shuffled board on" over a board start() will deal as printed is a
+    // promise nobody keeps. A private table keeps whatever its host set —
+    // that has been the rule since 1.0.6, and the host there is the reader.
+    if (quick && this.settings.shuffleBoard && !boardCanShuffle(this.settings.mapId)) {
+      this.settings.shuffleBoard = false;
+    }
     if (patch.teams !== undefined) {
       this.settings.teams = Math.max(0, Math.min(4, Math.floor(Number(this.settings.teams)) || 0));
       this.syncTeamsWithSettings();
@@ -1163,7 +1241,14 @@ export class GameRoom {
     this.estate = null;
     this.clearBankruptChoices();
     this.say('Game started! Good luck.', 'system');
-    if (this.map.shuffled) this.say('The board was shuffled', 'system');
+    // The shuffle is a moment, not a footnote — at a Play-now table nobody
+    // chose it, and the first anybody hears of it is here. The line keeps its
+    // 1.0.6 opening word for word, so a client or a test reading for it still
+    // finds it, and adds the one thing on the new board worth pointing at.
+    if (this.map.shuffled) {
+      const news = shuffleNews(this.boardBeforeShuffle, this.map);
+      this.say(`The board was shuffled${news ? ` — ${news}` : ''}`, 'system');
+    }
     if (this.endsAt) {
       this.say(`A ${this.settings.timeLimit}-minute game — when the clock runs out, the richest player wins`, 'system');
     }

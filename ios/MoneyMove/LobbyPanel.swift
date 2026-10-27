@@ -435,12 +435,11 @@ struct QuickMatchPanel: View {
 
                 rolledRules(P)
 
-                // What a bankrupt player's streets do is one of the rules this
-                // table rolled (1.0.7, H3), and its host may change it right
-                // here — everybody else reads it in the line above.
-                if let lobby, store.isHost, lobby.editable?.contains("bankruptProperties") == true {
-                    MMCard { EstateRulePicker(editable: true) }
-                }
+                // What a bankrupt player's streets do (1.0.7, H3) and whether
+                // the board is shuffled (1.0.8) are rules this table rolled,
+                // and its host may change both right here — everybody else
+                // reads them in the line above.
+                if let lobby, store.isHost { hostTwists(lobby, P) }
 
                 if lobby != nil { rulesAndChat(P) }
 
@@ -570,6 +569,28 @@ struct QuickMatchPanel: View {
         }
     }
 
+    /// The two rolled rules with controls of their own, on one card for the
+    /// host: the bankrupt rule's three-way switch, and the shuffle — the very
+    /// row a private host flips (ShuffleBoardToggle), because "Shuffle the
+    /// board" should read the same at a table of strangers as among friends.
+    /// Each shows only while the server lists it as the host's to change, so
+    /// an older server, which never shuffles a Play-now board, gets the one
+    /// control it answers to and no switch it would only refuse.
+    @ViewBuilder
+    private func hostTwists(_ lobby: QuickLobby, _ P: Palette) -> some View {
+        let estate = lobby.editable?.contains("bankruptProperties") == true
+        let shuffle = lobby.editable?.contains("shuffleBoard") == true
+        if estate || shuffle {
+            MMCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    if estate { EstateRulePicker(editable: true) }
+                    if estate && shuffle { Rectangle().fill(P.rule).frame(height: 1) }
+                    if shuffle { ShuffleBoardToggle(editable: true) }
+                }
+            }
+        }
+    }
+
     /// The same sheet either way: the host changes what the server lets a
     /// Play-now host change, everybody else reads every rule the table will
     /// play by. And the chat — the one way strangers get to say hello
@@ -643,10 +664,16 @@ struct QuickMatchPanel: View {
     /// come written from the server, which is the same thing the web lobby
     /// shows, word for word. Whatever the host has moved off the roll wears
     /// the accent's ring, so a stranger can see which rules a person chose.
+    ///
+    /// A shuffled board (1.0.8) is the one rule that changes the board itself
+    /// rather than a sum, and a table lands on it about one time in three —
+    /// so when it is on, its chip stands out: the drawn shuffle in front and
+    /// the accent's tint behind. Off, it reads like every other rule.
     @ViewBuilder
     private func rolledRules(_ P: Palette) -> some View {
         let parts = store.state?.quickRoll?.parts ?? []
         let edited = Set(store.state?.quickRoll?.edited ?? [])
+        let shuffleOn = store.state?.shufflesBoard == true
         if !parts.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
@@ -661,20 +688,30 @@ struct QuickMatchPanel: View {
                 // However many rules there are, on as many lines as they need.
                 FlowRow(spacing: 6) {
                     ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
-                        let changed = QuickRoll.partKeys[safe: i].map { edited.contains($0) } ?? false
-                        Text(part)
-                            .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                            // The board leads, and reads like it.
-                            .foregroundStyle(i == 0 ? P.gold : P.ink2)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(P.card, in: Capsule())
-                            .overlay(Capsule().stroke(
-                                changed ? P.red : (i == 0 ? P.gold.opacity(0.5) : P.rule),
-                                lineWidth: changed ? 1.5 : 1))
-                            .accessibilityLabel(changed ? "\(part), changed by the host" : part)
+                        let key = QuickRoll.partKeys[safe: i]
+                        let changed = key.map { edited.contains($0) } ?? false
+                        let shuffled = key == "shuffleBoard" && shuffleOn
+                        HStack(spacing: 4) {
+                            if shuffled { Art.icon(.shuffle, size: 12, tint: P.red) }
+                            Text(part)
+                                .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                        }
+                        // The board leads, and reads like it; a shuffled
+                        // board wears the accent.
+                        .foregroundStyle(i == 0 ? P.gold : shuffled ? P.red : P.ink2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(shuffled ? P.redSoft : P.card, in: Capsule())
+                        .overlay(Capsule().stroke(
+                            changed ? P.red
+                                : i == 0 ? P.gold.opacity(0.5)
+                                : shuffled ? P.red.opacity(0.4) : P.rule,
+                            lineWidth: changed ? 1.5 : 1))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(changed ? "\(part), changed by the host" : part)
                     }
                 }
+                .animation(.snappy(duration: 0.2), value: shuffleOn)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)

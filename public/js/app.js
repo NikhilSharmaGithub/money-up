@@ -88,6 +88,9 @@ let watching = false;
 // never to a reconnect or a mid-game join, whose first state is already
 // 'playing' and must show the board instantly.
 let lastStatus = null;
+// The shuffled layout this tab has already been told about, by map.uid —
+// see tellShuffledDeal.
+let shuffleToldFor = '';
 // Set while walking back into a table left mid-game. The server opens a room
 // for any code asked of it, so an abandoned table comes back as an empty lobby
 // wearing the old code — read once, on the first state, to say so out loud.
@@ -1586,6 +1589,7 @@ function render() {
     syncUndealt(state);
     if (sawLobby && state.status === 'playing' && dealBoardIn(state)) sfx.shuffle();
   });
+  safe('shuffleNote', () => { if (sawLobby) tellShuffledDeal(); });
 
   safe('awaiting', () => renderAwaiting(state, meId, $('#awaitingWell'), actions));
   safe('players', () => renderPlayers(state, meId, $('#playerList'), actions, shown));
@@ -1754,6 +1758,26 @@ let reliefShownAt = 0;
 
 function reliefMarks() {
   return (safeGet(localStorage, RELIEF_SEEN_KEY) || '').split('|').filter(Boolean);
+}
+
+/**
+ * The heads-up a shuffled board earns at the deal (1.0.8): one light line,
+ * once a game. Play-now tables roll the shuffle now, so a stranger can sit
+ * down to a board they know by heart and find the dear streets a step past
+ * START — worth a word while the deck is still riffling, before a first roll
+ * is spent wondering why the board looks wrong. The render only asks on the
+ * lobby → playing edge this tab watched happen, like the deal itself: anybody
+ * walking in mid-game — a watcher, a reload — finds the board already dealt,
+ * and the rules sheet and the log say so for them. Keyed on the layout's uid,
+ * which every shuffled deal has of its own, so no later push says it twice.
+ */
+function tellShuffledDeal() {
+  const map = state?.map;
+  if (!map?.shuffled || state.status !== 'playing') return;
+  const uid = String(map.uid || `${state.id}:${map.id}`);
+  if (shuffleToldFor === uid) return;
+  shuffleToldFor = uid;
+  toast('Shuffled board — the colour sets have new homes this game', 'accent', 'shuffle');
 }
 
 function showReliefCardOnce() {

@@ -1478,9 +1478,25 @@ struct CenterWell: View {
                                 .padding(.bottom, 4)
                         }
                         Art.icon(mapGlyph(state.map.icon), size: 28)
-                        Text(state.map.name)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(P.ink)
+                        // A board the deal will shuffle (1.0.8 rolls it at
+                        // Play-now tables too) carries the drawn shuffle beside
+                        // its name: the deck riffling above is about to send
+                        // the colour sets somewhere new, and this is where the
+                        // whole table is looking. Beside, not under — the well
+                        // of a small phone has no line to spare.
+                        HStack(spacing: 5) {
+                            Text(state.map.name)
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(P.ink)
+                            if state.shufflesBoard {
+                                Art.icon(.shuffle, size: 13, tint: P.red)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        .animation(.snappy(duration: 0.2), value: state.shufflesBoard)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(state.shufflesBoard ? "\(state.map.name), shuffled at the deal"
+                                                                : state.map.name)
                         // one dot per seat, filled with each player's colour
                         HStack(spacing: 6) {
                             ForEach(0..<state.settings.maxPlayers, id: \.self) { i in

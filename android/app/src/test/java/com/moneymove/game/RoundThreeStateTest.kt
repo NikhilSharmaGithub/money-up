@@ -57,8 +57,9 @@ class RoundThreeStateTest {
     }
 
     @Test
-    fun `the rolled phrase for it is the last one, and a host's change rings it`() {
-        assertEquals("bankruptProperties", QuickRoll.PART_KEYS.last())
+    fun `the rolled phrase for it is the eighth, and a host's change rings it`() {
+        // Last in 1.0.7; 1.0.8 put the shuffle after it (QuickShuffleTest).
+        assertEquals("bankruptProperties", QuickRoll.PART_KEYS[7])
         val roll = QuickRoll(
             parts = listOf(
                 "Classic", "$1,500 to start", "x2 rent on full sets on", "vacation cash off", "auctions on",

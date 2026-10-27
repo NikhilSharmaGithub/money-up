@@ -4,7 +4,8 @@
 //
 // At a Play-now table the host may change only what the server lists in
 // quickLobby.editable — the bankroll, the five rolled house rules, what a
-// bankrupt player's streets do (1.0.7) and the board. The seats, privacy and house players are what matchmaking stands
+// bankrupt player's streets do (1.0.7), the shuffled board (1.0.8) and the
+// board. The seats, privacy and house players are what matchmaking stands
 // on; the turn clock costs strangers karma; mortgage off turns ordinary rent
 // into bankruptcy; a fixed order would always put the host first. Those rows
 // stay on screen, locked, so everybody can still read what they are.
@@ -77,9 +78,13 @@ struct SettingsSheet: View {
                         TableTwistsCard(editable: canEdit("bankruptProperties"))
                     } else if isQuick, store.state?.cup != true {
                         // A Play-now table rolls what a bankrupt player's
-                        // streets do, and its host may change it (1.0.7, H3);
-                        // auction-only and the shuffled board stay private.
-                        TableTwistsCard(editable: canEdit("bankruptProperties"), estateOnly: true)
+                        // streets do (1.0.7, H3) and, from a 1.0.8 server,
+                        // the shuffled board; its host may change each the
+                        // server opens, and everybody else reads both here,
+                        // locked. Auction-only stays a private-table rule.
+                        TableTwistsCard(editable: canEdit("bankruptProperties"), quick: true,
+                                        showsShuffle: store.state?.rollsShuffle == true,
+                                        shuffleEditable: canEdit("shuffleBoard"))
                     }
                     rulesSection(P)
                 }

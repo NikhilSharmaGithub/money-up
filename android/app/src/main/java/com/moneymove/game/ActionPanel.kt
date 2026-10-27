@@ -1055,7 +1055,10 @@ private fun TableTerms(state: GameState) {
     val minutes = settings.gameMinutes
     val estates = state.estateRule
     val auctionOnly = settings.auctionOnly == true
-    val shuffle = settings.shuffleBoard == true
+    // Read as the table plays it, the way the estates are: the same call
+    // the Play-now lobby's chip and the rules sheet make, so no screen can
+    // promise a shuffle a cup table will not deal.
+    val shuffle = state.shufflesBoard
     if (!bots && minutes == 0 && estates == EstateRule.RELEASE && !auctionOnly && !shuffle) return
     FlowRow(
         Modifier.fillMaxWidth().animateContentSize(),

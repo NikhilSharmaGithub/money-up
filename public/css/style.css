@@ -4415,6 +4415,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   background-image: linear-gradient(color-mix(in srgb, var(--bad) calc(var(--glass-tint-a) * 100%), transparent) 0 0);
 }
 .toast.error > span:first-child { color: var(--glass-bad-ink); }
+/* A moment rather than a problem — the shuffled board at the deal (1.0.8):
+   the accent's tint and its glyph in the accent ink, the words in ink for
+   the same reason as above. */
+.toast.accent {
+  background-image: linear-gradient(color-mix(in srgb, var(--red) calc(var(--glass-tint-a) * 100%), transparent) 0 0);
+}
+.toast.accent > span:first-child { color: var(--glass-accent-ink); }
 .toast.out { animation: toastOut .3s ease forwards; }
 /* The repeat counter was a wash of white, which was a chip on the dark
    plate and would be nothing at all on a pale film. It is a wash of the ink
@@ -4710,6 +4717,13 @@ body.my-turn .board { box-shadow: var(--shadow), 0 0 0 2px rgba(227, 169, 60, .3
   font-size: var(--well-small); color: var(--ink-3); font-weight: 600;
   margin-top: 3px; line-height: 1.4;
 }
+/* A shuffled board in that line (1.0.8): the drawn shuffle and the glass's
+   accent ink, kept on one line so the glyph never wraps away from its words. */
+.lobby-rolled .rolled-lit {
+  display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+  color: var(--glass-accent-ink); font-weight: 750;
+}
+.lobby-rolled .rolled-lit .ico { width: 1.1em; height: 1.1em; vertical-align: 0; }
 /* The seats a table is still waiting on. Faces rather than dots, so a player
    sitting through the countdown can watch the table assemble. */
 /* The regional boards mark their groups with a pictograph rather than a flag;
@@ -5384,6 +5398,17 @@ body.focus-board .col.left { opacity: 0; pointer-events: none; overflow: hidden;
 /* A rule the host moved off the roll wears the accent's ring, so a stranger
    can tell which rules a person chose and which the dice did. */
 .rolled-chip.edited { border-color: var(--red); box-shadow: 0 0 0 .5px var(--red); color: var(--ink); }
+/* A shuffled board (1.0.8) is the one rolled rule that moves the board
+   itself, so when it is on its chip wears the accent's tint and the drawn
+   shuffle — loud enough to be noticed, still a chip. The tint is the fill
+   alone: a host who switched it on still gets the edited ring, and a ring
+   on a tint reads as both. */
+.rolled-chip.lit {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--red-soft); color: var(--red-ink);
+}
+.rolled-chip.lit:not(.edited) { border-color: color-mix(in srgb, var(--red) 40%, var(--rule)); }
+.rolled-chip.lit .ico { width: 12px; height: 12px; vertical-align: 0; }
 
 /* ── player chips: live position, and a nudge for whoever plays next ── */
 .prank {

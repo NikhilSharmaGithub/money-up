@@ -1581,6 +1581,7 @@ class GameStore(app: Application) : AndroidViewModel(app) {
             timedOut = false
             announceTopCountry(next)
         }
+        noteShuffle(old, next)
 
         noteTimeout(old, next)
 
@@ -2239,6 +2240,41 @@ class GameStore(app: Application) : AndroidViewModel(app) {
         }
         if (timedOut && (next.isEnded || next.players.none { it.removedFor == "timeout" && isLocal(it.id) })) {
             timedOut = false
+        }
+    }
+
+    /**
+     * The layout the last "shuffled board" word was said for —
+     * [MapData.layoutKey], which a shuffle makes new every game — so it is
+     * said once a game and never again on the pushes that follow. A table
+     * going back to its lobby (a rematch) forgets it, so the next deal is
+     * news again even from a server that sends no uid.
+     */
+    private var shuffleNoted: String? = null
+
+    /**
+     * A light word at the deal when the board came out shuffled — a Play-now
+     * table rolls it about one game in three from 1.0.8, and a host may set
+     * it. Everybody spent the lobby looking at the printed board, and the
+     * streets they were sizing up have just moved, so the bottom of the
+     * screen says so while the tiles fly to their new squares; the kick-off
+     * headline keeps the middle of the table for itself.
+     *
+     * Only on the deal this device watched — the table's own lobby becoming
+     * its game, the same edge the deck's flourish waits for (DeckIntro.kt).
+     * A phone walking in on a game already going, or coming back to one after
+     * a dropped line, is not told about a deal long done: the board, the
+     * well and the rules sheet all still say it. A toast, so it never stands
+     * in anybody's way.
+     */
+    private fun noteShuffle(old: GameState?, next: GameState) {
+        if (next.isLobby) shuffleNoted = null
+        if (!next.isPlaying || !next.map.isShuffled) return
+        val layout = next.map.layoutKey
+        if (layout == shuffleNoted) return
+        shuffleNoted = layout
+        if (next.dealtShuffledAfter(old)) {
+            showToast("Shuffled board — the colour sets have new homes this game", glyph = "shuffle")
         }
     }
 

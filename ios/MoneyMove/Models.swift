@@ -120,7 +120,9 @@ struct GameState: Codable, Equatable {
 /// `parts` arrives already written — "Japan", "$1,500 to start", "auctions on"
 /// — because the server phrases it once and a phone and a browser at the same
 /// table then cannot describe it differently. `keys` names which settings were
-/// rolled rather than defaulted; nothing on this screen needs it yet.
+/// rolled rather than defaulted — which is how a phone tells a 1.0.8 server,
+/// whose Play-now tables roll the shuffled board, from an older one whose
+/// tables never shuffle (GameState.rollsShuffle).
 struct QuickRoll: Codable, Equatable {
     var at: Double?
     var keys: [String]?
@@ -130,14 +132,23 @@ struct QuickRoll: Codable, Equatable {
     var edited: [String]?
 
     /// Which setting each of `parts` describes, in the order quickRollParts()
-    /// in server/game.js writes them: the board, the bankroll, then the five
-    /// house rules. The phrases arrive finished, so this is the only way to
-    /// tell which chip an edited key belongs to.
+    /// in server/game.js writes them: the board, the bankroll, the five house
+    /// rules, what a bankrupt player's streets do, then the shuffled board.
+    /// The phrases arrive finished, so this is the only way to tell which chip
+    /// an edited key belongs to.
+    ///
+    /// Every new rule goes on the end, never in the middle: a 1.0.7 app reads
+    /// a 1.0.8 table's nine phrases with its eight keys, and only an appended
+    /// ninth leaves the first eight on the chips they belong to — the extra one
+    /// just shows without a ring. The other way round, an older server's eight
+    /// phrases simply never reach the ninth key; look it up with `[safe:]`.
     static let partKeys = ["mapId", "startingCash", "x2rent", "vacationCash",
                            "auction", "noRentInPrison", "evenBuild",
-                           // 1.0.7 (H3): what a bankrupt player's streets do,
-                           // always the last phrase.
-                           "bankruptProperties"]
+                           // 1.0.7 (H3): what a bankrupt player's streets do.
+                           "bankruptProperties",
+                           // 1.0.8: "shuffled board on/off", the ninth and
+                           // last phrase.
+                           "shuffleBoard"]
 }
 
 /// A Play-now table between the tap and the deal: first the search, then a
@@ -235,6 +246,8 @@ struct GameSettings: Codable, Equatable {
     var auctionOnly: Bool?
     /// The colour sets are dealt to new places on the board at each start.
     /// The board itself arrives already shuffled in `map`; this is the rule.
+    /// A private table's host sets it (1.0.6); from 1.0.8 a Play-now table
+    /// rolls it too, about one table in three, and its host may change it.
     var shuffleBoard: Bool?
 }
 

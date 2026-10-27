@@ -59,14 +59,16 @@ data class TableRuleSection(val title: String, val lines: List<TableRuleLine>)
  *
  * A switch missing from the push reads exactly what the settings sheet reads
  * for it (LobbySheet.kt), so the two screens can never describe one table two
- * ways. A Play-now or a cup table always plays auction-only and the shuffle
- * at their defaults, whatever the fields say — the server's own rule — so
- * they are shown that way there. What a bankrupt player's streets do is a
- * Play-now table's own rolled rule from 1.0.7, and a cup table's is always
- * the bank ([GameState.estateRule]). Only a table with a house at it says
- * how hard the house plays ([GameState.showsBotSkill]): a table of people
- * has none to describe, a Play-now table's is passing itself off as people,
- * and a cup table has none.
+ * ways. A Play-now or a cup table always plays auction-only at its default,
+ * whatever the field says — the server's own rule — so it is shown that way
+ * there. What a bankrupt player's streets do is a Play-now table's own
+ * rolled rule from 1.0.7, and a cup table's is always the bank
+ * ([GameState.estateRule]); the shuffle is one from 1.0.8, and a cup table
+ * always plays the printed board ([GameState.shufflesBoard]) — its row still
+ * says "Off" there, as every client's does, never "On". Only a table with a
+ * house at it says how hard the house plays ([GameState.showsBotSkill]): a
+ * table of people has none to describe, a Play-now table's is passing itself
+ * off as people, and a cup table has none.
  */
 fun tableRuleSections(state: GameState): List<TableRuleSection> {
     val s = state.settings
@@ -75,7 +77,10 @@ fun tableRuleSections(state: GameState): List<TableRuleSection> {
     val hostSet = !quick && !cup
     fun onOff(on: Boolean) = if (on) "On" else "Off"
 
-    val shuffle = hostSet && s.shuffleBoard == true
+    // The switch is the lobby's promise; the board, once dealt, is what
+    // actually happened — and a shuffle that was dealt is the truth whatever
+    // the switch says now.
+    val shuffle = state.shufflesBoard
     val shuffledNow = state.map.shuffled == true
     val auctionOnly = hostSet && s.auctionOnly == true
     // Auction-only forces auctions on; an older server never sends the one

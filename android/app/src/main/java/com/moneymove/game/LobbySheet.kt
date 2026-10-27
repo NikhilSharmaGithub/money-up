@@ -86,10 +86,10 @@ import kotlinx.coroutines.launch
  * gets the same rows, dimmed, which is how you find out what you have sat
  * down to. At a Play-now table the host gets only what the server lets a
  * matchmade table change — the bankroll, the rolled rules (what a bankrupt
- * player's streets do among them, from 1.0.7) and the board — and the rest
- * stays as matchmaking set it, dimmed the same way; there are
- * no teams to pick among strangers, so that card is not drawn at all. The
- * seats are not here: iOS keeps them, Add player and the kick in
+ * player's streets do among them from 1.0.7, and the shuffle from 1.0.8) and
+ * the board — and the rest stays as matchmaking set it, dimmed the same way;
+ * there are no teams to pick among strangers, so that card is not drawn at
+ * all. The seats are not here: iOS keeps them, Add player and the kick in
  * the lobby panel under the board (ActionPanel.kt), and a second copy would be
  * a second place to kick.
  *
@@ -371,13 +371,19 @@ private fun SettingsFace(
             }
             BoardBoxes(store, game, can("mapId"), onOpenAll = onOpenAll, onShop = onShop)
             // Under the boards it changes, because it is a thing done to the
-            // board rather than a rule of play. A Play-now or a cup table
-            // always plays the printed board, so the row is theirs to not have.
-            if (tableRules) {
+            // board rather than a rule of play. From 1.0.8 a Play-now table
+            // rolls it like the rest of its rules and its host may change it —
+            // the server lists it as editable, which is what [can] reads — so
+            // there it is the host's switch and everybody else's to read. A
+            // cup table always plays the printed board, and a Play-now table
+            // on an older server never shuffled, so neither has the row
+            // ([GameState.hasShuffleRule]). The caption is the iPhone's, word
+            // for word: both phones sit at the same tables.
+            if (state.hasShuffleRule) {
                 Rule()
                 ToggleRow(
                     "Shuffle the board",
-                    "The colour sets swap places at the start of each game — pricey streets can sit right after START.",
+                    "At the start the colour sets swap places with sets of the same size, so pricey streets can sit right after START.",
                     s.shuffleBoard ?: false, can("shuffleBoard"),
                 ) { game.updateSettings(mapOf("shuffleBoard" to it)) }
             }
